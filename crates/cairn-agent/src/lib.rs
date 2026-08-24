@@ -24,8 +24,10 @@ pub use operation::{
     RecordedToolExchange, RecordedToolGateway, ScriptedToolGateway, StartedToolOperation,
     ToolEffectClass, ToolGateway, ToolGatewayError, ToolGatewayFailureClass,
     ToolOperationAuthority, ToolOperationCompletion, ToolOperationState, ToolResultEncodingError,
-    authorize_tool_operation, begin_tool_operation, execute_tool_operation, prepare_tool_operation,
-    recover_tool_operation,
+    authorize_tool_operation, authorize_tool_operation_retry, begin_tool_operation,
+    execute_tool_operation, prepare_tool_operation, reconcile_tool_operation_completed,
+    reconcile_tool_operation_not_occurred, recover_tool_operation,
+    recover_tool_operation_authority,
 };
 pub use semantic::{
     AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,
@@ -119,6 +121,10 @@ content_type!(ToolCatalog, "agent.tool-catalog.v1");
 content_type!(HistoryItem, "agent.history-item.v1");
 content_type!(ContextBlock, "agent.context-block.v1");
 content_type!(OperationResult, "agent.operation-result.v1");
+content_type!(
+    OperationReconciliationEvidence,
+    "agent.operation-reconciliation-evidence.v1"
+);
 content_type!(PolicyDocument, "agent.policy-document.v1");
 content_type!(TurnInputDecisionArtifact, "agent.turn-input-decision.v1");
 content_type!(MaterializedRequestArtifact, "agent.materialized-request.v1");

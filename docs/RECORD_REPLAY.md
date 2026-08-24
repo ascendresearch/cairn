@@ -154,6 +154,12 @@ the operation's effect class:
 
 Human-readable error messages do not determine the effect class.
 
+An authorized retry appends a new authority fact to the same logical operation and must use a fresh
+`AttemptId`; authority from an earlier attempt cannot be reused. Reconciliation cites a verified,
+content-addressed evidence artifact and records one of two facts: the effect did not occur and a new
+attempt may be authorized, or the original attempt completed and its reconciled result is published
+without invoking the effect again.
+
 ## 6. Content-addressed store
 
 ### 6.1 Canonical bytes

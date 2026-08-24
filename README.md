@@ -27,8 +27,11 @@ in-doubt, decode, yield, and awaiting-operation boundaries. Trusted tool registr
 ordered proposals atomically to unique logical operations without granting execution authority.
 Concrete tool invocations carry their own `AttemptId`; completed and definitively rejected outcomes
 flow back as verified `pending_results` in proposal order, while retry and reconciliation cases stay
-typed blockers. The remaining architecture in the normative documents is still target design. The
-old repositories are evidence and compatibility references, not source trees to copy mechanically.
+typed blockers. Retry now requires a new durable authority and rejects reused attempt identities.
+Reconcile-required effects can only resume after citing verified, content-addressed evidence that
+either proves the effect did not occur or confirms the original attempt's result. The remaining
+architecture in the normative documents is still target design. The old repositories are evidence
+and compatibility references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

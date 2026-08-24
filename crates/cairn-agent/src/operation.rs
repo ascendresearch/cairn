@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, io::Cursor};
+use std::{
+    collections::{HashSet, VecDeque},
+    io::Cursor,
+};
 
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, EventId, ObservedAtUnixMillis,
@@ -11,7 +14,10 @@ use cairn_record::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{OperationResult, ToolArguments, ToolCallId, ToolImplementationVersion, ToolName};
+use crate::{
+    OperationReconciliationEvidence, OperationResult, ToolArguments, ToolCallId,
+    ToolImplementationVersion, ToolName,
+};
 
 const PREPARED: &str = "agent.tool-operation-prepared";
 const STARTED: &str = "agent.tool-operation-started";
@@ -19,6 +25,9 @@ const COMPLETED: &str = "agent.tool-operation-completed";
 const NOT_STARTED: &str = "agent.tool-operation-not-started";
 const REJECTED: &str = "agent.tool-operation-rejected";
 const AMBIGUOUS: &str = "agent.tool-operation-ambiguous";
+const RETRY_AUTHORIZED: &str = "agent.tool-operation-retry-authorized";
+const RECONCILED_NOT_OCCURRED: &str = "agent.tool-operation-reconciled-not-occurred";
+const RECONCILED_COMPLETED: &str = "agent.tool-operation-reconciled-completed";
 
 /// External-effect semantics declared by trusted tool registration, never by model text.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -375,6 +384,7 @@ pub struct ToolOperationAuthority {
     stream: StreamId,
     revision: StreamRevision,
     prepared_event_id: EventId,
+    used_attempt_ids: HashSet<String>,
     operation: PreparedToolOperation,
 }
 
@@ -436,7 +446,7 @@ pub enum ToolOperationCompletion {
     },
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PreparedPayload {
     operation_id: OperationId,
@@ -466,6 +476,38 @@ struct OutcomePayload {
     attempt_id: AttemptId,
     result_id: Option<ContentId<OperationResult>>,
     diagnostic: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RetryAuthorizedPayload {
+    operation_id: OperationId,
+    previous_attempt_id: AttemptId,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "persisted identity fields intentionally use explicit _id suffixes"
+)]
+struct ReconciledNotOccurredPayload {
+    operation_id: OperationId,
+    ambiguous_attempt_id: AttemptId,
+    evidence_id: ContentId<OperationReconciliationEvidence>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "persisted identity fields intentionally use explicit _id suffixes"
+)]
+struct ReconciledCompletedPayload {
+    operation_id: OperationId,
+    ambiguous_attempt_id: AttemptId,
+    evidence_id: ContentId<OperationReconciliationEvidence>,
+    result_id: ContentId<OperationResult>,
 }
 
 struct Fact<'a, P> {
@@ -514,8 +556,298 @@ pub fn authorize_tool_operation<E: EventStore>(
         stream,
         revision: revision(outcome.last_sequence)?,
         prepared_event_id: outcome.event_ids[0],
+        used_attempt_ids: HashSet::new(),
         operation,
     })
+}
+
+/// Recovers unconsumed durable authority for an already prepared logical operation.
+///
+/// The supplied operation must exactly match the initial prepared metadata. This lets a caller
+/// reconstruct it from the durable step binding without trusting mutable registry state.
+///
+/// # Errors
+///
+/// Returns [`OperationCoordinatorError`] when history is invalid or prepared metadata differs.
+pub fn recover_tool_operation_authority<E: EventStore>(
+    events: &E,
+    operation: PreparedToolOperation,
+) -> Result<Option<ToolOperationAuthority>, OperationCoordinatorError> {
+    let stream = operation_stream(operation.operation_id)?;
+    let history = events.read_stream(&stream, None)?;
+    let projection = project_operation_details(&history, operation.operation_id)?;
+    if !matches!(projection.state, ToolOperationState::Authorized { .. }) {
+        return Ok(None);
+    }
+    into_recovered_authority(stream, &history, projection, operation).map(Some)
+}
+
+/// Commits explicit authority to retry the same logical operation.
+///
+/// A proven-not-started attempt is always retryable. Interrupted or ambiguous attempts are only
+/// retryable when their trusted effect class yields [`OperationRecovery::RetrySameOperation`].
+/// The subsequent [`begin_tool_operation`] call must supply a fresh [`AttemptId`].
+///
+/// # Errors
+///
+/// Returns [`OperationCoordinatorError`] when retry is unsafe, metadata differs, or commit fails.
+pub fn authorize_tool_operation_retry<E: EventStore>(
+    events: &mut E,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+    operation: PreparedToolOperation,
+) -> Result<ToolOperationAuthority, OperationCoordinatorError> {
+    let stream = operation_stream(operation.operation_id)?;
+    let history = events.read_stream(&stream, None)?;
+    let projection = project_operation_details(&history, operation.operation_id)?;
+    validate_prepared_operation(projection.prepared.as_ref(), &operation)?;
+    if authority_command_replays(&history, &projection.state, command_id, RETRY_AUTHORIZED)? {
+        return into_recovered_authority(stream, &history, projection, operation);
+    }
+    let previous_attempt_id = retryable_attempt(&projection.state)?;
+    let last = history
+        .last()
+        .ok_or_else(|| OperationCoordinatorError::InvalidOperation("operation is empty".into()))?;
+    let payload = RetryAuthorizedPayload {
+        operation_id: operation.operation_id,
+        previous_attempt_id,
+    };
+    let outcome = append_fact(
+        events,
+        &Fact {
+            stream: &stream,
+            expected: ExpectedRevision::Exact(revision(last.sequence)?),
+            command_id,
+            schema: RETRY_AUTHORIZED,
+            parent_event_id: Some(last.event_id),
+            observed_at,
+            payload: &payload,
+        },
+    )?;
+    Ok(ToolOperationAuthority {
+        stream,
+        revision: revision(outcome.last_sequence)?,
+        prepared_event_id: outcome.event_ids[0],
+        used_attempt_ids: projection.used_attempt_ids,
+        operation,
+    })
+}
+
+/// Records evidence that a reconcile-required attempt did not occur and grants retry authority.
+///
+/// # Errors
+///
+/// Returns [`OperationCoordinatorError`] when evidence is unavailable, reconciliation is not
+/// required, metadata differs, or commit fails.
+pub fn reconcile_tool_operation_not_occurred<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &C,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+    operation: PreparedToolOperation,
+    evidence_id: ContentId<OperationReconciliationEvidence>,
+) -> Result<ToolOperationAuthority, OperationCoordinatorError> {
+    verify_reconciliation_evidence(content, evidence_id)?;
+    let stream = operation_stream(operation.operation_id)?;
+    let history = events.read_stream(&stream, None)?;
+    let projection = project_operation_details(&history, operation.operation_id)?;
+    validate_prepared_operation(projection.prepared.as_ref(), &operation)?;
+    if authority_command_replays(
+        &history,
+        &projection.state,
+        command_id,
+        RECONCILED_NOT_OCCURRED,
+    )? {
+        let event = history.last().ok_or_else(|| {
+            OperationCoordinatorError::InvalidOperation("operation is empty".into())
+        })?;
+        let last: ReconciledNotOccurredPayload = decode_payload(event)?;
+        if last.evidence_id != evidence_id {
+            return invalid_operation("replayed reconciliation cites different evidence");
+        }
+        return into_recovered_authority(stream, &history, projection, operation);
+    }
+    let ambiguous_attempt_id = reconcilable_attempt(&projection.state)?;
+    let last = history
+        .last()
+        .ok_or_else(|| OperationCoordinatorError::InvalidOperation("operation is empty".into()))?;
+    let payload = ReconciledNotOccurredPayload {
+        operation_id: operation.operation_id,
+        ambiguous_attempt_id,
+        evidence_id,
+    };
+    let outcome = append_fact(
+        events,
+        &Fact {
+            stream: &stream,
+            expected: ExpectedRevision::Exact(revision(last.sequence)?),
+            command_id,
+            schema: RECONCILED_NOT_OCCURRED,
+            parent_event_id: Some(last.event_id),
+            observed_at,
+            payload: &payload,
+        },
+    )?;
+    Ok(ToolOperationAuthority {
+        stream,
+        revision: revision(outcome.last_sequence)?,
+        prepared_event_id: outcome.event_ids[0],
+        used_attempt_ids: projection.used_attempt_ids,
+        operation,
+    })
+}
+
+/// Records evidence that a reconcile-required attempt completed and publishes its canonical result.
+///
+/// No gateway is invoked again. The original ambiguous attempt remains the attempt that produced
+/// the externally reconciled result.
+///
+/// # Errors
+///
+/// Returns [`OperationCoordinatorError`] when evidence/result archival, validation, or commit fails.
+pub fn reconcile_tool_operation_completed<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+    operation: &PreparedToolOperation,
+    evidence_id: ContentId<OperationReconciliationEvidence>,
+    result: &CanonicalToolResult,
+) -> Result<ToolOperationCompletion, OperationCoordinatorError> {
+    verify_reconciliation_evidence(content, evidence_id)?;
+    let expected_result_id = ContentId::<OperationResult>::derive(result.as_bytes())
+        .map_err(|error| OperationCoordinatorError::InvalidOperation(error.to_string()))?;
+    let stream = operation_stream(operation.operation_id)?;
+    let history = events.read_stream(&stream, None)?;
+    let projection = project_operation_details(&history, operation.operation_id)?;
+    validate_prepared_operation(projection.prepared.as_ref(), operation)?;
+    if let Some(event) = command_event(&history, command_id, RECONCILED_COMPLETED) {
+        if history.last().map(|last| last.event_id) != Some(event.event_id) {
+            return invalid_operation("replayed reconciliation is not the terminal operation fact");
+        }
+        let last: ReconciledCompletedPayload = decode_payload(event)?;
+        if last.evidence_id != evidence_id || last.result_id != expected_result_id {
+            return invalid_operation("replayed reconciliation cites different evidence or result");
+        }
+        return Ok(ToolOperationCompletion::Completed {
+            attempt_id: last.ambiguous_attempt_id,
+            result_id: last.result_id,
+        });
+    }
+    let ambiguous_attempt_id = reconcilable_attempt(&projection.state)?;
+    let last = history
+        .last()
+        .ok_or_else(|| OperationCoordinatorError::InvalidOperation("operation is empty".into()))?;
+    let descriptor = content.put::<OperationResult>(&mut Cursor::new(result.as_bytes()))?;
+    let payload = ReconciledCompletedPayload {
+        operation_id: operation.operation_id,
+        ambiguous_attempt_id,
+        evidence_id,
+        result_id: descriptor.content_id,
+    };
+    append_fact(
+        events,
+        &Fact {
+            stream: &stream,
+            expected: ExpectedRevision::Exact(revision(last.sequence)?),
+            command_id,
+            schema: RECONCILED_COMPLETED,
+            parent_event_id: Some(last.event_id),
+            observed_at,
+            payload: &payload,
+        },
+    )
+    .map_err(|record| OperationCoordinatorError::UnrecordedResult {
+        operation_id: operation.operation_id,
+        result_id: descriptor.content_id,
+        record: record.to_string(),
+    })?;
+    Ok(ToolOperationCompletion::Completed {
+        attempt_id: ambiguous_attempt_id,
+        result_id: descriptor.content_id,
+    })
+}
+
+fn verify_reconciliation_evidence<C: ContentStore>(
+    content: &C,
+    evidence_id: ContentId<OperationReconciliationEvidence>,
+) -> Result<(), OperationCoordinatorError> {
+    content.write_to(&evidence_id, &mut std::io::sink())?;
+    Ok(())
+}
+
+fn authority_command_replays(
+    history: &[EventEnvelope],
+    state: &ToolOperationState,
+    command_id: &CommandId,
+    schema: &str,
+) -> Result<bool, OperationCoordinatorError> {
+    let Some(event) = command_event(history, command_id, schema) else {
+        return Ok(false);
+    };
+    if history.last().map(|last| last.event_id) == Some(event.event_id)
+        && matches!(state, ToolOperationState::Authorized { .. })
+    {
+        Ok(true)
+    } else {
+        invalid_operation("replayed operation authority was already consumed")
+    }
+}
+
+fn command_event<'a>(
+    history: &'a [EventEnvelope],
+    command_id: &CommandId,
+    schema: &str,
+) -> Option<&'a EventEnvelope> {
+    history
+        .iter()
+        .find(|event| event.command_id == *command_id && event.schema_name.as_str() == schema)
+}
+
+fn into_recovered_authority(
+    stream: StreamId,
+    history: &[EventEnvelope],
+    projection: OperationProjection,
+    operation: PreparedToolOperation,
+) -> Result<ToolOperationAuthority, OperationCoordinatorError> {
+    validate_prepared_operation(projection.prepared.as_ref(), &operation)?;
+    if !matches!(projection.state, ToolOperationState::Authorized { .. }) {
+        return invalid_operation("operation has no unconsumed authority");
+    }
+    let last = history
+        .last()
+        .ok_or_else(|| OperationCoordinatorError::InvalidOperation("operation is empty".into()))?;
+    Ok(ToolOperationAuthority {
+        stream,
+        revision: revision(last.sequence)?,
+        prepared_event_id: projection.authority_event_id.ok_or_else(|| {
+            OperationCoordinatorError::InvalidOperation(
+                "authorized operation has no authority event".into(),
+            )
+        })?,
+        used_attempt_ids: projection.used_attempt_ids,
+        operation,
+    })
+}
+
+fn validate_prepared_operation(
+    prepared: Option<&PreparedPayload>,
+    operation: &PreparedToolOperation,
+) -> Result<(), OperationCoordinatorError> {
+    let Some(prepared) = prepared else {
+        return invalid_operation("operation has no prepared metadata");
+    };
+    if prepared.operation_id == operation.operation_id
+        && prepared.source_tool_call_id == operation.source_tool_call_id
+        && prepared.tool == operation.tool
+        && prepared.implementation_version == operation.implementation_version
+        && prepared.effect == operation.effect
+        && prepared.arguments_id == operation.arguments_id
+    {
+        Ok(())
+    } else {
+        invalid_operation("prepared operation differs from durable metadata")
+    }
 }
 
 /// Commits the started fact before a gateway can be invoked.
@@ -534,8 +866,12 @@ pub fn begin_tool_operation<E: EventStore>(
         stream,
         revision: current_revision,
         prepared_event_id,
+        mut used_attempt_ids,
         operation,
     } = authority;
+    if !used_attempt_ids.insert(attempt_id.to_string()) {
+        return invalid_operation("attempt identity was already used by this operation");
+    }
     let payload = StartedPayload {
         operation_id: operation.operation_id,
         attempt_id,
@@ -806,19 +1142,39 @@ pub fn recover_tool_operation<E: EventStore>(
 ) -> Result<ToolOperationState, OperationCoordinatorError> {
     let stream = operation_stream(operation_id)?;
     let history = events.read_stream(&stream, None)?;
-    project_operation(&history, operation_id)
+    Ok(project_operation_details(&history, operation_id)?.state)
 }
 
+#[cfg(test)]
 fn project_operation(
     history: &[EventEnvelope],
     operation_id: OperationId,
 ) -> Result<ToolOperationState, OperationCoordinatorError> {
+    Ok(project_operation_details(history, operation_id)?.state)
+}
+
+struct OperationProjection {
+    state: ToolOperationState,
+    prepared: Option<PreparedPayload>,
+    authority_event_id: Option<EventId>,
+    used_attempt_ids: HashSet<String>,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the linear projector keeps persisted causal transitions auditable in one place"
+)]
+fn project_operation_details(
+    history: &[EventEnvelope],
+    operation_id: OperationId,
+) -> Result<OperationProjection, OperationCoordinatorError> {
     let mut state = ToolOperationState::NotFound;
-    let mut effect = None;
-    let mut arguments_id = None;
-    let mut prepared_event_id = None;
+    let mut prepared: Option<PreparedPayload> = None;
+    let mut authority_event_id = None;
     let mut started_event_id = None;
     let mut started_attempt_id = None;
+    let mut used_attempt_ids = HashSet::new();
+    let mut last_event_id = None;
     for event in history {
         let schema = event.schema_name.as_str();
         if schema == PREPARED {
@@ -828,39 +1184,42 @@ fn project_operation(
             if event.parent_event_id.is_some() {
                 return invalid_operation("prepared event must not have a causal parent");
             }
-            effect = Some(payload.effect);
-            arguments_id = Some(payload.arguments_id);
-            prepared_event_id = Some(event.event_id);
             state = ToolOperationState::Authorized {
                 effect: payload.effect,
             };
+            authority_event_id = Some(event.event_id);
+            prepared = Some(payload);
         } else if schema == STARTED {
             let payload: StartedPayload = decode_payload(event)?;
             require_operation(payload.operation_id, operation_id)?;
-            let Some(effect_value) = effect else {
+            let Some(prepared) = prepared.as_ref() else {
                 return invalid_operation("started event has no prepared effect class");
             };
             transition_is(
                 &state,
                 &ToolOperationState::Authorized {
-                    effect: effect_value,
+                    effect: prepared.effect,
                 },
                 STARTED,
             )?;
-            if Some(payload.arguments_id) != arguments_id {
+            if payload.arguments_id != prepared.arguments_id {
                 return invalid_operation("started event cites different arguments");
             }
-            if event.parent_event_id != prepared_event_id {
-                return invalid_operation("started event does not cite its prepared event");
+            if event.parent_event_id != authority_event_id {
+                return invalid_operation("started event does not cite its authority event");
+            }
+            if !used_attempt_ids.insert(payload.attempt_id.to_string()) {
+                return invalid_operation("attempt identity is reused within one operation");
             }
             started_event_id = Some(event.event_id);
             started_attempt_id = Some(payload.attempt_id);
             state = ToolOperationState::Interrupted {
                 attempt_id: payload.attempt_id,
-                effect: effect_value,
-                recovery: effect_value.recovery(),
+                effect: prepared.effect,
+                recovery: prepared.effect.recovery(),
             };
         } else if [COMPLETED, NOT_STARTED, REJECTED, AMBIGUOUS].contains(&schema) {
+            let effect = prepared.as_ref().map(|payload| payload.effect);
             state = project_terminal(
                 event,
                 schema,
@@ -870,9 +1229,109 @@ fn project_operation(
                 started_attempt_id,
                 started_event_id,
             )?;
+        } else if schema == RETRY_AUTHORIZED {
+            let payload: RetryAuthorizedPayload = decode_payload(event)?;
+            require_operation(payload.operation_id, operation_id)?;
+            if payload.previous_attempt_id != retryable_attempt(&state)? {
+                return invalid_operation("retry fact cites a different previous attempt");
+            }
+            require_parent(event, last_event_id, "retry authority")?;
+            let effect = prepared_effect(prepared.as_ref())?;
+            state = ToolOperationState::Authorized { effect };
+            authority_event_id = Some(event.event_id);
+            started_event_id = None;
+            started_attempt_id = None;
+        } else if schema == RECONCILED_NOT_OCCURRED {
+            let payload: ReconciledNotOccurredPayload = decode_payload(event)?;
+            require_operation(payload.operation_id, operation_id)?;
+            if payload.ambiguous_attempt_id != reconcilable_attempt(&state)? {
+                return invalid_operation("reconciliation cites a different ambiguous attempt");
+            }
+            require_parent(event, last_event_id, "reconciliation")?;
+            let effect = prepared_effect(prepared.as_ref())?;
+            state = ToolOperationState::Authorized { effect };
+            authority_event_id = Some(event.event_id);
+            started_event_id = None;
+            started_attempt_id = None;
+        } else if schema == RECONCILED_COMPLETED {
+            let payload: ReconciledCompletedPayload = decode_payload(event)?;
+            require_operation(payload.operation_id, operation_id)?;
+            if payload.ambiguous_attempt_id != reconcilable_attempt(&state)? {
+                return invalid_operation("reconciliation cites a different ambiguous attempt");
+            }
+            require_parent(event, last_event_id, "reconciliation")?;
+            state = ToolOperationState::Completed {
+                attempt_id: payload.ambiguous_attempt_id,
+                result_id: payload.result_id,
+            };
+        } else {
+            return invalid_operation("unsupported tool-operation event schema");
         }
+        last_event_id = Some(event.event_id);
     }
-    Ok(state)
+    Ok(OperationProjection {
+        state,
+        prepared,
+        authority_event_id,
+        used_attempt_ids,
+    })
+}
+
+fn prepared_effect(
+    prepared: Option<&PreparedPayload>,
+) -> Result<ToolEffectClass, OperationCoordinatorError> {
+    prepared.map(|payload| payload.effect).ok_or_else(|| {
+        OperationCoordinatorError::InvalidOperation(
+            "operation fact has no prepared metadata".to_owned(),
+        )
+    })
+}
+
+fn retryable_attempt(state: &ToolOperationState) -> Result<AttemptId, OperationCoordinatorError> {
+    match state {
+        ToolOperationState::NotStarted { attempt_id, .. }
+        | ToolOperationState::Interrupted {
+            attempt_id,
+            recovery: OperationRecovery::RetrySameOperation,
+            ..
+        }
+        | ToolOperationState::Ambiguous {
+            attempt_id,
+            recovery: OperationRecovery::RetrySameOperation,
+            ..
+        } => Ok(*attempt_id),
+        _ => invalid_operation("operation state does not permit retry"),
+    }
+}
+
+fn reconcilable_attempt(
+    state: &ToolOperationState,
+) -> Result<AttemptId, OperationCoordinatorError> {
+    match state {
+        ToolOperationState::Interrupted {
+            attempt_id,
+            recovery: OperationRecovery::ReconcileRequired,
+            ..
+        }
+        | ToolOperationState::Ambiguous {
+            attempt_id,
+            recovery: OperationRecovery::ReconcileRequired,
+            ..
+        } => Ok(*attempt_id),
+        _ => invalid_operation("operation state does not require reconciliation"),
+    }
+}
+
+fn require_parent(
+    event: &EventEnvelope,
+    expected: Option<EventId>,
+    fact: &str,
+) -> Result<(), OperationCoordinatorError> {
+    if event.parent_event_id == expected && expected.is_some() {
+        Ok(())
+    } else {
+        invalid_operation(&format!("{fact} does not cite the previous operation fact"))
+    }
 }
 
 fn project_terminal(
@@ -985,7 +1444,9 @@ fn invalid_operation<T>(message: &str) -> Result<T, OperationCoordinatorError> {
 
 #[cfg(test)]
 mod tests {
-    use cairn_protocol::{AttemptId, CommandId, OperationId};
+    use std::io::Cursor;
+
+    use cairn_protocol::{AttemptId, CommandId, ContentId, OperationId};
     use cairn_record::{ContentStore, EventStore};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 
@@ -993,10 +1454,12 @@ mod tests {
         CanonicalToolResult, OperationRecovery, PreparedToolOperation, RecordedToolExchange,
         RecordedToolGateway, ScriptedToolGateway, ToolEffectClass, ToolGatewayError,
         ToolOperationCompletion, ToolOperationState, authorize_tool_operation,
-        begin_tool_operation, execute_tool_operation, operation_stream, prepare_tool_operation,
-        project_operation, recover_tool_operation,
+        authorize_tool_operation_retry, begin_tool_operation, execute_tool_operation,
+        operation_stream, prepare_tool_operation, project_operation,
+        reconcile_tool_operation_completed, reconcile_tool_operation_not_occurred,
+        recover_tool_operation, recover_tool_operation_authority,
     };
-    use crate::{ToolImplementationVersion, ToolName};
+    use crate::{OperationReconciliationEvidence, ToolImplementationVersion, ToolName};
 
     fn content_store(directory: &tempfile::TempDir) -> SqliteContentStore {
         SqliteContentStore::open(
@@ -1020,6 +1483,59 @@ mod tests {
             &serde_json::json!({"path":"src/main.rs"}),
         )
         .expect("prepare")
+    }
+
+    fn reconciliation_evidence(
+        content: &mut SqliteContentStore,
+        conclusion: &str,
+    ) -> ContentId<OperationReconciliationEvidence> {
+        let bytes = cairn_codec::to_vec(&serde_json::json!({
+            "conclusion": conclusion,
+            "source": "trusted-test-probe"
+        }))
+        .expect("evidence bytes");
+        content
+            .put::<OperationReconciliationEvidence>(&mut Cursor::new(bytes))
+            .expect("archive evidence")
+            .content_id
+    }
+
+    fn ambiguous_operation(
+        content: &mut SqliteContentStore,
+        events: &mut SqliteEventStore,
+        effect: ToolEffectClass,
+    ) -> (OperationId, PreparedToolOperation, AttemptId) {
+        let operation_id = OperationId::new();
+        let operation = prepare(content, operation_id, effect);
+        let authority = authorize_tool_operation(
+            events,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(1),
+            operation.clone(),
+        )
+        .expect("authorize");
+        let attempt_id = AttemptId::new();
+        let started = begin_tool_operation(
+            events,
+            authority,
+            attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(2),
+        )
+        .expect("begin");
+        let mut gateway = ScriptedToolGateway::new(|_: &PreparedToolOperation| {
+            Err(ToolGatewayError::Ambiguous("connection lost".to_owned()))
+        });
+        execute_tool_operation(
+            events,
+            content,
+            &mut gateway,
+            started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(3),
+        )
+        .expect("record ambiguity");
+        (operation_id, operation, attempt_id)
     }
 
     #[test]
@@ -1189,6 +1705,192 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn safe_retry_preserves_operation_and_rejects_attempt_identity_reuse() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut content = content_store(&directory);
+        let mut events = SqliteEventStore::in_memory().expect("event store");
+        let (operation_id, operation, first_attempt_id) =
+            ambiguous_operation(&mut content, &mut events, ToolEffectClass::ReadOnly);
+        let retry_command = CommandId::new();
+        let _lost = authorize_tool_operation_retry(
+            &mut events,
+            &retry_command,
+            cairn_protocol::ObservedAtUnixMillis::new(4),
+            operation.clone(),
+        )
+        .expect("authorize retry");
+        let replayed = authorize_tool_operation_retry(
+            &mut events,
+            &retry_command,
+            cairn_protocol::ObservedAtUnixMillis::new(4),
+            operation.clone(),
+        )
+        .expect("replay retry authority");
+        assert!(
+            begin_tool_operation(
+                &mut events,
+                replayed,
+                first_attempt_id,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(5),
+            )
+            .is_err()
+        );
+        let recovered = recover_tool_operation_authority(&events, operation.clone())
+            .expect("recover authority")
+            .expect("retry authority");
+        let second_attempt_id = AttemptId::new();
+        let started = begin_tool_operation(
+            &mut events,
+            recovered,
+            second_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(5),
+        )
+        .expect("begin retry");
+        assert!(
+            authorize_tool_operation_retry(
+                &mut events,
+                &retry_command,
+                cairn_protocol::ObservedAtUnixMillis::new(4),
+                operation.clone(),
+            )
+            .is_err()
+        );
+        let mut gateway = RecordedToolGateway::new([RecordedToolExchange {
+            arguments_id: operation.arguments_id(),
+            result: CanonicalToolResult::from_value(&serde_json::json!({"ok":true}))
+                .expect("result"),
+        }]);
+        execute_tool_operation(
+            &mut events,
+            &mut content,
+            &mut gateway,
+            started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(6),
+        )
+        .expect("complete retry");
+        assert!(matches!(
+            recover_tool_operation(&events, operation_id).expect("recover"),
+            ToolOperationState::Completed { attempt_id, .. }
+                if attempt_id == second_attempt_id && attempt_id != first_attempt_id
+        ));
+        let stream = operation_stream(operation_id).expect("stream");
+        let history = events.read_stream(&stream, None).expect("history");
+        assert_eq!(history.len(), 6);
+        let mut broken_retry_parent = history;
+        broken_retry_parent[3].parent_event_id = None;
+        assert!(project_operation(&broken_retry_parent, operation_id).is_err());
+    }
+
+    #[test]
+    fn reconciliation_proving_no_effect_grants_a_fresh_attempt() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut content = content_store(&directory);
+        let mut events = SqliteEventStore::in_memory().expect("event store");
+        let (operation_id, operation, first_attempt_id) =
+            ambiguous_operation(&mut content, &mut events, ToolEffectClass::AtMostOnce);
+        assert!(
+            authorize_tool_operation_retry(
+                &mut events,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(4),
+                operation.clone(),
+            )
+            .is_err()
+        );
+        let evidence_id = reconciliation_evidence(&mut content, "not-occurred");
+        let authority = reconcile_tool_operation_not_occurred(
+            &mut events,
+            &content,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(5),
+            operation.clone(),
+            evidence_id,
+        )
+        .expect("reconcile not occurred");
+        let second_attempt_id = AttemptId::new();
+        let started = begin_tool_operation(
+            &mut events,
+            authority,
+            second_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(6),
+        )
+        .expect("begin after reconciliation");
+        let mut gateway = RecordedToolGateway::new([RecordedToolExchange {
+            arguments_id: operation.arguments_id(),
+            result: CanonicalToolResult::from_value(&serde_json::json!({"ok":true}))
+                .expect("result"),
+        }]);
+        execute_tool_operation(
+            &mut events,
+            &mut content,
+            &mut gateway,
+            started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(7),
+        )
+        .expect("complete reconciled retry");
+        assert!(matches!(
+            recover_tool_operation(&events, operation_id).expect("recover"),
+            ToolOperationState::Completed { attempt_id, .. }
+                if attempt_id == second_attempt_id && attempt_id != first_attempt_id
+        ));
+    }
+
+    #[test]
+    fn reconciliation_can_publish_the_original_attempt_result_without_retry() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut content = content_store(&directory);
+        let mut events = SqliteEventStore::in_memory().expect("event store");
+        let (operation_id, operation, attempt_id) =
+            ambiguous_operation(&mut content, &mut events, ToolEffectClass::AtMostOnce);
+        let evidence_id = reconciliation_evidence(&mut content, "completed");
+        let result = CanonicalToolResult::from_value(&serde_json::json!({"receipt":"remote-1"}))
+            .expect("result");
+        let command = CommandId::new();
+        let ToolOperationCompletion::Completed { result_id, .. } =
+            reconcile_tool_operation_completed(
+                &mut events,
+                &mut content,
+                &command,
+                cairn_protocol::ObservedAtUnixMillis::new(4),
+                &operation,
+                evidence_id,
+                &result,
+            )
+            .expect("reconcile completion")
+        else {
+            panic!("completed reconciliation");
+        };
+        let replay_result = CanonicalToolResult::from_value(&serde_json::json!({
+            "receipt":"remote-1"
+        }))
+        .expect("replay result");
+        reconcile_tool_operation_completed(
+            &mut events,
+            &mut content,
+            &command,
+            cairn_protocol::ObservedAtUnixMillis::new(4),
+            &operation,
+            evidence_id,
+            &replay_result,
+        )
+        .expect("replay reconciliation");
+        assert_eq!(
+            recover_tool_operation(&events, operation_id).expect("recover"),
+            ToolOperationState::Completed {
+                attempt_id,
+                result_id,
+            }
+        );
+        let stream = operation_stream(operation_id).expect("stream");
+        assert_eq!(events.read_stream(&stream, None).expect("history").len(), 4);
     }
 
     #[test]

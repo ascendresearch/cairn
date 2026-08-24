@@ -731,13 +731,14 @@ mod tests {
     use crate::{
         AdapterModelTurn, AdapterOutputItem, AdapterVersion, AgentStep, AgentStepState,
         CanonicalToolResult, ContextBlock, DeploymentName, DispatchCompletion, HistoryItem,
-        InstructionBlock, ModelName, ModelSelection, OperationResult, PolicyDocument,
-        PreparedModelRequest, PreparedToolOperation, ProviderName, ProviderToolCallId,
-        RecordedAdapterExchange, RecordedModelAdapter, RecordedToolExchange, RecordedToolGateway,
-        ScriptedModelTransport, ScriptedToolGateway, SettledAgentStep, ToolCatalog,
-        ToolEffectClass, ToolGatewayError, ToolImplementationVersion, ToolName, TransportError,
-        TurnInputDecision, authorize_tool_operation, begin_model_dispatch, begin_tool_operation,
-        decode_model_response, execute_model_dispatch, execute_tool_operation, prepare_agent_step,
+        InstructionBlock, ModelName, ModelSelection, OperationReconciliationEvidence,
+        OperationResult, PolicyDocument, PreparedModelRequest, PreparedToolOperation, ProviderName,
+        ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter, RecordedToolExchange,
+        RecordedToolGateway, ScriptedModelTransport, ScriptedToolGateway, SettledAgentStep,
+        ToolCatalog, ToolEffectClass, ToolGatewayError, ToolImplementationVersion, ToolName,
+        TransportError, TurnInputDecision, authorize_tool_operation, begin_model_dispatch,
+        begin_tool_operation, decode_model_response, execute_model_dispatch,
+        execute_tool_operation, prepare_agent_step, reconcile_tool_operation_completed,
         recover_agent_step, settle_decoded_step,
     };
 
@@ -1099,7 +1100,11 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_at_most_once_operation_blocks_result_flow() {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the end-to-end fault test keeps blocker, evidence, and result flow together"
+    )]
+    fn ambiguous_at_most_once_blocks_until_evidence_reconciles_completion() {
         let mut fixture = awaiting_fixture(1);
         let operation_id = OperationId::new();
         let bound = bind_step_operations(
@@ -1171,6 +1176,49 @@ mod tests {
                 .iter()
                 .any(|event| event.schema_name.as_str() == "agent.step-operations-settled")
         );
+
+        let AgentStepState::OperationsBound(recovered) = recover_agent_step(
+            &fixture.events,
+            &mut fixture.content,
+            &fixture.step,
+            fixture.model_attempt_id,
+        )
+        .expect("recover binding") else {
+            panic!("binding remains recoverable");
+        };
+        let operation = recovered.operations()[0].clone();
+        let evidence_bytes = cairn_codec::to_vec(&serde_json::json!({
+            "conclusion":"completed",
+            "receipt":"remote-1"
+        }))
+        .expect("evidence");
+        let evidence_id = fixture
+            .content
+            .put::<OperationReconciliationEvidence>(&mut Cursor::new(evidence_bytes))
+            .expect("archive evidence")
+            .content_id;
+        reconcile_tool_operation_completed(
+            &mut fixture.events,
+            &mut fixture.content,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(11),
+            &operation,
+            evidence_id,
+            &CanonicalToolResult::from_value(&serde_json::json!({"value":1})).expect("result"),
+        )
+        .expect("reconcile completion");
+        assert!(matches!(
+            settle_step_operations(
+                &mut fixture.events,
+                &mut fixture.content,
+                &fixture.step,
+                fixture.model_attempt_id,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(12),
+            )
+            .expect("settle reconciled result"),
+            StepOperationSettlement::ReadyForNextStep { .. }
+        ));
     }
 
     #[test]
