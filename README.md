@@ -32,9 +32,12 @@ Reconcile-required effects can only resume after citing verified, content-addres
 either proves the effect did not occur or confirms the original attempt's result. The remaining
 agent loop now has a durable episode aggregate that pins task and role identities, grants one-shot
 step authority, verifies cross-step `pending_results` lineage, survives lost open/advance
-acknowledgements, and terminates at yielded, step-limit, or deadline safe points. The remaining
-architecture in the normative documents is still target design. The old repositories are evidence
-and compatibility references, not source trees to copy mechanically.
+acknowledgements, and terminates at yielded, step-limit, deadline, or tool-operation-budget safe
+points. Logical tool-operation budget is reserved by an episode admission fact before step binding;
+recovery verifies the exact operation IDs and trusted registrations across both streams, and no tool
+authority is produced when admission would exceed the limit. The remaining architecture in the
+normative documents is still target design. The old repositories are evidence and compatibility
+references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

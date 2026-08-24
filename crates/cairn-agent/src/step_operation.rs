@@ -110,6 +110,52 @@ pub struct BoundStepOperations {
     operations: Vec<PreparedToolOperation>,
 }
 
+/// Non-authoritative identity and trusted registration of a bound logical operation.
+///
+/// This projection deliberately excludes argument bytes and cannot grant execution authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StepOperationIdentity {
+    operation_id: OperationId,
+    tool: ToolName,
+    implementation_version: ToolImplementationVersion,
+    effect: ToolEffectClass,
+}
+
+impl StepOperationIdentity {
+    /// Returns the stable logical operation identity.
+    #[must_use]
+    pub const fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+
+    /// Returns the trusted registered tool name.
+    #[must_use]
+    pub fn tool(&self) -> &ToolName {
+        &self.tool
+    }
+
+    /// Returns the pinned tool implementation version.
+    #[must_use]
+    pub fn implementation_version(&self) -> &ToolImplementationVersion {
+        &self.implementation_version
+    }
+
+    /// Returns trusted external-effect semantics.
+    #[must_use]
+    pub const fn effect(&self) -> ToolEffectClass {
+        self.effect
+    }
+
+    fn from_prepared(operation: &PreparedToolOperation) -> Self {
+        Self {
+            operation_id: operation.operation_id(),
+            tool: operation.tool().clone(),
+            implementation_version: operation.implementation_version().clone(),
+            effect: operation.effect(),
+        }
+    }
+}
+
 impl BoundStepOperations {
     /// Returns the semantic turn that proposed these operations.
     #[must_use]
@@ -210,6 +256,7 @@ pub(crate) enum StepOperationProjection {
     Ready {
         turn_id: ContentId<SemanticModelTurnArtifact>,
         pending_results: Vec<ContentId<OperationResult>>,
+        operations: Vec<StepOperationIdentity>,
     },
 }
 
@@ -356,6 +403,7 @@ pub fn settle_step_operations<E: EventStore, C: ContentStore>(
         AgentStepState::ReadyForNextStep {
             turn_id,
             pending_results,
+            ..
         } => {
             return Ok(StepOperationSettlement::ReadyForNextStep {
                 turn_id,
@@ -597,6 +645,11 @@ pub(crate) fn project_step_operations<E: EventStore, C: ContentStore>(
     Ok(StepOperationProjection::Ready {
         turn_id,
         pending_results,
+        operations: bound
+            .operations
+            .iter()
+            .map(StepOperationIdentity::from_prepared)
+            .collect(),
     })
 }
 

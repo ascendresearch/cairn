@@ -228,6 +228,7 @@ Examples:
 - `ModelResponseReceived`
 - `ModelResponseDecoded`
 - `ToolCallProposed`
+- `EpisodeOperationsAdmitted`
 - operation lifecycle events
 - `EpisodeCompleted`
 
@@ -238,6 +239,16 @@ edge: the prior step must have produced those results and the next step's commit
 must consume exactly those results. Step-limit and deadline completion are recorded only at a safe
 step boundary; authority lost before step preparation can be reconstructed but cannot be replayed
 after the step has consumed it.
+
+`EpisodeOperationsAdmitted` is the pre-authority budget reservation for an ordered, non-empty set
+of logical tool operations. It records each stable `OperationId` plus the trusted tool name,
+implementation version, and effect class. The episode fact commits before step binding. A restart in
+between can finish the exact binding without charging twice; recovery rejects a binding or settled
+result that lacks the matching episode admission. If the proposed set would exceed the cumulative
+episode limit, `EpisodeCompleted(ToolOperationLimitReached)` records the requested count while the
+step remains at `AwaitingOperations`; no binding or operation authority may be created. Retries use
+fresh `AttemptId` values under an already admitted logical operation and are not counted as new
+logical operations; attempt and externally metered budgets remain separate dimensions.
 
 ### 7.3 Execution facts
 

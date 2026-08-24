@@ -123,6 +123,8 @@ pub enum AgentStepState {
         turn_id: ContentId<SemanticModelTurnArtifact>,
         /// Operation results in original model output order.
         pending_results: Vec<ContentId<crate::OperationResult>>,
+        /// Non-authoritative logical operation identities in `pending_results` order.
+        operations: Vec<crate::StepOperationIdentity>,
     },
     /// Transport proved no provider request was sent.
     ModelNotSent,
@@ -263,9 +265,11 @@ fn recover_completed_step<E: EventStore, C: ContentStore>(
             StepOperationProjection::Ready {
                 turn_id,
                 pending_results,
+                operations,
             } => Ok(AgentStepState::ReadyForNextStep {
                 turn_id,
                 pending_results,
+                operations,
             }),
         }
     }

@@ -22,9 +22,10 @@ pub use dispatch::{
 };
 pub use episode::{
     AgentEpisode, AgentEpisodeState, EpisodeAdvance, EpisodeBudget, EpisodeCompletionReason,
-    EpisodeCoordinatorError, EpisodeDeadlineUnixMillis, EpisodeStepAuthority, EpisodeStepLimit,
-    EpisodeValueError, advance_agent_episode, open_agent_episode, prepare_episode_step,
-    recover_agent_episode,
+    EpisodeCoordinatorError, EpisodeDeadlineUnixMillis, EpisodeOperationAdmission,
+    EpisodeOperationAdmissionOutcome, EpisodeStepAuthority, EpisodeStepLimit,
+    EpisodeToolOperationLimit, EpisodeValueError, admit_episode_operations, advance_agent_episode,
+    open_agent_episode, prepare_episode_step, recover_agent_episode,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -47,8 +48,8 @@ pub use step::{
     recover_agent_step, settle_decoded_step,
 };
 pub use step_operation::{
-    BoundStepOperations, StepOperationBlocker, StepOperationSettlement, ToolOperationAssignment,
-    ToolRegistration, bind_step_operations, settle_step_operations,
+    BoundStepOperations, StepOperationBlocker, StepOperationIdentity, StepOperationSettlement,
+    ToolOperationAssignment, ToolRegistration, bind_step_operations, settle_step_operations,
 };
 
 macro_rules! label_type {

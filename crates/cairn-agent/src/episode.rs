@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use cairn_protocol::{
     AggregateId, AggregateKind, CommandId, ContentId, EpisodeId, EventId, ModelAttemptId,
-    ObservedAtUnixMillis, SchemaName, SchemaVersion, StepId, TaskId,
+    ObservedAtUnixMillis, OperationId, SchemaName, SchemaVersion, StepId, TaskId,
 };
 use cairn_record::{
     EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId,
@@ -12,11 +12,14 @@ use thiserror::Error;
 
 use crate::dispatch::recover_turn_input_decision;
 use crate::{
-    AgentRoleName, AgentStep, AgentStepState, DispatchAuthority, OperationResult,
-    StepCoordinatorError, TurnInputDecision, prepare_agent_step, recover_agent_step,
+    AgentRoleName, AgentStep, AgentStepState, BoundStepOperations, DispatchAuthority,
+    OperationResult, PreparedToolOperation, StepCoordinatorError, ToolCallProposal,
+    ToolEffectClass, ToolImplementationVersion, ToolName, ToolOperationAssignment,
+    TurnInputDecision, bind_step_operations, prepare_agent_step, recover_agent_step,
 };
 
 const EPISODE_OPENED: &str = "agent.episode-opened";
+const OPERATIONS_ADMITTED: &str = "agent.episode-operations-admitted";
 const STEP_ADVANCED: &str = "agent.episode-step-advanced";
 const EPISODE_COMPLETED: &str = "agent.episode-completed";
 
@@ -65,6 +68,40 @@ impl From<EpisodeStepLimit> for u32 {
     }
 }
 
+/// Maximum number of logical tool operations an episode may admit.
+///
+/// Zero is valid and creates a model-only episode. Retries are attempts of an already admitted
+/// logical operation and are deliberately not charged against this dimension.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct EpisodeToolOperationLimit(u32);
+
+impl EpisodeToolOperationLimit {
+    /// Creates a logical tool-operation limit.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the configured maximum.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for EpisodeToolOperationLimit {
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<EpisodeToolOperationLimit> for u32 {
+    fn from(value: EpisodeToolOperationLimit) -> Self {
+        value.0
+    }
+}
+
 /// Absolute wall-clock safe-point deadline for an episode.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -94,8 +131,15 @@ impl EpisodeDeadlineUnixMillis {
 pub struct EpisodeBudget {
     /// Maximum number of model steps that may start.
     pub step_limit: EpisodeStepLimit,
+    /// Maximum number of logical operations admitted before any tool authority can exist.
+    #[serde(default = "unlimited_tool_operation_limit")]
+    pub tool_operation_limit: EpisodeToolOperationLimit,
     /// Optional absolute deadline checked at safe step boundaries.
     pub deadline_unix_ms: Option<EpisodeDeadlineUnixMillis>,
+}
+
+const fn unlimited_tool_operation_limit() -> EpisodeToolOperationLimit {
+    EpisodeToolOperationLimit::new(u32::MAX)
 }
 
 /// Durable episode aggregate boundary.
@@ -144,6 +188,66 @@ pub enum EpisodeCompletionReason {
     StepLimitReached,
     /// The deadline was reached at a durable safe boundary.
     DeadlineReached,
+    /// The current proposals would exceed the logical tool-operation limit.
+    ToolOperationLimitReached,
+}
+
+/// Budget-backed permit containing the durable tool bindings for the current episode step.
+///
+/// ```compile_fail
+/// use cairn_agent::EpisodeOperationAdmission;
+///
+/// let forged = EpisodeOperationAdmission {
+///     episode_id: todo!(),
+///     step_id: todo!(),
+///     bound: todo!(),
+/// };
+/// ```
+#[derive(Debug)]
+pub struct EpisodeOperationAdmission {
+    episode_id: EpisodeId,
+    step_id: StepId,
+    bound: BoundStepOperations,
+}
+
+impl EpisodeOperationAdmission {
+    /// Returns the episode that admitted these operations.
+    #[must_use]
+    pub const fn episode_id(&self) -> EpisodeId {
+        self.episode_id
+    }
+
+    /// Returns the step whose proposals were admitted.
+    #[must_use]
+    pub const fn step_id(&self) -> StepId {
+        self.step_id
+    }
+
+    /// Borrows the admitted, durable operations in proposal order.
+    #[must_use]
+    pub fn operations(&self) -> &[PreparedToolOperation] {
+        self.bound.operations()
+    }
+
+    /// Consumes the permit into independently authorizable operations.
+    #[must_use]
+    pub fn into_operations(self) -> Vec<PreparedToolOperation> {
+        self.bound.into_operations()
+    }
+}
+
+/// Result of applying episode tool-operation policy at the pre-authority boundary.
+#[derive(Debug)]
+pub enum EpisodeOperationAdmissionOutcome {
+    /// The logical operations fit the budget and have durable step bindings.
+    Admitted(EpisodeOperationAdmission),
+    /// The proposals exceeded the budget and durably completed the episode.
+    Completed {
+        /// Terminal reason.
+        reason: EpisodeCompletionReason,
+        /// Number of model steps started.
+        steps_started: u32,
+    },
 }
 
 /// One-shot authority to prepare the current episode step.
@@ -273,6 +377,25 @@ struct CompletedPayload {
     last_step_id: StepId,
     reason: EpisodeCompletionReason,
     steps_started: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requested_tool_operations: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AdmittedAssignmentPayload {
+    operation_id: OperationId,
+    tool: ToolName,
+    implementation_version: ToolImplementationVersion,
+    effect: ToolEffectClass,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsAdmittedPayload {
+    episode_id: EpisodeId,
+    step_id: StepId,
+    assignments: Vec<AdmittedAssignmentPayload>,
 }
 
 #[derive(Clone)]
@@ -280,6 +403,9 @@ struct StepEntry {
     step_id: StepId,
     model_attempt_id: ModelAttemptId,
     expected_pending_results: Vec<ContentId<OperationResult>>,
+    admitted_operations: Option<Vec<AdmittedAssignmentPayload>>,
+    admission_command_id: Option<CommandId>,
+    admission_observed_at_unix_ms: Option<i64>,
 }
 
 struct EpisodeProjection {
@@ -394,6 +520,161 @@ pub fn prepare_episode_step<E: EventStore, C: cairn_record::ContentStore>(
     .map_err(Into::into)
 }
 
+/// Reserves episode tool budget before creating durable step bindings.
+///
+/// The admission fact is committed to the episode first. If the process stops before the step
+/// binding commits, calling this function again with the same assignments completes the binding
+/// without charging the budget twice. No [`PreparedToolOperation`] is returned unless both facts
+/// agree.
+///
+/// # Errors
+///
+/// Returns [`EpisodeCoordinatorError`] when assignments differ from durable proposals or prior
+/// admission, the episode is terminal, binding was bypassed, or a storage operation fails.
+#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the pre-authority coordinator keeps audit, replay, budget, and binding order explicit"
+)]
+pub fn admit_episode_operations<E: EventStore, C: cairn_record::ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    episode: &AgentEpisode,
+    assignments: Vec<ToolOperationAssignment>,
+    admission_command_id: &CommandId,
+    binding_command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<EpisodeOperationAdmissionOutcome, EpisodeCoordinatorError> {
+    let history = events.read_stream(&episode.stream, None)?;
+    let projection = project_episode(&history, episode.episode_id)?;
+    validate_previous_steps(events, content, &projection)?;
+    let current = projection
+        .steps
+        .last()
+        .ok_or_else(|| EpisodeCoordinatorError::InvalidEpisode("episode has no step".into()))?;
+    let step = AgentStep::new(current.step_id)?;
+    let step_state = recover_agent_step(events, content, &step, current.model_attempt_id)?;
+    if !matches!(step_state, AgentStepState::NotStarted) {
+        validate_step_input(
+            events,
+            content,
+            &step,
+            current.model_attempt_id,
+            &current.expected_pending_results,
+        )?;
+    }
+    validate_step_admission(&step_state, current)?;
+    let steps_started = u32::try_from(projection.steps.len())
+        .map_err(|_| EpisodeCoordinatorError::InvalidEpisode("too many episode steps".into()))?;
+    if let Some(completion) = projection.completion {
+        validate_completion(
+            &projection.opened,
+            &projection.steps,
+            &completion,
+            &step_state,
+        )?;
+        return Ok(EpisodeOperationAdmissionOutcome::Completed {
+            reason: completion.reason,
+            steps_started: completion.steps_started,
+        });
+    }
+
+    let requested = admission_payload_from_assignments(&assignments);
+    if requested.is_empty() {
+        return invalid_episode("operation admission must contain at least one assignment");
+    }
+    let proposals = match &step_state {
+        AgentStepState::AwaitingOperations { proposals, .. } => Some(proposals.as_slice()),
+        AgentStepState::OperationsBound(_) if current.admitted_operations.is_some() => None,
+        _ => return invalid_episode("episode step is not awaiting operation admission"),
+    };
+    if let Some(proposals) = proposals {
+        validate_assignments_against_proposals(proposals, &assignments)?;
+    }
+
+    if let Some(durable) = &current.admitted_operations {
+        if durable != &requested {
+            return invalid_episode("operation assignments differ from durable episode admission");
+        }
+        if current.admission_command_id != Some(*admission_command_id)
+            || current.admission_observed_at_unix_ms != Some(observed_at.get())
+        {
+            return invalid_episode("replayed operation admission differs from durable command");
+        }
+    } else {
+        validate_new_operation_ids(&projection.steps, &requested)?;
+        let admitted = admitted_operation_count(&projection.steps)?;
+        let requested_count = u32::try_from(requested.len()).map_err(|_| {
+            EpisodeCoordinatorError::InvalidEpisode("too many requested tool operations".into())
+        })?;
+        if admitted
+            .checked_add(requested_count)
+            .is_none_or(|total| total > projection.opened.budget.tool_operation_limit.get())
+        {
+            let advance = complete_episode(
+                events,
+                episode,
+                &history,
+                current.step_id,
+                EpisodeCompletionReason::ToolOperationLimitReached,
+                steps_started,
+                Some(requested_count),
+                admission_command_id,
+                observed_at,
+            )?;
+            let EpisodeAdvance::Completed {
+                reason,
+                steps_started,
+            } = advance
+            else {
+                unreachable!("completion helper always returns a terminal outcome")
+            };
+            return Ok(EpisodeOperationAdmissionOutcome::Completed {
+                reason,
+                steps_started,
+            });
+        }
+        append_operation_admission(
+            events,
+            episode,
+            &history,
+            current.step_id,
+            requested.clone(),
+            admission_command_id,
+            observed_at,
+        )?;
+        let refreshed_history = events.read_stream(&episode.stream, None)?;
+        let refreshed = project_episode(&refreshed_history, episode.episode_id)?;
+        let refreshed_current = refreshed
+            .steps
+            .last()
+            .ok_or_else(|| EpisodeCoordinatorError::InvalidEpisode("episode has no step".into()))?;
+        if refreshed_current.admitted_operations.as_ref()
+            != Some(&admission_payload_from_assignments(&assignments))
+        {
+            return invalid_episode("committed operation admission could not be recovered");
+        }
+    }
+
+    let bound = bind_step_operations(
+        events,
+        content,
+        &step,
+        current.model_attempt_id,
+        assignments,
+        binding_command_id,
+        observed_at,
+    )?;
+    validate_bound_admission(&bound, &requested)?;
+    Ok(EpisodeOperationAdmissionOutcome::Admitted(
+        EpisodeOperationAdmission {
+            episode_id: episode.episode_id,
+            step_id: current.step_id,
+            bound,
+        },
+    ))
+}
+
 /// Rebuilds episode and current-step state exclusively from durable facts and verified content.
 ///
 /// # Errors
@@ -425,8 +706,14 @@ pub fn recover_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             &current.expected_pending_results,
         )?;
     }
+    validate_step_admission(&step_state, current)?;
     if let Some(completion) = projection.completion {
-        validate_completion(&projection.opened, &completion, &step_state)?;
+        validate_completion(
+            &projection.opened,
+            &projection.steps,
+            &completion,
+            &step_state,
+        )?;
         return Ok(AgentEpisodeState::Completed {
             reason: completion.reason,
             steps_started: completion.steps_started,
@@ -488,10 +775,16 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             &current.expected_pending_results,
         )?;
     }
+    validate_step_admission(&step_state, current)?;
     let steps_started = u32::try_from(projection.steps.len())
         .map_err(|_| EpisodeCoordinatorError::InvalidEpisode("too many episode steps".into()))?;
     if let Some(completion) = projection.completion {
-        validate_completion(&projection.opened, &completion, &step_state)?;
+        validate_completion(
+            &projection.opened,
+            &projection.steps,
+            &completion,
+            &step_state,
+        )?;
         return Ok(EpisodeAdvance::Completed {
             reason: completion.reason,
             steps_started: completion.steps_started,
@@ -526,6 +819,7 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             current.step_id,
             EpisodeCompletionReason::Yielded,
             steps_started,
+            None,
             command_id,
             observed_at,
         );
@@ -556,6 +850,7 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             current.step_id,
             reason,
             steps_started,
+            None,
             command_id,
             observed_at,
         );
@@ -619,6 +914,42 @@ fn append_advanced_step<E: EventStore>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn append_operation_admission<E: EventStore>(
+    events: &mut E,
+    episode: &AgentEpisode,
+    history: &[EventEnvelope],
+    step_id: StepId,
+    assignments: Vec<AdmittedAssignmentPayload>,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), EpisodeCoordinatorError> {
+    let last = history
+        .last()
+        .ok_or_else(|| EpisodeCoordinatorError::InvalidEpisode("episode is empty".into()))?;
+    let payload = OperationsAdmittedPayload {
+        episode_id: episode.episode_id,
+        step_id,
+        assignments,
+    };
+    let event = episode_fact(
+        OPERATIONS_ADMITTED,
+        Some(last.event_id),
+        observed_at,
+        &payload,
+    )?;
+    events.append(
+        &episode.stream,
+        ExpectedRevision::Exact(
+            cairn_protocol::StreamRevision::new(last.sequence.get())
+                .map_err(|error| EpisodeCoordinatorError::InvalidEpisode(error.to_string()))?,
+        ),
+        command_id,
+        &[event],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn complete_episode<E: EventStore>(
     events: &mut E,
     episode: &AgentEpisode,
@@ -626,6 +957,7 @@ fn complete_episode<E: EventStore>(
     last_step_id: StepId,
     reason: EpisodeCompletionReason,
     steps_started: u32,
+    requested_tool_operations: Option<u32>,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<EpisodeAdvance, EpisodeCoordinatorError> {
@@ -637,6 +969,7 @@ fn complete_episode<E: EventStore>(
         last_step_id,
         reason,
         steps_started,
+        requested_tool_operations,
     };
     let event = episode_fact(
         EPISODE_COMPLETED,
@@ -673,6 +1006,10 @@ fn step_authority(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the episode projector keeps its small event protocol and invariants in one pass"
+)]
 fn project_episode(
     history: &[EventEnvelope],
     episode_id: EpisodeId,
@@ -692,9 +1029,13 @@ fn project_episode(
         step_id: opened.first_step_id,
         model_attempt_id: opened.first_model_attempt_id,
         expected_pending_results: Vec::new(),
+        admitted_operations: None,
+        admission_command_id: None,
+        admission_observed_at_unix_ms: None,
     }];
     let mut step_ids = HashSet::from([opened.first_step_id.to_string()]);
     let mut attempt_ids = HashSet::from([opened.first_model_attempt_id.to_string()]);
+    let mut admitted_operation_ids = HashSet::new();
     let mut completion = None;
     let mut parent = first.event_id;
     for event in &history[1..] {
@@ -702,6 +1043,30 @@ fn project_episode(
             return invalid_episode("episode fact does not cite the previous fact");
         }
         match event.schema_name.as_str() {
+            OPERATIONS_ADMITTED => {
+                if completion.is_some() {
+                    return invalid_episode("episode admits operations after completion");
+                }
+                let payload: OperationsAdmittedPayload = decode(event)?;
+                let current = steps.last_mut().expect("opened episode has a step");
+                if payload.episode_id != episode_id || payload.step_id != current.step_id {
+                    return invalid_episode("operation admission cites another episode step");
+                }
+                if current.admitted_operations.is_some() {
+                    return invalid_episode("episode step has multiple operation admissions");
+                }
+                if payload.assignments.is_empty() {
+                    return invalid_episode("operation admission must not be empty");
+                }
+                for assignment in &payload.assignments {
+                    if !admitted_operation_ids.insert(assignment.operation_id.to_string()) {
+                        return invalid_episode("episode reuses an admitted operation identity");
+                    }
+                }
+                current.admitted_operations = Some(payload.assignments);
+                current.admission_command_id = Some(event.command_id);
+                current.admission_observed_at_unix_ms = Some(event.observed_at_unix_ms);
+            }
             STEP_ADVANCED => {
                 if completion.is_some() {
                     return invalid_episode("episode advances after completion");
@@ -726,6 +1091,9 @@ fn project_episode(
                     step_id: payload.next_step_id,
                     model_attempt_id: payload.next_model_attempt_id,
                     expected_pending_results: payload.pending_results,
+                    admitted_operations: None,
+                    admission_command_id: None,
+                    admission_observed_at_unix_ms: None,
                 });
             }
             EPISODE_COMPLETED => {
@@ -743,19 +1111,45 @@ fn project_episode(
                 {
                     return invalid_episode("completion fact breaks episode step lineage");
                 }
+                let admitted = admitted_operation_count(&steps)?;
                 match payload.reason {
                     EpisodeCompletionReason::StepLimitReached
-                        if expected_steps < opened.budget.step_limit.get() =>
+                        if payload.requested_tool_operations.is_some()
+                            || expected_steps < opened.budget.step_limit.get() =>
                     {
                         return invalid_episode("episode completed before reaching its step limit");
                     }
                     EpisodeCompletionReason::DeadlineReached
-                        if opened.budget.deadline_unix_ms.is_none_or(|deadline| {
-                            !deadline
-                                .is_reached(ObservedAtUnixMillis::new(event.observed_at_unix_ms))
-                        }) =>
+                        if payload.requested_tool_operations.is_some()
+                            || opened.budget.deadline_unix_ms.is_none_or(|deadline| {
+                                !deadline.is_reached(ObservedAtUnixMillis::new(
+                                    event.observed_at_unix_ms,
+                                ))
+                            }) =>
                     {
                         return invalid_episode("episode completed before its deadline");
+                    }
+                    EpisodeCompletionReason::Yielded
+                        if payload.requested_tool_operations.is_some() =>
+                    {
+                        return invalid_episode("yield completion carries tool budget evidence");
+                    }
+                    EpisodeCompletionReason::ToolOperationLimitReached => {
+                        let requested = payload.requested_tool_operations.ok_or_else(|| {
+                            EpisodeCoordinatorError::InvalidEpisode(
+                                "tool-budget completion lacks requested operation count".into(),
+                            )
+                        })?;
+                        if requested == 0
+                            || current.admitted_operations.is_some()
+                            || admitted.checked_add(requested).is_some_and(|total| {
+                                total <= opened.budget.tool_operation_limit.get()
+                            })
+                        {
+                            return invalid_episode(
+                                "tool-budget completion does not prove a budget overrun",
+                            );
+                        }
                     }
                     _ => {}
                 }
@@ -770,6 +1164,149 @@ fn project_episode(
         steps,
         completion,
     })
+}
+
+fn admission_payload_from_assignments(
+    assignments: &[ToolOperationAssignment],
+) -> Vec<AdmittedAssignmentPayload> {
+    assignments
+        .iter()
+        .map(|assignment| AdmittedAssignmentPayload {
+            operation_id: assignment.operation_id(),
+            tool: assignment.registration().name().clone(),
+            implementation_version: assignment.registration().implementation_version().clone(),
+            effect: assignment.registration().effect(),
+        })
+        .collect()
+}
+
+fn validate_assignments_against_proposals(
+    proposals: &[ToolCallProposal],
+    assignments: &[ToolOperationAssignment],
+) -> Result<(), EpisodeCoordinatorError> {
+    if proposals.len() != assignments.len() {
+        return invalid_episode("every proposal must have exactly one admitted operation");
+    }
+    let mut operation_ids = HashSet::new();
+    for (proposal, assignment) in proposals.iter().zip(assignments) {
+        if proposal.tool() != assignment.registration().name() {
+            return invalid_episode("admitted registration differs from the proposed tool");
+        }
+        if !operation_ids.insert(assignment.operation_id().to_string()) {
+            return invalid_episode("operation admission contains a duplicate identity");
+        }
+    }
+    Ok(())
+}
+
+fn validate_new_operation_ids(
+    steps: &[StepEntry],
+    requested: &[AdmittedAssignmentPayload],
+) -> Result<(), EpisodeCoordinatorError> {
+    let prior: HashSet<String> = steps
+        .iter()
+        .filter_map(|step| step.admitted_operations.as_ref())
+        .flatten()
+        .map(|assignment| assignment.operation_id.to_string())
+        .collect();
+    if requested
+        .iter()
+        .any(|assignment| prior.contains(&assignment.operation_id.to_string()))
+    {
+        return invalid_episode("episode cannot reuse a prior logical operation identity");
+    }
+    Ok(())
+}
+
+fn admitted_operation_count(steps: &[StepEntry]) -> Result<u32, EpisodeCoordinatorError> {
+    steps.iter().try_fold(0_u32, |total, step| {
+        let count = step.admitted_operations.as_ref().map_or(0, Vec::len);
+        let count = u32::try_from(count).map_err(|_| {
+            EpisodeCoordinatorError::InvalidEpisode("too many admitted operations".into())
+        })?;
+        total.checked_add(count).ok_or_else(|| {
+            EpisodeCoordinatorError::InvalidEpisode("admitted operation count overflow".into())
+        })
+    })
+}
+
+fn validate_bound_admission(
+    bound: &BoundStepOperations,
+    admitted: &[AdmittedAssignmentPayload],
+) -> Result<(), EpisodeCoordinatorError> {
+    if bound.operations().len() != admitted.len()
+        || bound
+            .operations()
+            .iter()
+            .zip(admitted)
+            .any(|(operation, assignment)| {
+                operation.operation_id() != assignment.operation_id
+                    || operation.tool() != &assignment.tool
+                    || operation.implementation_version() != &assignment.implementation_version
+                    || operation.effect() != assignment.effect
+            })
+    {
+        return invalid_episode("step bindings differ from durable episode admission");
+    }
+    Ok(())
+}
+
+fn validate_step_admission(
+    step_state: &AgentStepState,
+    entry: &StepEntry,
+) -> Result<(), EpisodeCoordinatorError> {
+    match step_state {
+        AgentStepState::AwaitingOperations { proposals, .. } => {
+            if let Some(admitted) = &entry.admitted_operations {
+                if proposals.len() != admitted.len()
+                    || proposals
+                        .iter()
+                        .zip(admitted)
+                        .any(|(proposal, assignment)| proposal.tool() != &assignment.tool)
+                {
+                    return invalid_episode(
+                        "durable episode admission differs from step proposals",
+                    );
+                }
+            }
+            Ok(())
+        }
+        AgentStepState::OperationsBound(bound) => entry
+            .admitted_operations
+            .as_ref()
+            .ok_or_else(|| {
+                EpisodeCoordinatorError::InvalidEpisode(
+                    "step operations were bound without episode admission".into(),
+                )
+            })
+            .and_then(|admitted| validate_bound_admission(bound, admitted)),
+        AgentStepState::ReadyForNextStep { operations, .. } => {
+            let admitted = entry.admitted_operations.as_ref().ok_or_else(|| {
+                EpisodeCoordinatorError::InvalidEpisode(
+                    "settled operations lack durable episode admission".into(),
+                )
+            })?;
+            if operations.len() != admitted.len()
+                || operations
+                    .iter()
+                    .zip(admitted)
+                    .any(|(operation, assignment)| {
+                        operation.operation_id() != assignment.operation_id
+                            || operation.tool() != &assignment.tool
+                            || operation.implementation_version()
+                                != &assignment.implementation_version
+                            || operation.effect() != assignment.effect
+                    })
+            {
+                return invalid_episode("settled operations differ from episode admission");
+            }
+            Ok(())
+        }
+        _ if entry.admitted_operations.is_some() => {
+            invalid_episode("episode admitted operations before durable tool proposals")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_previous_steps<E: EventStore, C: cairn_record::ContentStore>(
@@ -788,7 +1325,9 @@ fn validate_previous_steps<E: EventStore, C: cairn_record::ContentStore>(
             previous.model_attempt_id,
             &previous.expected_pending_results,
         )?;
-        match recover_agent_step(events, content, &step, previous.model_attempt_id)? {
+        let step_state = recover_agent_step(events, content, &step, previous.model_attempt_id)?;
+        validate_step_admission(&step_state, previous)?;
+        match step_state {
             AgentStepState::ReadyForNextStep {
                 pending_results, ..
             } if pending_results == next.expected_pending_results => {}
@@ -818,6 +1357,7 @@ fn validate_step_input<E: EventStore, C: cairn_record::ContentStore>(
 
 fn validate_completion(
     opened: &OpenedPayload,
+    steps: &[StepEntry],
     completion: &CompletedPayload,
     step_state: &AgentStepState,
 ) -> Result<(), EpisodeCoordinatorError> {
@@ -838,6 +1378,31 @@ fn validate_completion(
                 && matches!(step_state, AgentStepState::ReadyForNextStep { .. }) =>
         {
             Ok(())
+        }
+        EpisodeCompletionReason::ToolOperationLimitReached => {
+            let requested = completion.requested_tool_operations.ok_or_else(|| {
+                EpisodeCoordinatorError::InvalidEpisode(
+                    "tool-budget completion lacks requested operation count".into(),
+                )
+            })?;
+            let AgentStepState::AwaitingOperations { proposals, .. } = step_state else {
+                return invalid_episode(
+                    "tool-budget completion is not at the proposal admission boundary",
+                );
+            };
+            let proposal_count = u32::try_from(proposals.len()).map_err(|_| {
+                EpisodeCoordinatorError::InvalidEpisode("too many proposed operations".into())
+            })?;
+            let admitted = admitted_operation_count(steps)?;
+            if requested == proposal_count
+                && admitted
+                    .checked_add(requested)
+                    .is_none_or(|total| total > opened.budget.tool_operation_limit.get())
+            {
+                Ok(())
+            } else {
+                invalid_episode("tool-budget completion carries false overrun evidence")
+            }
         }
         _ => invalid_episode("episode completion reason contradicts its final step"),
     }
@@ -888,16 +1453,18 @@ mod tests {
     use std::io::Cursor;
 
     use cairn_protocol::{
-        AttemptId, CommandId, ContentId, ContentType, EpisodeId, ModelAttemptId, OperationId,
-        StepId, TaskId,
+        AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, EpisodeId,
+        ModelAttemptId, OperationId, StepId, TaskId,
     };
-    use cairn_record::{ContentStore, EventStore};
+    use cairn_record::{ContentStore, EventStore, StreamId};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 
     use super::{
         AdvancedPayload, AgentEpisode, AgentEpisodeState, EpisodeAdvance, EpisodeBudget,
-        EpisodeCompletionReason, EpisodeDeadlineUnixMillis, EpisodeStepLimit,
-        advance_agent_episode, open_agent_episode, prepare_episode_step, project_episode,
+        EpisodeCompletionReason, EpisodeDeadlineUnixMillis, EpisodeOperationAdmissionOutcome,
+        EpisodeStepLimit, EpisodeToolOperationLimit, OperationsAdmittedPayload,
+        admission_payload_from_assignments, admit_episode_operations, advance_agent_episode,
+        append_operation_admission, open_agent_episode, prepare_episode_step, project_episode,
         recover_agent_episode, validate_previous_steps,
     };
     use crate::{
@@ -1024,6 +1591,7 @@ mod tests {
     fn complete_tool_step(
         events: &mut SqliteEventStore,
         content: &mut SqliteContentStore,
+        episode: &AgentEpisode,
         step: &AgentStep,
         attempt_id: ModelAttemptId,
         authority: DispatchAuthority,
@@ -1044,11 +1612,10 @@ mod tests {
             settled,
             SettledAgentStep::AwaitingOperations { .. }
         ));
-        let bound = bind_step_operations(
+        let EpisodeOperationAdmissionOutcome::Admitted(admission) = admit_episode_operations(
             events,
             content,
-            step,
-            attempt_id,
+            episode,
             vec![ToolOperationAssignment::new(
                 OperationId::new(),
                 ToolRegistration::new(
@@ -1058,10 +1625,13 @@ mod tests {
                 ),
             )],
             &CommandId::new(),
+            &CommandId::new(),
             cairn_protocol::ObservedAtUnixMillis::new(7),
         )
-        .expect("bind");
-        let operation = bound.into_operations().pop().expect("operation");
+        .expect("admit") else {
+            panic!("admitted operations");
+        };
+        let operation = admission.into_operations().pop().expect("operation");
         let arguments_id = operation.arguments_id();
         let operation_authority = authorize_tool_operation(
             events,
@@ -1109,10 +1679,11 @@ mod tests {
         pending_results
     }
 
-    fn ready_episode(
+    fn prepared_episode(
         step_limit: u32,
+        tool_operation_limit: u32,
         deadline: Option<i64>,
-    ) -> (ReadyEpisode, Vec<ContentId<OperationResult>>) {
+    ) -> (ReadyEpisode, AgentStep, ModelAttemptId, DispatchAuthority) {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut content = SqliteContentStore::open(
             directory.path().join("content.db"),
@@ -1127,6 +1698,7 @@ mod tests {
         let command = CommandId::new();
         let budget = EpisodeBudget {
             step_limit: EpisodeStepLimit::new(step_limit).expect("limit"),
+            tool_operation_limit: EpisodeToolOperationLimit::new(tool_operation_limit),
             deadline_unix_ms: deadline.map(EpisodeDeadlineUnixMillis::new),
         };
         let role = AgentRoleName::new("candidate-author").expect("role");
@@ -1180,7 +1752,6 @@ mod tests {
             "consumed first-step authority must not replay"
         );
         let step = AgentStep::new(step_id).expect("step");
-        let results = complete_tool_step(&mut events, &mut content, &step, attempt_id, dispatch);
         (
             ReadyEpisode {
                 _directory: directory,
@@ -1188,8 +1759,54 @@ mod tests {
                 events,
                 episode,
             },
-            results,
+            step,
+            attempt_id,
+            dispatch,
         )
+    }
+
+    fn ready_episode(
+        step_limit: u32,
+        tool_operation_limit: u32,
+        deadline: Option<i64>,
+    ) -> (ReadyEpisode, Vec<ContentId<OperationResult>>) {
+        let (mut fixture, step, attempt_id, dispatch) =
+            prepared_episode(step_limit, tool_operation_limit, deadline);
+        let results = complete_tool_step(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            &step,
+            attempt_id,
+            dispatch,
+        );
+        (fixture, results)
+    }
+
+    fn read_source_assignment(operation_id: OperationId) -> ToolOperationAssignment {
+        ToolOperationAssignment::new(
+            operation_id,
+            ToolRegistration::new(
+                ToolName::new("read_source").expect("tool"),
+                ToolImplementationVersion::new("v1").expect("version"),
+                ToolEffectClass::ReadOnly,
+            ),
+        )
+    }
+
+    fn tool_call(call_id: &str) -> AdapterOutputItem {
+        AdapterOutputItem::ToolCall {
+            provider_call_id: ProviderToolCallId::new(call_id).expect("call"),
+            tool: ToolName::new("read_source").expect("tool"),
+            arguments: serde_json::json!({"path":"src/lib.rs"}),
+        }
+    }
+
+    fn operation_stream(operation_id: OperationId) -> StreamId {
+        StreamId {
+            kind: AggregateKind::new("tool-operation").expect("kind"),
+            id: AggregateId::new(operation_id.to_string()).expect("id"),
+        }
     }
 
     #[test]
@@ -1198,7 +1815,7 @@ mod tests {
         reason = "the end-to-end test keeps two-step authority and result lineage together"
     )]
     fn episode_runs_multiple_steps_and_recovers_advance_authority() {
-        let (mut fixture, expected_results) = ready_episode(3, None);
+        let (mut fixture, expected_results) = ready_episode(3, 3, None);
         let next_step_id = StepId::new();
         let next_attempt_id = ModelAttemptId::new();
         let command = CommandId::new();
@@ -1308,7 +1925,7 @@ mod tests {
 
     #[test]
     fn step_limit_and_deadline_stop_before_granting_another_step() {
-        let (mut limited, _) = ready_episode(1, None);
+        let (mut limited, _) = ready_episode(1, 3, None);
         assert!(matches!(
             advance_agent_episode(
                 &mut limited.events,
@@ -1326,7 +1943,7 @@ mod tests {
             }
         ));
 
-        let (mut deadline, _) = ready_episode(3, Some(12));
+        let (mut deadline, _) = ready_episode(3, 3, Some(12));
         assert!(matches!(
             advance_agent_episode(
                 &mut deadline.events,
@@ -1344,11 +1961,17 @@ mod tests {
             }
         ));
         assert!(EpisodeStepLimit::new(0).is_err());
+        let legacy_budget: EpisodeBudget = serde_json::from_value(serde_json::json!({
+            "step_limit": 2,
+            "deadline_unix_ms": null
+        }))
+        .expect("legacy budget");
+        assert_eq!(legacy_budget.tool_operation_limit.get(), u32::MAX);
     }
 
     #[test]
     fn recovery_rejects_broken_episode_parent_and_result_lineage() {
-        let (mut fixture, _) = ready_episode(3, None);
+        let (mut fixture, _) = ready_episode(3, 3, None);
         let next_step_id = StepId::new();
         let next_attempt_id = ModelAttemptId::new();
         advance_agent_episode(
@@ -1369,11 +1992,35 @@ mod tests {
         broken_parent[1].parent_event_id = None;
         assert!(project_episode(&broken_parent, fixture.episode.episode_id()).is_err());
 
+        let mut broken_admission = history.clone();
+        let admission_index = broken_admission
+            .iter()
+            .position(|event| event.schema_name.as_str() == super::OPERATIONS_ADMITTED)
+            .expect("admission event");
+        let mut admission: OperationsAdmittedPayload =
+            cairn_codec::from_slice(&broken_admission[admission_index].payload)
+                .expect("admission payload");
+        admission.assignments[0].effect = ToolEffectClass::AmbiguousExternal;
+        broken_admission[admission_index].payload =
+            cairn_codec::to_vec(&admission).expect("corrupt admission");
+        let projection = project_episode(&broken_admission, fixture.episode.episode_id())
+            .expect("corrupt admission remains shaped");
+        assert!(
+            validate_previous_steps(&fixture.events, &mut fixture.content, &projection).is_err(),
+            "settled registration metadata must match episode admission"
+        );
+
         let mut broken_results = history;
+        let advanced_index = broken_results
+            .iter()
+            .position(|event| event.schema_name.as_str() == super::STEP_ADVANCED)
+            .expect("advanced event");
         let mut payload: AdvancedPayload =
-            cairn_codec::from_slice(&broken_results[1].payload).expect("advance payload");
+            cairn_codec::from_slice(&broken_results[advanced_index].payload)
+                .expect("advance payload");
         payload.pending_results.clear();
-        broken_results[1].payload = cairn_codec::to_vec(&payload).expect("corrupt payload");
+        broken_results[advanced_index].payload =
+            cairn_codec::to_vec(&payload).expect("corrupt payload");
         let projection = project_episode(&broken_results, fixture.episode.episode_id())
             .expect("local episode facts remain shaped");
         assert!(
@@ -1396,6 +2043,223 @@ mod tests {
             recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode,)
                 .is_err(),
             "episode recovery must reject a step that bypassed pending-result lineage"
+        );
+    }
+
+    #[test]
+    fn tool_budget_exhaustion_completes_before_binding_or_authority() {
+        let (mut fixture, step, attempt_id, dispatch) = prepared_episode(3, 0, None);
+        assert!(matches!(
+            settle_model_turn(
+                &mut fixture.events,
+                &mut fixture.content,
+                &step,
+                attempt_id,
+                dispatch,
+                vec![tool_call("call-budget")],
+            ),
+            SettledAgentStep::AwaitingOperations { .. }
+        ));
+        let operation_id = OperationId::new();
+        let outcome = admit_episode_operations(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            vec![read_source_assignment(operation_id)],
+            &CommandId::new(),
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(7),
+        )
+        .expect("budget decision");
+        assert!(matches!(
+            outcome,
+            EpisodeOperationAdmissionOutcome::Completed {
+                reason: EpisodeCompletionReason::ToolOperationLimitReached,
+                steps_started: 1,
+            }
+        ));
+        let step_history = fixture
+            .events
+            .read_stream(step.stream_id(), None)
+            .expect("step history");
+        assert!(
+            step_history
+                .iter()
+                .all(|event| event.schema_name.as_str()
+                    != crate::step_operation::STEP_OPERATION_BOUND)
+        );
+        assert!(
+            fixture
+                .events
+                .read_stream(&operation_stream(operation_id), None)
+                .expect("operation history")
+                .is_empty()
+        );
+        assert!(matches!(
+            recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode)
+                .expect("recover exhausted episode"),
+            AgentEpisodeState::Completed {
+                reason: EpisodeCompletionReason::ToolOperationLimitReached,
+                steps_started: 1,
+            }
+        ));
+    }
+
+    #[test]
+    fn admission_replay_closes_crash_window_before_step_binding() {
+        let (mut fixture, step, attempt_id, dispatch) = prepared_episode(3, 1, None);
+        settle_model_turn(
+            &mut fixture.events,
+            &mut fixture.content,
+            &step,
+            attempt_id,
+            dispatch,
+            vec![tool_call("call-crash")],
+        );
+        let operation_id = OperationId::new();
+        let assignments = vec![read_source_assignment(operation_id)];
+        let admission_command = CommandId::new();
+        let binding_command = CommandId::new();
+        let observed_at = cairn_protocol::ObservedAtUnixMillis::new(7);
+        let history = fixture
+            .events
+            .read_stream(fixture.episode.stream_id(), None)
+            .expect("episode history");
+        append_operation_admission(
+            &mut fixture.events,
+            &fixture.episode,
+            &history,
+            step.step_id(),
+            admission_payload_from_assignments(&assignments),
+            &admission_command,
+            observed_at,
+        )
+        .expect("admission fact");
+
+        let EpisodeOperationAdmissionOutcome::Admitted(first) = admit_episode_operations(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            assignments.clone(),
+            &admission_command,
+            &binding_command,
+            observed_at,
+        )
+        .expect("finish binding") else {
+            panic!("admitted");
+        };
+        assert_eq!(first.operations()[0].operation_id(), operation_id);
+        let EpisodeOperationAdmissionOutcome::Admitted(replayed) = admit_episode_operations(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            assignments,
+            &admission_command,
+            &binding_command,
+            observed_at,
+        )
+        .expect("replay admission and binding") else {
+            panic!("replayed admission");
+        };
+        assert_eq!(replayed.operations()[0].operation_id(), operation_id);
+        assert!(matches!(
+            recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode)
+                .expect("recover bound episode"),
+            AgentEpisodeState::Active {
+                step_state: crate::AgentStepState::OperationsBound(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn episode_recovery_rejects_binding_that_bypassed_admission() {
+        let (mut fixture, step, attempt_id, dispatch) = prepared_episode(3, 1, None);
+        settle_model_turn(
+            &mut fixture.events,
+            &mut fixture.content,
+            &step,
+            attempt_id,
+            dispatch,
+            vec![tool_call("call-bypass")],
+        );
+        bind_step_operations(
+            &mut fixture.events,
+            &mut fixture.content,
+            &step,
+            attempt_id,
+            vec![read_source_assignment(OperationId::new())],
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(7),
+        )
+        .expect("raw binding");
+        assert!(
+            recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode).is_err()
+        );
+    }
+
+    #[test]
+    fn tool_budget_accumulates_across_steps() {
+        let (mut fixture, first_results) = ready_episode(3, 1, None);
+        let next_step_id = StepId::new();
+        let next_attempt_id = ModelAttemptId::new();
+        let EpisodeAdvance::NextStep(authority) = advance_agent_episode(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            next_step_id,
+            next_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(12),
+        )
+        .expect("advance") else {
+            panic!("next step");
+        };
+        let input = decision(&mut fixture.content, first_results);
+        let dispatch = prepare_episode_step(
+            &mut fixture.events,
+            &mut fixture.content,
+            authority,
+            &input,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(13),
+        )
+        .expect("prepare second step");
+        let next_step = AgentStep::new(next_step_id).expect("next step");
+        settle_model_turn(
+            &mut fixture.events,
+            &mut fixture.content,
+            &next_step,
+            next_attempt_id,
+            dispatch,
+            vec![tool_call("call-second")],
+        );
+        let second_operation_id = OperationId::new();
+        assert!(matches!(
+            admit_episode_operations(
+                &mut fixture.events,
+                &mut fixture.content,
+                &fixture.episode,
+                vec![read_source_assignment(second_operation_id)],
+                &CommandId::new(),
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(14),
+            )
+            .expect("second budget decision"),
+            EpisodeOperationAdmissionOutcome::Completed {
+                reason: EpisodeCompletionReason::ToolOperationLimitReached,
+                steps_started: 2,
+            }
+        ));
+        let step_history = fixture
+            .events
+            .read_stream(next_step.stream_id(), None)
+            .expect("second step history");
+        assert!(
+            step_history
+                .iter()
+                .all(|event| event.schema_name.as_str()
+                    != crate::step_operation::STEP_OPERATION_BOUND)
         );
     }
 }

@@ -654,6 +654,12 @@ episodes and tasks independently of V0–V3. Before buying a correction turn, th
 collect all safe, already-authorized cheap diagnostics for the current proposal so the turn receives
 one coherent failure report.
 
+Logical tool-operation budget is reserved before a proposed tool call becomes an executable
+binding. The durable admission records ordered operation identities and trusted registration
+metadata; an over-limit proposal terminates at that boundary without producing tool authority.
+Invocation retries retain the logical operation identity and consume a separate attempt or metered
+budget when those ledgers are available.
+
 Scheduling decisions and skipped checks are durable facts.
 
 ## 16. Trust and security boundaries
