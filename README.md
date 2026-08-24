@@ -13,8 +13,11 @@ system. They are no longer separate products. Agent execution, remote execution,
 candidate search, verification, records, replay, and counterfactual experiments belong to one system
 with internal architectural boundaries.
 
-The repository is currently in the design-baseline phase. The old repositories are evidence and
-compatibility references, not source trees to copy mechanically.
+The repository is in early implementation. The Rust workspace, strict canonical JSON V1 boundary,
+strong protocol identifier/revision types, append-only event-store port, and SQLite reference
+adapter are implemented; the remaining architecture in the normative documents is still target
+design. The old repositories are evidence and compatibility references, not source trees to copy
+mechanically.
 
 ## Authoritative documents
 

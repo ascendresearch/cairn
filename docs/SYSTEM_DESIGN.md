@@ -120,6 +120,12 @@ it is introduced as an explicit, versioned policy change.
 The public API uses product resources (`Task`, `Episode`, `Attempt`, `Oracle`, `Artifact`, `Verdict`).
 Internal runtime event variants are not automatically public protocol commitments.
 
+Semantically different identities and states remain different Rust types throughout production
+logic. A `TaskId` is not an `EpisodeId`; a `ContentId<T>` is not an aggregate ID; a stream revision is
+not an event sequence; and an empirical assurance is not a proven bound. String, integer, and byte
+representations are confined to validated codec, protocol, and storage adapters. Generic `Id`, raw
+digest, and boolean status fields are not substitutes for domain types.
+
 ## 5. Architectural layers
 
 ```mermaid

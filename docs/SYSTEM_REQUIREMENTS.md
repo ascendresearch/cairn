@@ -267,6 +267,7 @@ Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md
 | QR-MNT-003 | Persisted and wire schemas MUST be versioned and have explicit compatibility/migration policy. | Old-fixture read tests and protocol compatibility tests. |
 | QR-MNT-004 | A second real operator MUST not require changes to generic runtime, worker, or verification core types. | Second-operator end-to-end control. |
 | QR-MNT-005 | Architecture documents MUST state whether a described capability is target, implemented, or measured. | Documentation gate/review checklist. |
+| QR-MNT-006 | Semantically distinct identities, revisions, schema versions, evidence strengths, and lifecycle states MUST use distinct validated Rust types. Production APIs MUST NOT erase them into interchangeable strings, integers, digests, or generic identifiers except at explicit wire/storage boundaries. | Compile-fail boundary tests plus schema round-trip and invalid-value tests. |
 
 ### 6.5 Observability and cost accountability
 
