@@ -612,6 +612,35 @@ pub fn recover_dispatch_authority<C: ContentStore>(
     invalid_history("authorized attempt has no prepared event")
 }
 
+pub(crate) fn recover_turn_input_decision<C: ContentStore>(
+    events: &[EventEnvelope],
+    content: &mut C,
+    attempt_id: ModelAttemptId,
+) -> Result<Option<TurnInputDecision>, DispatchCoordinatorError> {
+    for event in events {
+        if event.schema_name.as_str() != PREPARED {
+            continue;
+        }
+        let payload: PreparedPayload = decode_payload(event)?;
+        if payload.attempt != attempt_id {
+            continue;
+        }
+        let mut decision_bytes = Vec::new();
+        content.write_to(&payload.decision, &mut decision_bytes)?;
+        let decision: TurnInputDecision = cairn_codec::from_slice(&decision_bytes)
+            .map_err(|error| DispatchCoordinatorError::InvalidHistory(error.to_string()))?;
+        let request = prepare_model_request(content, &decision)?;
+        if request.decision_id != payload.decision
+            || request.request_id != payload.request
+            || request.adapter_version != payload.adapter_version
+        {
+            return invalid_history("recovered input decision differs from prepared request fact");
+        }
+        return Ok(Some(decision));
+    }
+    Ok(None)
+}
+
 fn prepared_adapter_version(
     events: &[EventEnvelope],
     attempt_id: ModelAttemptId,

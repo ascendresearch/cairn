@@ -231,6 +231,14 @@ Examples:
 - operation lifecycle events
 - `EpisodeCompleted`
 
+`EpisodeOpened` fixes the owning task, role name, initial step/model-attempt identities, and the
+currently enforceable budget policy. `EpisodeStepAdvanced` cites the prior step and its ordered
+operation results before granting the next step identity. Recovery re-audits both sides of this
+edge: the prior step must have produced those results and the next step's committed input decision
+must consume exactly those results. Step-limit and deadline completion are recorded only at a safe
+step boundary; authority lost before step preparation can be reconstructed but cannot be replayed
+after the step has consumed it.
+
 ### 7.3 Execution facts
 
 - `JobDeclared`

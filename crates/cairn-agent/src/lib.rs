@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod dispatch;
+mod episode;
 mod operation;
 mod semantic;
 mod step;
@@ -18,6 +19,12 @@ pub use dispatch::{
     ReceivedModelResponse, StartedDispatch, authorize_model_request, begin_model_dispatch,
     execute_model_dispatch, recover_dispatch_authority, recover_model_attempt,
     recover_received_model_response,
+};
+pub use episode::{
+    AgentEpisode, AgentEpisodeState, EpisodeAdvance, EpisodeBudget, EpisodeCompletionReason,
+    EpisodeCoordinatorError, EpisodeDeadlineUnixMillis, EpisodeStepAuthority, EpisodeStepLimit,
+    EpisodeValueError, advance_agent_episode, open_agent_episode, prepare_episode_step,
+    recover_agent_episode,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -105,6 +112,8 @@ label_type!(/// Registered tool implementation version.
 ToolImplementationVersion);
 label_type!(/// Provider-native tool-call correlation identity.
 ProviderToolCallId);
+label_type!(/// Server-enforced role scope selected for one agent episode.
+AgentRoleName);
 
 macro_rules! content_type {
     ($name:ident, $domain:literal) => {
