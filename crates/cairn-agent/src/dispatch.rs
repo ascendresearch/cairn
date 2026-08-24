@@ -110,6 +110,7 @@ pub enum DispatchCompletion {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct PreparedPayload {
     #[serde(rename = "attempt_id")]
     attempt: ModelAttemptId,
@@ -120,6 +121,7 @@ struct PreparedPayload {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct StartedPayload {
     #[serde(rename = "attempt_id")]
     attempt: ModelAttemptId,
@@ -128,6 +130,7 @@ struct StartedPayload {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct OutcomePayload {
     attempt_id: ModelAttemptId,
     response_id: Option<ContentId<ModelResponseArtifact>>,
@@ -463,6 +466,9 @@ pub fn recover_model_attempt(
                 return invalid_history("terminal event does not cite its started event");
             }
             state = match schema {
+                RESPONSE if payload.diagnostic.is_some() => {
+                    return invalid_history("response event unexpectedly has a failure diagnostic");
+                }
                 RESPONSE => ModelAttemptState::Completed {
                     response_id: payload.response_id.ok_or_else(|| {
                         DispatchCoordinatorError::InvalidHistory(
@@ -472,6 +478,9 @@ pub fn recover_model_attempt(
                 },
                 NOT_SENT | REJECTED | AMBIGUOUS if payload.response_id.is_some() => {
                     return invalid_history("failure event unexpectedly cites a response");
+                }
+                NOT_SENT | REJECTED | AMBIGUOUS if payload.diagnostic.is_none() => {
+                    return invalid_history("failure event lacks a diagnostic");
                 }
                 NOT_SENT => ModelAttemptState::NotSent,
                 REJECTED => ModelAttemptState::Rejected,

@@ -8,11 +8,20 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod dispatch;
+mod operation;
 
 pub use dispatch::{
     DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
     StartedDispatch, authorize_model_request, begin_model_dispatch, execute_model_dispatch,
     recover_model_attempt,
+};
+pub use operation::{
+    CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
+    RecordedToolExchange, RecordedToolGateway, ScriptedToolGateway, StartedToolOperation,
+    ToolEffectClass, ToolGateway, ToolGatewayError, ToolGatewayFailureClass,
+    ToolOperationAuthority, ToolOperationCompletion, ToolOperationState, ToolResultEncodingError,
+    authorize_tool_operation, begin_tool_operation, execute_tool_operation, prepare_tool_operation,
+    recover_tool_operation,
 };
 
 macro_rules! label_type {
@@ -23,7 +32,7 @@ macro_rules! label_type {
         pub struct $name(String);
 
         impl $name {
-            /// Creates a non-empty provider label.
+            /// Creates a non-empty agent-boundary label.
             ///
             /// # Errors
             ///
@@ -57,9 +66,9 @@ macro_rules! label_type {
     };
 }
 
-/// Invalid model/provider label.
+/// Invalid agent-boundary label.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("model/provider label must be non-empty, trimmed, and contain no control characters")]
+#[error("agent label must be non-empty, trimmed, and contain no control characters")]
 pub struct InputTypeError;
 
 label_type!(/// Model-provider identity.
@@ -70,6 +79,10 @@ label_type!(/// Provider deployment identity.
 DeploymentName);
 label_type!(/// Semantic adapter version.
 AdapterVersion);
+label_type!(/// Registered tool identity.
+ToolName);
+label_type!(/// Registered tool implementation version.
+ToolImplementationVersion);
 
 macro_rules! content_type {
     ($name:ident, $domain:literal) => {
@@ -90,6 +103,7 @@ content_type!(PolicyDocument, "agent.policy-document.v1");
 content_type!(TurnInputDecisionArtifact, "agent.turn-input-decision.v1");
 content_type!(MaterializedRequestArtifact, "agent.materialized-request.v1");
 content_type!(ModelResponseArtifact, "agent.model-response.v1");
+content_type!(ToolArguments, "agent.tool-arguments.v1");
 
 /// Pinned provider/model/adapter selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -18,9 +18,10 @@ typed SHA-256/UUIDv7 identities, append-only event-store port, streaming content
 metadata adapters, filesystem blob CAS, model-input projection/audit, and recorded/scripted model
 transports are implemented. Model dispatch now has a durable prepared/started/terminal lifecycle,
 one-shot typed authority, exact response archiving, explicit ambiguous-effect recovery, and causal
-history validation. The remaining architecture in the normative documents is still target design.
-The old repositories are evidence and compatibility references, not source trees to copy
-mechanically.
+history validation. Tool operations use the same durable effect discipline with canonical argument
+and result artifacts, recorded/scripted gateways, and effect-class-derived retry or reconciliation
+semantics. The remaining architecture in the normative documents is still target design. The old
+repositories are evidence and compatibility references, not source trees to copy mechanically.
 
 ## Authoritative documents
 
