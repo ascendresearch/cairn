@@ -9,11 +9,12 @@ use thiserror::Error;
 
 mod dispatch;
 mod operation;
+mod semantic;
 
 pub use dispatch::{
     DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
-    StartedDispatch, authorize_model_request, begin_model_dispatch, execute_model_dispatch,
-    recover_model_attempt,
+    ReceivedModelResponse, StartedDispatch, authorize_model_request, begin_model_dispatch,
+    execute_model_dispatch, recover_model_attempt, recover_received_model_response,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -22,6 +23,12 @@ pub use operation::{
     ToolOperationAuthority, ToolOperationCompletion, ToolOperationState, ToolResultEncodingError,
     authorize_tool_operation, begin_tool_operation, execute_tool_operation, prepare_tool_operation,
     recover_tool_operation,
+};
+pub use semantic::{
+    AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,
+    ModelAdapterError, OutputOrdinal, RecordedAdapterExchange, RecordedModelAdapter,
+    ScriptedModelAdapter, SemanticModelTurn, SemanticOutputItem, ToolCallId, ToolCallProposal,
+    decode_model_response, recover_decoded_model_turn,
 };
 
 macro_rules! label_type {
@@ -83,10 +90,12 @@ label_type!(/// Registered tool identity.
 ToolName);
 label_type!(/// Registered tool implementation version.
 ToolImplementationVersion);
+label_type!(/// Provider-native tool-call correlation identity.
+ProviderToolCallId);
 
 macro_rules! content_type {
     ($name:ident, $domain:literal) => {
-        /// Marker for a durable model-input content domain.
+        /// Marker for a durable semantic content domain.
         pub struct $name;
         impl ContentType for $name {
             const DOMAIN: &'static str = $domain;
@@ -104,6 +113,8 @@ content_type!(TurnInputDecisionArtifact, "agent.turn-input-decision.v1");
 content_type!(MaterializedRequestArtifact, "agent.materialized-request.v1");
 content_type!(ModelResponseArtifact, "agent.model-response.v1");
 content_type!(ToolArguments, "agent.tool-arguments.v1");
+content_type!(SemanticModelTurnArtifact, "agent.semantic-model-turn.v1");
+content_type!(ToolCallIdentity, "agent.tool-call-identity.v1");
 
 /// Pinned provider/model/adapter selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -193,6 +204,7 @@ struct MaterializedRequestBody {
 /// let forged = PreparedModelRequest {
 ///     decision_id: todo!(),
 ///     request_id: todo!(),
+///     adapter_version: todo!(),
 ///     request_bytes: Vec::new(),
 /// };
 /// ```
@@ -202,6 +214,8 @@ pub struct PreparedModelRequest {
     decision_id: ContentId<TurnInputDecisionArtifact>,
     /// Stored exact provider-neutral request bytes.
     request_id: ContentId<MaterializedRequestArtifact>,
+    /// Semantic adapter version pinned when the input decision was made.
+    adapter_version: AdapterVersion,
     /// Exact bytes supplied to the transport adapter.
     request_bytes: Vec<u8>,
 }
@@ -217,6 +231,12 @@ impl PreparedModelRequest {
     #[must_use]
     pub const fn request_id(&self) -> ContentId<MaterializedRequestArtifact> {
         self.request_id
+    }
+
+    /// Returns the semantic adapter version pinned before provider dispatch.
+    #[must_use]
+    pub fn adapter_version(&self) -> &AdapterVersion {
+        &self.adapter_version
     }
 
     /// Returns the exact bytes to pass to a transport adapter.
@@ -284,6 +304,7 @@ pub fn prepare_model_request<S: ContentStore>(
     Ok(PreparedModelRequest {
         decision_id: decision_descriptor.content_id,
         request_id: request_descriptor.content_id,
+        adapter_version: decision.selection.adapter_version.clone(),
         request_bytes,
     })
 }
@@ -581,6 +602,7 @@ mod tests {
         let request = PreparedModelRequest {
             decision_id: ContentId::derive(b"{}").expect("decision identity"),
             request_id,
+            adapter_version: AdapterVersion::new("v1").expect("adapter"),
             request_bytes: b"{}".to_vec(),
         };
         let mut recorded = RecordedModelTransport::new([RecordedExchange {

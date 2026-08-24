@@ -20,8 +20,10 @@ transports are implemented. Model dispatch now has a durable prepared/started/te
 one-shot typed authority, exact response archiving, explicit ambiguous-effect recovery, and causal
 history validation. Tool operations use the same durable effect discipline with canonical argument
 and result artifacts, recorded/scripted gateways, and effect-class-derived retry or reconciliation
-semantics. The remaining architecture in the normative documents is still target design. The old
-repositories are evidence and compatibility references, not source trees to copy mechanically.
+semantics. Version-pinned model adapters now archive provider-neutral semantic turns and atomically
+publish derived, non-authoritative tool-call proposals that can be rebuilt after restart. The
+remaining architecture in the normative documents is still target design. The old repositories are
+evidence and compatibility references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

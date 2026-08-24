@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    MaterializedRequestArtifact, ModelResponseArtifact, ModelTransport, PreparedModelRequest,
-    TransportFailureClass, TurnInputDecisionArtifact,
+    AdapterVersion, MaterializedRequestArtifact, ModelResponseArtifact, ModelTransport,
+    PreparedModelRequest, TransportFailureClass, TurnInputDecisionArtifact,
 };
 
 const PREPARED: &str = "agent.model-request-prepared";
@@ -79,6 +79,37 @@ pub struct StartedDispatch {
     request: PreparedModelRequest,
 }
 
+/// One-shot proof that exact response bytes and their receipt event are durable.
+#[derive(Debug)]
+pub struct ReceivedModelResponse {
+    pub(crate) attempt_id: ModelAttemptId,
+    pub(crate) stream: StreamId,
+    pub(crate) revision: StreamRevision,
+    pub(crate) response_event_id: EventId,
+    pub(crate) response_id: ContentId<ModelResponseArtifact>,
+    pub(crate) adapter_version: AdapterVersion,
+}
+
+impl ReceivedModelResponse {
+    /// Returns the provider-attempt identity.
+    #[must_use]
+    pub const fn attempt_id(&self) -> ModelAttemptId {
+        self.attempt_id
+    }
+
+    /// Returns the archived raw-response identity.
+    #[must_use]
+    pub const fn response_id(&self) -> ContentId<ModelResponseArtifact> {
+        self.response_id
+    }
+
+    /// Returns the semantic adapter version pinned before dispatch.
+    #[must_use]
+    pub fn adapter_version(&self) -> &AdapterVersion {
+        &self.adapter_version
+    }
+}
+
 struct TerminalContext {
     stream: StreamId,
     revision: StreamRevision,
@@ -97,10 +128,7 @@ impl StartedDispatch {
 #[derive(Debug)]
 pub enum DispatchCompletion {
     /// Exact response bytes were archived and cited by a durable event.
-    Response {
-        /// Typed response content identity.
-        response_id: ContentId<ModelResponseArtifact>,
-    },
+    Response(ReceivedModelResponse),
     /// Transport proved the request was not sent.
     NotSent,
     /// Provider definitively rejected the request.
@@ -118,6 +146,7 @@ struct PreparedPayload {
     decision: ContentId<TurnInputDecisionArtifact>,
     #[serde(rename = "request_id")]
     request: ContentId<MaterializedRequestArtifact>,
+    adapter_version: AdapterVersion,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -165,6 +194,7 @@ pub fn authorize_model_request<E: EventStore>(
         attempt: attempt_id,
         decision: request.decision_id,
         request: request.request_id,
+        adapter_version: request.adapter_version.clone(),
     };
     let outcome = append_fact(
         events,
@@ -272,13 +302,13 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
     let StartedDispatch {
         attempt_id,
         stream,
-        revision,
+        revision: started_revision,
         started_event_id,
         request,
     } = started;
     let terminal = TerminalContext {
         stream,
-        revision,
+        revision: started_revision,
         started_event_id,
     };
     match transport.dispatch(&request) {
@@ -290,7 +320,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 response_id: Some(descriptor.content_id),
                 diagnostic: None,
             };
-            append_terminal(
+            let outcome = append_terminal(
                 events,
                 &terminal,
                 outcome_command_id,
@@ -303,9 +333,14 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 response_id: descriptor.content_id,
                 record: record.to_string(),
             })?;
-            Ok(DispatchCompletion::Response {
+            Ok(DispatchCompletion::Response(ReceivedModelResponse {
+                attempt_id,
+                stream: terminal.stream,
+                revision: revision(outcome.last_sequence)?,
+                response_event_id: outcome.event_ids[0],
                 response_id: descriptor.content_id,
-            })
+                adapter_version: request.adapter_version,
+            }))
         }
         Err(error) => {
             let class = error.failure_class();
@@ -350,7 +385,7 @@ fn append_terminal<E: EventStore>(
     observed_at: ObservedAtUnixMillis,
     schema: &str,
     payload: &OutcomePayload,
-) -> Result<(), DispatchCoordinatorError> {
+) -> Result<cairn_record::AppendOutcome, DispatchCoordinatorError> {
     append_fact(
         events,
         &Fact {
@@ -362,8 +397,7 @@ fn append_terminal<E: EventStore>(
             observed_at,
             payload,
         },
-    )?;
-    Ok(())
+    )
 }
 
 fn append_fact<E: EventStore, P: Serialize>(
@@ -492,6 +526,58 @@ pub fn recover_model_attempt(
     Ok(state)
 }
 
+/// Reconstructs one-shot semantic-decoding authority from a valid response-received history.
+///
+/// # Errors
+///
+/// Returns [`DispatchCoordinatorError`] when the attempt history is malformed.
+pub fn recover_received_model_response(
+    events: &[EventEnvelope],
+    attempt_id: ModelAttemptId,
+) -> Result<Option<ReceivedModelResponse>, DispatchCoordinatorError> {
+    let ModelAttemptState::Completed { response_id } = recover_model_attempt(events, attempt_id)?
+    else {
+        return Ok(None);
+    };
+    let adapter_version = prepared_adapter_version(events, attempt_id)?;
+    for event in events.iter().rev() {
+        if event.schema_name.as_str() != RESPONSE {
+            continue;
+        }
+        let payload: OutcomePayload = decode_payload(event)?;
+        if payload.attempt_id == attempt_id {
+            if payload.response_id != Some(response_id) {
+                return invalid_history("recovered response identity changed during projection");
+            }
+            return Ok(Some(ReceivedModelResponse {
+                attempt_id,
+                stream: event.stream.clone(),
+                revision: revision(event.sequence)?,
+                response_event_id: event.event_id,
+                response_id,
+                adapter_version,
+            }));
+        }
+    }
+    invalid_history("completed attempt has no response event")
+}
+
+fn prepared_adapter_version(
+    events: &[EventEnvelope],
+    attempt_id: ModelAttemptId,
+) -> Result<AdapterVersion, DispatchCoordinatorError> {
+    for event in events {
+        if event.schema_name.as_str() != PREPARED {
+            continue;
+        }
+        let payload: PreparedPayload = decode_payload(event)?;
+        if payload.attempt == attempt_id {
+            return Ok(payload.adapter_version);
+        }
+    }
+    invalid_history("completed attempt has no prepared adapter version")
+}
+
 fn decode_payload<P: for<'de> Deserialize<'de>>(
     event: &EventEnvelope,
 ) -> Result<P, DispatchCoordinatorError> {
@@ -548,6 +634,7 @@ mod tests {
                 .expect("decision id"),
             request_id: ContentId::<MaterializedRequestArtifact>::derive(b"request")
                 .expect("request id"),
+            adapter_version: crate::AdapterVersion::new("v1").expect("adapter"),
             request_bytes: b"request".to_vec(),
         }
     }
@@ -627,9 +714,10 @@ mod tests {
             cairn_protocol::ObservedAtUnixMillis::new(3),
         )
         .expect("execute");
-        let DispatchCompletion::Response { response_id } = completion else {
+        let DispatchCompletion::Response(received) = completion else {
             panic!("expected response completion");
         };
+        let response_id = received.response_id();
         let mut archived = Vec::new();
         content
             .write_to(&response_id, &mut archived)

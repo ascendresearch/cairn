@@ -11,7 +11,7 @@ use cairn_record::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{OperationResult, ToolArguments, ToolImplementationVersion, ToolName};
+use crate::{OperationResult, ToolArguments, ToolCallId, ToolImplementationVersion, ToolName};
 
 const PREPARED: &str = "agent.tool-operation-prepared";
 const STARTED: &str = "agent.tool-operation-started";
@@ -112,6 +112,7 @@ pub struct ToolResultEncodingError(String);
 #[derive(Clone, Debug)]
 pub struct PreparedToolOperation {
     operation_id: OperationId,
+    source_tool_call_id: Option<ToolCallId>,
     tool: ToolName,
     implementation_version: ToolImplementationVersion,
     effect: ToolEffectClass,
@@ -124,6 +125,12 @@ impl PreparedToolOperation {
     #[must_use]
     pub const fn operation_id(&self) -> OperationId {
         self.operation_id
+    }
+
+    /// Returns the decoded model tool call that proposed this operation, when present.
+    #[must_use]
+    pub const fn source_tool_call_id(&self) -> Option<ToolCallId> {
+        self.source_tool_call_id
     }
 
     /// Returns the trusted registered tool name.
@@ -155,6 +162,26 @@ impl PreparedToolOperation {
     pub fn argument_bytes(&self) -> &[u8] {
         &self.argument_bytes
     }
+
+    pub(crate) fn from_tool_call(
+        operation_id: OperationId,
+        source_tool_call_id: ToolCallId,
+        tool: ToolName,
+        implementation_version: ToolImplementationVersion,
+        effect: ToolEffectClass,
+        arguments_id: ContentId<ToolArguments>,
+        argument_bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            operation_id,
+            source_tool_call_id: Some(source_tool_call_id),
+            tool,
+            implementation_version,
+            effect,
+            arguments_id,
+            argument_bytes,
+        }
+    }
 }
 
 /// Canonicalizes and archives exact tool arguments before operation authorization.
@@ -175,6 +202,7 @@ pub fn prepare_tool_operation<C: ContentStore>(
     let descriptor = content.put::<ToolArguments>(&mut Cursor::new(&argument_bytes))?;
     Ok(PreparedToolOperation {
         operation_id,
+        source_tool_call_id: None,
         tool,
         implementation_version,
         effect,
@@ -389,6 +417,7 @@ pub enum ToolOperationCompletion {
 #[serde(deny_unknown_fields)]
 struct PreparedPayload {
     operation_id: OperationId,
+    source_tool_call_id: Option<ToolCallId>,
     tool: ToolName,
     implementation_version: ToolImplementationVersion,
     effect: ToolEffectClass,
@@ -434,6 +463,7 @@ pub fn authorize_tool_operation<E: EventStore>(
     let stream = operation_stream(operation.operation_id)?;
     let payload = PreparedPayload {
         operation_id: operation.operation_id,
+        source_tool_call_id: operation.source_tool_call_id,
         tool: operation.tool.clone(),
         implementation_version: operation.implementation_version.clone(),
         effect: operation.effect,
