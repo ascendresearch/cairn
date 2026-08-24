@@ -1,8 +1,10 @@
 //! Durable record ports and format-neutral event semantics.
 
+use std::io::{Read, Write};
+
 use cairn_protocol::{
-    AggregateId, AggregateKind, CommandId, EventId, EventSequence, SchemaName, SchemaVersion,
-    StreamRevision,
+    AggregateId, AggregateKind, BlobDigest, CommandId, ContentId, ContentType, EventId,
+    EventSequence, SchemaName, SchemaVersion, StreamRevision,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -197,6 +199,93 @@ pub trait EventStore {
         stream: &StreamId,
         after_sequence: Option<EventSequence>,
     ) -> Result<Vec<EventEnvelope>, EventStoreError>;
+}
+
+/// Verified relationship between one semantic identity and its physical bytes.
+pub struct ContentDescriptor<T: ContentType> {
+    /// Domain-separated public identity.
+    pub content_id: ContentId<T>,
+    /// Internal exact-byte storage digest.
+    pub blob_digest: BlobDigest,
+    /// Verified physical byte length.
+    pub byte_len: u64,
+}
+
+impl<T: ContentType> Copy for ContentDescriptor<T> {}
+
+impl<T: ContentType> Clone for ContentDescriptor<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ContentType> std::fmt::Debug for ContentDescriptor<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ContentDescriptor")
+            .field("content_id", &self.content_id)
+            .field("blob_digest", &self.blob_digest)
+            .field("byte_len", &self.byte_len)
+            .finish()
+    }
+}
+
+/// Content-addressed storage failure.
+#[derive(Debug, Error)]
+pub enum ContentStoreError {
+    /// The semantic identity has no metadata binding.
+    #[error("content object was not found: {content_id}")]
+    NotFound {
+        /// Requested tagged identity.
+        content_id: String,
+    },
+    /// Physical bytes or metadata do not match their recorded identities.
+    #[error("content integrity failure: {message}")]
+    Integrity {
+        /// Mismatch diagnostic.
+        message: String,
+    },
+    /// Filesystem or stream operation failed.
+    #[error("content I/O failure: {message}")]
+    Io {
+        /// Adapter-neutral I/O diagnostic.
+        message: String,
+    },
+    /// Metadata adapter failed.
+    #[error("content metadata failure: {message}")]
+    Metadata {
+        /// Adapter-neutral metadata diagnostic.
+        message: String,
+    },
+}
+
+/// Strongly typed, streaming content-addressed storage contract.
+///
+/// Generic methods intentionally keep `ContentId<T>` intact. An erased metadata representation may
+/// exist inside an adapter, but product logic cannot exchange content domains through this port.
+pub trait ContentStore {
+    /// Streams exact bytes into immutable storage and binds their typed semantic identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContentStoreError`] when input cannot be read, bytes cannot be published, metadata
+    /// cannot commit, or an existing binding fails verification.
+    fn put<T: ContentType>(
+        &mut self,
+        reader: &mut dyn Read,
+    ) -> Result<ContentDescriptor<T>, ContentStoreError>;
+
+    /// Verifies the complete stored object, then streams it to `writer`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContentStoreError`] when metadata/object bytes are missing or corrupt, or output
+    /// cannot be written.
+    fn write_to<T: ContentType>(
+        &self,
+        content_id: &ContentId<T>,
+        writer: &mut dyn Write,
+    ) -> Result<ContentDescriptor<T>, ContentStoreError>;
 }
 
 #[cfg(test)]

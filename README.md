@@ -14,10 +14,10 @@ candidate search, verification, records, replay, and counterfactual experiments 
 with internal architectural boundaries.
 
 The repository is in early implementation. The Rust workspace, strict canonical JSON V1 boundary,
-strong protocol identifier/revision types, append-only event-store port, and SQLite reference
-adapter are implemented; the remaining architecture in the normative documents is still target
-design. The old repositories are evidence and compatibility references, not source trees to copy
-mechanically.
+typed SHA-256/UUIDv7 identities, append-only event-store port, streaming content-store port, SQLite
+metadata adapters, and filesystem blob CAS are implemented; the remaining architecture in the
+normative documents is still target design. The old repositories are evidence and compatibility
+references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

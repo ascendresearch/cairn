@@ -1,6 +1,6 @@
 //! Strong, domain-separated identity types.
 
-use std::{fmt, hash::Hash, marker::PhantomData, str::FromStr};
+use std::{fmt, hash::Hash, io::Read, marker::PhantomData, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
@@ -52,6 +52,25 @@ pub enum IdentityError {
     },
 }
 
+/// Failure while deriving an identity from a stream.
+#[derive(Debug, Error)]
+pub enum IdentityReadError {
+    /// Identity framing failed.
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+    /// The byte stream failed.
+    #[error("identity input stream failed: {0}")]
+    Io(#[from] std::io::Error),
+    /// The stream length differs from the length committed into the identity frame.
+    #[error("identity input length mismatch: expected {expected}, observed {observed}")]
+    LengthMismatch {
+        /// Declared byte length.
+        expected: u64,
+        /// Bytes actually read, capped at expected plus one.
+        observed: u64,
+    },
+}
+
 /// Declares the stable semantic domain for exact content bytes.
 pub trait ContentType {
     /// Registered domain, for example `content.source-file.v1`.
@@ -73,6 +92,19 @@ impl<T: ContentType> ContentId<T> {
     pub fn derive(bytes: &[u8]) -> Result<Self, IdentityError> {
         Ok(Self {
             digest: derive_domain_digest(T::DOMAIN, bytes)?,
+            marker: PhantomData,
+        })
+    }
+
+    /// Derives a typed identity without loading the complete content into memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentityReadError`] when framing fails, reading fails, or the stream length does
+    /// not equal `byte_len` exactly.
+    pub fn derive_reader(reader: &mut dyn Read, byte_len: u64) -> Result<Self, IdentityReadError> {
+        Ok(Self {
+            digest: derive_domain_digest_reader(T::DOMAIN, reader, byte_len)?,
             marker: PhantomData,
         })
     }
@@ -300,10 +332,65 @@ impl BlobDigest {
         Self(Sha256Digest(Sha256::digest(bytes).into()))
     }
 
+    /// Hashes a physical byte stream to EOF and returns its digest and observed length.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying I/O error when the stream cannot be read completely.
+    pub fn derive_reader(reader: &mut dyn Read) -> Result<(Self, u64), std::io::Error> {
+        let mut hasher = Sha256::new();
+        let byte_len = update_from_reader(&mut hasher, reader, None)?;
+        Ok((Self(Sha256Digest(hasher.finalize().into())), byte_len))
+    }
+
     /// Returns `sha256:<lowercase hex>` for storage metadata.
     #[must_use]
     pub fn to_wire(self) -> String {
         format!("sha256:{}", self.0.to_hex())
+    }
+
+    /// Returns the lowercase digest used for filesystem sharding.
+    #[must_use]
+    pub fn hex(self) -> String {
+        self.0.to_hex()
+    }
+}
+
+impl fmt::Display for BlobDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.to_wire())
+    }
+}
+
+impl FromStr for BlobDigest {
+    type Err = IdentityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .strip_prefix("sha256:")
+            .ok_or(IdentityError::InvalidWire)
+            .and_then(Sha256Digest::from_hex)
+            .map(Self)
+    }
+}
+
+impl Serialize for BlobDigest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_wire())
+    }
+}
+
+impl<'de> Deserialize<'de> for BlobDigest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
     }
 }
 
@@ -358,6 +445,63 @@ fn derive_domain_digest(domain: &str, payload: &[u8]) -> Result<Sha256Digest, Id
     hasher.update(payload_len.to_be_bytes());
     hasher.update(payload);
     Ok(Sha256Digest(hasher.finalize().into()))
+}
+
+fn derive_domain_digest_reader(
+    domain: &str,
+    reader: &mut dyn Read,
+    payload_len: u64,
+) -> Result<Sha256Digest, IdentityReadError> {
+    validate_domain(domain)?;
+    let domain_len = u16::try_from(domain.len()).map_err(|_| IdentityError::FrameTooLarge)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FRAME_MAGIC);
+    hasher.update(FRAME_VERSION.to_be_bytes());
+    hasher.update([SHA256_TAG]);
+    hasher.update(domain_len.to_be_bytes());
+    hasher.update(domain.as_bytes());
+    hasher.update(payload_len.to_be_bytes());
+    let observed = update_from_reader(&mut hasher, reader, Some(payload_len))?;
+    if observed != payload_len {
+        return Err(IdentityReadError::LengthMismatch {
+            expected: payload_len,
+            observed,
+        });
+    }
+    let mut extra = [0_u8; 1];
+    if reader.read(&mut extra)? != 0 {
+        return Err(IdentityReadError::LengthMismatch {
+            expected: payload_len,
+            observed: payload_len.saturating_add(1),
+        });
+    }
+    Ok(Sha256Digest(hasher.finalize().into()))
+}
+
+fn update_from_reader(
+    hasher: &mut Sha256,
+    reader: &mut dyn Read,
+    limit: Option<u64>,
+) -> Result<u64, std::io::Error> {
+    let mut observed = 0_u64;
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let wanted = limit.map_or(buffer.len(), |remaining| {
+            usize::try_from(remaining.saturating_sub(observed))
+                .unwrap_or(buffer.len())
+                .min(buffer.len())
+        });
+        if wanted == 0 {
+            break;
+        }
+        let read = reader.read(&mut buffer[..wanted])?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        observed = observed.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+    }
+    Ok(observed)
 }
 
 fn validate_domain(domain: &str) -> Result<(), IdentityError> {
@@ -480,7 +624,9 @@ BranchId, "branch");
 
 #[cfg(test)]
 mod tests {
-    use super::{BlobDigest, CommandId, ContentId, ContentType};
+    use std::io::Cursor;
+
+    use super::{BlobDigest, CommandId, ContentId, ContentType, IdentityReadError};
 
     struct Source;
     impl ContentType for Source {
@@ -517,5 +663,29 @@ mod tests {
         let command = CommandId::new();
         assert_eq!(command.as_uuid().get_version_num(), 7);
         assert_eq!(command.to_string().parse::<CommandId>(), Ok(command));
+    }
+
+    #[test]
+    fn streaming_and_in_memory_derivation_are_identical() {
+        let bytes = b"streamed identity material";
+        let expected = ContentId::<Source>::derive(bytes).expect("in-memory identity");
+        let actual = ContentId::<Source>::derive_reader(
+            &mut Cursor::new(bytes),
+            u64::try_from(bytes.len()).expect("length"),
+        )
+        .expect("stream identity");
+        assert_eq!(actual, expected);
+
+        let (blob, length) =
+            BlobDigest::derive_reader(&mut Cursor::new(bytes)).expect("stream blob");
+        assert_eq!(blob, BlobDigest::derive(bytes));
+        assert_eq!(length, u64::try_from(bytes.len()).expect("length"));
+    }
+
+    #[test]
+    fn streaming_identity_rejects_declared_length_mismatch() {
+        let error = ContentId::<Source>::derive_reader(&mut Cursor::new(b"abc"), 2)
+            .expect_err("extra byte must fail");
+        assert!(matches!(error, IdentityReadError::LengthMismatch { .. }));
     }
 }

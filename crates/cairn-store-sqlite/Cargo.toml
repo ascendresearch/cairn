@@ -10,10 +10,7 @@ license.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 rusqlite.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true
 
 [lints]
 workspace = true
-

@@ -1,5 +1,9 @@
 //! `SQLite` reference adapters for Cairn storage ports.
 
+mod content;
+
+pub use content::SqliteContentStore;
+
 use std::{path::Path, str::FromStr};
 
 use cairn_protocol::{
