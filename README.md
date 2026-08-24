@@ -22,8 +22,10 @@ history validation. Tool operations use the same durable effect discipline with 
 and result artifacts, recorded/scripted gateways, and effect-class-derived retry or reconciliation
 semantics. Version-pinned model adapters now archive provider-neutral semantic turns and atomically
 publish derived, non-authoritative tool-call proposals that can be rebuilt after restart. The
-remaining architecture in the normative documents is still target design. The old repositories are
-evidence and compatibility references, not source trees to copy mechanically.
+neutral agent-step projection exposes only the next safe durable action, including explicit
+in-doubt, decode, yield, and awaiting-operation boundaries. The remaining architecture in the
+normative documents is still target design. The old repositories are evidence and compatibility
+references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

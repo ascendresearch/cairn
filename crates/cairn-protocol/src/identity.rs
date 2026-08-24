@@ -623,6 +623,8 @@ lifecycle_id!(/// Counterfactual/replay branch identity.
 BranchId, "branch");
 lifecycle_id!(/// One externally dispatched model-attempt identity.
 ModelAttemptId, "model-attempt");
+lifecycle_id!(/// One model request and its resulting tool-operation boundary.
+StepId, "step");
 
 #[cfg(test)]
 mod tests {

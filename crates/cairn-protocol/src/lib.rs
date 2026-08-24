@@ -13,7 +13,7 @@ mod identity;
 pub use identity::{
     AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType, DerivedId, EpisodeId,
     EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, ModelAttemptId, OperationId,
-    TaskId,
+    StepId, TaskId,
 };
 
 const MAX_IDENTIFIER_LEN: usize = 255;

@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    AdapterVersion, MaterializedRequestArtifact, ModelResponseArtifact, ModelTransport,
-    PreparedModelRequest, TransportFailureClass, TurnInputDecisionArtifact,
+    AdapterVersion, InputAuditError, MaterializedRequestArtifact, ModelResponseArtifact,
+    ModelTransport, PreparedModelRequest, TransportFailureClass, TurnInputDecision,
+    TurnInputDecisionArtifact, prepare_model_request,
 };
 
 const PREPARED: &str = "agent.model-request-prepared";
@@ -32,6 +33,9 @@ pub enum DispatchCoordinatorError {
     /// Provider response could not be archived.
     #[error(transparent)]
     Content(#[from] ContentStoreError),
+    /// A recovered prepared request no longer passes its complete-input audit.
+    #[error(transparent)]
+    InputAudit(#[from] InputAuditError),
     /// A transport failure occurred but its terminal fact could not be committed.
     #[error(
         "model attempt {attempt_id} transport failed ({transport}); recording the outcome also failed ({record})"
@@ -62,6 +66,7 @@ pub enum DispatchCoordinatorError {
 }
 
 /// Proof that a prepared request has durable dispatch authority.
+#[derive(Debug)]
 pub struct DispatchAuthority {
     attempt_id: ModelAttemptId,
     stream: StreamId,
@@ -560,6 +565,51 @@ pub fn recover_received_model_response(
         }
     }
     invalid_history("completed attempt has no response event")
+}
+
+/// Reconstructs one-shot start authority for a prepared-but-not-started request. The complete input
+/// graph is audited again before authority is returned.
+///
+/// # Errors
+///
+/// Returns [`DispatchCoordinatorError`] when history is malformed, content is incomplete, or the
+/// reconstructed request differs from the committed prepared fact.
+pub fn recover_dispatch_authority<C: ContentStore>(
+    events: &[EventEnvelope],
+    content: &mut C,
+    attempt_id: ModelAttemptId,
+) -> Result<Option<DispatchAuthority>, DispatchCoordinatorError> {
+    if recover_model_attempt(events, attempt_id)? != ModelAttemptState::Authorized {
+        return Ok(None);
+    }
+    for event in events {
+        if event.schema_name.as_str() != PREPARED {
+            continue;
+        }
+        let payload: PreparedPayload = decode_payload(event)?;
+        if payload.attempt != attempt_id {
+            continue;
+        }
+        let mut decision_bytes = Vec::new();
+        content.write_to(&payload.decision, &mut decision_bytes)?;
+        let decision: TurnInputDecision = cairn_codec::from_slice(&decision_bytes)
+            .map_err(|error| DispatchCoordinatorError::InvalidHistory(error.to_string()))?;
+        let request = prepare_model_request(content, &decision)?;
+        if request.decision_id != payload.decision
+            || request.request_id != payload.request
+            || request.adapter_version != payload.adapter_version
+        {
+            return invalid_history("reconstructed request differs from prepared fact");
+        }
+        return Ok(Some(DispatchAuthority {
+            attempt_id,
+            stream: event.stream.clone(),
+            revision: revision(event.sequence)?,
+            prepared_event_id: event.event_id,
+            request,
+        }));
+    }
+    invalid_history("authorized attempt has no prepared event")
 }
 
 fn prepared_adapter_version(

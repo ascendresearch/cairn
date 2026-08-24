@@ -10,11 +10,13 @@ use thiserror::Error;
 mod dispatch;
 mod operation;
 mod semantic;
+mod step;
 
 pub use dispatch::{
     DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
     ReceivedModelResponse, StartedDispatch, authorize_model_request, begin_model_dispatch,
-    execute_model_dispatch, recover_model_attempt, recover_received_model_response,
+    execute_model_dispatch, recover_dispatch_authority, recover_model_attempt,
+    recover_received_model_response,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -29,6 +31,10 @@ pub use semantic::{
     ModelAdapterError, OutputOrdinal, RecordedAdapterExchange, RecordedModelAdapter,
     ScriptedModelAdapter, SemanticModelTurn, SemanticOutputItem, ToolCallId, ToolCallProposal,
     decode_model_response, recover_decoded_model_turn,
+};
+pub use step::{
+    AgentStep, AgentStepState, SettledAgentStep, StepCoordinatorError, prepare_agent_step,
+    recover_agent_step, settle_decoded_step,
 };
 
 macro_rules! label_type {
