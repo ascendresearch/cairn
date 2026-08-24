@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cairn-agent",
     "crates/cairn-codec",
     "crates/cairn-protocol",
     "crates/cairn-record",
@@ -15,6 +16,7 @@ license = "MIT"
 
 [workspace.dependencies]
 cairn-codec = { path = "crates/cairn-codec" }
+cairn-agent = { path = "crates/cairn-agent" }
 cairn-protocol = { path = "crates/cairn-protocol" }
 cairn-record = { path = "crates/cairn-record" }
 rusqlite = { version = "0.37.0", features = ["bundled"] }

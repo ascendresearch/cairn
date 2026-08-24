@@ -11,6 +11,7 @@ cairn-protocol.workspace = true
 cairn-record.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

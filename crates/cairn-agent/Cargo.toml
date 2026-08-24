@@ -1,0 +1,23 @@
+[package]
+name = "cairn-agent"
+description = "Domain-neutral agent input and provider capabilities for Cairn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-codec.workspace = true
+cairn-protocol.workspace = true
+cairn-record.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+cairn-store-sqlite = { path = "../cairn-store-sqlite" }
+tempfile.workspace = true
+
+[lints]
+workspace = true
+

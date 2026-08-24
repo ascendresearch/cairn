@@ -1,6 +1,7 @@
 //! `SQLite` reference adapters for Cairn storage ports.
 
 mod content;
+mod schema;
 
 pub use content::SqliteContentStore;
 
@@ -40,50 +41,11 @@ impl SqliteEventStore {
         Self::from_connection(Connection::open_in_memory().map_err(storage_error)?)
     }
 
-    fn from_connection(connection: Connection) -> Result<Self, EventStoreError> {
+    fn from_connection(mut connection: Connection) -> Result<Self, EventStoreError> {
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(storage_error)?;
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys = ON;
-
-                 CREATE TABLE IF NOT EXISTS streams (
-                    aggregate_kind TEXT NOT NULL,
-                    aggregate_id   TEXT NOT NULL,
-                    revision       INTEGER NOT NULL CHECK (revision > 0),
-                    PRIMARY KEY (aggregate_kind, aggregate_id)
-                 ) STRICT;
-
-                 CREATE TABLE IF NOT EXISTS commands (
-                    command_id       TEXT PRIMARY KEY NOT NULL,
-                    aggregate_kind   TEXT NOT NULL,
-                    aggregate_id     TEXT NOT NULL,
-                    expected_kind    INTEGER NOT NULL CHECK (expected_kind IN (0, 1)),
-                    expected_revision INTEGER,
-                    first_sequence   INTEGER NOT NULL,
-                    last_sequence    INTEGER NOT NULL
-                 ) STRICT;
-
-                 CREATE TABLE IF NOT EXISTS events (
-                    event_id           TEXT PRIMARY KEY NOT NULL,
-                    aggregate_kind     TEXT NOT NULL,
-                    aggregate_id       TEXT NOT NULL,
-                    sequence           INTEGER NOT NULL CHECK (sequence > 0),
-                    schema_name        TEXT NOT NULL,
-                    schema_version     INTEGER NOT NULL CHECK (schema_version > 0),
-                    command_id         TEXT NOT NULL,
-                    parent_event_id    TEXT,
-                    observed_at_unix_ms INTEGER NOT NULL,
-                    payload             BLOB NOT NULL,
-                    UNIQUE (aggregate_kind, aggregate_id, sequence),
-                    FOREIGN KEY (command_id) REFERENCES commands(command_id)
-                 ) STRICT;
-
-                 CREATE INDEX IF NOT EXISTS events_by_command
-                    ON events(command_id, sequence);",
-            )
-            .map_err(storage_error)?;
+        schema::migrate(&mut connection).map_err(protocol_error)?;
         Ok(Self { connection })
     }
 }

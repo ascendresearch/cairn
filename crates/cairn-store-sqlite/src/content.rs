@@ -9,6 +9,8 @@ use cairn_protocol::{BlobDigest, ContentId, ContentType};
 use cairn_record::{ContentDescriptor, ContentStore, ContentStoreError};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::schema;
+
 /// Filesystem blob CAS with `SQLite` semantic metadata.
 pub struct SqliteContentStore {
     connection: Connection,
@@ -25,32 +27,11 @@ impl SqliteContentStore {
         database_path: impl AsRef<Path>,
         blob_root: impl AsRef<Path>,
     ) -> Result<Self, ContentStoreError> {
-        let connection = Connection::open(database_path).map_err(metadata_error)?;
+        let mut connection = Connection::open(database_path).map_err(metadata_error)?;
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(metadata_error)?;
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys = ON;
-
-                 CREATE TABLE IF NOT EXISTS content_blobs (
-                    blob_digest TEXT PRIMARY KEY NOT NULL,
-                    byte_len    INTEGER NOT NULL CHECK (byte_len >= 0)
-                 ) STRICT;
-
-                 CREATE TABLE IF NOT EXISTS content_objects (
-                    content_id     TEXT PRIMARY KEY NOT NULL,
-                    content_domain TEXT NOT NULL,
-                    algorithm      TEXT NOT NULL,
-                    blob_digest    TEXT NOT NULL,
-                    byte_len       INTEGER NOT NULL CHECK (byte_len >= 0),
-                    FOREIGN KEY (blob_digest) REFERENCES content_blobs(blob_digest)
-                 ) STRICT;
-
-                 CREATE INDEX IF NOT EXISTS content_objects_by_blob
-                    ON content_objects(blob_digest);",
-            )
-            .map_err(metadata_error)?;
+        schema::migrate(&mut connection).map_err(metadata_error)?;
 
         let blob_root = blob_root.as_ref().to_path_buf();
         fs::create_dir_all(blob_root.join("objects/sha256")).map_err(io_error)?;

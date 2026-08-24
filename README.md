@@ -15,9 +15,10 @@ with internal architectural boundaries.
 
 The repository is in early implementation. The Rust workspace, strict canonical JSON V1 boundary,
 typed SHA-256/UUIDv7 identities, append-only event-store port, streaming content-store port, SQLite
-metadata adapters, and filesystem blob CAS are implemented; the remaining architecture in the
-normative documents is still target design. The old repositories are evidence and compatibility
-references, not source trees to copy mechanically.
+metadata adapters, filesystem blob CAS, model-input projection/audit, and recorded/scripted model
+transports are implemented; the remaining architecture in the normative documents is still target
+design. The old repositories are evidence and compatibility references, not source trees to copy
+mechanically.
 
 ## Authoritative documents
 
