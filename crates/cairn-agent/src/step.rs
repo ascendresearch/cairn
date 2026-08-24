@@ -3,11 +3,13 @@ use cairn_protocol::{
     ObservedAtUnixMillis, SchemaName, SchemaVersion, StepId,
 };
 use cairn_record::{
-    ContentStore, EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId,
+    ContentStore, ContentStoreError, EventStore, EventStoreError, ExpectedRevision, NewEvent,
+    StreamId,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::step_operation::{StepOperationProjection, project_step_operations};
 use crate::{
     DecodeCoordinatorError, DecodedModelTurn, DispatchAuthority, DispatchCoordinatorError,
     InputAuditError, ModelAttemptState, ReceivedModelResponse, SemanticModelTurnArtifact,
@@ -74,6 +76,12 @@ pub enum StepCoordinatorError {
     /// Semantic response state failed.
     #[error(transparent)]
     Decode(#[from] DecodeCoordinatorError),
+    /// Tool-operation aggregate recovery failed.
+    #[error(transparent)]
+    Operation(#[from] crate::OperationCoordinatorError),
+    /// Bound or result content could not be verified or archived.
+    #[error(transparent)]
+    Content(#[from] ContentStoreError),
     /// Direct step event storage failed.
     #[error(transparent)]
     Event(#[from] EventStoreError),
@@ -106,6 +114,15 @@ pub enum AgentStepState {
         turn_id: ContentId<SemanticModelTurnArtifact>,
         /// Ordered, reconstructed, non-authoritative proposals.
         proposals: Vec<ToolCallProposal>,
+    },
+    /// Every proposal has a durable, trusted, uniquely identified operation binding.
+    OperationsBound(crate::BoundStepOperations),
+    /// Every operation produced an ordered model-visible input artifact.
+    ReadyForNextStep {
+        /// Archived provider-neutral turn that proposed the operations.
+        turn_id: ContentId<SemanticModelTurnArtifact>,
+        /// Operation results in original model output order.
+        pending_results: Vec<ContentId<crate::OperationResult>>,
     },
     /// Transport proved no provider request was sent.
     ModelNotSent,
@@ -230,10 +247,27 @@ fn recover_completed_step<E: EventStore, C: ContentStore>(
             turn_id: settled.turn_id,
         })
     } else {
-        Ok(AgentStepState::AwaitingOperations {
-            turn_id: settled.turn_id,
-            proposals: decoded.into_proposals(),
-        })
+        match project_step_operations(
+            events,
+            content,
+            history,
+            step,
+            settled.turn_id,
+            decoded.into_proposals(),
+        )? {
+            StepOperationProjection::Unbound(proposals) => Ok(AgentStepState::AwaitingOperations {
+                turn_id: settled.turn_id,
+                proposals,
+            }),
+            StepOperationProjection::Bound(bound) => Ok(AgentStepState::OperationsBound(bound)),
+            StepOperationProjection::Ready {
+                turn_id,
+                pending_results,
+            } => Ok(AgentStepState::ReadyForNextStep {
+                turn_id,
+                pending_results,
+            }),
+        }
     }
 }
 

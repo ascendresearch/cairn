@@ -11,6 +11,7 @@ mod dispatch;
 mod operation;
 mod semantic;
 mod step;
+mod step_operation;
 
 pub use dispatch::{
     DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
@@ -35,6 +36,10 @@ pub use semantic::{
 pub use step::{
     AgentStep, AgentStepState, SettledAgentStep, StepCoordinatorError, prepare_agent_step,
     recover_agent_step, settle_decoded_step,
+};
+pub use step_operation::{
+    BoundStepOperations, StepOperationBlocker, StepOperationSettlement, ToolOperationAssignment,
+    ToolRegistration, bind_step_operations, settle_step_operations,
 };
 
 macro_rules! label_type {

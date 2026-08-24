@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, io::Cursor};
 
 use cairn_protocol::{
-    AggregateId, AggregateKind, CommandId, ContentId, EventId, ObservedAtUnixMillis, OperationId,
-    SchemaName, SchemaVersion, StreamRevision,
+    AggregateId, AggregateKind, AttemptId, CommandId, ContentId, EventId, ObservedAtUnixMillis,
+    OperationId, SchemaName, SchemaVersion, StreamRevision,
 };
 use cairn_record::{
     ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError, ExpectedRevision,
@@ -383,6 +383,7 @@ pub struct StartedToolOperation {
     stream: StreamId,
     revision: StreamRevision,
     started_event_id: EventId,
+    attempt_id: AttemptId,
     operation: PreparedToolOperation,
 }
 
@@ -392,6 +393,12 @@ impl StartedToolOperation {
     pub const fn operation_id(&self) -> OperationId {
         self.operation.operation_id
     }
+
+    /// Returns the identity of this concrete invocation attempt.
+    #[must_use]
+    pub const fn attempt_id(&self) -> AttemptId {
+        self.attempt_id
+    }
 }
 
 /// Fully recorded operation outcome.
@@ -399,17 +406,33 @@ impl StartedToolOperation {
 pub enum ToolOperationCompletion {
     /// Canonical result bytes were archived and cited.
     Completed {
+        /// Concrete invocation that produced the result.
+        attempt_id: AttemptId,
         /// Typed result identity.
         result_id: ContentId<OperationResult>,
     },
     /// Gateway proved execution never began.
-    NotStarted,
+    NotStarted {
+        /// Concrete invocation that did not begin.
+        attempt_id: AttemptId,
+        /// Durable gateway diagnostic.
+        diagnostic: String,
+    },
     /// Gateway definitively rejected the operation.
-    Rejected,
+    Rejected {
+        /// Concrete invocation that was rejected.
+        attempt_id: AttemptId,
+        /// Durable gateway diagnostic.
+        diagnostic: String,
+    },
     /// External outcome is unknown; recovery follows the declared effect class.
     Ambiguous {
+        /// Concrete invocation whose outcome is unknown.
+        attempt_id: AttemptId,
         /// Typed recovery policy.
         recovery: OperationRecovery,
+        /// Durable gateway diagnostic.
+        diagnostic: String,
     },
 }
 
@@ -426,8 +449,13 @@ struct PreparedPayload {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "persisted identity fields intentionally use explicit _id suffixes"
+)]
 struct StartedPayload {
     operation_id: OperationId,
+    attempt_id: AttemptId,
     arguments_id: ContentId<ToolArguments>,
 }
 
@@ -435,6 +463,7 @@ struct StartedPayload {
 #[serde(deny_unknown_fields)]
 struct OutcomePayload {
     operation_id: OperationId,
+    attempt_id: AttemptId,
     result_id: Option<ContentId<OperationResult>>,
     diagnostic: Option<String>,
 }
@@ -497,6 +526,7 @@ pub fn authorize_tool_operation<E: EventStore>(
 pub fn begin_tool_operation<E: EventStore>(
     events: &mut E,
     authority: ToolOperationAuthority,
+    attempt_id: AttemptId,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<StartedToolOperation, OperationCoordinatorError> {
@@ -508,6 +538,7 @@ pub fn begin_tool_operation<E: EventStore>(
     } = authority;
     let payload = StartedPayload {
         operation_id: operation.operation_id,
+        attempt_id,
         arguments_id: operation.arguments_id,
     };
     let outcome = append_fact(
@@ -526,6 +557,7 @@ pub fn begin_tool_operation<E: EventStore>(
         stream,
         revision: revision(outcome.last_sequence)?,
         started_event_id: outcome.event_ids[0],
+        attempt_id,
         operation,
     })
 }
@@ -572,6 +604,7 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
         stream,
         revision,
         started_event_id,
+        attempt_id,
         operation,
     } = started;
     let terminal = TerminalContext {
@@ -584,6 +617,7 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
             let descriptor = content.put::<OperationResult>(&mut Cursor::new(result.as_bytes()))?;
             let payload = OutcomePayload {
                 operation_id: operation.operation_id,
+                attempt_id,
                 result_id: Some(descriptor.content_id),
                 diagnostic: None,
             };
@@ -601,6 +635,7 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
                 record: record.to_string(),
             })?;
             Ok(ToolOperationCompletion::Completed {
+                attempt_id,
                 result_id: descriptor.content_id,
             })
         }
@@ -613,6 +648,7 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
             };
             let payload = OutcomePayload {
                 operation_id: operation.operation_id,
+                attempt_id,
                 result_id: None,
                 diagnostic: Some(error.to_string()),
             };
@@ -623,11 +659,20 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
                     record: record.to_string(),
                 },
             )?;
+            let diagnostic = error.to_string();
             Ok(match class {
-                ToolGatewayFailureClass::NotStarted => ToolOperationCompletion::NotStarted,
-                ToolGatewayFailureClass::Rejected => ToolOperationCompletion::Rejected,
+                ToolGatewayFailureClass::NotStarted => ToolOperationCompletion::NotStarted {
+                    attempt_id,
+                    diagnostic,
+                },
+                ToolGatewayFailureClass::Rejected => ToolOperationCompletion::Rejected {
+                    attempt_id,
+                    diagnostic,
+                },
                 ToolGatewayFailureClass::Ambiguous => ToolOperationCompletion::Ambiguous {
+                    attempt_id,
                     recovery: operation.effect.recovery(),
+                    diagnostic,
                 },
             })
         }
@@ -711,6 +756,8 @@ pub enum ToolOperationState {
     },
     /// Invocation was started with no terminal fact, for example after process loss.
     Interrupted {
+        /// Concrete invocation with no terminal fact.
+        attempt_id: AttemptId,
         /// Declared effect semantics.
         effect: ToolEffectClass,
         /// Safe next action derived from the effect class.
@@ -718,17 +765,33 @@ pub enum ToolOperationState {
     },
     /// Canonical result bytes were archived.
     Completed {
+        /// Concrete invocation that produced the result.
+        attempt_id: AttemptId,
         /// Typed result identity.
         result_id: ContentId<OperationResult>,
     },
     /// Gateway proved the implementation never began.
-    NotStarted,
+    NotStarted {
+        /// Concrete invocation that did not begin.
+        attempt_id: AttemptId,
+        /// Durable gateway diagnostic.
+        diagnostic: String,
+    },
     /// Gateway definitively rejected the operation.
-    Rejected,
+    Rejected {
+        /// Concrete invocation that was rejected.
+        attempt_id: AttemptId,
+        /// Durable gateway diagnostic.
+        diagnostic: String,
+    },
     /// Gateway explicitly reported an unknown external outcome.
     Ambiguous {
+        /// Concrete invocation whose outcome is unknown.
+        attempt_id: AttemptId,
         /// Safe next action derived from the effect class.
         recovery: OperationRecovery,
+        /// Durable gateway diagnostic.
+        diagnostic: String,
     },
 }
 
@@ -755,6 +818,7 @@ fn project_operation(
     let mut arguments_id = None;
     let mut prepared_event_id = None;
     let mut started_event_id = None;
+    let mut started_attempt_id = None;
     for event in history {
         let schema = event.schema_name.as_str();
         if schema == PREPARED {
@@ -790,56 +854,92 @@ fn project_operation(
                 return invalid_operation("started event does not cite its prepared event");
             }
             started_event_id = Some(event.event_id);
+            started_attempt_id = Some(payload.attempt_id);
             state = ToolOperationState::Interrupted {
+                attempt_id: payload.attempt_id,
                 effect: effect_value,
                 recovery: effect_value.recovery(),
             };
         } else if [COMPLETED, NOT_STARTED, REJECTED, AMBIGUOUS].contains(&schema) {
-            let payload: OutcomePayload = decode_payload(event)?;
-            require_operation(payload.operation_id, operation_id)?;
-            let Some(effect_value) = effect else {
-                return invalid_operation("terminal event has no prepared effect class");
-            };
-            transition_is(
-                &state,
-                &ToolOperationState::Interrupted {
-                    effect: effect_value,
-                    recovery: effect_value.recovery(),
-                },
+            state = project_terminal(
+                event,
                 schema,
+                operation_id,
+                &state,
+                effect,
+                started_attempt_id,
+                started_event_id,
             )?;
-            if event.parent_event_id != started_event_id {
-                return invalid_operation("terminal event does not cite its started event");
-            }
-            state = match schema {
-                COMPLETED if payload.diagnostic.is_some() => {
-                    return invalid_operation(
-                        "completed event unexpectedly has a failure diagnostic",
-                    );
-                }
-                COMPLETED => ToolOperationState::Completed {
-                    result_id: payload.result_id.ok_or_else(|| {
-                        OperationCoordinatorError::InvalidOperation(
-                            "completed event lacks result identity".to_owned(),
-                        )
-                    })?,
-                },
-                NOT_STARTED | REJECTED | AMBIGUOUS if payload.result_id.is_some() => {
-                    return invalid_operation("failure event unexpectedly cites a result");
-                }
-                NOT_STARTED | REJECTED | AMBIGUOUS if payload.diagnostic.is_none() => {
-                    return invalid_operation("failure event lacks a diagnostic");
-                }
-                NOT_STARTED => ToolOperationState::NotStarted,
-                REJECTED => ToolOperationState::Rejected,
-                AMBIGUOUS => ToolOperationState::Ambiguous {
-                    recovery: effect_value.recovery(),
-                },
-                _ => unreachable!("schema was filtered above"),
-            };
         }
     }
     Ok(state)
+}
+
+fn project_terminal(
+    event: &EventEnvelope,
+    schema: &str,
+    operation_id: OperationId,
+    state: &ToolOperationState,
+    effect: Option<ToolEffectClass>,
+    started_attempt_id: Option<AttemptId>,
+    started_event_id: Option<EventId>,
+) -> Result<ToolOperationState, OperationCoordinatorError> {
+    let payload: OutcomePayload = decode_payload(event)?;
+    require_operation(payload.operation_id, operation_id)?;
+    let Some(effect) = effect else {
+        return invalid_operation("terminal event has no prepared effect class");
+    };
+    let Some(attempt_id) = started_attempt_id else {
+        return invalid_operation("terminal event has no started attempt identity");
+    };
+    if payload.attempt_id != attempt_id {
+        return invalid_operation("terminal event cites a different attempt");
+    }
+    transition_is(
+        state,
+        &ToolOperationState::Interrupted {
+            attempt_id,
+            effect,
+            recovery: effect.recovery(),
+        },
+        schema,
+    )?;
+    if event.parent_event_id != started_event_id {
+        return invalid_operation("terminal event does not cite its started event");
+    }
+    match schema {
+        COMPLETED if payload.diagnostic.is_some() => {
+            invalid_operation("completed event unexpectedly has a failure diagnostic")
+        }
+        COMPLETED => Ok(ToolOperationState::Completed {
+            attempt_id,
+            result_id: payload.result_id.ok_or_else(|| {
+                OperationCoordinatorError::InvalidOperation(
+                    "completed event lacks result identity".to_owned(),
+                )
+            })?,
+        }),
+        NOT_STARTED | REJECTED | AMBIGUOUS if payload.result_id.is_some() => {
+            invalid_operation("failure event unexpectedly cites a result")
+        }
+        NOT_STARTED | REJECTED | AMBIGUOUS if payload.diagnostic.is_none() => {
+            invalid_operation("failure event lacks a diagnostic")
+        }
+        NOT_STARTED => Ok(ToolOperationState::NotStarted {
+            attempt_id,
+            diagnostic: payload.diagnostic.expect("checked above"),
+        }),
+        REJECTED => Ok(ToolOperationState::Rejected {
+            attempt_id,
+            diagnostic: payload.diagnostic.expect("checked above"),
+        }),
+        AMBIGUOUS => Ok(ToolOperationState::Ambiguous {
+            attempt_id,
+            recovery: effect.recovery(),
+            diagnostic: payload.diagnostic.expect("checked above"),
+        }),
+        _ => unreachable!("schema was filtered by the caller"),
+    }
 }
 
 fn decode_payload<P: for<'de> Deserialize<'de>>(
@@ -885,7 +985,7 @@ fn invalid_operation<T>(message: &str) -> Result<T, OperationCoordinatorError> {
 
 #[cfg(test)]
 mod tests {
-    use cairn_protocol::{CommandId, OperationId};
+    use cairn_protocol::{AttemptId, CommandId, OperationId};
     use cairn_record::{ContentStore, EventStore};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 
@@ -947,6 +1047,7 @@ mod tests {
         let started = begin_tool_operation(
             &mut events,
             authority,
+            AttemptId::new(),
             &CommandId::new(),
             cairn_protocol::ObservedAtUnixMillis::new(2),
         )
@@ -969,7 +1070,11 @@ mod tests {
             cairn_protocol::ObservedAtUnixMillis::new(3),
         )
         .expect("execute");
-        let ToolOperationCompletion::Completed { result_id } = completion else {
+        let ToolOperationCompletion::Completed {
+            attempt_id,
+            result_id,
+        } = completion
+        else {
             panic!("expected completed result");
         };
         let mut archived = Vec::new();
@@ -979,8 +1084,18 @@ mod tests {
         assert_eq!(archived, expected_bytes);
         assert_eq!(
             recover_tool_operation(&events, operation_id).expect("recover"),
-            ToolOperationState::Completed { result_id }
+            ToolOperationState::Completed {
+                attempt_id,
+                result_id
+            }
         );
+        let stream = operation_stream(operation_id).expect("stream");
+        let mut corrupted = events.read_stream(&stream, None).expect("history");
+        let mut terminal: super::OutcomePayload =
+            cairn_codec::from_slice(&corrupted[2].payload).expect("terminal payload");
+        terminal.attempt_id = AttemptId::new();
+        corrupted[2].payload = cairn_codec::to_vec(&terminal).expect("encode corruption");
+        assert!(project_operation(&corrupted, operation_id).is_err());
     }
 
     #[test]
@@ -1010,17 +1125,19 @@ mod tests {
             let _started = begin_tool_operation(
                 &mut events,
                 authority,
+                AttemptId::new(),
                 &CommandId::new(),
                 cairn_protocol::ObservedAtUnixMillis::new(2),
             )
             .expect("begin");
-            assert_eq!(
+            assert!(matches!(
                 recover_tool_operation(&events, operation_id).expect("recover"),
                 ToolOperationState::Interrupted {
-                    effect,
-                    recovery: expected_recovery,
-                }
-            );
+                    effect: actual_effect,
+                    recovery: actual_recovery,
+                    ..
+                } if actual_effect == effect && actual_recovery == expected_recovery
+            ));
         }
     }
 
@@ -1041,6 +1158,7 @@ mod tests {
         let started = begin_tool_operation(
             &mut events,
             authority,
+            AttemptId::new(),
             &CommandId::new(),
             cairn_protocol::ObservedAtUnixMillis::new(2),
         )
@@ -1060,15 +1178,17 @@ mod tests {
         assert!(matches!(
             completion,
             ToolOperationCompletion::Ambiguous {
-                recovery: OperationRecovery::ReconcileRequired
+                recovery: OperationRecovery::ReconcileRequired,
+                ..
             }
         ));
-        assert_eq!(
+        assert!(matches!(
             recover_tool_operation(&events, operation_id).expect("recover"),
             ToolOperationState::Ambiguous {
-                recovery: OperationRecovery::ReconcileRequired
+                recovery: OperationRecovery::ReconcileRequired,
+                ..
             }
-        );
+        ));
     }
 
     #[test]
@@ -1106,6 +1226,7 @@ mod tests {
         let _started = begin_tool_operation(
             &mut events,
             authority,
+            AttemptId::new(),
             &CommandId::new(),
             cairn_protocol::ObservedAtUnixMillis::new(2),
         )
