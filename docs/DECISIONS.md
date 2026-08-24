@@ -1,0 +1,180 @@
+# Resolved design decisions
+
+- Status: normative decision register
+- Date: 2026-08-24
+
+This register records decisions that close entries in [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+Detailed requirements remain in `SYSTEM_REQUIREMENTS.md`; detailed implementation boundaries remain
+in `SYSTEM_DESIGN.md`.
+
+## D-001 — Canonical JSON first, behind a codec boundary
+
+- Resolves: OQ-001
+- Decision: accepted
+
+Cairn V1 will use canonical UTF-8 JSON for persisted structured artifacts, event payloads, fixtures,
+and exported manifests.
+
+The choice of JSON is an adapter decision, not a license for serialization details to spread through
+domain and workflow code:
+
+- domain types and state machines live in format-neutral crates;
+- `cairn-codec` owns canonical JSON encoding/decoding, schema dispatch, and compatibility fixtures;
+- persisted envelopes carry schema and encoding identifiers;
+- content/event identity is computed from canonical encoded bytes under an explicit domain;
+- a future encoding is introduced as a new codec/version and explicit transformation, never by
+  silently changing the bytes an old identity means.
+
+Canonical JSON V1 will define object-key ordering, UTF-8 handling, escaping, duplicate-key rejection,
+number representation, and unknown-field behavior. Verdict-critical floating-point observations
+will use exact integer bits, scaled integers, or specified strings instead of depending on a JSON
+parser's floating-point round trip.
+
+If “JSONP” means the browser callback format, it is not a persistence format: it may be a client-side
+presentation wrapper someday, but it will not participate in canonical identity or durable storage.
+
+## D-002 — SQLite first, behind storage ports
+
+- Resolves: OQ-002
+- Decision: accepted
+
+Cairn V1 will use SQLite as the reference and production-first implementation for:
+
+- append-only event streams and expected-revision checks;
+- command idempotency and transactional outbox state;
+- task/episode/operation projections;
+- jobs, leases, attempts, and reconciliation state;
+- artifact metadata and reference graph;
+- subscription cursors and operational indexes.
+
+Persistence is isolated behind narrow contracts:
+
+- `EventStore` — append/read streams with expected revision and command idempotency;
+- `ProjectionStore` — rebuildable views and checkpoints;
+- `CoordinationStore` — leases, outbox, and process-manager checkpoints;
+- `ContentStore` — immutable byte streaming and identity verification.
+
+`cairn-store-sqlite` implements the first three. The initial `ContentStore` may use filesystem blobs
+with SQLite metadata; callers do not depend on that layout. Product, agent, execution, verification,
+and API crates depend on ports rather than `rusqlite` or SQL schemas.
+
+SQLite-specific features such as WAL, busy timeout, transaction shape, and backup remain adapter
+details. A future PostgreSQL or remote content-store adapter must pass the same contract and fault-
+injection suites before it can replace SQLite.
+
+## D-003 — Hybrid authority for the structured domain
+
+- Resolves: OQ-003
+- Decision: accepted
+
+The supported domain is resolved from several separately recorded authorities rather than authored
+entirely by one agent or required in full from one caller.
+
+### Caller responsibility
+
+The caller supplies a minimum machine-readable contract covering, for the requested claim:
+
+- source entry point and parameter/buffer roles;
+- dtypes and known shape/rank variables;
+- declared valid ranges and required invalid/error behavior;
+- requested output semantics or an independent semantic reference;
+- explicit exclusions and unknowns.
+
+The contract may be incomplete, but it may not disguise an unknown as an unrestricted domain.
+
+### Cairn responsibility
+
+A role-scoped domain-analysis/blue episode may propose refinements from source, documentation,
+framework definitions, and upstream tests. Each refinement cites its evidence and remains distinct
+from the caller declaration.
+
+Cairn independently challenges both through:
+
+- source implementation interrogation and boundary probing;
+- mandatory cases derived from the caller's minimum contract;
+- upstream and external test proposals with provenance;
+- historical target-failure coverage obligations.
+
+### Conflict rule
+
+Caller declaration, agent interpretation, source observations, and external expectations are never
+overwritten into one unattributed value. Admission records agreements and disagreements. An
+unresolved disagreement affecting the requested claim rejects the oracle or reduces it to an
+explicit weaker/`Unverifiable` result.
+
+The admitted structured domain is an immutable artifact produced by admission. Changing it creates a
+new oracle and experiment identity.
+
+## D-004 — Policy-configured variant sufficiency
+
+- Resolves: OQ-005
+- Decision: accepted
+
+There is no universal correct count of correct-by-construction and deliberately incorrect variants.
+Variant sufficiency is defined by the immutable, versioned `AdmissionPolicy` selected for an
+admission attempt.
+
+The policy configures at least:
+
+- minimum accepted correct-by-construction variants;
+- minimum rejected implementation-level incorrect variants;
+- required applicable fault/construction classes;
+- structural-independence requirements;
+- saturation rounds and what resets saturation;
+- provider/execution budgets and the outcome when they are exhausted.
+
+The V1 reference profile starts with two structurally distinct correct variants, three deliberately
+incorrect variants, applicable fault-class coverage, and two consecutive saturation rounds. These
+are profile defaults, not hard-coded verifier constants.
+
+Counts are necessary controls, not sufficient evidence. Every accepted correct variant still needs
+an independent `ConstructionClaim`; every mandatory incorrect variant must be rejected through the
+required execution scope; and the generic mutant/case grid remains a separate obligation. A policy
+that requests a stronger claim may increase these requirements. A profile may configure a smaller
+family only if its accepted strength and limitations explicitly permit that reduction; it cannot
+label missing evidence as having passed.
+
+Budget exhaustion before the selected policy is satisfied yields rejection, a permitted weaker
+strength, or `Unverifiable`. Cost limits never turn incomplete admission into `Pass`. The exact
+policy identity and observed stopping reason are retained in the admission receipt.
+
+## D-005 — Separate numerical provenance from assurance
+
+- Resolves: OQ-008
+- Decision: accepted
+
+A numerical allowance records two orthogonal classifications:
+
+1. **provenance** records where the allowance came from, such as `MeasuredFamily`,
+   `MeasuredAdversarial`, `ExternalPrior`, `Asserted`, or `ExactOrSet`;
+2. **assurance** records what the evidence justifies: `ProvenBound`, `ExhaustiveFinite`,
+   `HeldOutValidated`, `ExploratoryMeasured`, `PriorOnly`, or `Unsupported`.
+
+`HeldOutValidated` requires identity-disjoint derivation and validation corpora. The receipt records
+variant count and independence, input-generation/search strategy, observed spans, seeds, domain
+regions, and known unexplored regions. A safety factor is policy, not proof, and does not promote an
+empirical maximum to `ProvenBound`.
+
+`HeldOutValidated` may support an empirical `Pass` when allowed by the selected admission policy.
+The verdict must label it as empirical and state its admitted domain, corpus relationship,
+allowance, and limitations. Only a justified `ProvenBound` or `ExhaustiveFinite` assurance may use
+an unqualified domain-wide numerical claim. `ExploratoryMeasured`, `PriorOnly`, and `Unsupported`
+cannot be presented as such a claim.
+
+Cairn does not report probabilistic confidence unless the input distribution and sampling procedure
+are themselves declared and justified. A measured maximum alone is an observation, not a
+statistical or mathematical bound.
+
+## D-006 — MIT license for the public project
+
+- Partially resolves: OQ-017 (outbound project license)
+- Decision: accepted
+
+Cairn source code and project-authored documentation will be released under the MIT License. Root
+license text, Rust package metadata, generated release metadata, and source/fixture provenance must
+agree with that choice.
+
+This decision does not silently relicense imported code, corpora, model outputs, vendor SDKs, or
+historical Cairn/Alloyport material. Such material requires compatible provenance or must remain an
+external/private input. Contribution certification, governance, trademark policy, and the detailed
+dependency-license gate remain to be decided before the first public release.
