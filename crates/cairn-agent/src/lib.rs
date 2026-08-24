@@ -1,4 +1,4 @@
-//! Domain-neutral model-input projection, completeness audit, and transport capabilities.
+//! Domain-neutral model-input projection, durable dispatch, and transport capabilities.
 
 use std::{collections::VecDeque, io::Cursor};
 
@@ -6,6 +6,14 @@ use cairn_protocol::{ContentId, ContentType};
 use cairn_record::{ContentStore, ContentStoreError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+mod dispatch;
+
+pub use dispatch::{
+    DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
+    StartedDispatch, authorize_model_request, begin_model_dispatch, execute_model_dispatch,
+    recover_model_attempt,
+};
 
 macro_rules! label_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -81,6 +89,7 @@ content_type!(OperationResult, "agent.operation-result.v1");
 content_type!(PolicyDocument, "agent.policy-document.v1");
 content_type!(TurnInputDecisionArtifact, "agent.turn-input-decision.v1");
 content_type!(MaterializedRequestArtifact, "agent.materialized-request.v1");
+content_type!(ModelResponseArtifact, "agent.model-response.v1");
 
 /// Pinned provider/model/adapter selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -161,15 +170,46 @@ struct MaterializedRequestBody {
     policy: serde_json::Value,
 }
 
-/// Durable decision and exact canonical request identities prepared before dispatch.
-#[derive(Debug)]
+/// Durable decision and exact canonical request identities prepared before dispatch. Construction
+/// is restricted to [`prepare_model_request`] so dispatch authority cannot wrap unaudited bytes.
+///
+/// ```compile_fail
+/// use cairn_agent::PreparedModelRequest;
+///
+/// let forged = PreparedModelRequest {
+///     decision_id: todo!(),
+///     request_id: todo!(),
+///     request_bytes: Vec::new(),
+/// };
+/// ```
+#[derive(Clone, Debug)]
 pub struct PreparedModelRequest {
     /// Stored input decision.
-    pub decision_id: ContentId<TurnInputDecisionArtifact>,
+    decision_id: ContentId<TurnInputDecisionArtifact>,
     /// Stored exact provider-neutral request bytes.
-    pub request_id: ContentId<MaterializedRequestArtifact>,
+    request_id: ContentId<MaterializedRequestArtifact>,
     /// Exact bytes supplied to the transport adapter.
-    pub request_bytes: Vec<u8>,
+    request_bytes: Vec<u8>,
+}
+
+impl PreparedModelRequest {
+    /// Returns the durable input-decision identity.
+    #[must_use]
+    pub const fn decision_id(&self) -> ContentId<TurnInputDecisionArtifact> {
+        self.decision_id
+    }
+
+    /// Returns the identity of the exact materialized request bytes.
+    #[must_use]
+    pub const fn request_id(&self) -> ContentId<MaterializedRequestArtifact> {
+        self.request_id
+    }
+
+    /// Returns the exact bytes to pass to a transport adapter.
+    #[must_use]
+    pub fn request_bytes(&self) -> &[u8] {
+        &self.request_bytes
+    }
 }
 
 /// Persists the decision, walks every reference, and materializes exact canonical request bytes.
@@ -320,9 +360,43 @@ pub enum TransportError {
     /// No scripted/recorded response remains.
     #[error("transport fixture is exhausted")]
     Exhausted,
+    /// Provider call is known not to have left the process.
+    #[error("model request was not sent: {0}")]
+    NotSent(String),
+    /// Provider definitively rejected the request without producing a response.
+    #[error("model request was rejected: {0}")]
+    Rejected(String),
+    /// The caller cannot determine whether the provider executed the request.
+    #[error("model request outcome is ambiguous: {0}")]
+    Ambiguous(String),
     /// Scripted provider failure.
     #[error("scripted transport failed: {0}")]
     Scripted(String),
+}
+
+/// Durable classification used after a transport failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportFailureClass {
+    /// Safe to authorize a distinct later attempt; this attempt did not leave the process.
+    NotSent,
+    /// Provider gave a definitive rejection.
+    Rejected,
+    /// External execution may have occurred and must not be blindly retried.
+    Ambiguous,
+}
+
+impl TransportError {
+    /// Classifies the external effect independently from diagnostic text.
+    #[must_use]
+    pub const fn failure_class(&self) -> TransportFailureClass {
+        match self {
+            Self::RequestMismatch | Self::Exhausted | Self::NotSent(_) => {
+                TransportFailureClass::NotSent
+            }
+            Self::Rejected(_) => TransportFailureClass::Rejected,
+            Self::Ambiguous(_) | Self::Scripted(_) => TransportFailureClass::Ambiguous,
+        }
+    }
 }
 
 /// Replaceable byte transport used identically by live, recorded, and scripted providers.

@@ -12,7 +12,8 @@ mod identity;
 
 pub use identity::{
     AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType, DerivedId, EpisodeId,
-    EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, OperationId, TaskId,
+    EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, ModelAttemptId, OperationId,
+    TaskId,
 };
 
 const MAX_IDENTIFIER_LEN: usize = 255;
@@ -199,6 +200,25 @@ macro_rules! positive_u64_type {
 #[derive(Debug, Clone, Copy, Eq, Error, PartialEq)]
 #[error("protocol sequence/revision must be greater than zero")]
 pub struct PositiveValueError;
+
+/// Observed wall-clock time in Unix milliseconds. It is evidence, never an ordering authority.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct ObservedAtUnixMillis(i64);
+
+impl ObservedAtUnixMillis {
+    /// Wraps an observed timestamp without assigning it ordering authority.
+    #[must_use]
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the wire integer.
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
 
 positive_u64_type!(
     /// One-based position of an event within an aggregate stream.

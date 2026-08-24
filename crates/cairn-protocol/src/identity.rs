@@ -621,6 +621,8 @@ lifecycle_id!(/// Idempotent command identity.
 CommandId, "command");
 lifecycle_id!(/// Counterfactual/replay branch identity.
 BranchId, "branch");
+lifecycle_id!(/// One externally dispatched model-attempt identity.
+ModelAttemptId, "model-attempt");
 
 #[cfg(test)]
 mod tests {
