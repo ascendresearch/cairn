@@ -29,8 +29,6 @@ pub enum ExpectedRevision {
 /// Caller-supplied immutable event fields. Sequence and command causality are assigned by append.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewEvent {
-    /// Stable event identity. Derivation is intentionally outside the store.
-    pub event_id: EventId,
     /// Payload schema name.
     pub schema_name: SchemaName,
     /// Payload schema version.
@@ -85,6 +83,12 @@ pub enum EventStoreError {
     /// An append batch must contain at least one event.
     #[error("event append batch cannot be empty")]
     EmptyBatch,
+    /// Event payload bytes are not valid canonical JSON V1.
+    #[error("event payload is not canonical JSON V1: {message}")]
+    InvalidEventPayload {
+        /// Codec diagnostic.
+        message: String,
+    },
     /// Optimistic concurrency failed.
     #[error("expected revision {expected:?}, but current revision is {current:?}")]
     RevisionConflict {
@@ -111,6 +115,58 @@ pub enum EventStoreError {
         /// Diagnostic suitable for logs and tests.
         message: String,
     },
+}
+
+#[derive(Serialize)]
+struct EventIdentityMaterial<'a> {
+    stream: &'a StreamId,
+    sequence: EventSequence,
+    schema_name: &'a SchemaName,
+    schema_version: SchemaVersion,
+    encoding: &'static str,
+    command_id: &'a CommandId,
+    parent_event_id: Option<EventId>,
+    observed_at_unix_ms: i64,
+    payload: serde_json::Value,
+}
+
+/// Derives an event identity from the complete canonical envelope material available after sequence
+/// allocation. The identity field itself is intentionally absent from the preimage.
+///
+/// # Errors
+///
+/// Returns [`EventStoreError::InvalidEventPayload`] when payload bytes are not canonical JSON V1 or
+/// when identity material cannot be encoded/hashed.
+pub fn derive_event_id(
+    stream: &StreamId,
+    sequence: EventSequence,
+    command_id: &CommandId,
+    event: &NewEvent,
+) -> Result<EventId, EventStoreError> {
+    let payload =
+        cairn_codec::from_slice::<serde_json::Value>(&event.payload).map_err(|error| {
+            EventStoreError::InvalidEventPayload {
+                message: error.to_string(),
+            }
+        })?;
+    let material = EventIdentityMaterial {
+        stream,
+        sequence,
+        schema_name: &event.schema_name,
+        schema_version: event.schema_version,
+        encoding: cairn_codec::ENCODING_ID,
+        command_id,
+        parent_event_id: event.parent_event_id,
+        observed_at_unix_ms: event.observed_at_unix_ms,
+        payload,
+    };
+    let bytes =
+        cairn_codec::to_vec(&material).map_err(|error| EventStoreError::InvalidEventPayload {
+            message: error.to_string(),
+        })?;
+    EventId::derive(&bytes).map_err(|error| EventStoreError::InvalidEventPayload {
+        message: error.to_string(),
+    })
 }
 
 /// Append-only event-store contract.
@@ -141,4 +197,101 @@ pub trait EventStore {
         stream: &StreamId,
         after_sequence: Option<EventSequence>,
     ) -> Result<Vec<EventEnvelope>, EventStoreError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use cairn_protocol::{
+        AggregateId, AggregateKind, CommandId, EventId, EventSequence, SchemaName, SchemaVersion,
+    };
+
+    use super::{NewEvent, StreamId, derive_event_id};
+
+    fn event(payload: &[u8]) -> NewEvent {
+        NewEvent {
+            schema_name: SchemaName::new("task.created").expect("schema"),
+            schema_version: SchemaVersion::new(1).expect("version"),
+            parent_event_id: None,
+            observed_at_unix_ms: 1_777_000_000_000,
+            payload: payload.to_vec(),
+        }
+    }
+
+    #[test]
+    fn every_authoritative_envelope_change_mutates_event_identity() {
+        let stream = StreamId {
+            kind: AggregateKind::new("task").expect("kind"),
+            id: AggregateId::new("task:fixture").expect("id"),
+        };
+        let command = CommandId::new();
+        let sequence = EventSequence::new(1).expect("sequence");
+        let base = event(b"{\"value\":1}");
+        let base_id = derive_event_id(&stream, sequence, &command, &base).expect("base id");
+
+        let mut changed_payload = event(b"{\"value\":2}");
+        assert_ne!(
+            base_id,
+            derive_event_id(&stream, sequence, &command, &changed_payload).expect("payload id")
+        );
+        changed_payload.payload = base.payload.clone();
+        changed_payload.observed_at_unix_ms += 1;
+        assert_ne!(
+            base_id,
+            derive_event_id(&stream, sequence, &command, &changed_payload).expect("timestamp id")
+        );
+        assert_ne!(
+            base_id,
+            derive_event_id(
+                &stream,
+                EventSequence::new(2).expect("sequence"),
+                &command,
+                &base
+            )
+            .expect("sequence id")
+        );
+        assert_ne!(
+            base_id,
+            derive_event_id(&stream, sequence, &CommandId::new(), &base).expect("command id")
+        );
+
+        let other_stream = StreamId {
+            kind: stream.kind.clone(),
+            id: AggregateId::new("task:other").expect("other id"),
+        };
+        assert_ne!(
+            base_id,
+            derive_event_id(&other_stream, sequence, &command, &base).expect("stream id")
+        );
+
+        let mut changed_schema = event(&base.payload);
+        changed_schema.schema_version = SchemaVersion::new(2).expect("version");
+        assert_ne!(
+            base_id,
+            derive_event_id(&stream, sequence, &command, &changed_schema).expect("schema id")
+        );
+
+        let mut changed_parent = event(&base.payload);
+        changed_parent.parent_event_id =
+            Some(EventId::derive(b"parent fixture").expect("parent event id"));
+        assert_ne!(
+            base_id,
+            derive_event_id(&stream, sequence, &command, &changed_parent).expect("parent id")
+        );
+    }
+
+    #[test]
+    fn event_identity_rejects_noncanonical_payload() {
+        let stream = StreamId {
+            kind: AggregateKind::new("task").expect("kind"),
+            id: AggregateId::new("task:fixture").expect("id"),
+        };
+        let error = derive_event_id(
+            &stream,
+            EventSequence::new(1).expect("sequence"),
+            &CommandId::new(),
+            &event(b"{ \"not\":\"canonical\" }"),
+        )
+        .expect_err("noncanonical payload must fail");
+        assert!(error.to_string().contains("not canonical"));
+    }
 }

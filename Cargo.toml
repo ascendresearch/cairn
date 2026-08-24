@@ -20,8 +20,10 @@ cairn-record = { path = "crates/cairn-record" }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.10.9"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
+uuid = { version = "1", features = ["serde", "v7"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -29,4 +31,3 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
-

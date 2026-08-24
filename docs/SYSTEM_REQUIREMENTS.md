@@ -213,6 +213,10 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-REC-007 | Counterfactual execution MUST identify its source record, cut boundary, changed variable, control, resulting branch, and first divergence. | One controlled same-input run and one deliberate perturbation. |
 | FR-REC-008 | A live continuation from a recorded prefix MUST create a new branch and MUST NOT append to or rewrite the historical source run. | Branch immutability test. |
 | FR-REC-009 | Secret material MUST NOT enter the content store or exported record; secret references and credential state MUST be represented without secret bytes. | Secret scanning and redaction tests. |
+| FR-REC-010 | Content, event, and derived identities MUST use a versioned algorithm tag and registered semantic domain in both their hash preimage and wire representation. Distinct identity domains MUST be distinct Rust types. | Published SHA-256 test vectors, cross-domain inequality tests, parsing mismatch tests, and compile-fail controls. |
+| FR-REC-011 | Event identity MUST be derived by trusted record code after aggregate sequence allocation and MUST cover the canonical envelope excluding only its own identity field. Callers MUST NOT author an `EventId` for append. | Envelope-field mutation suite and concurrent append control. |
+| FR-REC-012 | Physical `BlobDigest` and semantic `ContentId<T>` MUST remain distinct. Identical bytes MAY share physical storage without making semantic identities interchangeable. | Same-bytes/different-domain fixture and deduplication contract test. |
+| FR-REC-013 | An identity-algorithm upgrade MUST run as a restartable verified migration with an immutable mapping manifest, projection/index rebuild, and atomic writer cutover. It MUST NOT rewrite historical event bytes or verdict meaning. | Interrupted-migration recovery, old export resolution, and partial-cutover rejection tests. |
 
 Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md).
 

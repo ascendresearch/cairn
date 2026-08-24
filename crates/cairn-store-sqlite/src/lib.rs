@@ -7,7 +7,8 @@ use cairn_protocol::{
     StreamRevision,
 };
 use cairn_record::{
-    AppendOutcome, EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId,
+    AppendOutcome, EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent,
+    StreamId, derive_event_id,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -164,13 +165,13 @@ fn append_new(
         first_sequence,
         last_sequence,
     )?;
-    insert_events(transaction, stream, command_id, first_sequence, events)?;
+    let event_ids = insert_events(transaction, stream, command_id, first_sequence, events)?;
     update_stream(transaction, stream, current, last_sequence)?;
 
     Ok(AppendOutcome {
         first_sequence,
         last_sequence,
-        event_ids: events.iter().map(|event| event.event_id.clone()).collect(),
+        event_ids,
         was_replay: false,
     })
 }
@@ -184,6 +185,7 @@ fn insert_command(
     last_sequence: EventSequence,
 ) -> Result<(), EventStoreError> {
     let (expected_kind, expected_revision) = encode_expected(expected)?;
+    let command_wire = command_id.to_string();
     transaction
         .execute(
             "INSERT INTO commands (
@@ -191,7 +193,7 @@ fn insert_command(
                 first_sequence, last_sequence
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                command_id.as_str(),
+                command_wire,
                 stream.kind.as_str(),
                 stream.id.as_str(),
                 expected_kind,
@@ -210,7 +212,9 @@ fn insert_events(
     command_id: &CommandId,
     first_sequence: EventSequence,
     events: &[NewEvent],
-) -> Result<(), EventStoreError> {
+) -> Result<Vec<EventId>, EventStoreError> {
+    let command_wire = command_id.to_string();
+    let mut event_ids = Vec::with_capacity(events.len());
     for (offset, event) in events.iter().enumerate() {
         let offset = u64::try_from(offset).map_err(|_| EventStoreError::IntegerRange {
             field: "event offset",
@@ -219,6 +223,10 @@ fn insert_events(
             .get()
             .checked_add(offset)
             .ok_or(EventStoreError::IntegerRange { field: "sequence" })?;
+        let sequence = EventSequence::new(sequence).map_err(protocol_error)?;
+        let event_id = derive_event_id(stream, sequence, command_id, event)?;
+        let event_wire = event_id.to_wire();
+        let parent_wire = event.parent_event_id.map(EventId::to_wire);
         transaction
             .execute(
                 "INSERT INTO events (
@@ -226,21 +234,22 @@ fn insert_events(
                     schema_version, command_id, parent_event_id, observed_at_unix_ms, payload
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
-                    event.event_id.as_str(),
+                    event_wire,
                     stream.kind.as_str(),
                     stream.id.as_str(),
-                    to_i64(sequence, "sequence")?,
+                    to_i64(sequence.get(), "sequence")?,
                     event.schema_name.as_str(),
                     i64::from(event.schema_version.get()),
-                    command_id.as_str(),
-                    event.parent_event_id.as_ref().map(EventId::as_str),
+                    command_wire,
+                    parent_wire,
                     event.observed_at_unix_ms,
                     event.payload,
                 ],
             )
             .map_err(storage_error)?;
+        event_ids.push(event_id);
     }
-    Ok(())
+    Ok(event_ids)
 }
 
 fn update_stream(
@@ -312,7 +321,7 @@ fn replay_outcome(
             "SELECT aggregate_kind, aggregate_id, expected_kind, expected_revision,
                     first_sequence, last_sequence
              FROM commands WHERE command_id = ?1",
-            [command_id.as_str()],
+            [command_id.to_string()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -335,12 +344,11 @@ fn replay_outcome(
     let stored_events = read_events(
         transaction,
         "WHERE command_id = ?1 ORDER BY sequence ASC",
-        [command_id.as_str()],
+        [command_id.to_string()],
     )?;
     let same_events = stored_events.len() == proposed.len()
         && stored_events.iter().zip(proposed).all(|(stored, new)| {
-            stored.event_id == new.event_id
-                && stored.schema_name == new.schema_name
+            stored.schema_name == new.schema_name
                 && stored.schema_version == new.schema_version
                 && stored.parent_event_id == new.parent_event_id
                 && stored.observed_at_unix_ms == new.observed_at_unix_ms
@@ -352,7 +360,7 @@ fn replay_outcome(
         || !same_events
     {
         return Err(EventStoreError::CommandConflict {
-            command_id: command_id.clone(),
+            command_id: *command_id,
         });
     }
 
@@ -468,7 +476,7 @@ fn protocol_error(error: impl std::fmt::Display) -> EventStoreError {
 #[cfg(test)]
 mod tests {
     use cairn_protocol::{
-        AggregateId, AggregateKind, CommandId, EventId, SchemaName, SchemaVersion, StreamRevision,
+        AggregateId, AggregateKind, CommandId, SchemaName, SchemaVersion, StreamRevision,
     };
     use cairn_record::{EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId};
 
@@ -481,9 +489,8 @@ mod tests {
         }
     }
 
-    fn event(id: &str, payload: &[u8]) -> NewEvent {
+    fn event(payload: &[u8]) -> NewEvent {
         NewEvent {
-            event_id: EventId::new(id).expect("event id"),
             schema_name: SchemaName::new("task.created").expect("schema"),
             schema_version: SchemaVersion::new(1).expect("version"),
             parent_event_id: None,
@@ -495,15 +502,12 @@ mod tests {
     #[test]
     fn append_is_atomic_ordered_and_revision_checked() {
         let mut store = SqliteEventStore::in_memory().expect("store");
-        let events = [
-            event("event:1", b"{\"name\":\"one\"}"),
-            event("event:2", b"{}"),
-        ];
+        let events = [event(b"{\"name\":\"one\"}"), event(b"{}")];
         let outcome = store
             .append(
                 &stream(),
                 ExpectedRevision::NoStream,
-                &CommandId::new("command:1").expect("command"),
+                &CommandId::new(),
                 &events,
             )
             .expect("append");
@@ -519,8 +523,8 @@ mod tests {
             .append(
                 &stream(),
                 ExpectedRevision::Exact(StreamRevision::new(1).expect("revision")),
-                &CommandId::new("command:2").expect("command"),
-                &[event("event:3", b"{}")],
+                &CommandId::new(),
+                &[event(b"{}")],
             )
             .expect_err("stale revision must fail");
         assert!(matches!(error, EventStoreError::RevisionConflict { .. }));
@@ -530,8 +534,8 @@ mod tests {
     #[test]
     fn identical_command_retry_returns_prior_result() {
         let mut store = SqliteEventStore::in_memory().expect("store");
-        let command = CommandId::new("command:retry").expect("command");
-        let proposed = [event("event:retry", b"{}")];
+        let command = CommandId::new();
+        let proposed = [event(b"{}")];
         let first = store
             .append(&stream(), ExpectedRevision::NoStream, &command, &proposed)
             .expect("first append");
@@ -547,13 +551,13 @@ mod tests {
     #[test]
     fn command_id_cannot_authorize_different_input() {
         let mut store = SqliteEventStore::in_memory().expect("store");
-        let command = CommandId::new("command:conflict").expect("command");
+        let command = CommandId::new();
         store
             .append(
                 &stream(),
                 ExpectedRevision::NoStream,
                 &command,
-                &[event("event:original", b"{}")],
+                &[event(b"{}")],
             )
             .expect("first append");
         let error = store
@@ -561,7 +565,7 @@ mod tests {
                 &stream(),
                 ExpectedRevision::NoStream,
                 &command,
-                &[event("event:different", b"{}")],
+                &[event(b"{\"different\":true}")],
             )
             .expect_err("command reuse must fail");
         assert!(matches!(error, EventStoreError::CommandConflict { .. }));
@@ -577,8 +581,8 @@ mod tests {
                 .append(
                     &stream(),
                     ExpectedRevision::NoStream,
-                    &CommandId::new("command:persist").expect("command"),
-                    &[event("event:persist", b"{}")],
+                    &CommandId::new(),
+                    &[event(b"{}")],
                 )
                 .expect("append");
         }

@@ -32,6 +32,10 @@ it.
 - **OQ-008** — numerical allowance confidence: resolved by
   [`D-005`](DECISIONS.md#d-005--separate-numerical-provenance-from-assurance). Allowance provenance
   and assurance are separate; `HeldOutValidated` may produce only an explicitly empirical `Pass`.
+- **OQ-013** — identity algorithm and agility: resolved by
+  [`D-007`](DECISIONS.md#d-007--typed-sha-256-identities-with-controlled-migration). V1 uses typed,
+  domain-separated SHA-256 identities and UUIDv7 lifecycle IDs; upgrades use a verified controlled
+  migration rather than a permanent runtime alias framework.
 
 ## OQ-004 — Independence of semantic reference
 
@@ -139,14 +143,6 @@ the common record contract for:
 
 Controls must include the historical case where reconstructed input matched token count but produced
 a different tool argument.
-
-## OQ-013 — Identity algorithm and agility
-
-- Priority: P0
-- Affects: every content and event ID
-
-SHA-256 is the historical baseline. Decide how algorithm tags, domain separation, canonical schema,
-and future migration work without making identifiers ambiguous. Avoid hand-implemented cryptography.
 
 ## OQ-014 — External extension packaging
 

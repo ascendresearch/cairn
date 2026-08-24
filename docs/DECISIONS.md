@@ -178,3 +178,54 @@ This decision does not silently relicense imported code, corpora, model outputs,
 historical Cairn/Alloyport material. Such material requires compatible provenance or must remain an
 external/private input. Contribution certification, governance, trademark policy, and the detailed
 dependency-license gate remain to be decided before the first public release.
+
+## D-007 — Typed SHA-256 identities with controlled migration
+
+- Resolves: OQ-013
+- Decision: accepted
+
+Cairn V1 uses SHA-256 for content, event, and deterministic derived identities. Every public
+identity carries an explicit frame version, algorithm tag, and semantic domain; Rust APIs retain the
+domain as a concrete type such as `ContentId<SourceFile>` rather than an untyped digest.
+
+The hash preimage is a versioned, length-delimited binary frame containing a fixed Cairn magic,
+frame version, algorithm identifier, semantic domain, and exact canonical/payload bytes. Domains
+are stable registered constants. Hashing uses a maintained cryptographic library and published test
+vectors; Cairn does not implement SHA-256 itself.
+
+Lifecycle identities such as task, episode, operation, job, attempt, command, and branch are
+distinct UUIDv7-backed Rust types. UUID timestamp ordering is an operational convenience only and
+never establishes event order, causality, or authority.
+
+### Semantic and physical identities
+
+- `ContentId<T>` is the public, domain-separated semantic identity for exact bytes under type `T`;
+- `EventId` and `DerivedId<T>` are domain-separated identities for canonical relationship bytes;
+- `BlobDigest` is an internal exact-byte storage/integrity digest used for physical lookup and
+  deduplication.
+
+The same bytes used under two semantic types therefore have different `ContentId<T>` values but may
+share one `BlobDigest`. Product APIs never substitute `BlobDigest` for a semantic identity.
+
+An `EventId` covers the canonical envelope without its own identity field, including stream,
+sequence, schema, command causality, parent, observation time, and payload. Because sequence is
+assigned under optimistic concurrency, trusted record code derives the event identity after
+sequence allocation inside the append transaction; an untrusted caller does not supply it.
+
+### Algorithm upgrade
+
+V1 implements a closed SHA-256 algorithm enum rather than a speculative pluggable hashing
+framework. An upgrade runs a controlled, restartable migration:
+
+1. verify old semantic identities and physical bytes;
+2. compute new blob and semantic identities;
+3. write an immutable migration manifest containing the verified old-to-new mapping;
+4. rebuild mutable metadata, projections, and indexes against the new identities;
+5. atomically switch the active writer algorithm/version;
+6. retain old events and exported identities as historical facts until their retention policy
+   allows physical garbage collection.
+
+Historical event bytes and verdict meaning are not rewritten. Legacy lookup consults the migration
+manifest at import/resolution boundaries; ordinary new business logic does not carry a permanent
+general alias graph. A failed migration resumes from verified checkpoints and cannot partially
+authorize the new writer.

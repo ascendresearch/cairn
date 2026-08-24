@@ -199,6 +199,12 @@ All production crates live in one workspace. A single verification entry point r
 linting, tests, schema compatibility, dependency boundaries, mutation controls, and documentation
 links while preserving each failing exit status.
 
+`cairn-protocol` exposes typed SHA-256 semantic identities and typed UUIDv7 lifecycle identities.
+The algorithm enum is deliberately closed to SHA-256 in V1. `cairn-record` owns canonical event
+identity material and derives `EventId` only after sequence allocation; storage adapters call that
+shared trusted function rather than inventing identity rules. Physical blob hashes remain an
+internal `ContentStore` concern and cannot satisfy an API requiring `ContentId<T>`.
+
 ## 7. Top-level product state
 
 ### 7.1 Task aggregate

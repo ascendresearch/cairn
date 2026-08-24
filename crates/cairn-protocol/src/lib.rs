@@ -8,6 +8,13 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
+mod identity;
+
+pub use identity::{
+    AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType, DerivedId, EpisodeId,
+    EventId, HashAlgorithm, IdentityError, JobId, OperationId, TaskId,
+};
+
 const MAX_IDENTIFIER_LEN: usize = 255;
 
 /// Validation failure for a protocol identifier.
@@ -105,23 +112,6 @@ identifier_type!(
 identifier_type!(
     /// Names an aggregate category.
     AggregateKind
-);
-identifier_type!(
-    /// Makes command retries idempotent.
-    CommandId
-);
-identifier_type!(
-    /// Names one canonical event envelope.
-    ///
-    /// Identity categories are intentionally not interchangeable:
-    ///
-    /// ```compile_fail
-    /// use cairn_protocol::{CommandId, EventId};
-    ///
-    /// let command = CommandId::new("command:one").unwrap();
-    /// let _event: EventId = command;
-    /// ```
-    EventId
 );
 identifier_type!(
     /// Names a versioned schema.

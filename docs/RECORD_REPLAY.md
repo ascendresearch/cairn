@@ -53,8 +53,9 @@ Identity categories are distinct Rust types and wire schemas.
 
 ### 3.1 Content identity
 
-`ContentId` names exact bytes under an algorithm and canonicalization contract. Reading the object
-recomputes and verifies the identity.
+`ContentId<T>` names exact bytes under an algorithm, semantic type domain, and canonicalization
+contract. Reading the object recomputes and verifies the identity. A typed ID cannot deserialize a
+wire identity carrying a different domain.
 
 Examples: prompt block, tool catalog, task spec, source file, manifest, model response bytes,
 execution receipt, oracle proposal.
@@ -69,6 +70,11 @@ do not imply content bytes. Creation events explain their provenance.
 `EventId` names one canonical event envelope. Aggregate sequence establishes local order. Event IDs
 and causal command IDs make duplicate delivery safe.
 
+Trusted record code derives `EventId` after assigning aggregate sequence inside the append
+transaction. The canonical identity material excludes `event_id` itself and includes stream,
+sequence, schema, command identity, parent event, observation timestamp, and payload. The append
+caller never supplies the resulting identity.
+
 ### 3.4 Derived identity
 
 `DerivedId<T>` identifies a deterministic relationship or projection, such as an input identity
@@ -79,6 +85,20 @@ not queried from CAS unless a separate content artifact was actually materialize
 
 Logical work and concrete attempts differ. `JobId`/`OperationId` remain stable across authorized
 retry; `AttemptId` changes. Evidence from failed or ambiguous attempts remains linked.
+
+### 3.6 Physical blob identity
+
+`BlobDigest` is an internal exact-byte digest used for storage integrity and physical deduplication.
+It is not a semantic artifact identity and does not enter product APIs in place of `ContentId<T>`.
+Two semantic types may have different content identities while sharing one physical blob.
+
+### 3.7 Algorithm migration
+
+Identity algorithms are tagged but V1 implements only SHA-256. A future upgrade is a controlled,
+checkpointed migration that verifies old objects, writes new identities plus an immutable mapping
+manifest, rebuilds mutable projections/indexes, and atomically cuts over the writer. Historical
+events remain byte-identical. Legacy resolution uses the manifest at import/read boundaries rather
+than adding general alias handling to every product path.
 
 ## 4. Event envelope and append contract
 
