@@ -427,7 +427,12 @@ protocol slice now provides closed per-protocol history variants, typed tool-cal
 model-template replay policies, CAS archival, an `agent.native-continuation-recorded` event, and
 SQLite/CAS close/reopen tests. Those tests define stability as an identical history boundary and
 byte-identical next request; they do not claim that a fresh live model output is deterministic.
-HTTP transport and live provider conformance remain later slices.
+The bounded HTTPS transport reads its credential file only at dispatch, marks authorization headers
+sensitive, disables redirects, applies configured connect/request/body limits, extracts validated
+usage receipts, and preserves not-sent/rejected/ambiguous effect classes. The opt-in DeepSeek
+Responses conformance executable performs two real provider turns around a SQLite/CAS close-reopen
+boundary and checks byte identity before the second dispatch. It emits identities and usage only;
+thinking and answer bodies remain archived rather than printed.
 
 The wire rules are based on the provider documentation current at implementation time:
 

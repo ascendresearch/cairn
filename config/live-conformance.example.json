@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "max_output_tokens": 128,
+  "initial_user_text": "Reply with exactly CAIRN_LIVE_OK.",
+  "followup_user_text": "Now reply with exactly CAIRN_REPLAY_OK."
+}

@@ -18,9 +18,10 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::{
-    ChatReasoningReplay, ModelName, ModelOutputTokenLimit, ModelProtocolConfig, ModelProtocolKind,
-    ModelResponseArtifact, NativeContinuationArtifact, ProviderToolCallId, ReceivedModelResponse,
-    ResponsesReasoningReplay, ToolName,
+    ChatReasoningReplay, InputAuditError, MaterializedRequestArtifact, ModelName,
+    ModelOutputTokenLimit, ModelProtocolConfig, ModelProtocolKind, ModelResponseArtifact,
+    NativeContinuationArtifact, PreparedModelRequest, ProviderToolCallId, ReceivedModelResponse,
+    ResponsesReasoningReplay, ToolName, TurnInputDecision, prepare_model_request,
 };
 
 const NATIVE_CONTINUATION_SCHEMA_V1: u16 = 1;
@@ -166,6 +167,33 @@ impl PreparedNativeRequest {
     pub const fn base_continuation(&self) -> &NativeContinuation {
         &self.base_continuation
     }
+}
+
+/// Audits a durable turn decision and binds exact protocol-native bytes to dispatch authority.
+///
+/// This is the bridge from the domain-neutral input completeness audit to a selected protocol
+/// codec. The provider-neutral audit projection remains evidence; only `native.request_bytes()` is
+/// dispatched.
+///
+/// # Errors
+///
+/// Returns [`InputAuditError`] if any cited model-visible fact is missing/corrupt or if the native
+/// bytes cannot be archived.
+pub fn prepare_native_dispatch_request<S: ContentStore>(
+    store: &mut S,
+    decision: &TurnInputDecision,
+    native: &PreparedNativeRequest,
+) -> Result<PreparedModelRequest, InputAuditError> {
+    let audited = prepare_model_request(store, decision)?;
+    let descriptor = store
+        .put::<MaterializedRequestArtifact>(&mut Cursor::new(native.request_bytes()))
+        .map_err(|error| crate::audit_from_store("native_request", "unmaterialized", &error))?;
+    Ok(PreparedModelRequest {
+        decision_id: audited.decision_id,
+        request_id: descriptor.content_id,
+        adapter_version: audited.adapter_version,
+        request_bytes: native.request_bytes().to_vec(),
+    })
 }
 
 /// A closed codec selected from a model template's protocol profile.
@@ -419,6 +447,42 @@ impl NativeProtocolCodec {
             }
         }
         next.pending_call_ids.clear();
+        self.validate(&next)?;
+        Ok(next)
+    }
+
+    /// Appends a new human turn after a settled assistant turn.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty text, protocol mismatch, or a boundary that still awaits tool results.
+    pub fn append_user_text(
+        self,
+        continuation: &NativeContinuation,
+        text: &str,
+    ) -> Result<NativeContinuation, NativeCodecError> {
+        self.validate(continuation)?;
+        if !continuation.pending_call_ids.is_empty() {
+            return Err(NativeCodecError::PendingToolResults);
+        }
+        if text.trim().is_empty() {
+            return Err(NativeCodecError::MissingUserInput);
+        }
+        let mut next = continuation.clone();
+        match &mut next.history {
+            NativeHistory::OpenAiResponses { input } => input.push(json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text}]
+            })),
+            NativeHistory::OpenAiChatCompletions { messages } => {
+                messages.push(json!({"role": "user", "content": text}));
+            }
+            NativeHistory::AnthropicMessages { messages } => messages.push(json!({
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            })),
+        }
         self.validate(&next)?;
         Ok(next)
     }
@@ -697,6 +761,8 @@ pub enum NativeCodecError {
     HostedResponsesState,
     #[error("initial user input must not be empty")]
     MissingInitialInput,
+    #[error("new user input must not be empty")]
+    MissingUserInput,
     #[error("native continuation protocol does not match the selected codec")]
     ProtocolMismatch,
     #[error("native continuation schema {0} is unsupported")]
@@ -1184,6 +1250,38 @@ mod tests {
             assert_eq!(input[3]["type"], "function_call_output");
             assert_eq!(request["store"], false);
         });
+    }
+
+    #[test]
+    fn responses_completed_turn_accepts_a_new_user_message_without_losing_phase() {
+        let codec = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiResponses {
+            store: false,
+            reasoning_replay: ResponsesReasoningReplay::PreserveOutputItems,
+        })
+        .expect("codec");
+        let initial = codec
+            .prepare_initial(&spec(), "first turn")
+            .expect("initial");
+        let response = br#"{
+            "output":[
+                {"type":"reasoning","id":"rs_1","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"private"}],"encrypted_content":"opaque"},
+                {"type":"message","id":"msg_1","phase":"final_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":"first"}]}
+            ]
+        }"#;
+        let continuation = codec
+            .decode_response(&initial, response_id(response), response)
+            .expect("decode");
+        let next = codec
+            .append_user_text(&continuation, "second turn")
+            .expect("append user turn");
+        let request = codec
+            .prepare_continuation(&spec(), &next)
+            .expect("prepare continuation");
+        let body: serde_json::Value =
+            serde_json::from_slice(request.request_bytes()).expect("request JSON");
+        assert_eq!(body["input"][2]["phase"], "final_answer");
+        assert_eq!(body["input"][3]["role"], "user");
+        assert_eq!(body["input"][3]["content"][0]["text"], "second turn");
     }
 
     #[test]

@@ -9,6 +9,7 @@ use thiserror::Error;
 
 mod dispatch;
 mod episode;
+mod http_transport;
 mod metering;
 mod native_protocol;
 mod operation;
@@ -31,6 +32,7 @@ pub use episode::{
     admit_episode_operations, advance_agent_episode, open_agent_episode, prepare_episode_step,
     recover_agent_episode,
 };
+pub use http_transport::{HttpModelTransport, HttpTransportConfigError};
 pub use metering::{
     EpisodeExternalMeterLimit, ExternalMeteredUnits, ExternalMeteringReceipt, MeterReservation,
     MeterReservationOutcome, MeteredActionAuthority, MeteredActionState, MeteringCoordinatorError,
@@ -40,6 +42,7 @@ pub use metering::{
 pub use native_protocol::{
     NativeCodecError, NativeContinuation, NativeProtocolCodec, NativeRequestSpec,
     NativeToolDefinition, NativeToolResult, PreparedNativeRequest, RecordedNativeResponse,
+    prepare_native_dispatch_request,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,

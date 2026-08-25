@@ -10,6 +10,7 @@ license.workspace = true
 cairn-codec.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -20,4 +21,3 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
-
