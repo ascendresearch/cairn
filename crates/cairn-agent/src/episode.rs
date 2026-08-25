@@ -178,20 +178,18 @@ impl EpisodeDeadlineUnixMillis {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EpisodeBudget {
-    /// Maximum number of model steps that may start.
-    pub step_limit: EpisodeStepLimit,
-    /// Maximum number of logical operations admitted before any tool authority can exist.
-    #[serde(default = "unlimited_tool_operation_limit")]
-    pub tool_operation_limit: EpisodeToolOperationLimit,
+    /// Optional maximum number of model steps that may start; `None` disables the dimension.
+    #[serde(default)]
+    pub step_limit: Option<EpisodeStepLimit>,
+    /// Optional logical-operation limit; `None` disables the dimension.
+    #[serde(default)]
+    pub tool_operation_limit: Option<EpisodeToolOperationLimit>,
     /// Optional observed provider-token threshold. Missing receipts fail closed when configured.
     #[serde(default)]
     pub provider_token_limit: Option<EpisodeProviderTokenLimit>,
-    /// Optional absolute deadline checked at safe step boundaries.
+    /// Optional absolute deadline; `None` disables wall-clock budget checks.
+    #[serde(default)]
     pub deadline_unix_ms: Option<EpisodeDeadlineUnixMillis>,
-}
-
-const fn unlimited_tool_operation_limit() -> EpisodeToolOperationLimit {
-    EpisodeToolOperationLimit::new(u32::MAX)
 }
 
 /// Durable episode aggregate boundary.
@@ -683,9 +681,15 @@ pub fn admit_episode_operations<E: EventStore, C: cairn_record::ContentStore>(
         let requested_count = u32::try_from(requested.len()).map_err(|_| {
             EpisodeCoordinatorError::InvalidEpisode("too many requested tool operations".into())
         })?;
-        if admitted
-            .checked_add(requested_count)
-            .is_none_or(|total| total > projection.opened.budget.tool_operation_limit.get())
+        if projection
+            .opened
+            .budget
+            .tool_operation_limit
+            .is_some_and(|limit| {
+                admitted
+                    .checked_add(requested_count)
+                    .is_none_or(|total| total > limit.get())
+            })
         {
             let advance = complete_episode(
                 events,
@@ -946,7 +950,12 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
         .is_some_and(|deadline| deadline.is_reached(observed_at))
     {
         Some(EpisodeCompletionReason::DeadlineReached)
-    } else if steps_started >= projection.opened.budget.step_limit.get() {
+    } else if projection
+        .opened
+        .budget
+        .step_limit
+        .is_some_and(|limit| steps_started >= limit.get())
+    {
         Some(EpisodeCompletionReason::StepLimitReached)
     } else {
         None
@@ -1236,7 +1245,10 @@ fn project_episode(
                     EpisodeCompletionReason::StepLimitReached
                         if payload.requested_tool_operations.is_some()
                             || has_non_tool_evidence
-                            || expected_steps < opened.budget.step_limit.get() =>
+                            || opened
+                                .budget
+                                .step_limit
+                                .is_none_or(|limit| expected_steps < limit.get()) =>
                     {
                         return invalid_episode("episode completed before reaching its step limit");
                     }
@@ -1267,8 +1279,10 @@ fn project_episode(
                         if has_non_tool_evidence
                             || requested == 0
                             || current.admitted_operations.is_some()
-                            || admitted.checked_add(requested).is_some_and(|total| {
-                                total <= opened.budget.tool_operation_limit.get()
+                            || opened.budget.tool_operation_limit.is_none_or(|limit| {
+                                admitted
+                                    .checked_add(requested)
+                                    .is_some_and(|total| total <= limit.get())
                             })
                         {
                             return invalid_episode(
@@ -1566,7 +1580,10 @@ fn validate_completion(
             Ok(())
         }
         EpisodeCompletionReason::StepLimitReached
-            if completion.steps_started >= opened.budget.step_limit.get()
+            if opened
+                .budget
+                .step_limit
+                .is_some_and(|limit| completion.steps_started >= limit.get())
                 && matches!(step_state, AgentStepState::ReadyForNextStep { .. }) =>
         {
             Ok(())
@@ -1593,9 +1610,11 @@ fn validate_completion(
             })?;
             let admitted = admitted_operation_count(steps)?;
             if requested == proposal_count
-                && admitted
-                    .checked_add(requested)
-                    .is_none_or(|total| total > opened.budget.tool_operation_limit.get())
+                && opened.budget.tool_operation_limit.is_some_and(|limit| {
+                    admitted
+                        .checked_add(requested)
+                        .is_none_or(|total| total > limit.get())
+                })
             {
                 Ok(())
             } else {
@@ -1939,11 +1958,8 @@ mod tests {
         complete_tool_step_with_usage(events, content, episode, step, attempt_id, authority, None)
     }
 
-    fn prepared_episode_with_token_limit(
-        step_limit: u32,
-        tool_operation_limit: u32,
-        provider_token_limit: Option<u64>,
-        deadline: Option<i64>,
+    fn prepared_episode_with_budget(
+        budget: EpisodeBudget,
     ) -> (ReadyEpisode, AgentStep, ModelAttemptId, DispatchAuthority) {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut content = SqliteContentStore::open(
@@ -1957,13 +1973,6 @@ mod tests {
         let attempt_id = ModelAttemptId::new();
         let task_id = TaskId::new();
         let command = CommandId::new();
-        let budget = EpisodeBudget {
-            step_limit: EpisodeStepLimit::new(step_limit).expect("limit"),
-            tool_operation_limit: EpisodeToolOperationLimit::new(tool_operation_limit),
-            provider_token_limit: provider_token_limit
-                .map(|limit| EpisodeProviderTokenLimit::new(limit).expect("provider token limit")),
-            deadline_unix_ms: deadline.map(EpisodeDeadlineUnixMillis::new),
-        };
         let role = AgentRoleName::new("candidate-author").expect("role");
         let _lost = open_agent_episode(
             &mut events,
@@ -2026,6 +2035,21 @@ mod tests {
             attempt_id,
             dispatch,
         )
+    }
+
+    fn prepared_episode_with_token_limit(
+        step_limit: u32,
+        tool_operation_limit: u32,
+        provider_token_limit: Option<u64>,
+        deadline: Option<i64>,
+    ) -> (ReadyEpisode, AgentStep, ModelAttemptId, DispatchAuthority) {
+        prepared_episode_with_budget(EpisodeBudget {
+            step_limit: Some(EpisodeStepLimit::new(step_limit).expect("limit")),
+            tool_operation_limit: Some(EpisodeToolOperationLimit::new(tool_operation_limit)),
+            provider_token_limit: provider_token_limit
+                .map(|limit| EpisodeProviderTokenLimit::new(limit).expect("provider token limit")),
+            deadline_unix_ms: deadline.map(EpisodeDeadlineUnixMillis::new),
+        })
     }
 
     fn prepared_episode(
@@ -2237,9 +2261,80 @@ mod tests {
             "deadline_unix_ms": null
         }))
         .expect("legacy budget");
-        assert_eq!(legacy_budget.tool_operation_limit.get(), u32::MAX);
+        assert_eq!(legacy_budget.step_limit.map(EpisodeStepLimit::get), Some(2));
+        assert_eq!(legacy_budget.tool_operation_limit, None);
         assert_eq!(legacy_budget.provider_token_limit, None);
         assert!(EpisodeProviderTokenLimit::new(0).is_err());
+    }
+
+    #[test]
+    fn serialized_budget_dimensions_can_all_be_disabled() {
+        let budget: EpisodeBudget = serde_json::from_value(serde_json::json!({
+            "step_limit": null,
+            "tool_operation_limit": null,
+            "provider_token_limit": null,
+            "deadline_unix_ms": null
+        }))
+        .expect("disabled budget config");
+        assert_eq!(
+            budget,
+            EpisodeBudget {
+                step_limit: None,
+                tool_operation_limit: None,
+                provider_token_limit: None,
+                deadline_unix_ms: None,
+            }
+        );
+        let omitted: EpisodeBudget =
+            serde_json::from_value(serde_json::json!({})).expect("omitted budget config");
+        assert_eq!(omitted, budget);
+        let enabled: EpisodeBudget = serde_json::from_value(serde_json::json!({
+            "step_limit": 4,
+            "tool_operation_limit": 7,
+            "provider_token_limit": 1000,
+            "deadline_unix_ms": 2000
+        }))
+        .expect("enabled budget config");
+        assert_eq!(enabled.step_limit.map(EpisodeStepLimit::get), Some(4));
+        assert_eq!(
+            enabled
+                .tool_operation_limit
+                .map(EpisodeToolOperationLimit::get),
+            Some(7)
+        );
+        assert_eq!(
+            enabled
+                .provider_token_limit
+                .map(EpisodeProviderTokenLimit::get),
+            Some(1000)
+        );
+        assert_eq!(
+            enabled.deadline_unix_ms.map(EpisodeDeadlineUnixMillis::get),
+            Some(2000)
+        );
+        let (mut fixture, step, attempt_id, dispatch) = prepared_episode_with_budget(budget);
+        let results = complete_tool_step(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            &step,
+            attempt_id,
+            dispatch,
+        );
+        assert!(matches!(
+            advance_agent_episode(
+                &mut fixture.events,
+                &mut fixture.content,
+                &fixture.episode,
+                StepId::new(),
+                ModelAttemptId::new(),
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(i64::MAX),
+            )
+            .expect("all budget dimensions disabled"),
+            EpisodeAdvance::NextStep(authority)
+                if authority.expected_pending_results() == results
+        ));
     }
 
     #[test]

@@ -39,8 +39,12 @@ authority is produced when admission would exceed the limit. Model transports ca
 provider input/output-token receipts to the same durable response fact as the archived bytes. An
 optional episode token threshold accumulates only those receipts: reaching it blocks the next model
 step, while a missing receipt fails closed instead of being treated as zero. The remaining
-architecture in the normative documents is still target design. The old repositories are evidence
-and compatibility references, not source trees to copy mechanically.
+episode budget dimensions—step count, logical tool operations, observed provider tokens, and
+deadline—are independently configurable in serialized `EpisodeBudget`: a typed value enables a
+dimension and `null` or an omitted field disables it. The resolved values are frozen in
+`EpisodeOpened`; later configuration changes affect new episodes, not historical meaning. The
+remaining architecture in the normative documents is still target design. The old repositories are
+evidence and compatibility references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

@@ -173,7 +173,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-AGENT-004 | The model request MUST be projected from durable facts and content, not from unrecorded mutable session state. | Restart-before-dispatch produces byte-identical request. |
 | FR-AGENT-005 | Provider nondeterminism MUST be represented explicitly. Cairn MUST NOT claim that a live provider continuation is deterministic merely because its request was reconstructed. | Same-request live control records possible divergence. |
 | FR-AGENT-006 | Agent roles MUST be isolated by scoped capabilities and visibility, not merely by prompt instruction. | Red/blue/candidate capability matrix test. |
-| FR-AGENT-007 | The runtime MUST enforce explicit budgets for turns, tokens where observable, tool operations, wall time, and externally metered actions. | Boundary and exhaustion tests. |
+| FR-AGENT-007 | The runtime MUST enforce explicit, independently configurable budgets for turns, tokens where observable, tool operations, wall time, and externally metered actions. Every dimension MUST support a typed configured value and an explicit disabled state. | Configuration round-trip plus enabled, disabled, boundary, and exhaustion tests. |
 | FR-AGENT-008 | Cancellation and suspension MUST reach durable safe points and preserve whether each external operation is pending, completed, rejected, or ambiguous. | Cancellation at every operation phase. |
 
 ### 5.5 Execution substrate

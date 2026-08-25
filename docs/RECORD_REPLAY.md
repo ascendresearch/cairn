@@ -233,7 +233,9 @@ Examples:
 - `EpisodeCompleted`
 
 `EpisodeOpened` fixes the owning task, role name, initial step/model-attempt identities, and the
-currently enforceable budget policy. `EpisodeStepAdvanced` cites the prior step and its ordered
+currently enforceable budget policy. Each budget dimension is explicit and independent: a typed
+value enables it, while `null` or an omitted field disables it. Reconfiguring the process does not
+rewrite an opened episode's policy. `EpisodeStepAdvanced` cites the prior step and its ordered
 operation results before granting the next step identity. Recovery re-audits both sides of this
 edge: the prior step must have produced those results and the next step's committed input decision
 must consume exactly those results. Step-limit and deadline completion are recorded only at a safe

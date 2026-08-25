@@ -776,6 +776,13 @@ Configuration selects providers and policies. It cannot replace immutable histor
 fully resolved configuration bytes or a reconstructable, secret-free form are archived for each
 task/episode.
 
+Every episode budget dimension is independently optional in configuration. In the serialized
+`EpisodeBudget`, a typed numeric value enables its check and `null` or omission disables it. This
+applies uniformly to model-step count, logical tool-operation count, observed provider-token usage,
+and absolute deadline; future metered dimensions must use the same explicit enable/disable rule.
+The resolved budget is copied into `EpisodeOpened`, so a configuration reload changes only episodes
+opened afterward.
+
 ## 19. Verification strategy for Cairn itself
 
 ### 19.1 Test lanes
