@@ -34,7 +34,7 @@ Acceptance gate:
 - authority decisions survive controller restart and concurrent administrative SQLite access;
 - static enrollment remains explicitly transitional and cannot collide with managed credential IDs.
 
-## Phase B — safe credential rotation
+## Phase B — safe credential rotation (implemented 2026-08-25)
 
 Add a rotation offer bound to an existing `WorkerId` and current authority, rather than allocating a
 new worker. Issue the new certificate to a fresh worker-local key/CSR while retaining the existing

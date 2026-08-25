@@ -6,8 +6,8 @@ use std::{
 };
 
 use cairn_control_transport::{
-    CertificateFingerprint, EnrollmentBundle, EnrollmentEndpoint, EnrollmentRequest,
-    EnrollmentSecret, IssuedWorkerCredential,
+    CertificateFingerprint, EnrollmentBundle, EnrollmentEndpoint, EnrollmentPurpose,
+    EnrollmentRequest, EnrollmentSecret, IssuedWorkerCredential,
 };
 use cairn_execution::WorkerPoolName;
 use cairn_protocol::{
@@ -41,6 +41,10 @@ struct OfferCreatedPayload {
     token_digest: String,
     pool: WorkerPoolName,
     expires_at: ObservedAtUnixMillis,
+    #[serde(default)]
+    purpose: EnrollmentPurpose,
+    #[serde(default)]
+    rotation_overlap_ms: Option<NonZeroU64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -76,6 +80,8 @@ struct Offer {
     token_digest: [u8; 32],
     pool: WorkerPoolName,
     expires_at: ObservedAtUnixMillis,
+    purpose: EnrollmentPurpose,
+    rotation_overlap_ms: Option<NonZeroU64>,
     issued: Option<Issued>,
     revoked: bool,
 }
@@ -91,6 +97,9 @@ struct CredentialRecord {
     fingerprint: CertificateFingerprint,
     enrolled: EnrolledWorker,
     revoked: bool,
+    superseded_by: Option<CredentialId>,
+    retire_at: Option<ObservedAtUnixMillis>,
+    predecessor: Option<CredentialId>,
 }
 
 pub(crate) struct EnrollmentRegistry {
@@ -100,6 +109,7 @@ pub(crate) struct EnrollmentRegistry {
     enrolled: BTreeMap<CertificateFingerprint, EnrolledWorker>,
     revision: Option<StreamRevision>,
     last_event_id: Option<EventId>,
+    evaluated_at: ObservedAtUnixMillis,
 }
 
 pub(crate) struct EnrollmentIssuer {
@@ -146,8 +156,11 @@ pub(crate) enum EnrollmentError {
 }
 
 impl EnrollmentRegistry {
-    pub(crate) fn load(events: &impl EventStore) -> Result<Self, EnrollmentError> {
-        project(events)
+    pub(crate) fn load(
+        events: &impl EventStore,
+        now: ObservedAtUnixMillis,
+    ) -> Result<Self, EnrollmentError> {
+        project(events, now)
     }
 
     pub(crate) fn enrolled(&self) -> &BTreeMap<CertificateFingerprint, EnrolledWorker> {
@@ -160,14 +173,25 @@ impl EnrollmentRegistry {
         worker_id: WorkerId,
     ) -> bool {
         self.credentials.get(&credential_id).is_some_and(|record| {
-            !record.revoked
-                && record.enrolled.worker_id == worker_id
-                && !self.disabled_workers.contains(&worker_id)
+            record.enrolled.worker_id == worker_id
+                && record.is_authorized_at(&self.disabled_workers, self.evaluated_at)
         })
     }
 
     pub(crate) fn credential_is_known(&self, credential_id: CredentialId) -> bool {
         self.credentials.contains_key(&credential_id)
+    }
+}
+
+impl CredentialRecord {
+    fn is_authorized_at(
+        &self,
+        disabled_workers: &BTreeSet<WorkerId>,
+        now: ObservedAtUnixMillis,
+    ) -> bool {
+        !self.revoked
+            && !disabled_workers.contains(&self.enrolled.worker_id)
+            && self.retire_at.is_none_or(|retire_at| now < retire_at)
     }
 }
 
@@ -241,7 +265,7 @@ pub(crate) fn create_offer(
     ttl_ms: NonZeroU64,
     now: ObservedAtUnixMillis,
 ) -> Result<EnrollmentBundle, EnrollmentError> {
-    let registry = project(events)?;
+    let registry = project(events, now)?;
     let ttl = i64::try_from(ttl_ms.get())
         .map_err(|_| EnrollmentError::InvalidRequest("enrollment TTL is too large".into()))?;
     let expires_at = ObservedAtUnixMillis::new(
@@ -259,11 +283,14 @@ pub(crate) fn create_offer(
         token_digest: digest_wire(secret.expose()),
         pool,
         expires_at,
+        purpose: EnrollmentPurpose::Bootstrap,
+        rotation_overlap_ms: None,
     };
     append(
         events,
         &registry,
         OFFER_CREATED,
+        2,
         &payload,
         CommandId::new(),
         now,
@@ -271,8 +298,77 @@ pub(crate) fn create_offer(
     let server_ca_pem = fs::read_to_string(&config.server_ca)
         .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
     Ok(EnrollmentBundle {
-        schema_version: 1,
+        schema_version: 2,
         enrollment_id,
+        purpose: EnrollmentPurpose::Bootstrap,
+        secret,
+        expires_at,
+        endpoint: EnrollmentEndpoint {
+            tcp_address: config.public_tcp_address.clone(),
+            websocket_uri: config.websocket_uri.clone(),
+            server_name: config.server_name.clone(),
+            server_ca_pem,
+        },
+        handshake_timeout_ms: config.handshake_timeout_ms,
+        transport: config.transport,
+    })
+}
+
+pub(crate) fn create_rotation_offer(
+    events: &mut impl EventStore,
+    config: &EnrollmentServiceConfig,
+    predecessor_credential_id: CredentialId,
+    ttl_ms: NonZeroU64,
+    overlap_ms: Option<NonZeroU64>,
+    now: ObservedAtUnixMillis,
+) -> Result<EnrollmentBundle, EnrollmentError> {
+    let registry = project(events, now)?;
+    let predecessor = registry
+        .credentials
+        .get(&predecessor_credential_id)
+        .filter(|record| {
+            record.is_authorized_at(&registry.disabled_workers, now)
+                && record.superseded_by.is_none()
+        })
+        .ok_or(EnrollmentError::CredentialNotActive)?;
+    let ttl = i64::try_from(ttl_ms.get())
+        .map_err(|_| EnrollmentError::InvalidRequest("rotation TTL is too large".into()))?;
+    let expires_at = ObservedAtUnixMillis::new(
+        now.get()
+            .checked_add(ttl)
+            .ok_or_else(|| EnrollmentError::InvalidRequest("rotation TTL overflow".into()))?,
+    );
+    let enrollment_id = EnrollmentId::new();
+    let purpose = EnrollmentPurpose::Rotation {
+        worker_id: predecessor.enrolled.worker_id,
+        predecessor_credential_id,
+    };
+    let mut secret_bytes = [0_u8; 32];
+    getrandom::fill(&mut secret_bytes)
+        .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
+    let secret = EnrollmentSecret::from_bytes(secret_bytes);
+    append(
+        events,
+        &registry,
+        OFFER_CREATED,
+        2,
+        &OfferCreatedPayload {
+            enrollment_id,
+            token_digest: digest_wire(secret.expose()),
+            pool: predecessor.enrolled.pool.clone(),
+            expires_at,
+            purpose: purpose.clone(),
+            rotation_overlap_ms: overlap_ms,
+        },
+        CommandId::new(),
+        now,
+    )?;
+    let server_ca_pem = fs::read_to_string(&config.server_ca)
+        .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
+    Ok(EnrollmentBundle {
+        schema_version: 2,
+        enrollment_id,
+        purpose,
         secret,
         expires_at,
         endpoint: EnrollmentEndpoint {
@@ -302,7 +398,7 @@ pub(crate) fn redeem(
             "CSR is empty or exceeds 16 KiB".into(),
         ));
     }
-    let registry = project(events)?;
+    let registry = project(events, now)?;
     let offer = registry
         .offers
         .get(&request.enrollment_id)
@@ -325,16 +421,52 @@ pub(crate) fn redeem(
     if now > offer.expires_at {
         return Err(EnrollmentError::Expired);
     }
-    let worker_id = WorkerId::new();
+    let (worker_id, predecessor_credential_id, predecessor_retire_at) = match offer.purpose {
+        EnrollmentPurpose::Bootstrap => (WorkerId::new(), None, None),
+        EnrollmentPurpose::Rotation {
+            worker_id,
+            predecessor_credential_id,
+        } => {
+            let predecessor = registry
+                .credentials
+                .get(&predecessor_credential_id)
+                .filter(|record| {
+                    record.enrolled.worker_id == worker_id
+                        && record.enrolled.pool == offer.pool
+                        && record.is_authorized_at(&registry.disabled_workers, now)
+                        && record.superseded_by.is_none()
+                })
+                .ok_or(EnrollmentError::CredentialNotActive)?;
+            let retire_at = if let Some(overlap) = offer.rotation_overlap_ms {
+                let overlap = i64::try_from(overlap.get()).map_err(|_| {
+                    EnrollmentError::InvalidRequest("rotation overlap is too large".into())
+                })?;
+                Some(ObservedAtUnixMillis::new(
+                    now.get().checked_add(overlap).ok_or_else(|| {
+                        EnrollmentError::InvalidRequest("rotation overlap overflows time".into())
+                    })?,
+                ))
+            } else {
+                None
+            };
+            (
+                predecessor.enrolled.worker_id,
+                Some(predecessor_credential_id),
+                retire_at,
+            )
+        }
+    };
     let credential_id = CredentialId::new();
     let certificate_chain_pem = issuer.issue(&request.csr_pem, worker_id, credential_id, now)?;
     let certificate_fingerprint = CertificateFingerprint::from_pem(&certificate_chain_pem)
         .map_err(|error| EnrollmentError::Issuance(error.to_string()))?;
     let credential = IssuedWorkerCredential {
-        schema_version: 1,
+        schema_version: 2,
         worker_id,
         credential_id,
         pool: offer.pool.clone(),
+        predecessor_credential_id,
+        predecessor_retire_at,
         certificate_chain_pem,
     };
     let payload = CredentialIssuedPayload {
@@ -348,6 +480,7 @@ pub(crate) fn redeem(
         events,
         &registry,
         CREDENTIAL_ISSUED,
+        2,
         &payload,
         CommandId::new(),
         now,
@@ -360,7 +493,7 @@ pub(crate) fn revoke_credential(
     credential_id: CredentialId,
     now: ObservedAtUnixMillis,
 ) -> Result<(), EnrollmentError> {
-    let registry = project(events)?;
+    let registry = project(events, now)?;
     if registry
         .credentials
         .get(&credential_id)
@@ -372,6 +505,7 @@ pub(crate) fn revoke_credential(
         events,
         &registry,
         CREDENTIAL_REVOKED,
+        1,
         &CredentialRevokedPayload { credential_id },
         CommandId::new(),
         now,
@@ -383,7 +517,7 @@ pub(crate) fn disable_worker(
     worker_id: WorkerId,
     now: ObservedAtUnixMillis,
 ) -> Result<(), EnrollmentError> {
-    let registry = project(events)?;
+    let registry = project(events, now)?;
     if registry.disabled_workers.contains(&worker_id)
         || !registry
             .credentials
@@ -396,6 +530,7 @@ pub(crate) fn disable_worker(
         events,
         &registry,
         WORKER_DISABLED,
+        1,
         &WorkerDisabledPayload { worker_id },
         CommandId::new(),
         now,
@@ -407,7 +542,7 @@ pub(crate) fn revoke_enrollment(
     enrollment_id: EnrollmentId,
     now: ObservedAtUnixMillis,
 ) -> Result<(), EnrollmentError> {
-    let registry = project(events)?;
+    let registry = project(events, now)?;
     let offer = registry
         .offers
         .get(&enrollment_id)
@@ -422,6 +557,7 @@ pub(crate) fn revoke_enrollment(
         events,
         &registry,
         ENROLLMENT_REVOKED,
+        1,
         &EnrollmentRevokedPayload { enrollment_id },
         CommandId::new(),
         now,
@@ -432,7 +568,10 @@ pub(crate) fn revoke_enrollment(
     clippy::too_many_lines,
     reason = "the authority projector validates every lifecycle event and cross-event invariant linearly"
 )]
-fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentError> {
+fn project(
+    events: &impl EventStore,
+    now: ObservedAtUnixMillis,
+) -> Result<EnrollmentRegistry, EnrollmentError> {
     let history = events
         .read_stream(&stream()?, None)
         .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
@@ -443,16 +582,60 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
         enrolled: BTreeMap::new(),
         revision: None,
         last_event_id: None,
+        evaluated_at: now,
     };
     for event in history {
-        if event.schema_version.get() != 1 || event.parent_event_id != registry.last_event_id {
+        if event.parent_event_id != registry.last_event_id {
             return Err(EnrollmentError::InvalidHistory(
-                "schema version or causal parent differs".into(),
+                "enrollment registry causal parent differs".into(),
             ));
         }
         match event.schema_name.as_str() {
             OFFER_CREATED => {
+                if !matches!(event.schema_version.get(), 1 | 2) {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "offer schema version is unsupported".into(),
+                    ));
+                }
                 let payload: OfferCreatedPayload = decode(&event.payload)?;
+                if event.schema_version.get() == 1
+                    && (payload.purpose != EnrollmentPurpose::Bootstrap
+                        || payload.rotation_overlap_ms.is_some())
+                {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "V1 offer contains rotation state".into(),
+                    ));
+                }
+                match &payload.purpose {
+                    EnrollmentPurpose::Bootstrap if payload.rotation_overlap_ms.is_some() => {
+                        return Err(EnrollmentError::InvalidHistory(
+                            "bootstrap offer contains rotation overlap".into(),
+                        ));
+                    }
+                    EnrollmentPurpose::Rotation {
+                        worker_id,
+                        predecessor_credential_id,
+                    } => {
+                        let offered_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                        let predecessor = registry
+                            .credentials
+                            .get(predecessor_credential_id)
+                            .filter(|record| {
+                                record.enrolled.worker_id == *worker_id
+                                    && record.enrolled.pool == payload.pool
+                                    && record
+                                        .is_authorized_at(&registry.disabled_workers, offered_at)
+                                    && record.superseded_by.is_none()
+                            })
+                            .ok_or_else(|| {
+                                EnrollmentError::InvalidHistory(
+                                    "rotation offer has no active predecessor".into(),
+                                )
+                            })?;
+                        let _ = predecessor;
+                    }
+                    EnrollmentPurpose::Bootstrap => {}
+                }
                 let token_digest = parse_digest(&payload.token_digest)?;
                 if registry
                     .offers
@@ -462,6 +645,8 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                             token_digest,
                             pool: payload.pool,
                             expires_at: payload.expires_at,
+                            purpose: payload.purpose,
+                            rotation_overlap_ms: payload.rotation_overlap_ms,
                             issued: None,
                             revoked: false,
                         },
@@ -474,11 +659,17 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                 }
             }
             CREDENTIAL_ISSUED => {
+                if !matches!(event.schema_version.get(), 1 | 2) {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "credential issuance schema version is unsupported".into(),
+                    ));
+                }
                 let payload: CredentialIssuedPayload = decode(&event.payload)?;
                 let csr_digest = parse_digest(&payload.csr_digest)?;
                 let offer = registry
                     .offers
-                    .get_mut(&payload.enrollment_id)
+                    .get(&payload.enrollment_id)
+                    .cloned()
                     .ok_or_else(|| {
                         EnrollmentError::InvalidHistory("credential precedes its offer".into())
                     })?;
@@ -488,6 +679,92 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                         "credential duplicates or changes the authorized pool".into(),
                     ));
                 }
+                if event.schema_version.get() == 1
+                    && (payload.credential.schema_version != 1
+                        || payload.credential.predecessor_credential_id.is_some()
+                        || payload.credential.predecessor_retire_at.is_some()
+                        || offer.purpose != EnrollmentPurpose::Bootstrap)
+                {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "V1 issuance contains rotation state".into(),
+                    ));
+                }
+                let rotation_predecessor = match &offer.purpose {
+                    EnrollmentPurpose::Bootstrap => {
+                        if payload.credential.predecessor_credential_id.is_some()
+                            || payload.credential.predecessor_retire_at.is_some()
+                        {
+                            return Err(EnrollmentError::InvalidHistory(
+                                "bootstrap credential cites a predecessor".into(),
+                            ));
+                        }
+                        None
+                    }
+                    EnrollmentPurpose::Rotation {
+                        worker_id,
+                        predecessor_credential_id,
+                    } => {
+                        if payload.credential.schema_version != 2
+                            || payload.credential.worker_id != *worker_id
+                            || payload.credential.predecessor_credential_id
+                                != Some(*predecessor_credential_id)
+                            || offer.rotation_overlap_ms.is_some()
+                                != payload.credential.predecessor_retire_at.is_some()
+                        {
+                            return Err(EnrollmentError::InvalidHistory(
+                                "rotated credential contradicts its offer".into(),
+                            ));
+                        }
+                        let issued_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                        let expected_retire_at = if let Some(overlap) = offer.rotation_overlap_ms {
+                            let overlap = i64::try_from(overlap.get()).map_err(|_| {
+                                EnrollmentError::InvalidHistory(
+                                    "rotation overlap exceeds time range".into(),
+                                )
+                            })?;
+                            Some(ObservedAtUnixMillis::new(
+                                issued_at.get().checked_add(overlap).ok_or_else(|| {
+                                    EnrollmentError::InvalidHistory(
+                                        "rotation overlap overflows time".into(),
+                                    )
+                                })?,
+                            ))
+                        } else {
+                            None
+                        };
+                        if payload.credential.predecessor_retire_at != expected_retire_at {
+                            return Err(EnrollmentError::InvalidHistory(
+                                "rotation retirement differs from frozen overlap".into(),
+                            ));
+                        }
+                        let predecessor = registry
+                            .credentials
+                            .get(predecessor_credential_id)
+                            .filter(|record| {
+                                record.enrolled.worker_id == *worker_id
+                                    && record.enrolled.pool == offer.pool
+                                    && record
+                                        .is_authorized_at(&registry.disabled_workers, issued_at)
+                                    && record.superseded_by.is_none()
+                            })
+                            .ok_or_else(|| {
+                                EnrollmentError::InvalidHistory(
+                                    "rotation issuance has no active predecessor".into(),
+                                )
+                            })?;
+                        if payload
+                            .credential
+                            .predecessor_retire_at
+                            .is_some_and(|retire_at| retire_at <= issued_at)
+                        {
+                            return Err(EnrollmentError::InvalidHistory(
+                                "rotation retirement is not after issuance".into(),
+                            ));
+                        }
+                        let _ = predecessor;
+                        Some(*predecessor_credential_id)
+                    }
+                };
                 let enrolled = EnrolledWorker {
                     worker_id: payload.credential.worker_id,
                     credential_id: payload.credential.credential_id,
@@ -501,6 +778,9 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                             fingerprint: payload.certificate_fingerprint,
                             enrolled: enrolled.clone(),
                             revoked: false,
+                            superseded_by: None,
+                            retire_at: None,
+                            predecessor: rotation_predecessor,
                         },
                     )
                     .is_some()
@@ -509,25 +789,42 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                         "credential identity was issued twice".into(),
                     ));
                 }
-                if registry
-                    .enrolled
-                    .insert(payload.certificate_fingerprint, enrolled)
-                    .is_some()
-                {
+                if registry.credentials.values().any(|record| {
+                    record.enrolled.credential_id != payload.credential.credential_id
+                        && record.fingerprint == payload.certificate_fingerprint
+                }) {
                     return Err(EnrollmentError::InvalidHistory(
                         "certificate fingerprint was issued twice".into(),
                     ));
                 }
-                offer.issued = Some(Issued {
+                if let Some(predecessor_id) = rotation_predecessor {
+                    let predecessor = registry
+                        .credentials
+                        .get_mut(&predecessor_id)
+                        .expect("validated predecessor exists");
+                    predecessor.superseded_by = Some(payload.credential.credential_id);
+                    predecessor.retire_at = payload.credential.predecessor_retire_at;
+                }
+                registry
+                    .offers
+                    .get_mut(&payload.enrollment_id)
+                    .expect("validated offer exists")
+                    .issued = Some(Issued {
                     csr_digest,
                     credential: payload.credential,
                 });
             }
             CREDENTIAL_REVOKED => {
+                if event.schema_version.get() != 1 {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "credential revocation schema version is unsupported".into(),
+                    ));
+                }
                 let payload: CredentialRevokedPayload = decode(&event.payload)?;
+                let revoked_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 let record = registry
                     .credentials
-                    .get_mut(&payload.credential_id)
+                    .get(&payload.credential_id)
                     .ok_or_else(|| {
                         EnrollmentError::InvalidHistory("unknown credential was revoked".into())
                     })?;
@@ -536,10 +833,37 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                         "credential was revoked twice".into(),
                     ));
                 }
-                record.revoked = true;
-                registry.enrolled.remove(&record.fingerprint);
+                let rollback_predecessor = record.predecessor.filter(|predecessor_id| {
+                    registry
+                        .credentials
+                        .get(predecessor_id)
+                        .is_some_and(|predecessor| {
+                            predecessor.superseded_by == Some(payload.credential_id)
+                                && predecessor
+                                    .retire_at
+                                    .is_none_or(|retire_at| revoked_at < retire_at)
+                        })
+                });
+                registry
+                    .credentials
+                    .get_mut(&payload.credential_id)
+                    .expect("validated credential exists")
+                    .revoked = true;
+                if let Some(predecessor_id) = rollback_predecessor {
+                    let predecessor = registry
+                        .credentials
+                        .get_mut(&predecessor_id)
+                        .expect("validated predecessor exists");
+                    predecessor.superseded_by = None;
+                    predecessor.retire_at = None;
+                }
             }
             WORKER_DISABLED => {
+                if event.schema_version.get() != 1 {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "worker disable schema version is unsupported".into(),
+                    ));
+                }
                 let payload: WorkerDisabledPayload = decode(&event.payload)?;
                 if !registry
                     .credentials
@@ -551,11 +875,13 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                         "unknown or disabled worker was disabled".into(),
                     ));
                 }
-                registry
-                    .enrolled
-                    .retain(|_, worker| worker.worker_id != payload.worker_id);
             }
             ENROLLMENT_REVOKED => {
+                if event.schema_version.get() != 1 {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "enrollment revocation schema version is unsupported".into(),
+                    ));
+                }
                 let payload: EnrollmentRevokedPayload = decode(&event.payload)?;
                 let offer = registry
                     .offers
@@ -582,6 +908,18 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
         );
         registry.last_event_id = Some(event.event_id);
     }
+    for record in registry.credentials.values() {
+        if record.is_authorized_at(&registry.disabled_workers, now)
+            && registry
+                .enrolled
+                .insert(record.fingerprint, record.enrolled.clone())
+                .is_some()
+        {
+            return Err(EnrollmentError::InvalidHistory(
+                "active certificate fingerprint is not unique".into(),
+            ));
+        }
+    }
     Ok(registry)
 }
 
@@ -589,6 +927,7 @@ fn append<T: Serialize>(
     events: &mut impl EventStore,
     registry: &EnrollmentRegistry,
     schema: &str,
+    schema_version: u32,
     payload: &T,
     command_id: CommandId,
     observed_at: ObservedAtUnixMillis,
@@ -596,7 +935,7 @@ fn append<T: Serialize>(
     let event = NewEvent {
         schema_name: SchemaName::new(schema)
             .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(1)
+        schema_version: SchemaVersion::new(schema_version)
             .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
         parent_event_id: registry.last_event_id,
         observed_at_unix_ms: observed_at.get(),

@@ -94,12 +94,28 @@ pub struct EnrollmentEndpoint {
     pub server_ca_pem: String,
 }
 
+/// Controller-owned lifecycle purpose of one enrollment authority.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum EnrollmentPurpose {
+    /// Allocates a new stable worker and its first credential.
+    #[default]
+    Bootstrap,
+    /// Issues a successor credential for one exact existing credential.
+    Rotation {
+        worker_id: WorkerId,
+        predecessor_credential_id: CredentialId,
+    },
+}
+
 /// Short-lived file transferred to a worker before it has a client credential.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollmentBundle {
     pub schema_version: u16,
     pub enrollment_id: EnrollmentId,
+    #[serde(default)]
+    pub purpose: EnrollmentPurpose,
     pub secret: EnrollmentSecret,
     pub expires_at: ObservedAtUnixMillis,
     pub endpoint: EnrollmentEndpoint,
@@ -136,6 +152,10 @@ pub struct IssuedWorkerCredential {
     pub worker_id: WorkerId,
     pub credential_id: CredentialId,
     pub pool: WorkerPoolName,
+    #[serde(default)]
+    pub predecessor_credential_id: Option<CredentialId>,
+    #[serde(default)]
+    pub predecessor_retire_at: Option<ObservedAtUnixMillis>,
     pub certificate_chain_pem: String,
 }
 

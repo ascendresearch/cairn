@@ -334,3 +334,19 @@ append-only facts. TLS chain acceptance does not override these application fact
 does not require CRL or OCSP; external issuer adapters may add them without changing Cairn's domain
 lifecycle. Scheduler work follows this foundation so a placement snapshot can exclude inactive
 authority without guessing from certificate expiry or connection state.
+
+## D-013 — Rotation is successor issuance plus bounded predecessor authority
+
+- Decision: accepted; online reference path implemented
+
+A rotation authority names one exact active predecessor credential, not merely a worker. Issuance
+creates a fresh local key and successor `CredentialId` while preserving controller-owned
+`WorkerId`, stable principal, and pool. The controller freezes the configured optional overlap at
+issuance time. With an overlap, predecessor authority ends at that exact instant; with `null`, it
+remains active until explicit revocation.
+
+Worker material is immutable under a per-rotation directory. Cutover is one atomic replacement of
+`identity.json`; a running worker polls that manifest at a configured positive interval, closes the
+old connection, reloads the successor, and creates a new incarnation. Revoking a bad successor
+inside its overlap atomically cancels predecessor retirement in the registry, after which the local
+manifest may be rolled back. Once the frozen deadline passes, rollback cannot resurrect authority.

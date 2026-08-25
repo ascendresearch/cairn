@@ -8,8 +8,8 @@ mod tls;
 mod wire;
 
 pub use enrollment::{
-    EnrollmentBundle, EnrollmentEndpoint, EnrollmentRejectCode, EnrollmentRequest,
-    EnrollmentResponse, EnrollmentSecret, IssuedWorkerCredential,
+    EnrollmentBundle, EnrollmentEndpoint, EnrollmentPurpose, EnrollmentRejectCode,
+    EnrollmentRequest, EnrollmentResponse, EnrollmentSecret, IssuedWorkerCredential,
 };
 
 pub use tls::{

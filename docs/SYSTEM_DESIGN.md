@@ -673,8 +673,29 @@ registration and on each active control-loop iteration, so an observed managed s
 and its reconnect is rejected. This application check remains authoritative even when certificate
 chain validation succeeds. SQLite schema V2 uses WAL plus immediate writer transactions so a
 separate administrative command and the running controller serialize authority facts without a
-deferred read-to-write deadlock. Safe issuance/cutover of a replacement credential, re-enable, and
-static-registry import remain subsequent lifecycle work.
+deferred read-to-write deadlock. Worker re-enable and static-registry import remain subsequent
+lifecycle work.
+
+**Implemented safe credential rotation slice (2026-08-25).** Enrollment authority V2 distinguishes
+bootstrap from rotation. A rotation offer freezes the exact active predecessor credential,
+controller-owned worker/pool, and configured optional overlap. Issuance V2 creates a fresh
+`CredentialId` and certificate while recording predecessor lineage and its exact retirement
+instant. Registry replay admits both credentials inside the overlap, then derives predecessor
+retirement from the frozen fact; `null` disables automatic retirement and requires explicit
+revocation.
+
+Each worker rotation has an immutable `rotations/<EnrollmentId UUID>/` directory containing its
+fresh `0600` key, exact CSR, issued certificate, CA, and predecessor manifest. Only `identity.json`
+is atomically replaced. Exact staged-CSR replay closes response and local-commit loss windows.
+Worker configuration V3 adds a positive identity-manifest poll interval: a running process notices
+cutover, closes its old connection, reloads material, and reconnects under a new incarnation while
+the predecessor is still authorized.
+
+If a successor is revoked before predecessor retirement, registry projection cancels that pending
+retirement; the worker can then validate and atomically restore the predecessor manifest. Once the
+deadline passes, both authority projection and local rollback fail closed. The mTLS integration
+test exercises failed-successor rollback, another rotation, live-process cutover, exact issuance
+recovery, old-certificate rejection after overlap, and final successor revocation.
 
 After a worker heartbeat is durably accepted, the controller returns an ephemeral
 `HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence
@@ -694,7 +715,7 @@ polling, reconnect, and diagnostic bounds are configured; `null` disables an opt
 This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
 It can close the control protocol without claiming an external workload ran. Scheduler-wide slot
 reservation across different attempts, cancellation delivery, artifact transfer, local
-process/container supervision, safe credential rotation, and production service
+process/container supervision, registry lifecycle administration, and production service
 deployment remain application/adapter slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,

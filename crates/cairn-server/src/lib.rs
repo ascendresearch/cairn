@@ -42,7 +42,10 @@ use tokio::{
     time::Instant,
 };
 
-use enrollment::{EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, redeem};
+use enrollment::{
+    EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, create_rotation_offer,
+    redeem,
+};
 use enrollment::{disable_worker, revoke_credential, revoke_enrollment};
 
 /// Strict controller process configuration.
@@ -78,6 +81,8 @@ pub struct EnrollmentServiceConfig {
     pub issuer_certificate: PathBuf,
     pub issuer_private_key: PathBuf,
     pub credential_validity_ms: NonZeroU64,
+    #[serde(default)]
+    pub rotation_overlap_ms: Option<NonZeroU64>,
     pub handshake_timeout_ms: Option<NonZeroU64>,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
     #[serde(default)]
@@ -114,7 +119,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> | cairn-server credential revoke <config.json> <credential-id> | cairn-server worker disable <config.json> <worker-id>"
+        "usage: cairn-server <config.json> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> | cairn-server worker disable <config.json> <worker-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -183,21 +188,43 @@ pub async fn run_from_arguments(
         eprintln!("wrote enrollment bundle to {}", output_path.display());
         return Ok(());
     }
-    if first == "credential" || first == "worker" {
+    if first == "credential" {
         let action = arguments.next().ok_or(ServerError::Usage)?;
         let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
-        let identity = arguments.next();
-        if arguments.next().is_some() {
-            return Err(ServerError::Usage);
-        }
+        let credential_id = parse_argument::<CredentialId>(arguments.next())?;
         let config = load_config(&config_path)?;
-        if first == "credential" && action == "revoke" {
-            return revoke_worker_credential(&config, parse_argument::<CredentialId>(identity)?);
+        if action == "revoke" {
+            if arguments.next().is_some() {
+                return Err(ServerError::Usage);
+            }
+            return revoke_worker_credential(&config, credential_id);
         }
-        if first == "worker" && action == "disable" {
-            return disable_enrolled_worker(&config, parse_argument::<WorkerId>(identity)?);
+        if action == "rotate" {
+            let ttl_ms = parse_nonzero(arguments.next())?;
+            let output_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+            if arguments.next().is_some() {
+                return Err(ServerError::Usage);
+            }
+            let bundle = create_rotation_bundle(&config, credential_id, ttl_ms)?;
+            let bytes = serde_json::to_vec_pretty(&bundle)
+                .map_err(|error| ServerError::Configuration(error.to_string()))?;
+            write_new_secret_file(&output_path, &bytes)?;
+            eprintln!(
+                "wrote credential rotation bundle to {}",
+                output_path.display()
+            );
+            return Ok(());
         }
         return Err(ServerError::Usage);
+    }
+    if first == "worker" {
+        let action = arguments.next().ok_or(ServerError::Usage)?;
+        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let worker_id = parse_argument::<WorkerId>(arguments.next())?;
+        if arguments.next().is_some() || action != "disable" {
+            return Err(ServerError::Usage);
+        }
+        return disable_enrolled_worker(&load_config(&config_path)?, worker_id);
     }
     let config_path = PathBuf::from(first);
     if arguments.next().is_some() {
@@ -216,6 +243,10 @@ where
         .map_err(|_| ServerError::Usage)?
         .parse()
         .map_err(|_| ServerError::Usage)
+}
+
+fn parse_nonzero(value: Option<OsString>) -> Result<NonZeroU64, ServerError> {
+    NonZeroU64::new(parse_argument::<u64>(value)?).ok_or(ServerError::Usage)
 }
 
 fn write_new_secret_file(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
@@ -264,6 +295,34 @@ pub fn create_enrollment_bundle(
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     create_offer(&mut events, service, pool, ttl_ms, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
+/// Creates a one-shot rotation authority bound to one active predecessor credential.
+///
+/// # Errors
+///
+/// Returns an error for invalid configuration, inactive credentials, storage, entropy, or time.
+pub fn create_rotation_bundle(
+    config: &ServerConfig,
+    predecessor_credential_id: CredentialId,
+    ttl_ms: NonZeroU64,
+) -> Result<EnrollmentBundle, ServerError> {
+    config.validate()?;
+    let service = config
+        .enrollment_service
+        .as_ref()
+        .ok_or_else(|| ServerError::Configuration("enrollment_service is not configured".into()))?;
+    let mut events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    create_rotation_offer(
+        &mut events,
+        service,
+        predecessor_credential_id,
+        ttl_ms,
+        service.rotation_overlap_ms,
+        observed_now()?,
+    )
+    .map_err(|error| ServerError::Startup(error.to_string()))
 }
 
 /// Permanently revokes one issued managed credential.
@@ -327,7 +386,7 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     let events = SqliteEventStore::open(&config.storage.event_database)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
-    let registry = EnrollmentRegistry::load(&events)
+    let registry = EnrollmentRegistry::load(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     let mut enrolled = config.enrollments()?;
     if enrolled
@@ -965,7 +1024,7 @@ async fn credential_is_authorized(
     worker: &EnrolledWorker,
 ) -> Result<bool, ServerError> {
     let locked = state.lock().await;
-    let registry = EnrollmentRegistry::load(&locked.events)
+    let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
     Ok(!registry.credential_is_known(worker.credential_id)
         || registry.credential_is_authorized(worker.credential_id, worker.worker_id))
@@ -976,7 +1035,7 @@ async fn session_credential_is_authorized(
     session: &RegisteredWorkerSession,
 ) -> Result<bool, ServerError> {
     let locked = state.lock().await;
-    let registry = EnrollmentRegistry::load(&locked.events)
+    let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
     Ok(!registry.credential_is_known(session.credential_id())
         || registry.credential_is_authorized(session.credential_id(), session.worker_id()))
@@ -1217,6 +1276,39 @@ mod tests {
         let _: ServerConfig =
             serde_json::from_str(include_str!("../../../config/controller.example.json"))
                 .expect("documented server configuration");
+    }
+
+    #[test]
+    fn rotation_overlap_can_be_explicitly_disabled() {
+        let documented = include_str!("../../../config/controller.example.json");
+        let disabled = documented.replace(
+            "\"rotation_overlap_ms\": 300000",
+            "\"rotation_overlap_ms\": null",
+        );
+        let config: ServerConfig =
+            serde_json::from_str(&disabled).expect("disabled rotation overlap configuration");
+        assert!(
+            config
+                .enrollment_service
+                .expect("enrollment service")
+                .rotation_overlap_ms
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn missing_rotation_overlap_preserves_pre_rotation_configuration() {
+        let documented = include_str!("../../../config/controller.example.json");
+        let legacy = documented.replace("    \"rotation_overlap_ms\": 300000,\n", "");
+        let config: ServerConfig =
+            serde_json::from_str(&legacy).expect("pre-rotation controller configuration");
+        assert!(
+            config
+                .enrollment_service
+                .expect("enrollment service")
+                .rotation_overlap_ms
+                .is_none()
+        );
     }
 
     #[cfg(unix)]

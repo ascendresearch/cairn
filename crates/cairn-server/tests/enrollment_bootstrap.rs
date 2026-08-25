@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use cairn_control_transport::{EnrollmentSecret, ServerTlsFiles, TransportPolicy};
+use cairn_control_transport::{ClientTlsFiles, EnrollmentSecret, ServerTlsFiles, TransportPolicy};
 use cairn_execution::{
     ExecutionBackend, ExecutionPlatformRequirement, WorkerAvailability, WorkerBinaryIdentity,
     WorkerHealth, WorkerPoolName, WorkerProtocolVersion, WorkerSessionState,
@@ -13,11 +13,13 @@ use cairn_protocol::{AggregateId, AggregateKind, ObservedAtUnixMillis};
 use cairn_record::{EventStore, StreamId};
 use cairn_server::{
     EnrollmentServiceConfig, ServerConfig, ServerStorageConfig, create_enrollment_bundle,
-    disable_enrolled_worker, revoke_enrollment_authority, revoke_worker_credential,
+    create_rotation_bundle, disable_enrolled_worker, revoke_enrollment_authority,
+    revoke_worker_credential,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
     ControllerEndpoint, WorkerConfig, WorkerIdentityConfig, WorkerProfileConfig, enroll,
+    rollback_rotation, rotate,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -185,9 +187,10 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     let server_b = tokio::spawn(cairn_server::run(config_b));
     tokio::time::sleep(Duration::from_millis(50)).await;
     disable_enrolled_worker(&authority_config, disabled_identity.worker_id)?;
-    let disabled_worker =
-        tokio::spawn(cairn_worker::run(worker_config(control_b, disabled_state)?));
-    let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, state)?));
+    let mut disabled_worker_config = worker_config(control_b, disabled_state)?;
+    disabled_worker_config.reconnect_delay_ms = None;
+    let disabled_worker = tokio::spawn(cairn_worker::run(disabled_worker_config));
+    let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, state.clone())?));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let events = SqliteEventStore::open(&event_database)?;
@@ -205,9 +208,98 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     assert_eq!(session.pool(), &pool);
     assert_eq!(session.credential_id(), identity.credential_id);
 
+    // A successor is issued to a fresh local key without changing stable worker ownership. If it
+    // is revoked inside the overlap, the registry cancels predecessor retirement and the worker
+    // can atomically restore its previous identity.
+    let first_rotation = create_rotation_bundle(
+        &authority_config,
+        identity.credential_id,
+        NonZeroU64::new(60_000).expect("rotation TTL"),
+    )?;
+    let predecessor_identity_bytes = fs::read(state.join("identity.json"))?;
+    let first_successor = Box::pin(rotate(first_rotation.clone(), &state)).await?;
+    let first_successor_certificate = fs::read(state.join(&first_successor.tls.certificate))?;
+    // Simulate loss of the local identity commit acknowledgement after controller issuance. The
+    // staged key/CSR survive; retry returns the exact credential and certificate.
+    fs::write(state.join("identity.json"), predecessor_identity_bytes)?;
+    let recovered_successor = Box::pin(rotate(first_rotation, &state)).await?;
+    assert_eq!(recovered_successor, first_successor);
+    assert_eq!(
+        fs::read(state.join(&recovered_successor.tls.certificate))?,
+        first_successor_certificate
+    );
+    assert_eq!(first_successor.worker_id, identity.worker_id);
+    assert_eq!(first_successor.pool, identity.pool);
+    assert_ne!(first_successor.credential_id, identity.credential_id);
+    assert_eq!(
+        first_successor.predecessor_credential_id,
+        Some(identity.credential_id)
+    );
+    assert!(first_successor.predecessor_retire_at.is_some());
+    revoke_worker_credential(&authority_config, first_successor.credential_id)?;
+    let rolled_back = rollback_rotation(&state)?;
+    assert_eq!(rolled_back.credential_id, identity.credential_id);
+
+    // A second rotation is allowed because the failed successor rollback restored predecessor
+    // authority. Once its overlap elapses, the controller closes the old live connection; the
+    // same worker process reloads identity and reconnects under a fresh incarnation.
+    let second_rotation = create_rotation_bundle(
+        &authority_config,
+        identity.credential_id,
+        NonZeroU64::new(60_000).expect("rotation TTL"),
+    )?;
+    let second_successor = Box::pin(rotate(second_rotation, &state)).await?;
+    assert_ne!(
+        second_successor.credential_id,
+        first_successor.credential_id
+    );
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let events = SqliteEventStore::open(&event_database)?;
+    let content = SqliteContentStore::open(&content_database, &content_directory)?;
+    let WorkerSessionState::Live(rotated_session) = recover_worker_session(
+        &events,
+        &content,
+        identity.worker_id,
+        WorkerSessionTimeoutMillis::new(10_000)?,
+        ObservedAtUnixMillis::new(unix_millis()?),
+    )?
+    else {
+        return Err("rotated worker did not reconnect with its successor credential".into());
+    };
+    assert_eq!(
+        rotated_session.credential_id(),
+        second_successor.credential_id
+    );
+    assert_ne!(rotated_session.incarnation_id(), session.incarnation_id());
+    assert!(
+        rollback_rotation(&state)
+            .expect_err("elapsed overlap must reject local rollback")
+            .to_string()
+            .contains("overlap has elapsed")
+    );
+    let mut retired_config = worker_config(control_b, state.clone())?;
+    retired_config.identity = WorkerIdentityConfig::External {
+        worker_id: identity.worker_id,
+        tls: ClientTlsFiles {
+            certificate: state.join(&identity.tls.certificate),
+            private_key: state.join(&identity.tls.private_key),
+            server_ca: state.join(&identity.tls.server_ca),
+            server_name: identity.tls.server_name.clone(),
+        },
+    };
+    retired_config.journal_database = directory.path().join("retired-worker.sqlite3");
+    retired_config.reconnect_delay_ms = None;
+    assert!(
+        Box::pin(cairn_worker::run(retired_config))
+            .await
+            .expect_err("retired predecessor must fail authentication")
+            .to_string()
+            .contains("IdentityMismatch")
+    );
+
     // Revocation is a durable authority fact. The running controller observes it, terminates the
     // live session, and rejects the worker's automatic reconnect before a new registration fact.
-    revoke_worker_credential(&authority_config, identity.credential_id)?;
+    revoke_worker_credential(&authority_config, second_successor.credential_id)?;
     tokio::time::sleep(Duration::from_millis(200)).await;
     let events = SqliteEventStore::open(&event_database)?;
     let content = SqliteContentStore::open(&content_database, &content_directory)?;
@@ -249,7 +341,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
                 )
             })
             .count(),
-        1,
+        2,
         "revoked automatic reconnect must not append another registration"
     );
 
@@ -294,6 +386,7 @@ fn server_config(
             issuer_certificate: ca.to_path_buf(),
             issuer_private_key: ca_key.to_path_buf(),
             credential_validity_ms: NonZeroU64::new(3_600_000).expect("validity"),
+            rotation_overlap_ms: NonZeroU64::new(500),
             handshake_timeout_ms: NonZeroU64::new(2_000),
             diagnostic_byte_limit: NonZeroU64::new(256),
             transport: TransportPolicy::default(),
@@ -320,7 +413,7 @@ fn worker_config(
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     let journal_database = state_directory.join("worker-journal.sqlite3");
     Ok(WorkerConfig {
-        schema_version: 2,
+        schema_version: 3,
         controller: ControllerEndpoint {
             tcp_address: control.to_string(),
             websocket_uri: format!("wss://localhost:{}/control", control.port()),
@@ -340,7 +433,8 @@ fn worker_config(
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         heartbeat_interval_ms: NonZeroU64::new(50),
-        reconnect_delay_ms: None,
+        identity_poll_interval_ms: NonZeroU64::new(25).expect("identity poll"),
+        reconnect_delay_ms: NonZeroU64::new(25),
         transport: TransportPolicy::default(),
     })
 }

@@ -16,6 +16,7 @@
   },
   "handshake_timeout_ms": 10000,
   "heartbeat_interval_ms": 30000,
+  "identity_poll_interval_ms": 1000,
   "identity": {
     "mode": "managed",
     "state_directory": "state/identity"
@@ -33,7 +34,7 @@
     "schema_version": 1
   },
   "reconnect_delay_ms": 1000,
-  "schema_version": 2,
+  "schema_version": 3,
   "transport": {
     "message_byte_limit": 1048576
   }

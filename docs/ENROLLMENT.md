@@ -70,6 +70,52 @@ Worker configuration selects the state directory rather than repeating identity 
 After bootstrap, delete the transferred bundle according to local secret-handling policy. Do not
 delete the staged CSR: it is non-secret recovery evidence bound to the local private key.
 
+Worker configuration schema V3 adds mandatory positive `identity_poll_interval_ms`. A running
+managed worker checks the atomic identity manifest at this interval. When rotation changes the
+credential, it closes the old connection and reconnects with a fresh `WorkerIncarnationId`.
+
+## Rotate a managed credential
+
+Set `enrollment_service.rotation_overlap_ms` to a positive duration, or `null` to disable automatic
+predecessor retirement. The controller freezes this choice at successor issuance. Create a bundle
+for the exact current credential:
+
+```bash
+cairn-server credential rotate controller.json credential:... 600000 worker.rotation.json
+```
+
+Transfer it to the same worker state directory and rotate:
+
+```bash
+cairn-worker rotate worker.rotation.json /var/lib/cairn/identity
+```
+
+The command verifies that the bundle names the current `WorkerId` and `CredentialId`, then stages a
+fresh key and exact CSR under `rotations/<EnrollmentId UUID>/`. The directory also retains the
+predecessor manifest, issued certificate, and pinned CA. No old key or certificate is overwritten.
+After validating lineage and public-key binding, the worker atomically replaces only
+`identity.json`. Retrying after response or local-commit loss reuses the staged CSR and recovers the
+same successor.
+
+The running worker observes the manifest switch and reconnects with a new incarnation during the
+overlap. After confirming the successor session, the rotation bundle may be deleted. If overlap is
+`null`, the operator must explicitly revoke the predecessor after observing successor admission.
+
+To roll back a bad successor before the frozen deadline, first revoke that successor at the
+controller, then restore the local predecessor:
+
+```bash
+cairn-server credential revoke controller.json credential:<successor>
+cairn-worker rollback /var/lib/cairn/identity
+```
+
+Revoking the successor inside the overlap cancels the predecessor's pending retirement as part of
+the durable projection. The local command validates worker, pool, credential lineage, material, and
+deadline before atomically restoring the predecessor manifest. Reversing this order can leave only
+a temporary local fallback, so the controller action is deliberately first. Rollback after the
+deadline fails closed. Destroy the revoked successor's rotation bundle after rollback; exact-CSR
+replay deliberately returns the original (now revoked) issuance and is not a second rotation.
+
 ## Authority and recovery properties
 
 - The controller, not the worker, assigns `WorkerId` and pool.
@@ -99,6 +145,6 @@ an observed live session is closed no later than the configured positive
 
 Application authorization is authoritative even when TLS accepts a certificate chain, so the
 baseline does not require CRL or OCSP. Static file enrollments are not revocable through this
-managed registry until the planned `import-static` transition. Worker re-enable and safe credential
-rotation are subsequent phases; disablement and revocation should currently be treated as
-one-directional emergency actions. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+managed registry until the planned `import-static` transition. Worker disablement remains a
+one-directional emergency action until the registry lifecycle phase adds re-enable. See
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).

@@ -181,7 +181,7 @@ fn worker_config(
     protocol: WorkerProtocolVersion,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     Ok(WorkerConfig {
-        schema_version: 2,
+        schema_version: 3,
         controller,
         identity: WorkerIdentityConfig::External {
             worker_id,
@@ -206,6 +206,7 @@ fn worker_config(
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         heartbeat_interval_ms: NonZeroU64::new(50),
+        identity_poll_interval_ms: NonZeroU64::new(25).expect("identity poll"),
         reconnect_delay_ms: None,
         transport: TransportPolicy::default(),
     })

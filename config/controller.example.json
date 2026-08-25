@@ -17,6 +17,7 @@
     "issuer_private_key": "pki/ca-key.pem",
     "listen": "0.0.0.0:7444",
     "public_tcp_address": "controller.example.test:7444",
+    "rotation_overlap_ms": 300000,
     "server_ca": "pki/ca.pem",
     "server_name": "controller.example.test",
     "transport": {

@@ -11,9 +11,9 @@ use std::{
 };
 
 use cairn_control_transport::{
-    ClientTlsFiles, ControllerWireMessage, EnrollmentBundle, EnrollmentRequest, EnrollmentResponse,
-    TransportPolicy, WorkerWireMessage, connect_enrollment_socket, connect_worker_socket,
-    read_wire_message, write_wire_message,
+    ClientTlsFiles, ControllerWireMessage, EnrollmentBundle, EnrollmentPurpose, EnrollmentRequest,
+    EnrollmentResponse, TransportPolicy, WorkerWireMessage, connect_enrollment_socket,
+    connect_worker_socket, read_wire_message, write_wire_message,
 };
 use cairn_execution::{
     CapabilityRequirement, ControlFrame, ControllerControlMessage, ExecutionBackend,
@@ -52,6 +52,7 @@ pub struct WorkerConfig {
     pub handshake_timeout_ms: Option<NonZeroU64>,
     pub idle_timeout_ms: Option<NonZeroU64>,
     pub heartbeat_interval_ms: Option<NonZeroU64>,
+    pub identity_poll_interval_ms: NonZeroU64,
     pub reconnect_delay_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
@@ -78,6 +79,10 @@ pub struct ManagedWorkerIdentity {
     pub enrollment_id: EnrollmentId,
     pub worker_id: WorkerId,
     pub credential_id: CredentialId,
+    #[serde(default)]
+    pub predecessor_credential_id: Option<CredentialId>,
+    #[serde(default)]
+    pub predecessor_retire_at: Option<ObservedAtUnixMillis>,
     pub pool: WorkerPoolName,
     pub tls: ClientTlsFiles,
 }
@@ -85,6 +90,7 @@ pub struct ManagedWorkerIdentity {
 #[derive(Clone)]
 struct ResolvedWorkerIdentity {
     worker_id: WorkerId,
+    credential_id: Option<CredentialId>,
     tls: ClientTlsFiles,
 }
 
@@ -111,7 +117,9 @@ pub struct ControllerEndpoint {
 /// Configuration, transport, or durable worker-journal process failure.
 #[derive(Debug, Error)]
 pub enum WorkerError {
-    #[error("usage: cairn-worker <config.json> | cairn-worker enroll <bundle.json> <state-dir>")]
+    #[error(
+        "usage: cairn-worker <config.json> | cairn-worker enroll <bundle.json> <state-dir> | cairn-worker rotate <bundle.json> <state-dir> | cairn-worker rollback <state-dir>"
+    )]
     Usage,
     #[error("worker configuration failed: {0}")]
     Configuration(String),
@@ -155,6 +163,23 @@ pub async fn run_from_arguments(
         Box::pin(enroll_from_bundle(&bundle_path, &state_directory)).await?;
         return Ok(());
     }
+    if first == "rotate" {
+        let bundle_path = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        let state_directory = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        if arguments.next().is_some() {
+            return Err(WorkerError::Usage);
+        }
+        Box::pin(rotate_from_bundle(&bundle_path, &state_directory)).await?;
+        return Ok(());
+    }
+    if first == "rollback" {
+        let state_directory = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        if arguments.next().is_some() {
+            return Err(WorkerError::Usage);
+        }
+        rollback_rotation(&state_directory)?;
+        return Ok(());
+    }
     let config_path = first;
     if arguments.next().is_some() {
         return Err(WorkerError::Usage);
@@ -177,21 +202,39 @@ pub async fn run_from_arguments(
 /// Returns an error for invalid configuration, journal startup, or a terminal session failure when
 /// reconnect is disabled.
 pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
-    let identity = config.resolve_identity()?;
     let profile = config.runtime_profile()?;
     config.validate(&profile)?;
-    let incarnation_id = WorkerIncarnationId::new();
+    let mut incarnation_id = WorkerIncarnationId::new();
+    let mut bound_credential = None;
     let mut journal = SqliteEventStore::open(&config.journal_database)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     loop {
-        let outcome = Box::pin(run_session(
+        let identity = config.resolve_identity()?;
+        if bound_credential.is_some() && bound_credential != identity.credential_id {
+            incarnation_id = WorkerIncarnationId::new();
+        }
+        bound_credential = identity.credential_id;
+        let session = Box::pin(run_session(
             &config,
             &identity,
             &profile,
             &incarnation_id,
             &mut journal,
-        ))
-        .await;
+        ));
+        let outcome = if let Some(credential_id) = identity.credential_id {
+            tokio::select! {
+                outcome = session => Some(outcome),
+                changed = wait_for_identity_change(&config, credential_id) => {
+                    changed?;
+                    None
+                }
+            }
+        } else {
+            Some(session.await)
+        };
+        let Some(outcome) = outcome else {
+            continue;
+        };
         if let Err(error) = &outcome {
             eprintln!("cairn-worker session: {error}");
         }
@@ -202,11 +245,27 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     }
 }
 
+async fn wait_for_identity_change(
+    config: &WorkerConfig,
+    credential_id: CredentialId,
+) -> Result<(), WorkerError> {
+    loop {
+        tokio::time::sleep(Duration::from_millis(
+            config.identity_poll_interval_ms.get(),
+        ))
+        .await;
+        if config.resolve_identity()?.credential_id != Some(credential_id) {
+            return Ok(());
+        }
+    }
+}
+
 impl WorkerConfig {
     fn resolve_identity(&self) -> Result<ResolvedWorkerIdentity, WorkerError> {
         match &self.identity {
             WorkerIdentityConfig::External { worker_id, tls } => Ok(ResolvedWorkerIdentity {
                 worker_id: *worker_id,
+                credential_id: None,
                 tls: tls.clone(),
             }),
             WorkerIdentityConfig::Managed { state_directory } => {
@@ -216,9 +275,9 @@ impl WorkerConfig {
                         .map_err(|error| WorkerError::Configuration(error.to_string()))?,
                 )
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-                if identity.schema_version != 1 {
+                if !matches!(identity.schema_version, 1 | 2) {
                     return Err(WorkerError::Configuration(
-                        "only managed worker identity schema_version 1 is supported".into(),
+                        "only managed worker identity schema_version 1 or 2 is supported".into(),
                     ));
                 }
                 validate_managed_material(state_directory, &identity)?;
@@ -227,6 +286,7 @@ impl WorkerConfig {
                 resolve(&mut identity.tls.server_ca, state_directory);
                 Ok(ResolvedWorkerIdentity {
                     worker_id: identity.worker_id,
+                    credential_id: Some(identity.credential_id),
                     tls: identity.tls,
                 })
             }
@@ -234,9 +294,9 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 2 is supported".into(),
+                "only worker schema_version 3 is supported".into(),
             ));
         }
         if self.profile.schema_version != 1 {
@@ -628,9 +688,9 @@ pub async fn enroll(
     bundle: EnrollmentBundle,
     state_directory: &Path,
 ) -> Result<ManagedWorkerIdentity, WorkerError> {
-    if bundle.schema_version != 1 {
+    if !matches!(bundle.schema_version, 1 | 2) || bundle.purpose != EnrollmentPurpose::Bootstrap {
         return Err(WorkerError::Configuration(
-            "only enrollment bundle schema_version 1 is supported".into(),
+            "enroll requires a supported bootstrap authority".into(),
         ));
     }
     prepare_state_directory(state_directory)?;
@@ -641,7 +701,7 @@ pub async fn enroll(
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         )
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-        if identity.schema_version != 1 {
+        if !matches!(identity.schema_version, 1 | 2) {
             return Err(WorkerError::Configuration(
                 "managed identity has an unsupported schema".into(),
             ));
@@ -696,45 +756,13 @@ pub async fn enroll(
         ));
     }
 
-    let connecting = connect_enrollment_socket(
-        bundle.endpoint.tcp_address.as_str(),
-        &bundle.endpoint.websocket_uri,
-        &bundle.endpoint.server_name,
-        &bundle.endpoint.server_ca_pem,
-        bundle.transport,
-    );
-    let mut socket = timeout_optional(bundle.handshake_timeout_ms, connecting)
-        .await?
-        .map_err(|error| WorkerError::Session(error.to_string()))?;
-    write_wire_message(
-        &mut socket,
-        &EnrollmentRequest {
-            schema_version: 1,
-            enrollment_id: bundle.enrollment_id,
-            secret: bundle.secret,
-            csr_pem,
-        },
-        bundle.transport,
-    )
-    .await
-    .map_err(|error| WorkerError::Session(error.to_string()))?;
-    let response = timeout_optional(
-        bundle.handshake_timeout_ms,
-        read_wire_message::<_, EnrollmentResponse>(&mut socket, bundle.transport),
-    )
-    .await?
-    .map_err(|error| WorkerError::Session(error.to_string()))?;
-    let credential = match response {
-        EnrollmentResponse::Issued { credential } => credential,
-        EnrollmentResponse::Reject { code, diagnostic } => {
-            return Err(WorkerError::Session(format!(
-                "enrollment rejected ({code:?}): {diagnostic}"
-            )));
-        }
-    };
-    if credential.schema_version != 1 {
+    let credential = Box::pin(request_credential(&bundle, csr_pem)).await?;
+    if !matches!(credential.schema_version, 1 | 2)
+        || credential.predecessor_credential_id.is_some()
+        || credential.predecessor_retire_at.is_some()
+    {
         return Err(WorkerError::Session(
-            "controller returned an unsupported credential schema".into(),
+            "controller returned an invalid bootstrap credential".into(),
         ));
     }
     if certificate_public_key(&credential.certificate_chain_pem)? != key.public_key_der() {
@@ -753,10 +781,12 @@ pub async fn enroll(
         false,
     )?;
     let identity = ManagedWorkerIdentity {
-        schema_version: 1,
+        schema_version: 2,
         enrollment_id: bundle.enrollment_id,
         worker_id: credential.worker_id,
         credential_id: credential.credential_id,
+        predecessor_credential_id: None,
+        predecessor_retire_at: None,
         pool: credential.pool,
         tls: ClientTlsFiles {
             certificate: PathBuf::from("worker.pem"),
@@ -769,6 +799,262 @@ pub async fn enroll(
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     persist_exact(&identity_path, &bytes, false)?;
     Ok(identity)
+}
+
+/// Redeems a rotation authority using a fresh staged key and atomically switches managed identity.
+///
+/// A retry reuses the immutable staging directory and exact CSR. The predecessor identity and its
+/// key/certificate remain available for an explicit rollback during the controller-frozen overlap.
+///
+/// # Errors
+///
+/// Returns an error for mismatched authority, staging corruption, network rejection, or commit
+/// failure.
+#[expect(
+    clippy::too_many_lines,
+    reason = "rotation staging, exact replay, validation, and atomic cutover are one safety boundary"
+)]
+pub async fn rotate(
+    bundle: EnrollmentBundle,
+    state_directory: &Path,
+) -> Result<ManagedWorkerIdentity, WorkerError> {
+    let EnrollmentPurpose::Rotation {
+        worker_id,
+        predecessor_credential_id,
+    } = &bundle.purpose
+    else {
+        return Err(WorkerError::Configuration(
+            "rotate requires a credential rotation authority".into(),
+        ));
+    };
+    if bundle.schema_version != 2 {
+        return Err(WorkerError::Configuration(
+            "rotation authority schema is unsupported".into(),
+        ));
+    }
+    prepare_state_directory(state_directory)?;
+    let identity_path = state_directory.join("identity.json");
+    let predecessor_bytes =
+        fs::read(&identity_path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let predecessor: ManagedWorkerIdentity = serde_json::from_slice(&predecessor_bytes)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if predecessor.enrollment_id == bundle.enrollment_id {
+        if predecessor.worker_id != *worker_id
+            || predecessor.predecessor_credential_id != Some(*predecessor_credential_id)
+        {
+            return Err(WorkerError::Configuration(
+                "committed rotation identity contradicts the authority".into(),
+            ));
+        }
+        validate_managed_material(state_directory, &predecessor)?;
+        return Ok(predecessor);
+    }
+    if predecessor.worker_id != *worker_id
+        || predecessor.credential_id != *predecessor_credential_id
+    {
+        return Err(WorkerError::Configuration(
+            "rotation authority does not name the current managed credential".into(),
+        ));
+    }
+    validate_managed_material(state_directory, &predecessor)?;
+
+    let relative_directory =
+        PathBuf::from("rotations").join(bundle.enrollment_id.as_uuid().to_string());
+    let staging_directory = state_directory.join(&relative_directory);
+    prepare_state_directory(&staging_directory)?;
+    persist_exact(
+        &staging_directory.join("predecessor-identity.json"),
+        &predecessor_bytes,
+        false,
+    )?;
+    let key_path = staging_directory.join("worker-key.pem");
+    let key_pem = if key_path.exists() {
+        fs::read_to_string(&key_path)
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+    } else {
+        let generated = KeyPair::generate()
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+            .serialize_pem();
+        persist_exact(&key_path, generated.as_bytes(), true)?;
+        generated
+    };
+    let key = KeyPair::from_pem(&key_pem)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let csr_path = staging_directory.join("rotation.csr.pem");
+    let csr_pem = if csr_path.exists() {
+        fs::read_to_string(&csr_path)
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+    } else {
+        let mut params = CertificateParams::default();
+        let mut distinguished_name = DistinguishedName::new();
+        distinguished_name.push(DnType::CommonName, bundle.enrollment_id.to_string());
+        params.distinguished_name = distinguished_name;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let generated = params
+            .serialize_request(&key)
+            .and_then(|csr| csr.pem())
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        persist_exact(&csr_path, generated.as_bytes(), false)?;
+        generated
+    };
+    let parsed_csr = rcgen::CertificateSigningRequestParams::from_pem(&csr_pem)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if parsed_csr.public_key.der_bytes() != key.public_key_raw()
+        || parsed_csr.public_key.algorithm() != key.algorithm()
+    {
+        return Err(WorkerError::Configuration(
+            "staged rotation CSR does not match the staged private key".into(),
+        ));
+    }
+
+    let credential = Box::pin(request_credential(&bundle, csr_pem)).await?;
+    if credential.schema_version != 2
+        || credential.worker_id != *worker_id
+        || credential.pool != predecessor.pool
+        || credential.credential_id == *predecessor_credential_id
+        || credential.predecessor_credential_id != Some(*predecessor_credential_id)
+    {
+        return Err(WorkerError::Session(
+            "controller returned a rotation credential with contradictory lineage".into(),
+        ));
+    }
+    if certificate_public_key(&credential.certificate_chain_pem)? != key.public_key_der() {
+        return Err(WorkerError::Session(
+            "rotated certificate does not bind the staged private key".into(),
+        ));
+    }
+    persist_exact(
+        &staging_directory.join("worker.pem"),
+        credential.certificate_chain_pem.as_bytes(),
+        false,
+    )?;
+    persist_exact(
+        &staging_directory.join("ca.pem"),
+        bundle.endpoint.server_ca_pem.as_bytes(),
+        false,
+    )?;
+    let identity = ManagedWorkerIdentity {
+        schema_version: 2,
+        enrollment_id: bundle.enrollment_id,
+        worker_id: credential.worker_id,
+        credential_id: credential.credential_id,
+        predecessor_credential_id: credential.predecessor_credential_id,
+        predecessor_retire_at: credential.predecessor_retire_at,
+        pool: credential.pool,
+        tls: ClientTlsFiles {
+            certificate: relative_directory.join("worker.pem"),
+            private_key: relative_directory.join("worker-key.pem"),
+            server_ca: relative_directory.join("ca.pem"),
+            server_name: bundle.endpoint.server_name,
+        },
+    };
+    validate_managed_material(state_directory, &identity)?;
+    let identity_bytes = serde_json::to_vec_pretty(&identity)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    replace_exact(&identity_path, &identity_bytes, false)?;
+    Ok(identity)
+}
+
+/// Loads and redeems one rotation bundle.
+///
+/// # Errors
+///
+/// Returns an error for bundle decoding or rotation failure.
+pub async fn rotate_from_bundle(
+    bundle_path: &Path,
+    state_directory: &Path,
+) -> Result<ManagedWorkerIdentity, WorkerError> {
+    let bundle: EnrollmentBundle = serde_json::from_slice(
+        &fs::read(bundle_path).map_err(|error| WorkerError::Configuration(error.to_string()))?,
+    )
+    .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    Box::pin(rotate(bundle, state_directory)).await
+}
+
+/// Atomically restores the predecessor identity while its overlap window remains open.
+///
+/// # Errors
+///
+/// Returns an error when there is no rotation predecessor, the overlap elapsed, or staged material
+/// is inconsistent.
+pub fn rollback_rotation(state_directory: &Path) -> Result<ManagedWorkerIdentity, WorkerError> {
+    let identity_path = state_directory.join("identity.json");
+    let current: ManagedWorkerIdentity = serde_json::from_slice(
+        &fs::read(&identity_path).map_err(|error| WorkerError::Configuration(error.to_string()))?,
+    )
+    .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let predecessor_id = current.predecessor_credential_id.ok_or_else(|| {
+        WorkerError::Configuration("managed identity has no rotation predecessor".into())
+    })?;
+    let now = observed_now()?;
+    if current
+        .predecessor_retire_at
+        .is_some_and(|retire_at| now >= retire_at)
+    {
+        return Err(WorkerError::Configuration(
+            "credential rotation overlap has elapsed".into(),
+        ));
+    }
+    let predecessor_path = state_directory
+        .join("rotations")
+        .join(current.enrollment_id.as_uuid().to_string())
+        .join("predecessor-identity.json");
+    let predecessor_bytes = fs::read(&predecessor_path)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let predecessor: ManagedWorkerIdentity = serde_json::from_slice(&predecessor_bytes)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if predecessor.worker_id != current.worker_id
+        || predecessor.pool != current.pool
+        || predecessor.credential_id != predecessor_id
+    {
+        return Err(WorkerError::Configuration(
+            "staged predecessor identity contradicts current rotation lineage".into(),
+        ));
+    }
+    validate_managed_material(state_directory, &predecessor)?;
+    replace_exact(&identity_path, &predecessor_bytes, false)?;
+    Ok(predecessor)
+}
+
+async fn request_credential(
+    bundle: &EnrollmentBundle,
+    csr_pem: String,
+) -> Result<cairn_control_transport::IssuedWorkerCredential, WorkerError> {
+    let connecting = connect_enrollment_socket(
+        bundle.endpoint.tcp_address.as_str(),
+        &bundle.endpoint.websocket_uri,
+        &bundle.endpoint.server_name,
+        &bundle.endpoint.server_ca_pem,
+        bundle.transport,
+    );
+    let mut socket = timeout_optional(bundle.handshake_timeout_ms, connecting)
+        .await?
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+    write_wire_message(
+        &mut socket,
+        &EnrollmentRequest {
+            schema_version: 1,
+            enrollment_id: bundle.enrollment_id,
+            secret: bundle.secret.clone(),
+            csr_pem,
+        },
+        bundle.transport,
+    )
+    .await
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    let response = timeout_optional(
+        bundle.handshake_timeout_ms,
+        read_wire_message::<_, EnrollmentResponse>(&mut socket, bundle.transport),
+    )
+    .await?
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    match response {
+        EnrollmentResponse::Issued { credential } => Ok(credential),
+        EnrollmentResponse::Reject { code, diagnostic } => Err(WorkerError::Session(format!(
+            "enrollment rejected ({code:?}): {diagnostic}"
+        ))),
+    }
 }
 
 fn prepare_state_directory(path: &Path) -> Result<(), WorkerError> {
@@ -798,6 +1084,14 @@ fn validate_managed_material(
     state_directory: &Path,
     identity: &ManagedWorkerIdentity,
 ) -> Result<(), WorkerError> {
+    if !matches!(identity.schema_version, 1 | 2)
+        || identity.predecessor_retire_at.is_some() && identity.predecessor_credential_id.is_none()
+        || identity.predecessor_credential_id == Some(identity.credential_id)
+    {
+        return Err(WorkerError::Configuration(
+            "managed identity lifecycle metadata is invalid".into(),
+        ));
+    }
     let key_pem = fs::read_to_string(state_directory.join(&identity.tls.private_key))
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     let key = KeyPair::from_pem(&key_pem)
@@ -850,6 +1144,42 @@ fn persist_exact(path: &Path, bytes: &[u8], secret: bool) -> Result<(), WorkerEr
         .and_then(|()| file.sync_all())
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     fs::rename(&temporary, path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    sync_parent(path)?;
+    Ok(())
+}
+
+fn replace_exact(path: &Path, bytes: &[u8], secret: bool) -> Result<(), WorkerError> {
+    let suffix = CommandId::new().as_uuid();
+    let temporary = path.with_extension(format!("tmp-{suffix}"));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(if secret { 0o600 } else { 0o644 });
+    }
+    #[cfg(not(unix))]
+    let _ = secret;
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    fs::rename(&temporary, path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    sync_parent(path)
+}
+
+fn sync_parent(path: &Path) -> Result<(), WorkerError> {
+    #[cfg(unix)]
+    {
+        let parent = path.parent().ok_or_else(|| {
+            WorkerError::Configuration("managed identity path has no parent".into())
+        })?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    }
     Ok(())
 }
 
