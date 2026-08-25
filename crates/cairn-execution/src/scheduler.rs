@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, io::Cursor};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Cursor,
+};
 
 use cairn_protocol::{
     AggregateId, AggregateKind, AssignmentId, AttemptId, CommandId, ContentId, ContentType,
@@ -13,12 +16,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    AssignmentControlError, AssignmentLeaseGrant, ExecutionAssignmentState,
+    AcceleratorDeviceId, AssignmentControlError, AssignmentLeaseGrant, ExecutionAssignmentState,
     ExecutionAttemptAuthority, JobContract, JobContractArtifact, LeasedExecutionAssignment,
-    RegisteredWorkerSession, ReservationClaimTimeoutMillis, WorkerAvailabilityArtifact,
-    WorkerControlError, WorkerMatchFailure, WorkerProfileArtifact, WorkerSessionState,
-    WorkerSessionTimeoutMillis, grant_assignment_lease, match_worker_at,
-    recover_execution_assignment, recover_worker_session,
+    LogicalCpuCount, MemoryByteCount, QuantitativeResourceRequest, RegisteredWorkerSession,
+    ReservationClaimTimeoutMillis, ScratchByteCount, WorkerAvailabilityArtifact,
+    WorkerControlError, WorkerMatchFailure, WorkerProfileArtifact, WorkerResourceObservation,
+    WorkerResourceObservationArtifact, WorkerSessionState, WorkerSessionTimeoutMillis,
+    grant_assignment_lease, match_worker_at, recover_execution_assignment, recover_worker_session,
 };
 
 const PLACEMENT_RECORDED: &str = "execution.placement-recorded";
@@ -27,15 +31,17 @@ const RESERVATION_RELEASED: &str = "execution.placement-reservation-released";
 /// Immutable content domain for a complete scheduler candidate evaluation.
 pub struct PlacementSnapshotArtifact;
 impl ContentType for PlacementSnapshotArtifact {
-    const DOMAIN: &'static str = "execution.placement-snapshot.v1";
+    const DOMAIN: &'static str = "execution.placement-snapshot.v2";
 }
 
 /// Deterministic scheduler algorithm frozen into each placement snapshot.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SchedulerPolicyVersion {
-    /// Canonical candidate filtering followed by ascending stable `WorkerId`.
+    /// Historical slot-only policy retained only for explicit pre-public rejection/migration.
     StableWorkerIdV1,
+    /// Canonical filtering, quantitative reservation, then ascending stable `WorkerId`.
+    StableWorkerIdQuantitativeV2,
 }
 
 /// Configurable scheduler policy that separates liveness and orphan-claim timing.
@@ -158,6 +164,56 @@ pub enum PlacementCandidateRejection {
     WorkerMismatch(WorkerMatchFailure),
     /// Existing durable reservations consume all registered capacity.
     CapacityReserved,
+    /// Existing durable reservations consume requested quantitative resources.
+    QuantitativeCapacityReserved,
+}
+
+/// Exact quantities and device identities consumed by one durable scheduler reservation.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReservedWorkerResources {
+    logical_cpus: Option<LogicalCpuCount>,
+    memory_bytes: Option<MemoryByteCount>,
+    scratch_bytes: Option<ScratchByteCount>,
+    accelerator_device_ids: Vec<AcceleratorDeviceId>,
+}
+
+impl ReservedWorkerResources {
+    /// Returns reserved logical CPUs, or `None` when the contract did not request them.
+    #[must_use]
+    pub const fn logical_cpus(&self) -> Option<LogicalCpuCount> {
+        self.logical_cpus
+    }
+
+    /// Returns reserved memory bytes, or `None` when the contract did not request them.
+    #[must_use]
+    pub const fn memory_bytes(&self) -> Option<MemoryByteCount> {
+        self.memory_bytes
+    }
+
+    /// Returns reserved scratch bytes, or `None` when the contract did not request them.
+    #[must_use]
+    pub const fn scratch_bytes(&self) -> Option<ScratchByteCount> {
+        self.scratch_bytes
+    }
+
+    /// Returns canonical accelerator device identities exclusively held by the reservation.
+    #[must_use]
+    pub fn accelerator_device_ids(&self) -> &[AcceleratorDeviceId] {
+        &self.accelerator_device_ids
+    }
+
+    fn validate(&self) -> Result<(), SchedulerError> {
+        if self
+            .accelerator_device_ids
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            invalid_history("reserved accelerator devices are not canonical")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Explainable result of evaluating one canonical candidate.
@@ -174,6 +230,8 @@ pub enum CandidateDisposition {
         active_reservations: u16,
         /// Reservations not yet reflected in the worker's active-attempt heartbeat set.
         unreflected_reservations: u16,
+        /// Exact quantitative resources this candidate would reserve.
+        quantitative_reservation: ReservedWorkerResources,
     },
     /// Candidate failed one deterministic gate.
     Rejected {
@@ -190,6 +248,9 @@ pub struct PlacementCandidateSnapshot {
     incarnation_id: Option<WorkerIncarnationId>,
     credential_id: Option<CredentialId>,
     profile_id: Option<ContentId<WorkerProfileArtifact>>,
+    resource_observation_id: Option<ContentId<WorkerResourceObservationArtifact>>,
+    resource_observation_revision: Option<EventId>,
+    resource_admission_revision: Option<EventId>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     last_seen_at: Option<ObservedAtUnixMillis>,
     authority_revision: Option<EventId>,
@@ -267,9 +328,13 @@ struct ReservationBinding {
     worker_incarnation_id: WorkerIncarnationId,
     credential_id: CredentialId,
     worker_profile_id: ContentId<WorkerProfileArtifact>,
+    worker_resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
+    worker_resource_observation_revision: EventId,
+    worker_resource_admission_revision: Option<EventId>,
     worker_availability_id: ContentId<WorkerAvailabilityArtifact>,
     worker_last_seen_at: ObservedAtUnixMillis,
     claim_deadline: ObservedAtUnixMillis,
+    resources: ReservedWorkerResources,
 }
 
 /// Auditable result of one immutable placement attempt.
@@ -369,6 +434,9 @@ pub enum SchedulerError {
     /// Candidate identities must form a canonical set.
     #[error("scheduler candidate worker identities contain a duplicate")]
     DuplicateCandidate,
+    /// Historical scheduler algorithms are never silently reinterpreted.
+    #[error("scheduler policy version is unsupported by the quantitative ledger")]
+    UnsupportedPolicy,
     /// One execution attempt cannot consume capacity through parallel placement decisions.
     #[error("execution attempt already has an active scheduler reservation")]
     AttemptAlreadyReserved,
@@ -444,7 +512,13 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<PlacementOutcome, SchedulerError> {
+    if policy.version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV2 {
+        return Err(SchedulerError::UnsupportedPolicy);
+    }
     let ledger = project_ledger(events)?;
+    for existing in ledger.placements.values() {
+        validate_record_snapshot(content, existing)?;
+    }
     let mut candidates = candidate_worker_ids.to_vec();
     candidates.sort();
     if candidates.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -481,7 +555,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
     if active_by_worker
         .values()
         .flatten()
-        .any(|reserved_attempt| *reserved_attempt == attempt_id)
+        .any(|reservation| reservation.attempt_id == attempt_id)
     {
         return Err(SchedulerError::AttemptAlreadyReserved);
     }
@@ -504,6 +578,9 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 incarnation_id: Some(incarnation_id),
                 credential_id: None,
                 profile_id: None,
+                resource_observation_id: None,
+                resource_observation_revision: None,
+                resource_admission_revision: None,
                 availability_id: None,
                 last_seen_at: None,
                 authority_revision: None,
@@ -516,6 +593,9 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 incarnation_id: Some(incarnation_id),
                 credential_id: None,
                 profile_id: None,
+                resource_observation_id: None,
+                resource_observation_revision: None,
+                resource_admission_revision: None,
                 availability_id: None,
                 last_seen_at: None,
                 authority_revision: None,
@@ -542,7 +622,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
             .then_some(entry.worker_id)
     });
     let snapshot = PlacementSnapshot {
-        schema_version: 1,
+        schema_version: 2,
         placement_id,
         attempt_id,
         contract_id,
@@ -558,6 +638,24 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
             let session = sessions.get(&worker_id).ok_or_else(|| {
                 SchedulerError::InvalidHistory("eligible candidate lost its exact session".into())
             })?;
+            let selected = snapshot
+                .candidates
+                .iter()
+                .find(|candidate| candidate.worker_id == worker_id)
+                .ok_or_else(|| {
+                    SchedulerError::InvalidHistory(
+                        "eligible candidate is absent from its snapshot".into(),
+                    )
+                })?;
+            let CandidateDisposition::Eligible {
+                quantitative_reservation,
+                ..
+            } = &selected.disposition
+            else {
+                return Err(SchedulerError::InvalidHistory(
+                    "selected candidate is not eligible".into(),
+                ));
+            };
             let availability_id = session.availability_id().ok_or_else(|| {
                 SchedulerError::InvalidHistory(
                     "eligible worker has no availability identity".into(),
@@ -579,9 +677,13 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 worker_incarnation_id: session.incarnation_id(),
                 credential_id: session.credential_id(),
                 worker_profile_id: session.profile_id(),
+                worker_resource_observation_id: session.resource_observation_id(),
+                worker_resource_observation_revision: session.resource_observation_revision(),
+                worker_resource_admission_revision: session.resource_admission_revision(),
                 worker_availability_id: availability_id,
                 worker_last_seen_at: session.last_seen_at(),
                 claim_deadline,
+                resources: quantitative_reservation.clone(),
             })
         })
         .transpose()?;
@@ -674,6 +776,10 @@ pub fn grant_reserved_assignment<E: EventStore, C: ContentStore, A: WorkerPlacem
     if worker.incarnation_id() != reservation.worker_incarnation_id
         || worker.credential_id() != reservation.credential_id
         || worker.profile_id() != reservation.worker_profile_id
+        || worker.resource_observation_id() != reservation.worker_resource_observation_id
+        || worker.resource_observation_revision()
+            != reservation.worker_resource_observation_revision
+        || worker.resource_admission_revision() != reservation.worker_resource_admission_revision
         || worker.availability_id() != Some(reservation.worker_availability_id)
         || worker.last_seen_at() != reservation.worker_last_seen_at
     {
@@ -793,13 +899,13 @@ fn evaluate_live_candidate<A: WorkerPlacementAuthority>(
     contract: &JobContract,
     authority: &A,
     observed_at: ObservedAtUnixMillis,
-    reserved_attempts: &[AttemptId],
+    active_reservations: &[ActiveWorkerReservation],
     sessions: &mut BTreeMap<WorkerId, RegisteredWorkerSession>,
 ) -> Result<PlacementCandidateSnapshot, SchedulerError> {
     let worker_id = session.worker_id();
     let authority_observation =
         authority.observe_credential_authority(worker_id, session.credential_id(), observed_at)?;
-    let mut disposition = if !authority_observation.active() {
+    let disposition = if !authority_observation.active() {
         CandidateDisposition::Rejected {
             reason: PlacementCandidateRejection::AuthorityInactive,
         }
@@ -813,69 +919,59 @@ fn evaluate_live_candidate<A: WorkerPlacementAuthority>(
             SchedulerError::InvalidHistory("matching worker lost its availability evidence".into())
         })?;
         let reported_available_slots = availability.available_slots();
-        let active_reservations = u16::try_from(reserved_attempts.len()).map_err(|_| {
+        let active_reservation_count = u16::try_from(active_reservations.len()).map_err(|_| {
             SchedulerError::InvalidHistory("active reservation count exceeds u16".into())
         })?;
         let unreflected_reservations = u16::try_from(
-            reserved_attempts
+            active_reservations
                 .iter()
-                .filter(|attempt_id| !availability.active_attempts().contains(attempt_id))
+                .filter(|reservation| {
+                    !availability
+                        .active_attempts()
+                        .contains(&reservation.attempt_id)
+                })
                 .count(),
         )
         .map_err(|_| {
             SchedulerError::InvalidHistory("unreflected reservation count exceeds u16".into())
         })?;
-        if active_reservations >= registered_slots
+        if active_reservation_count >= registered_slots
             || reported_available_slots == 0
-            || registered_slots.saturating_sub(active_reservations) == 0
+            || registered_slots.saturating_sub(active_reservation_count) == 0
             || reported_available_slots.saturating_sub(unreflected_reservations) == 0
         {
             CandidateDisposition::Rejected {
                 reason: PlacementCandidateRejection::CapacityReserved,
             }
-        } else {
+        } else if let Some(quantitative_reservation) = plan_quantitative_reservation(
+            session.resource_observation(),
+            contract.resources().quantitative(),
+            active_reservations,
+        )? {
             CandidateDisposition::Eligible {
                 registered_slots,
                 reported_available_slots,
-                active_reservations,
+                active_reservations: active_reservation_count,
                 unreflected_reservations,
+                quantitative_reservation,
+            }
+        } else {
+            CandidateDisposition::Rejected {
+                reason: PlacementCandidateRejection::QuantitativeCapacityReserved,
             }
         }
     };
     if matches!(disposition, CandidateDisposition::Eligible { .. }) {
         sessions.insert(worker_id, session.clone());
     }
-    // A matching worker with reported availability may still have all controller-owned slots
-    // reserved. Keep this scheduler reason distinct from the worker's advisory NoCapacity reason.
-    if let CandidateDisposition::Eligible {
-        registered_slots,
-        reported_available_slots,
-        active_reservations,
-        unreflected_reservations,
-    } = disposition
-    {
-        let effective = registered_slots
-            .saturating_sub(active_reservations)
-            .min(reported_available_slots.saturating_sub(unreflected_reservations));
-        if effective == 0 {
-            sessions.remove(&worker_id);
-            disposition = CandidateDisposition::Rejected {
-                reason: PlacementCandidateRejection::CapacityReserved,
-            };
-        } else {
-            disposition = CandidateDisposition::Eligible {
-                registered_slots,
-                reported_available_slots,
-                active_reservations,
-                unreflected_reservations,
-            };
-        }
-    }
     Ok(PlacementCandidateSnapshot {
         worker_id,
         incarnation_id: Some(session.incarnation_id()),
         credential_id: Some(session.credential_id()),
         profile_id: Some(session.profile_id()),
+        resource_observation_id: Some(session.resource_observation_id()),
+        resource_observation_revision: Some(session.resource_observation_revision()),
+        resource_admission_revision: session.resource_admission_revision(),
         availability_id: session.availability_id(),
         last_seen_at: Some(session.last_seen_at()),
         authority_revision: authority_observation.evidence_revision(),
@@ -892,6 +988,9 @@ fn rejected(
         incarnation_id: None,
         credential_id: None,
         profile_id: None,
+        resource_observation_id: None,
+        resource_observation_revision: None,
+        resource_admission_revision: None,
         availability_id: None,
         last_seen_at: None,
         authority_revision: None,
@@ -899,31 +998,133 @@ fn rejected(
     }
 }
 
+#[derive(Clone)]
+struct ActiveWorkerReservation {
+    attempt_id: AttemptId,
+    resources: ReservedWorkerResources,
+}
+
 fn active_reservations_by_worker(
     ledger: &LedgerProjection,
-) -> Result<BTreeMap<WorkerId, Vec<AttemptId>>, SchedulerError> {
-    let mut attempts = BTreeMap::<WorkerId, Vec<AttemptId>>::new();
+) -> Result<BTreeMap<WorkerId, Vec<ActiveWorkerReservation>>, SchedulerError> {
+    let mut attempts = BTreeMap::<WorkerId, Vec<ActiveWorkerReservation>>::new();
     for (reservation_id, placement) in &ledger.reservations {
         if ledger.released.contains_key(reservation_id) {
             continue;
         }
-        let worker_id = placement
+        let binding = placement
             .reservation
             .as_ref()
-            .ok_or_else(|| SchedulerError::InvalidHistory("reservation index is invalid".into()))?
-            .worker_id;
+            .ok_or_else(|| SchedulerError::InvalidHistory("reservation index is invalid".into()))?;
         attempts
-            .entry(worker_id)
+            .entry(binding.worker_id)
             .or_default()
-            .push(placement.attempt_id);
+            .push(ActiveWorkerReservation {
+                attempt_id: placement.attempt_id,
+                resources: binding.resources.clone(),
+            });
     }
     for reserved_attempts in attempts.values_mut() {
-        reserved_attempts.sort();
-        if reserved_attempts.windows(2).any(|pair| pair[0] == pair[1]) {
+        reserved_attempts.sort_by_key(|reservation| reservation.attempt_id);
+        if reserved_attempts
+            .windows(2)
+            .any(|pair| pair[0].attempt_id == pair[1].attempt_id)
+        {
             return invalid_history("attempt has parallel active reservations");
         }
     }
     Ok(attempts)
+}
+
+fn plan_quantitative_reservation(
+    observed: &WorkerResourceObservation,
+    requested: &QuantitativeResourceRequest,
+    active: &[ActiveWorkerReservation],
+) -> Result<Option<ReservedWorkerResources>, SchedulerError> {
+    let consumed_logical = checked_consumed(active, |value| value.logical_cpus)?;
+    let consumed_memory = checked_consumed(active, |value| value.memory_bytes)?;
+    let consumed_scratch = checked_consumed(active, |value| value.scratch_bytes)?;
+    if !fits(
+        observed.logical_cpus().get(),
+        consumed_logical,
+        requested.minimum_logical_cpus().map(LogicalCpuCount::get),
+    ) || !fits(
+        observed.memory_bytes().get(),
+        consumed_memory,
+        requested.minimum_memory_bytes().map(MemoryByteCount::get),
+    ) || !fits(
+        observed.scratch_available_bytes().get(),
+        consumed_scratch,
+        requested.minimum_scratch_bytes().map(ScratchByteCount::get),
+    ) {
+        return Ok(None);
+    }
+    let mut used_devices = BTreeSet::new();
+    for reservation in active {
+        for device_id in &reservation.resources.accelerator_device_ids {
+            if !used_devices.insert(device_id.clone()) {
+                return invalid_history("accelerator device has parallel active reservations");
+            }
+        }
+    }
+    if used_devices.iter().any(|reserved_id| {
+        !observed
+            .accelerators()
+            .iter()
+            .any(|device| device.device_id() == reserved_id)
+    }) {
+        return Ok(None);
+    }
+    let mut accelerator_device_ids = Vec::new();
+    if let Some(accelerator) = requested.accelerator() {
+        for device in observed.accelerators() {
+            if used_devices.contains(device.device_id())
+                || !accelerator.capabilities().iter().all(|required| {
+                    device.capabilities().iter().any(|available| {
+                        available.name == required.name && available.value == required.value
+                    })
+                })
+            {
+                continue;
+            }
+            accelerator_device_ids.push(device.device_id().clone());
+            if u64::try_from(accelerator_device_ids.len()).unwrap_or(u64::MAX)
+                == accelerator.minimum_devices().get()
+            {
+                break;
+            }
+        }
+        if u64::try_from(accelerator_device_ids.len()).unwrap_or(u64::MAX)
+            < accelerator.minimum_devices().get()
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(ReservedWorkerResources {
+        logical_cpus: requested.minimum_logical_cpus(),
+        memory_bytes: requested.minimum_memory_bytes(),
+        scratch_bytes: requested.minimum_scratch_bytes(),
+        accelerator_device_ids,
+    }))
+}
+
+fn checked_consumed<T>(
+    active: &[ActiveWorkerReservation],
+    select: impl Fn(&ReservedWorkerResources) -> Option<T>,
+) -> Result<u64, SchedulerError>
+where
+    T: Into<u64>,
+{
+    active.iter().try_fold(0_u64, |total, reservation| {
+        let quantity = select(&reservation.resources).map_or(0, Into::into);
+        total
+            .checked_add(quantity)
+            .ok_or_else(|| SchedulerError::InvalidHistory("reserved quantity overflowed".into()))
+    })
+}
+
+fn fits(total: u64, consumed: u64, requested: Option<u64>) -> bool {
+    consumed <= total && requested.unwrap_or(0) <= total - consumed
 }
 
 fn outcome(record: PlacementRecord) -> PlacementOutcome {
@@ -958,18 +1159,109 @@ fn validate_record_snapshot<C: ContentStore>(
             .ok_or_else(|| {
                 SchedulerError::InvalidHistory("selected worker is absent from snapshot".into())
             })?;
-        if !matches!(selected.disposition, CandidateDisposition::Eligible { .. })
+        let CandidateDisposition::Eligible {
+            quantitative_reservation,
+            ..
+        } = &selected.disposition
+        else {
+            return invalid_history("selected candidate is not eligible");
+        };
+        if quantitative_reservation != &reservation.resources
             || selected.incarnation_id != Some(reservation.worker_incarnation_id)
             || selected.credential_id != Some(reservation.credential_id)
             || selected.profile_id != Some(reservation.worker_profile_id)
+            || selected.resource_observation_id != Some(reservation.worker_resource_observation_id)
+            || selected.resource_observation_revision
+                != Some(reservation.worker_resource_observation_revision)
+            || selected.resource_admission_revision
+                != reservation.worker_resource_admission_revision
             || selected.availability_id != Some(reservation.worker_availability_id)
             || selected.last_seen_at != Some(reservation.worker_last_seen_at)
             || reservation.claim_deadline <= snapshot.observed_at
         {
             return invalid_history("reservation contradicts selected candidate evidence");
         }
+        validate_reserved_resources(
+            content,
+            record.contract_id,
+            reservation,
+            snapshot.observed_at,
+        )?;
     }
     Ok(snapshot)
+}
+
+fn validate_reserved_resources<C: ContentStore>(
+    content: &C,
+    contract_id: ContentId<JobContractArtifact>,
+    reservation: &ReservationBinding,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), SchedulerError> {
+    let mut contract_bytes = Vec::new();
+    content.write_to(&contract_id, &mut contract_bytes)?;
+    let contract: JobContract = cairn_codec::from_slice(&contract_bytes)
+        .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?;
+    contract
+        .validate()
+        .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?;
+    let requested = contract.resources().quantitative();
+    if reservation.resources.logical_cpus != requested.minimum_logical_cpus()
+        || reservation.resources.memory_bytes != requested.minimum_memory_bytes()
+        || reservation.resources.scratch_bytes != requested.minimum_scratch_bytes()
+    {
+        return invalid_history("reserved quantities differ from the frozen contract");
+    }
+    let mut observation_bytes = Vec::new();
+    content.write_to(
+        &reservation.worker_resource_observation_id,
+        &mut observation_bytes,
+    )?;
+    let observation: WorkerResourceObservation = cairn_codec::from_slice(&observation_bytes)
+        .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?;
+    if observed_at < observation.observed_at()
+        || observation
+            .valid_until()
+            .is_some_and(|valid_until| observed_at >= valid_until)
+        || requested
+            .minimum_logical_cpus()
+            .is_some_and(|value| value > observation.logical_cpus())
+        || requested
+            .minimum_memory_bytes()
+            .is_some_and(|value| value > observation.memory_bytes())
+        || requested
+            .minimum_scratch_bytes()
+            .is_some_and(|value| value > observation.scratch_available_bytes())
+    {
+        return invalid_history("reservation cites insufficient or stale resource evidence");
+    }
+    match requested.accelerator() {
+        None if reservation.resources.accelerator_device_ids.is_empty() => Ok(()),
+        Some(accelerator)
+            if u64::try_from(reservation.resources.accelerator_device_ids.len())
+                .unwrap_or(u64::MAX)
+                == accelerator.minimum_devices().get()
+                && reservation
+                    .resources
+                    .accelerator_device_ids
+                    .iter()
+                    .all(|reserved_id| {
+                        observation.accelerators().iter().any(|device| {
+                            device.device_id() == reserved_id
+                                && accelerator.capabilities().iter().all(|required| {
+                                    device.capabilities().iter().any(|available| {
+                                        available.name == required.name
+                                            && available.value == required.value
+                                    })
+                                })
+                        })
+                    }) =>
+        {
+            Ok(())
+        }
+        None | Some(_) => {
+            invalid_history("reserved accelerator devices differ from the contract or observation")
+        }
+    }
 }
 
 fn ensure_assignment_matches(
@@ -1013,13 +1305,23 @@ fn verify_contract<C: ContentStore>(
 }
 
 fn validate_snapshot(snapshot: &PlacementSnapshot) -> Result<(), SchedulerError> {
-    if snapshot.schema_version != 1
+    if snapshot.schema_version != 2
+        || snapshot.policy.version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV2
         || snapshot
             .candidates
             .windows(2)
             .any(|pair| pair[0].worker_id >= pair[1].worker_id)
     {
         return invalid_history("placement snapshot schema or candidate order is invalid");
+    }
+    for candidate in &snapshot.candidates {
+        if let CandidateDisposition::Eligible {
+            quantitative_reservation,
+            ..
+        } = &candidate.disposition
+        {
+            quantitative_reservation.validate()?;
+        }
     }
     let expected = snapshot.candidates.iter().find_map(|entry| {
         matches!(entry.disposition, CandidateDisposition::Eligible { .. })
@@ -1063,7 +1365,7 @@ fn project_ledger(events: &impl EventStore) -> Result<LedgerProjection, Schedule
         last_observed_at: None,
     };
     for event in history {
-        if event.schema_version.get() != 1 || event.parent_event_id != projection.last_event_id {
+        if event.schema_version.get() != 2 || event.parent_event_id != projection.last_event_id {
             return invalid_history("scheduler event schema or causal parent differs");
         }
         let observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
@@ -1084,6 +1386,7 @@ fn project_ledger(events: &impl EventStore) -> Result<LedgerProjection, Schedule
                     return invalid_history("placement identity was recorded twice");
                 }
                 if let Some(reservation) = &payload.record.reservation {
+                    reservation.resources.validate()?;
                     if reservation.claim_deadline <= observed_at
                         || projection
                             .reservations
@@ -1134,7 +1437,7 @@ fn fact<T: Serialize>(
     Ok(NewEvent {
         schema_name: SchemaName::new(schema)
             .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(1)
+        schema_version: SchemaVersion::new(2)
             .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?,
         parent_event_id,
         observed_at_unix_ms: observed_at.get(),
@@ -1223,6 +1526,10 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_quantitative(QuantitativeResourceRequest::default())
+        }
+
+        fn with_quantitative(quantitative: QuantitativeResourceRequest) -> Self {
             let directory = tempfile::tempdir().expect("tempdir");
             let content_database = directory.path().join("content.db");
             let event_database = directory.path().join("events.db");
@@ -1243,7 +1550,7 @@ mod tests {
                     Vec::new(),
                     SandboxPath::new("work").expect("working directory"),
                 ),
-                ResourceRequest::new(
+                ResourceRequest::new_with_quantitative(
                     ExecutionTimeoutMillis::new(1_000).expect("timeout"),
                     PlacementRequest::new(
                         ExecutionPlatformRequirement::new(
@@ -1255,6 +1562,7 @@ mod tests {
                         Vec::new(),
                     )
                     .expect("placement"),
+                    quantitative,
                 )
                 .expect("resources"),
                 NetworkPolicy::Disabled,
@@ -1287,6 +1595,15 @@ mod tests {
         }
 
         fn register(&mut self, worker_id: WorkerId, observed_at: i64) -> RegisteredWorkerSession {
+            self.register_with_slots(worker_id, observed_at, 1)
+        }
+
+        fn register_with_slots(
+            &mut self,
+            worker_id: WorkerId,
+            observed_at: i64,
+            slots: u16,
+        ) -> RegisteredWorkerSession {
             let profile = WorkerProfile::new(
                 WorkerProtocolVersion::new(1).expect("protocol"),
                 WorkerBinaryIdentity::new(format!("sha256:{worker_id}")).expect("binary"),
@@ -1305,7 +1622,7 @@ mod tests {
                     )],
                     Vec::new(),
                     crate::worker::test_resource_observation(observed_at),
-                    WorkerSlotCount::new(1).expect("slots"),
+                    WorkerSlotCount::new(slots).expect("slots"),
                 )
                 .expect("resources"),
             )
@@ -1334,7 +1651,7 @@ mod tests {
                 &mut self.events,
                 &mut self.content,
                 &registered,
-                &WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+                &WorkerAvailability::new(WorkerHealth::Ready, false, slots, Vec::new())
                     .expect("availability"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(observed_at + 1),
@@ -1371,7 +1688,7 @@ mod tests {
 
     fn scheduler_policy() -> SchedulerPolicy {
         SchedulerPolicy::new(
-            SchedulerPolicyVersion::StableWorkerIdV1,
+            SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
             session_timeout(),
             ReservationClaimTimeoutMillis::new(10).expect("claim timeout"),
         )
@@ -1604,10 +1921,232 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_sqlite_placements_cannot_reserve_one_slot_twice() {
+    fn quantitative_reservations_are_additive_and_devices_are_exclusive() {
+        let device = |id: &str| {
+            crate::AcceleratorDevice::new(
+                AcceleratorDeviceId::new(id).expect("device ID"),
+                Vec::new(),
+            )
+            .expect("device")
+        };
+        let observed = WorkerResourceObservation::new(
+            WorkerResourceSource::BuiltinProbe,
+            crate::ResourceProbeVersion::new("fixture-probe-v1").expect("probe version"),
+            ObservedAtUnixMillis::new(0),
+            None,
+            LogicalCpuCount::new(8).expect("CPUs"),
+            MemoryByteCount::new(16_000).expect("memory"),
+            ScratchByteCount::new(64_000).expect("scratch"),
+            crate::AcceleratorDiscoveryCompleteness::Complete,
+            vec![device("accel0"), device("accel1")],
+        )
+        .expect("observation");
+        let request = QuantitativeResourceRequest::new(
+            Some(LogicalCpuCount::new(5).expect("CPUs")),
+            Some(MemoryByteCount::new(10_000).expect("memory")),
+            Some(ScratchByteCount::new(40_000).expect("scratch")),
+            Some(
+                crate::AcceleratorResourceRequest::new(
+                    crate::AcceleratorDeviceCount::new(1).expect("device count"),
+                    Vec::new(),
+                )
+                .expect("accelerator request"),
+            ),
+            true,
+        );
+        let first = plan_quantitative_reservation(&observed, &request, &[])
+            .expect("plan")
+            .expect("capacity");
+        assert_eq!(first.accelerator_device_ids()[0].as_str(), "accel0");
+        let active = [ActiveWorkerReservation {
+            attempt_id: AttemptId::new(),
+            resources: first,
+        }];
+        assert_eq!(
+            plan_quantitative_reservation(&observed, &request, &active).expect("plan"),
+            None
+        );
+
+        let devices = QuantitativeResourceRequest::new(
+            None,
+            None,
+            None,
+            Some(
+                crate::AcceleratorResourceRequest::new(
+                    crate::AcceleratorDeviceCount::new(2).expect("device count"),
+                    Vec::new(),
+                )
+                .expect("accelerator request"),
+            ),
+            true,
+        );
+        assert_eq!(
+            plan_quantitative_reservation(&observed, &devices, &active).expect("plan"),
+            None
+        );
+    }
+
+    #[test]
+    fn durable_quantitative_reservation_blocks_then_release_restores_capacity() {
+        let quantitative = QuantitativeResourceRequest::new(
+            Some(LogicalCpuCount::new(5).expect("CPUs")),
+            None,
+            None,
+            None,
+            false,
+        );
+        let mut fixture = Fixture::with_quantitative(quantitative);
+        let worker_id = WorkerId::new();
+        fixture.register_with_slots(worker_id, 0, 4);
+        let authority = ToggleAuthority::active();
+        let reservation_id = ReservationId::new();
+        let first = selected(
+            reserve_worker_placement(
+                &mut fixture.events,
+                &mut fixture.content,
+                AttemptId::new(),
+                fixture.prepared.contract_id(),
+                &fixture.contract,
+                &[worker_id],
+                &authority,
+                scheduler_policy(),
+                PlacementId::new(),
+                reservation_id,
+                assignment_grant(),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(2),
+            )
+            .expect("first reservation"),
+        );
+        let snapshot = read_snapshot(&fixture.content, first.snapshot_id()).expect("snapshot");
+        assert!(matches!(
+            snapshot.candidates()[0].disposition(),
+            CandidateDisposition::Eligible {
+                quantitative_reservation,
+                ..
+            } if quantitative_reservation.logical_cpus().map(LogicalCpuCount::get) == Some(5)
+        ));
+        let second = reserve_worker_placement(
+            &mut fixture.events,
+            &mut fixture.content,
+            AttemptId::new(),
+            fixture.prepared.contract_id(),
+            &fixture.contract,
+            &[worker_id],
+            &authority,
+            scheduler_policy(),
+            PlacementId::new(),
+            ReservationId::new(),
+            assignment_grant(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(3),
+        )
+        .expect("second decision");
+        let PlacementOutcome::NoCandidate(second) = second else {
+            panic!("quantitative capacity must be reserved");
+        };
+        let snapshot = read_snapshot(&fixture.content, second.snapshot_id()).expect("snapshot");
+        assert!(matches!(
+            snapshot.candidates()[0].disposition(),
+            CandidateDisposition::Rejected {
+                reason: PlacementCandidateRejection::QuantitativeCapacityReserved
+            }
+        ));
+        assert_eq!(
+            release_scheduler_reservation(
+                &mut fixture.events,
+                &fixture.content,
+                reservation_id,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(12),
+            )
+            .expect("release"),
+            ReservationReleaseReason::Unclaimed
+        );
+        assert!(matches!(
+            reserve_worker_placement(
+                &mut fixture.events,
+                &mut fixture.content,
+                AttemptId::new(),
+                fixture.prepared.contract_id(),
+                &fixture.contract,
+                &[worker_id],
+                &authority,
+                scheduler_policy(),
+                PlacementId::new(),
+                ReservationId::new(),
+                assignment_grant(),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(13),
+            )
+            .expect("capacity restored"),
+            PlacementOutcome::Selected(_)
+        ));
+    }
+
+    #[test]
+    fn resource_refresh_between_reservation_and_grant_fails_closed() {
         let mut fixture = Fixture::new();
         let worker_id = WorkerId::new();
-        fixture.register(worker_id, 0);
+        let worker = fixture.register(worker_id, 0);
+        let authority = ToggleAuthority::active();
+        let attempt_id = AttemptId::new();
+        let grant = assignment_grant();
+        let record = selected(
+            reserve_worker_placement(
+                &mut fixture.events,
+                &mut fixture.content,
+                attempt_id,
+                fixture.prepared.contract_id(),
+                &fixture.contract,
+                &[worker_id],
+                &authority,
+                scheduler_policy(),
+                PlacementId::new(),
+                ReservationId::new(),
+                grant,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(2),
+            )
+            .expect("reserve"),
+        );
+        crate::record_worker_resource_observation(
+            &mut fixture.events,
+            &mut fixture.content,
+            &worker,
+            &crate::worker::test_resource_observation(3),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(3),
+        )
+        .expect("resource refresh");
+        let execution_authority = fixture.authorize(attempt_id, 4);
+        assert!(matches!(
+            grant_reserved_assignment(
+                &mut fixture.events,
+                &fixture.content,
+                execution_authority,
+                &record,
+                grant,
+                &authority,
+                session_timeout(),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(5),
+            ),
+            Err(SchedulerError::StaleCandidate)
+        ));
+    }
+
+    #[test]
+    fn concurrent_sqlite_placements_cannot_overcommit_quantitative_capacity() {
+        let mut fixture = Fixture::with_quantitative(QuantitativeResourceRequest::new(
+            Some(LogicalCpuCount::new(5).expect("CPUs")),
+            None,
+            None,
+            None,
+            false,
+        ));
+        let worker_id = WorkerId::new();
+        fixture.register_with_slots(worker_id, 0, 2);
         let content_database = fixture.content_database.clone();
         let event_database = fixture.event_database.clone();
         let cas = fixture.cas.clone();
@@ -1653,7 +2192,10 @@ mod tests {
             .map(|handle| handle.join().expect("scheduler thread"))
             .filter(|selected| *selected)
             .count();
-        assert_eq!(selected, 1, "one registered slot admits one reservation");
+        assert_eq!(
+            selected, 1,
+            "eight observed CPUs cannot admit two five-CPU reservations"
+        );
     }
 
     #[test]

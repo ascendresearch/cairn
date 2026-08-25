@@ -24,8 +24,10 @@ pub struct ResourceProbeConfig {
     pub scratch_path: PathBuf,
     /// `null` disables accelerator discovery and records a partial observation.
     pub accelerator_sysfs: Option<PathBuf>,
-    /// `null` gives the immutable process-start observation no time expiry.
+    /// `null` gives resource observations no time expiry during the worker incarnation.
     pub freshness_ms: Option<NonZeroU64>,
+    /// `null` disables dynamic refresh; otherwise a fresh observation is sent at this interval.
+    pub refresh_interval_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub expected: ExpectedResourceConstraints,
 }
@@ -93,6 +95,8 @@ pub enum ResourceProbeError {
     Value(String),
     #[error("resource probe does not satisfy expected {0}")]
     ExpectedMismatch(&'static str),
+    #[error("resource probe refresh interval must be shorter than its freshness lifetime")]
+    InvalidRefreshPolicy,
 }
 
 /// Runs the supported Linux host resource probe once.
@@ -110,6 +114,13 @@ impl HostResourceProbe {
         config: &ResourceProbeConfig,
         observed_at: ObservedAtUnixMillis,
     ) -> Result<WorkerResourceObservation, ResourceProbeError> {
+        if config
+            .refresh_interval_ms
+            .zip(config.freshness_ms)
+            .is_some_and(|(refresh, freshness)| refresh >= freshness)
+        {
+            return Err(ResourceProbeError::InvalidRefreshPolicy);
+        }
         let logical = u64::try_from(
             std::thread::available_parallelism()
                 .map_err(|error| ResourceProbeError::Io(error.to_string()))?
@@ -342,5 +353,20 @@ mod tests {
             ..ExpectedResourceConstraints::default()
         };
         assert!(expected.validate(&observation).is_err());
+    }
+
+    #[test]
+    fn enabled_refresh_must_precede_enabled_expiry() {
+        let config = ResourceProbeConfig {
+            scratch_path: PathBuf::from("."),
+            accelerator_sysfs: None,
+            freshness_ms: NonZeroU64::new(100),
+            refresh_interval_ms: NonZeroU64::new(100),
+            expected: ExpectedResourceConstraints::default(),
+        };
+        assert!(matches!(
+            HostResourceProbe::probe(&config, ObservedAtUnixMillis::new(0)),
+            Err(ResourceProbeError::InvalidRefreshPolicy)
+        ));
     }
 }

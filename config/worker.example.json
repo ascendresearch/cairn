@@ -43,10 +43,11 @@
       "require_complete_accelerator_discovery": false
     },
     "freshness_ms": null,
+    "refresh_interval_ms": null,
     "scratch_path": "."
   },
   "reconnect_delay_ms": 1000,
-  "schema_version": 4,
+  "schema_version": 5,
   "transport": {
     "message_byte_limit": 1048576
   }

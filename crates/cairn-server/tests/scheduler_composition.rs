@@ -64,7 +64,7 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
         protocol_version: WorkerProtocolVersion::new(1)?,
         session_timeout_ms: WorkerSessionTimeoutMillis::new(100)?,
         scheduler: Some(SchedulerServiceConfig {
-            policy_version: SchedulerPolicyVersion::StableWorkerIdV1,
+            policy_version: SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
             reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(20)?,
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(40)?,
         }),

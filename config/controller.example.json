@@ -33,7 +33,7 @@
   "schema_version": 2,
   "scheduler": {
     "assignment_lease_duration_ms": 120000,
-    "policy_version": "stable-worker-id-v1",
+    "policy_version": "stable-worker-id-quantitative-v2",
     "reservation_claim_timeout_ms": 30000
   },
   "session_timeout_ms": 180000,

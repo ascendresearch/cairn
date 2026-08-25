@@ -1,10 +1,10 @@
 # Worker resource probing
 
-- Status: Phase D1 implemented; Phase D2 explicitly deferred
+- Status: Phase D1 and D2 core implemented
 - Date: 2026-08-25
 - Scope: Linux startup observation, operator configuration, matching, and trust boundaries
 
-## What D1 guarantees
+## Observation model
 
 Each worker incarnation constructs profile V3 from two different kinds of input:
 
@@ -12,11 +12,15 @@ Each worker incarnation constructs profile V3 from two different kinds of input:
   configured scratch filesystem, accelerator discovery completeness, and canonical device facts;
 - operator declarations: supported execution backends and worker-level equality capabilities.
 
-The quantitative observation records `BuiltinProbe` provenance, a probe-version label,
-`observed_at`, and an optional exclusive `valid_until`. It is archived inside the immutable worker
-profile. Job contract V3 can request independent minimum CPU, memory, and scratch quantities plus
-an accelerator request. An accelerator request is a positive minimum device count and a canonical
-set of per-device equality capabilities. Only devices satisfying every requested capability count.
+The startup quantitative observation remains archived inside immutable profile V3, but the current
+observation is a separate `execution.worker-resource-observation.v1` content identity. Each
+registration or `execution.worker-resources-observed` fact freezes that ContentId, its exact worker-
+stream event revision, and optional trusted-admission evidence. A refresh therefore never mutates
+profile identity or extends heartbeat liveness.
+
+Job contract V3 can request independent minimum CPU, memory, and scratch quantities plus an
+accelerator request. An accelerator request is a positive minimum device count and a canonical set
+of per-device equality capabilities. Only devices satisfying every requested capability count.
 
 All quantities have unit-specific positive types. CPU count, memory bytes, scratch bytes, and
 accelerator count are not interchangeable `u64` values in Rust even though their canonical JSON
@@ -49,31 +53,41 @@ future/expired timestamps, and configured expectation mismatch fail closed.
 
 ## Configuration contract
 
-`config/worker.example.json` is the strict schema V4 example. `resource_probe` contains:
+`config/worker.example.json` is the strict schema V5 example. `resource_probe` contains:
 
 - `scratch_path`: required path whose available filesystem bytes are observed;
 - `accelerator_sysfs`: path to inspect, or `null` to disable discovery explicitly;
 - `freshness_ms`: positive lifetime, or `null` for no expiry during this incarnation;
+- `refresh_interval_ms`: positive automatic refresh interval, or `null` to disable refresh;
 - `expected`: independently optional minima plus a completeness assertion.
 
 Expected values never overwrite probe results. They are startup assertions. Relative probe paths
 are resolved relative to the worker configuration file just like journal and identity paths.
 
-Because D1 observes only at process startup, setting `freshness_ms` makes the worker ineligible when
-that exclusive deadline arrives. Use `null` when incarnation-scoped evidence is sufficient. D2 will
-add refresh without requiring process restart.
+When both refresh and expiry are enabled, `refresh_interval_ms` must be shorter than
+`freshness_ms`; an equal or longer interval fails startup. A reconnect probes again before hello,
+so an expired historical startup observation does not prevent recovery when current evidence is
+available. Setting refresh to `null` is explicit: finite evidence then becomes ineligible at its
+exclusive deadline, while `freshness_ms: null` remains valid for the incarnation.
 
-## Scheduler behavior and current limit
+## Scheduler reservation behavior
 
 Candidate filtering and assignment grant evaluate resource freshness at their own controller
 observation time. They reject insufficient CPU, memory, scratch, discovery completeness, matching
 accelerator count, or ordinary platform/backend/capability constraints before availability.
 
-D1 does not subtract quantitative amounts for already-live reservations. The durable scheduler
-continues to prevent overcommit by assignment slots, and each quantitative request must fit the
-startup total, but two concurrent requests can each match the same CPU or memory total. Phase D2
-will introduce a separately versioned resource-observation stream, reservation accounting per
-dimension, and exact observation-revision recheck.
+Placement snapshot V2 freezes the current observation ContentId, its worker event revision, and any
+admission evidence. Each durable reservation records its requested CPU, memory, and scratch amounts
+and the exact canonical accelerator device IDs selected for it. New placements subtract every
+unreleased reservation. Accelerator devices are exclusive; if an active device disappears from a
+new observation, Cairn admits no further quantitative reservation on that worker until the old
+reservation is safely released.
+
+The singleton SQLite scheduler ledger and optimistic revision check serialize competing placements.
+This prevents both slot and quantitative overcommit. Assignment grant reloads the worker and rejects
+any changed observation ContentId, event revision, admission evidence, availability, profile,
+credential, or incarnation. A refresh between placement and grant therefore fails closed; the
+unclaimed reservation remains protected until its configured claim deadline permits safe release.
 
 ## Provenance and admission
 
@@ -81,6 +95,9 @@ A worker hello may assert only `BuiltinProbe` provenance for platform and quanti
 and `OperatorDeclared` provenance for backend/worker capabilities. It cannot self-label a claim as
 `ControllerVerified` or `ExternalAttestation`.
 
-Phase D2 will add typed admission facts that can supersede a built-in observation after a controller
-challenge or external attestation. This will be an independent authority stream, not mutation of a
-historical profile.
+The trusted admission port accepts only a `ControllerVerified` or `ExternalAttestation` observation
+paired with an independently supplied evidence `EventId`. Source/admission mismatch fails closed,
+and recovery requires trusted sources to retain that evidence citation. The worker wire path owns no
+such capability and accepts only `BuiltinProbe` refreshes. Concrete challenge and attestation
+adapters remain future integrations; if automated, their cadence and thresholds must be explicit
+configuration rather than constants.

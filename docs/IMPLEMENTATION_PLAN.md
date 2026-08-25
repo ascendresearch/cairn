@@ -102,14 +102,15 @@ Acceptance gate:
 - matching remains vendor/product neutral and counts only accelerator devices satisfying every
   requested device capability.
 
-## Phase D2 — refresh, quantitative reservation, and trusted admission
+## Phase D2 — refresh, quantitative reservation, and trusted admission (implemented 2026-08-25)
 
 Add a resource-update protocol independent of immutable worker-profile identity. Freeze each
 scheduler snapshot against an exact admitted observation revision, subtract outstanding
 quantitative reservations, and recheck that revision at assignment grant. Refresh/admission
 intervals and thresholds remain configurable or disableable. A controller challenge or external
 attestation may supersede built-in observations only through a typed admission fact; worker hello
-cannot self-assert higher provenance.
+cannot self-assert higher provenance. Trusted admission is currently an on-demand port; any future
+periodic verifier adapter must expose its interval and policy in configuration.
 
 Acceptance gate:
 

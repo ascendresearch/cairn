@@ -414,7 +414,7 @@ fn worker_config(
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     let journal_database = state_directory.join("worker-journal.sqlite3");
     Ok(WorkerConfig {
-        schema_version: 4,
+        schema_version: 5,
         controller: ControllerEndpoint {
             tcp_address: control.to_string(),
             websocket_uri: format!("wss://localhost:{}/control", control.port()),
@@ -436,6 +436,7 @@ fn worker_config(
                 .to_path_buf(),
             accelerator_sysfs: None,
             freshness_ms: None,
+            refresh_interval_ms: None,
             expected: ExpectedResourceConstraints::default(),
         },
         availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())?,

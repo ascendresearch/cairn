@@ -5,9 +5,9 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
 use cairn_execution::{
     ControlFrame, ControllerControlMessage, WorkerAvailability, WorkerControlMessage, WorkerHello,
-    WorkerProtocolVersion,
+    WorkerProtocolVersion, WorkerResourceObservation, WorkerResourceObservationArtifact,
 };
-use cairn_protocol::{ControlConnectionId, ObservedAtUnixMillis};
+use cairn_protocol::{ContentId, ControlConnectionId, ObservedAtUnixMillis};
 
 use crate::TransportError;
 
@@ -84,6 +84,10 @@ pub enum WorkerWireMessage {
     },
     /// Ephemeral liveness/capacity observation.
     Heartbeat { availability: WorkerAvailability },
+    /// Independently refreshable quantitative resource observation.
+    ResourcesObserved {
+        observation: Box<WorkerResourceObservation>,
+    },
     /// Durable worker outbox delivery or acknowledgement-only frame.
     Control {
         frame: Box<ControlFrame<WorkerControlMessage>>,
@@ -116,6 +120,11 @@ pub enum ControllerWireMessage {
     },
     /// Ephemeral acknowledgement sent only after the controller accepts a heartbeat.
     HeartbeatAccepted { accepted_at: ObservedAtUnixMillis },
+    /// Acknowledges durable admission of one exact resource observation.
+    ResourcesAccepted {
+        accepted_at: ObservedAtUnixMillis,
+        observation_id: ContentId<WorkerResourceObservationArtifact>,
+    },
     /// Durable controller outbox delivery or acknowledgement-only frame.
     Control {
         frame: Box<ControlFrame<ControllerControlMessage>>,

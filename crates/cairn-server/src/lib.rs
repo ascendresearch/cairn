@@ -30,12 +30,13 @@ use cairn_control_transport::{
 use cairn_execution::{
     AcceptedExecutionAssignment, AssignmentLeaseRecord, AuthenticatedWorkerIdentity, ControlFrame,
     ExecutionAssignmentState, InboundControlSession, RecordedWorkerAuthenticator,
-    RegisteredWorkerSession, WorkerAuthenticationSubject, WorkerControlMessage, WorkerPoolName,
-    WorkerProtocolVersion, WorkerResultReconciliation, WorkerSessionTimeoutMillis,
-    accept_worker_assignment, acknowledge_controller_messages, deliver_controller_acknowledgement,
-    deliver_controller_messages, disconnect_worker, enqueue_controller_message,
-    execution_start_message, reconcile_worker_result, record_worker_heartbeat,
-    recover_execution_assignment, register_worker, start_accepted_assignment,
+    RegisteredWorkerSession, SchedulerPolicyVersion, WorkerAuthenticationSubject,
+    WorkerControlMessage, WorkerPoolName, WorkerProtocolVersion, WorkerResultReconciliation,
+    WorkerSessionTimeoutMillis, accept_worker_assignment, acknowledge_controller_messages,
+    deliver_controller_acknowledgement, deliver_controller_messages, disconnect_worker,
+    enqueue_controller_message, execution_start_message, reconcile_worker_result,
+    record_worker_heartbeat, record_worker_resource_observation, recover_execution_assignment,
+    register_worker, start_accepted_assignment,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId,
@@ -503,6 +504,13 @@ impl ServerConfig {
 
     fn validate(&self) -> Result<(), ServerError> {
         self.validate_schema()?;
+        if self.scheduler.as_ref().is_some_and(|scheduler| {
+            scheduler.policy_version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV2
+        }) {
+            return Err(ServerError::Configuration(
+                "only scheduler policy stable-worker-id-quantitative-v2 is supported".into(),
+            ));
+        }
         if self.enrollment.is_empty() && self.enrollment_service.is_none() {
             return Err(ServerError::Configuration(
                 "at least one static enrollment or enrollment_service is required".into(),
@@ -883,6 +891,15 @@ async fn handle_connection(
             now,
         )
         .map_err(|error| ServerError::Session(error.to_string()))?;
+        let registered = record_worker_resource_observation(
+            events,
+            content,
+            &registered,
+            hello.resource_observation(),
+            &command("hello-resources"),
+            now,
+        )
+        .map_err(|error| ServerError::Session(error.to_string()))?;
         record_worker_heartbeat(
             events,
             content,
@@ -933,6 +950,7 @@ async fn handle_connection(
 
 #[expect(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "live session state has explicit independent authorities"
 )]
 async fn controller_session_loop(
@@ -1004,6 +1022,33 @@ async fn controller_session_loop(
                 write_wire_message(
                     socket,
                     &ControllerWireMessage::HeartbeatAccepted { accepted_at: now },
+                    config.transport,
+                )
+                .await
+                .map_err(|error| ServerError::Session(error.to_string()))?;
+            }
+            WorkerWireMessage::ResourcesObserved { observation } => {
+                let now = observed_now()?;
+                let observation_id = {
+                    let mut locked = state.lock().await;
+                    let ControllerState { events, content } = &mut *locked;
+                    *session = record_worker_resource_observation(
+                        events,
+                        content,
+                        session,
+                        &observation,
+                        &command("resource-refresh"),
+                        now,
+                    )
+                    .map_err(|error| ServerError::Session(error.to_string()))?;
+                    session.resource_observation_id()
+                };
+                write_wire_message(
+                    socket,
+                    &ControllerWireMessage::ResourcesAccepted {
+                        accepted_at: now,
+                        observation_id,
+                    },
                     config.transport,
                 )
                 .await
@@ -1375,6 +1420,23 @@ mod tests {
                 .expect("documented JSON");
         invalid["scheduler"]["assignment_lease_duration_ms"] = 0.into();
         assert!(serde_json::from_value::<ServerConfig>(invalid).is_err());
+    }
+
+    #[test]
+    fn historical_scheduler_policy_is_rejected_during_startup_validation() {
+        let historical = include_str!("../../../config/controller.example.json")
+            .replace("stable-worker-id-quantitative-v2", "stable-worker-id-v1");
+        let config: ServerConfig =
+            serde_json::from_str(&historical).expect("historical policy remains decodable");
+
+        let error = config
+            .validate()
+            .expect_err("historical policy must fail before serving traffic");
+        assert!(
+            error
+                .to_string()
+                .contains("stable-worker-id-quantitative-v2")
+        );
     }
 
     #[test]

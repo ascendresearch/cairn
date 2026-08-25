@@ -19,6 +19,7 @@ use crate::{
 const WORKER_REGISTERED: &str = "execution.worker-registered";
 const WORKER_REPLACED: &str = "execution.worker-replaced-after-expiry";
 const WORKER_HEARTBEAT: &str = "execution.worker-heartbeat";
+const WORKER_RESOURCES_OBSERVED: &str = "execution.worker-resources-observed";
 const WORKER_DISCONNECTED: &str = "execution.worker-disconnected";
 
 macro_rules! worker_label {
@@ -351,6 +352,33 @@ pub struct WorkerResourceObservation {
     accelerators: Vec<AcceleratorDevice>,
 }
 
+/// Trusted evidence attached when a controller or external authority replaces a built-in claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TrustedWorkerResourceAdmission {
+    source: WorkerResourceSource,
+    evidence_revision: EventId,
+}
+
+impl TrustedWorkerResourceAdmission {
+    /// Creates controller-verification admission citing its exact authority fact.
+    #[must_use]
+    pub const fn controller_verified(evidence_revision: EventId) -> Self {
+        Self {
+            source: WorkerResourceSource::ControllerVerified,
+            evidence_revision,
+        }
+    }
+
+    /// Creates external-attestation admission citing its exact authority fact.
+    #[must_use]
+    pub const fn external_attestation(evidence_revision: EventId) -> Self {
+        Self {
+            source: WorkerResourceSource::ExternalAttestation,
+            evidence_revision,
+        }
+    }
+}
+
 impl WorkerResourceObservation {
     /// Creates a canonical quantitative observation.
     ///
@@ -588,10 +616,7 @@ impl WorkerProfile {
         self.resources.validate()
     }
 
-    fn validate_advertised(
-        &self,
-        observed_at: ObservedAtUnixMillis,
-    ) -> Result<(), WorkerValueError> {
+    fn validate_advertised(&self) -> Result<(), WorkerValueError> {
         self.validate()?;
         if self.resources.platform.source != WorkerResourceSource::BuiltinProbe
             || self.resources.quantitative.source != WorkerResourceSource::BuiltinProbe
@@ -608,7 +633,7 @@ impl WorkerProfile {
         {
             return Err(WorkerValueError::UnadmittedResourceProvenance);
         }
-        self.resources.quantitative.ensure_fresh_at(observed_at)
+        Ok(())
     }
 
     /// Returns the control-protocol version.
@@ -643,20 +668,39 @@ pub struct WorkerHello {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,
     profile: WorkerProfile,
+    resource_observation: WorkerResourceObservation,
 }
 
 impl WorkerHello {
     /// Creates one worker hello without assigning trust to it.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         worker_id: WorkerId,
         incarnation_id: WorkerIncarnationId,
         profile: WorkerProfile,
+    ) -> Self {
+        let resource_observation = profile.resources.quantitative.clone();
+        Self::new_with_resource_observation(
+            worker_id,
+            incarnation_id,
+            profile,
+            resource_observation,
+        )
+    }
+
+    /// Creates a hello with a current observation independent of immutable profile startup bytes.
+    #[must_use]
+    pub const fn new_with_resource_observation(
+        worker_id: WorkerId,
+        incarnation_id: WorkerIncarnationId,
+        profile: WorkerProfile,
+        resource_observation: WorkerResourceObservation,
     ) -> Self {
         Self {
             worker_id,
             incarnation_id,
             profile,
+            resource_observation,
         }
     }
 
@@ -676,6 +720,12 @@ impl WorkerHello {
     #[must_use]
     pub const fn profile(&self) -> &WorkerProfile {
         &self.profile
+    }
+
+    /// Returns the current built-in observation proposed for registration/reconnect.
+    #[must_use]
+    pub const fn resource_observation(&self) -> &WorkerResourceObservation {
+        &self.resource_observation
     }
 }
 
@@ -864,6 +914,12 @@ impl ContentType for WorkerAvailabilityArtifact {
     const DOMAIN: &'static str = "execution.worker-availability.v1";
 }
 
+/// Immutable content domain for independently refreshable quantitative observations.
+pub struct WorkerResourceObservationArtifact;
+impl ContentType for WorkerResourceObservationArtifact {
+    const DOMAIN: &'static str = "execution.worker-resource-observation.v1";
+}
+
 /// Verified live worker session reconstructed from facts and CAS.
 #[derive(Clone, Debug)]
 pub struct RegisteredWorkerSession {
@@ -874,6 +930,10 @@ pub struct RegisteredWorkerSession {
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     profile: WorkerProfile,
+    resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
+    resource_observation_revision: EventId,
+    resource_admission_revision: Option<EventId>,
+    resource_observation: WorkerResourceObservation,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     availability: Option<WorkerAvailability>,
     last_seen_at: ObservedAtUnixMillis,
@@ -920,6 +980,30 @@ impl RegisteredWorkerSession {
     #[must_use]
     pub const fn profile(&self) -> &WorkerProfile {
         &self.profile
+    }
+
+    /// Returns the exact current quantitative observation identity.
+    #[must_use]
+    pub const fn resource_observation_id(&self) -> ContentId<WorkerResourceObservationArtifact> {
+        self.resource_observation_id
+    }
+
+    /// Returns the worker-stream event that admitted the current observation.
+    #[must_use]
+    pub const fn resource_observation_revision(&self) -> EventId {
+        self.resource_observation_revision
+    }
+
+    /// Returns controller/external evidence cited by trusted admission, when applicable.
+    #[must_use]
+    pub const fn resource_admission_revision(&self) -> Option<EventId> {
+        self.resource_admission_revision
+    }
+
+    /// Returns the current independently refreshable quantitative observation.
+    #[must_use]
+    pub const fn resource_observation(&self) -> &WorkerResourceObservation {
+        &self.resource_observation
     }
 
     /// Returns the latest availability identity, if a heartbeat has committed.
@@ -1073,8 +1157,18 @@ struct RegistrationPayload {
     credential_id: CredentialId,
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
+    resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
     replaced_incarnation_id: Option<WorkerIncarnationId>,
     predecessor_expired_at: Option<ObservedAtUnixMillis>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceObservedPayload {
+    worker_id: WorkerId,
+    incarnation_id: WorkerIncarnationId,
+    resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
+    admission_evidence_revision: Option<EventId>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1102,8 +1196,12 @@ struct WorkerProjection {
     credential_id: CredentialId,
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
+    resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
+    resource_observation_revision: EventId,
+    resource_admission_revision: Option<EventId>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     last_seen_at: ObservedAtUnixMillis,
+    last_observed_at: ObservedAtUnixMillis,
     disconnected: bool,
     last_event_id: EventId,
     revision: StreamRevision,
@@ -1119,6 +1217,10 @@ struct WorkerProjection {
 ///
 /// Returns an error for failed authentication, duplicate live identity, profile mutation, clock
 /// regression, invalid history/content, or append failure.
+#[expect(
+    clippy::too_many_lines,
+    reason = "registration keeps authentication, replacement, profile, and initial observation atomic"
+)]
 pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     events: &mut E,
     content: &mut C,
@@ -1128,12 +1230,22 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<RegisteredWorkerSession, WorkerControlError> {
-    hello.profile.validate_advertised(observed_at)?;
+    hello.profile.validate_advertised()?;
+    if hello.resource_observation.source != WorkerResourceSource::BuiltinProbe {
+        return Err(WorkerValueError::UnadmittedResourceProvenance.into());
+    }
+    hello.resource_observation.validate()?;
+    hello.resource_observation.ensure_fresh_at(observed_at)?;
     let authenticated = authenticator.authenticate(hello)?;
     let profile_bytes = cairn_codec::to_vec(&hello.profile)
         .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?;
     let profile_id = content
         .put::<WorkerProfileArtifact>(&mut Cursor::new(profile_bytes))?
+        .content_id;
+    let resource_observation_bytes = cairn_codec::to_vec(&hello.resource_observation)
+        .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?;
+    let resource_observation_id = content
+        .put::<WorkerResourceObservationArtifact>(&mut Cursor::new(resource_observation_bytes))?
         .content_id;
     let stream = worker_stream(hello.worker_id)?;
     let history = events.read_stream(&stream, None)?;
@@ -1154,7 +1266,7 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             if projection.pool != *authenticated.pool() {
                 return Err(WorkerControlError::WorkerPoolChanged);
             }
-            ensure_nonregressing(observed_at, projection.last_seen_at)?;
+            ensure_nonregressing(observed_at, projection.last_observed_at)?;
             if !projection.disconnected
                 && observed_at.get() < expiry_at(projection.last_seen_at, session_timeout)?.get()
             {
@@ -1192,7 +1304,7 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         };
     let event = fact(
         schema,
-        3,
+        4,
         parent,
         observed_at,
         &RegistrationPayload {
@@ -1202,12 +1314,13 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             credential_id: authenticated.credential_id(),
             pool: authenticated.pool().clone(),
             profile_id,
+            resource_observation_id,
             replaced_incarnation_id,
             predecessor_expired_at,
         },
     )?;
     let outcome = events.append(&stream, expected, command_id, &[event])?;
-    let _event_id = only_event_id(&outcome.event_ids)?;
+    let event_id = only_event_id(&outcome.event_ids)?;
     Ok(RegisteredWorkerSession {
         worker_id: hello.worker_id,
         incarnation_id: hello.incarnation_id,
@@ -1216,6 +1329,10 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         pool: authenticated.pool,
         profile_id,
         profile: hello.profile.clone(),
+        resource_observation_id,
+        resource_observation_revision: event_id,
+        resource_admission_revision: None,
+        resource_observation: hello.resource_observation.clone(),
         availability_id: None,
         availability: None,
         last_seen_at: observed_at,
@@ -1253,7 +1370,7 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
     {
         return materialize_session(content, session.worker_id, projection);
     }
-    ensure_nonregressing(observed_at, projection.last_seen_at)?;
+    ensure_nonregressing(observed_at, projection.last_observed_at)?;
     let event = fact(
         WORKER_HEARTBEAT,
         1,
@@ -1279,10 +1396,128 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         pool: session.pool.clone(),
         profile_id: session.profile_id,
         profile: session.profile.clone(),
+        resource_observation_id: session.resource_observation_id,
+        resource_observation_revision: session.resource_observation_revision,
+        resource_admission_revision: session.resource_admission_revision,
+        resource_observation: session.resource_observation.clone(),
         availability_id: Some(availability_id),
         availability: Some(availability.clone()),
         last_seen_at: observed_at,
     })
+}
+
+/// Commits one worker-probed quantitative refresh without changing immutable profile identity.
+///
+/// # Errors
+///
+/// Rejects non-built-in provenance, stale incarnation/evidence, time regression, or storage
+/// failure. Higher-assurance sources must use [`admit_trusted_worker_resource_observation`].
+pub fn record_worker_resource_observation<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    session: &RegisteredWorkerSession,
+    observation: &WorkerResourceObservation,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<RegisteredWorkerSession, WorkerControlError> {
+    if observation.source != WorkerResourceSource::BuiltinProbe {
+        return Err(WorkerValueError::UnadmittedResourceProvenance.into());
+    }
+    record_admitted_resource_observation(
+        events,
+        content,
+        session,
+        observation,
+        None,
+        command_id,
+        observed_at,
+    )
+}
+
+/// Commits a controller-verified or externally attested replacement observation.
+///
+/// The admission capability cites an independently established authority event. Worker transport
+/// code never receives this capability and therefore cannot elevate its own provenance.
+///
+/// # Errors
+///
+/// Rejects source/admission mismatch, stale incarnation/evidence, time regression, or storage
+/// failure.
+pub fn admit_trusted_worker_resource_observation<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    session: &RegisteredWorkerSession,
+    observation: &WorkerResourceObservation,
+    admission: TrustedWorkerResourceAdmission,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<RegisteredWorkerSession, WorkerControlError> {
+    if observation.source != admission.source {
+        return Err(WorkerValueError::UnadmittedResourceProvenance.into());
+    }
+    record_admitted_resource_observation(
+        events,
+        content,
+        session,
+        observation,
+        Some(admission.evidence_revision),
+        command_id,
+        observed_at,
+    )
+}
+
+fn record_admitted_resource_observation<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    session: &RegisteredWorkerSession,
+    observation: &WorkerResourceObservation,
+    admission_evidence_revision: Option<EventId>,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<RegisteredWorkerSession, WorkerControlError> {
+    observation.validate()?;
+    observation.ensure_fresh_at(observed_at)?;
+    let bytes = cairn_codec::to_vec(observation)
+        .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?;
+    let resource_observation_id = content
+        .put::<WorkerResourceObservationArtifact>(&mut Cursor::new(bytes))?
+        .content_id;
+    let stream = worker_stream(session.worker_id)?;
+    let history = events.read_stream(&stream, None)?;
+    let projection = project_worker(&history, session.worker_id)?;
+    ensure_current(session, &projection)?;
+    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    if projection.resource_observation_id == resource_observation_id {
+        return materialize_session(content, session.worker_id, projection);
+    }
+    if observation.observed_at <= session.resource_observation.observed_at {
+        return Err(WorkerControlError::ObservationTimeRegressed);
+    }
+    let event = fact(
+        WORKER_RESOURCES_OBSERVED,
+        1,
+        Some(projection.last_event_id),
+        observed_at,
+        &ResourceObservedPayload {
+            worker_id: session.worker_id,
+            incarnation_id: session.incarnation_id,
+            resource_observation_id,
+            admission_evidence_revision,
+        },
+    )?;
+    let outcome = events.append(
+        &stream,
+        ExpectedRevision::Exact(projection.revision),
+        command_id,
+        &[event],
+    )?;
+    let _revision = only_event_id(&outcome.event_ids)?;
+    let history = events.read_stream(&stream, None)?;
+    materialize_session(
+        content,
+        session.worker_id,
+        project_worker(&history, session.worker_id)?,
+    )
 }
 
 /// Durably closes the current worker incarnation.
@@ -1311,7 +1546,7 @@ pub fn disconnect_worker<E: EventStore>(
     if projection.disconnected {
         return Ok(());
     }
-    ensure_nonregressing(observed_at, projection.last_seen_at)?;
+    ensure_nonregressing(observed_at, projection.last_observed_at)?;
     let event = fact(
         WORKER_DISCONNECTED,
         1,
@@ -1348,7 +1583,7 @@ pub fn recover_worker_session<E: EventStore, C: ContentStore>(
         return Ok(WorkerSessionState::NotFound);
     }
     let projection = project_worker(&history, worker_id)?;
-    ensure_nonregressing(observed_at, projection.last_seen_at)?;
+    ensure_nonregressing(observed_at, projection.last_observed_at)?;
     if projection.disconnected {
         return Ok(WorkerSessionState::Disconnected {
             incarnation_id: projection.incarnation_id,
@@ -1390,7 +1625,7 @@ pub fn match_worker_at(
 ) -> Result<(), WorkerMatchFailure> {
     match_static_resources(session, contract)?;
     match_quantitative_resources(
-        session.profile.resources.quantitative(),
+        session.resource_observation(),
         contract.resources().quantitative(),
         observed_at,
     )?;
@@ -1528,6 +1763,23 @@ fn materialize_session<C: ContentStore>(
 ) -> Result<RegisteredWorkerSession, WorkerControlError> {
     let profile: WorkerProfile = read_json(content, projection.profile_id)?;
     profile.validate()?;
+    let resource_observation: WorkerResourceObservation =
+        read_json::<C, WorkerResourceObservationArtifact, WorkerResourceObservation>(
+            content,
+            projection.resource_observation_id,
+        )?;
+    resource_observation.validate()?;
+    match resource_observation.source {
+        WorkerResourceSource::BuiltinProbe if projection.resource_admission_revision.is_none() => {}
+        WorkerResourceSource::ControllerVerified | WorkerResourceSource::ExternalAttestation
+            if projection.resource_admission_revision.is_some() => {}
+        WorkerResourceSource::BuiltinProbe
+        | WorkerResourceSource::OperatorDeclared
+        | WorkerResourceSource::ControllerVerified
+        | WorkerResourceSource::ExternalAttestation => {
+            return Err(WorkerValueError::UnadmittedResourceProvenance.into());
+        }
+    }
     let availability = projection
         .availability_id
         .map(|id| read_json::<C, WorkerAvailabilityArtifact, WorkerAvailability>(content, id))
@@ -1543,6 +1795,10 @@ fn materialize_session<C: ContentStore>(
         pool: projection.pool,
         profile_id: projection.profile_id,
         profile,
+        resource_observation_id: projection.resource_observation_id,
+        resource_observation_revision: projection.resource_observation_revision,
+        resource_admission_revision: projection.resource_admission_revision,
+        resource_observation,
         availability_id: projection.availability_id,
         availability,
         last_seen_at: projection.last_seen_at,
@@ -1567,7 +1823,7 @@ fn project_worker(
         }
         match event.schema_name.as_str() {
             WORKER_REGISTERED | WORKER_REPLACED => {
-                if event.schema_version.get() != 3 {
+                if event.schema_version.get() != 4 {
                     return invalid_history("worker registration schema version is unsupported");
                 }
                 let payload: RegistrationPayload = decode(event)?;
@@ -1622,8 +1878,12 @@ fn project_worker(
                     credential_id: payload.credential_id,
                     pool: payload.pool,
                     profile_id: payload.profile_id,
+                    resource_observation_id: payload.resource_observation_id,
+                    resource_observation_revision: event.event_id,
+                    resource_admission_revision: None,
                     availability_id: None,
                     last_seen_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
+                    last_observed_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
                     disconnected: false,
                     last_event_id: event.event_id,
                     revision: revision(event)?,
@@ -1640,12 +1900,39 @@ fn project_worker(
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
                     || state.disconnected
-                    || event.observed_at_unix_ms < state.last_seen_at.get()
+                    || event.observed_at_unix_ms < state.last_observed_at.get()
                 {
                     return invalid_history("worker heartbeat contradicts current incarnation");
                 }
                 state.availability_id = Some(payload.availability_id);
                 state.last_seen_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_event_id = event.event_id;
+                state.revision = revision(event)?;
+            }
+            WORKER_RESOURCES_OBSERVED => {
+                if event.schema_version.get() != 1 {
+                    return invalid_history("worker resource observation schema is unsupported");
+                }
+                let payload: ResourceObservedPayload = decode(event)?;
+                let state = projection.as_mut().ok_or_else(|| {
+                    WorkerControlError::InvalidHistory(
+                        "resource observation before registration".into(),
+                    )
+                })?;
+                if payload.worker_id != expected_worker_id
+                    || payload.incarnation_id != state.incarnation_id
+                    || state.disconnected
+                    || event.observed_at_unix_ms < state.last_observed_at.get()
+                {
+                    return invalid_history(
+                        "worker resource observation contradicts current incarnation",
+                    );
+                }
+                state.resource_observation_id = payload.resource_observation_id;
+                state.resource_observation_revision = event.event_id;
+                state.resource_admission_revision = payload.admission_evidence_revision;
+                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
             }
@@ -1660,12 +1947,13 @@ fn project_worker(
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
                     || state.disconnected
-                    || event.observed_at_unix_ms < state.last_seen_at.get()
+                    || event.observed_at_unix_ms < state.last_observed_at.get()
                 {
                     return invalid_history("worker disconnect contradicts current incarnation");
                 }
                 state.disconnected = true;
                 state.last_seen_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
             }
@@ -1685,6 +1973,8 @@ fn ensure_current(
         || projection.credential_id != session.credential_id
         || projection.pool != session.pool
         || projection.profile_id != session.profile_id
+        || projection.resource_observation_id != session.resource_observation_id
+        || projection.resource_observation_revision != session.resource_observation_revision
         || projection.disconnected
     {
         return Err(WorkerControlError::StaleIncarnation);
@@ -1793,7 +2083,7 @@ pub(crate) fn test_resource_observation(observed_at: i64) -> WorkerResourceObser
 
 #[cfg(test)]
 mod tests {
-    use cairn_protocol::{CommandId, ContentId, JobId};
+    use cairn_protocol::{CommandId, ContentId, EventId, JobId};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 
     use super::*;
@@ -2287,6 +2577,156 @@ mod tests {
         assert_eq!(
             match_worker(&session, &contract),
             Err(WorkerMatchFailure::AcceleratorDiscoveryIncomplete)
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear fixture proves both trusted provenance variants and restart recovery"
+    )]
+    fn resource_refresh_and_trusted_admission_survive_restart_without_mutating_profile() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let hello = WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"));
+        let mut auth = authenticator(worker_id, "spiffe://cairn/worker/resources");
+        let registered = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut auth,
+            &hello,
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(0),
+        )
+        .expect("register");
+        let profile_id = registered.profile_id();
+        let startup_id = registered.resource_observation_id();
+        let refreshed = record_worker_resource_observation(
+            &mut fixture.events,
+            &mut fixture.content,
+            &registered,
+            &resource_observation(10),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(10),
+        )
+        .expect("refresh");
+        assert_eq!(refreshed.profile_id(), profile_id);
+        assert_ne!(refreshed.resource_observation_id(), startup_id);
+        assert_eq!(refreshed.last_seen_at(), ObservedAtUnixMillis::new(0));
+
+        let controller_observation = WorkerResourceObservation::new(
+            WorkerResourceSource::ControllerVerified,
+            ResourceProbeVersion::new("controller-challenge-v1").expect("probe version"),
+            ObservedAtUnixMillis::new(11),
+            None,
+            crate::LogicalCpuCount::new(6).expect("logical CPUs"),
+            crate::MemoryByteCount::new(12_000).expect("memory"),
+            crate::ScratchByteCount::new(48_000).expect("scratch"),
+            AcceleratorDiscoveryCompleteness::Complete,
+            Vec::new(),
+        )
+        .expect("controller observation");
+        assert!(matches!(
+            record_worker_resource_observation(
+                &mut fixture.events,
+                &mut fixture.content,
+                &refreshed,
+                &controller_observation,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(11),
+            ),
+            Err(WorkerControlError::Value(
+                WorkerValueError::UnadmittedResourceProvenance
+            ))
+        ));
+        let evidence_revision =
+            EventId::derive(b"controller-resource-challenge").expect("evidence revision");
+        let admitted = admit_trusted_worker_resource_observation(
+            &mut fixture.events,
+            &mut fixture.content,
+            &refreshed,
+            &controller_observation,
+            TrustedWorkerResourceAdmission::controller_verified(evidence_revision),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(11),
+        )
+        .expect("trusted admission");
+        assert_eq!(
+            admitted.resource_admission_revision(),
+            Some(evidence_revision)
+        );
+        assert_eq!(
+            admitted.resource_observation().source(),
+            WorkerResourceSource::ControllerVerified
+        );
+
+        let external_observation = WorkerResourceObservation::new(
+            WorkerResourceSource::ExternalAttestation,
+            ResourceProbeVersion::new("external-attestation-v1").expect("probe version"),
+            ObservedAtUnixMillis::new(12),
+            None,
+            crate::LogicalCpuCount::new(6).expect("logical CPUs"),
+            crate::MemoryByteCount::new(12_000).expect("memory"),
+            crate::ScratchByteCount::new(48_000).expect("scratch"),
+            AcceleratorDiscoveryCompleteness::Complete,
+            Vec::new(),
+        )
+        .expect("external observation");
+        assert!(matches!(
+            admit_trusted_worker_resource_observation(
+                &mut fixture.events,
+                &mut fixture.content,
+                &admitted,
+                &external_observation,
+                TrustedWorkerResourceAdmission::controller_verified(evidence_revision),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(12),
+            ),
+            Err(WorkerControlError::Value(
+                WorkerValueError::UnadmittedResourceProvenance
+            ))
+        ));
+        let attestation_revision =
+            EventId::derive(b"external-resource-attestation").expect("attestation revision");
+        let externally_admitted = admit_trusted_worker_resource_observation(
+            &mut fixture.events,
+            &mut fixture.content,
+            &admitted,
+            &external_observation,
+            TrustedWorkerResourceAdmission::external_attestation(attestation_revision),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(12),
+        )
+        .expect("external admission");
+
+        fixture.reopen();
+        let WorkerSessionState::Live(recovered) = recover_worker_session(
+            &fixture.events,
+            &fixture.content,
+            worker_id,
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            ObservedAtUnixMillis::new(13),
+        )
+        .expect("recover") else {
+            panic!("live worker");
+        };
+        assert_eq!(recovered.profile_id(), profile_id);
+        assert_eq!(
+            recovered.resource_observation_id(),
+            externally_admitted.resource_observation_id()
+        );
+        assert_eq!(
+            recovered.resource_observation_revision(),
+            externally_admitted.resource_observation_revision()
+        );
+        assert_eq!(
+            recovered.resource_admission_revision(),
+            Some(attestation_revision)
+        );
+        assert_eq!(
+            recovered.resource_observation().source(),
+            WorkerResourceSource::ExternalAttestation
         );
     }
 

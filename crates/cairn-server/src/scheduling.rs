@@ -598,7 +598,7 @@ mod tests {
             &[credential.worker_id],
             &authority,
             SchedulerPolicy::new(
-                SchedulerPolicyVersion::StableWorkerIdV1,
+                SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
                 session_timeout,
                 ReservationClaimTimeoutMillis::new(20).expect("claim timeout"),
             ),

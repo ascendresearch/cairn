@@ -97,8 +97,13 @@ CPU, memory-byte, scratch-byte, accelerator discovery, and per-device capability
 configuration provides only probe paths, optional expectations, and optional expiry; it cannot
 forge observed capacity. Job contract V3 expresses quantitative minima and the scheduler rejects
 stale or insufficient observations, including accelerator devices that do not satisfy requested
-device capabilities. Dynamic refresh, quantitative reservation subtraction, and trusted claim
-admission remain Phase D2; see [`docs/RESOURCE_PROBING.md`](docs/RESOURCE_PROBING.md).
+device capabilities. Dynamic refresh now has an independently optional interval and persists exact
+observation ContentId/revision without changing profile or liveness. Scheduler reservations subtract
+CPU, memory, scratch, and deterministic accelerator device IDs; assignment grant rejects any
+resource refresh or admission change since placement. A typed on-demand admission seam permits
+controller-verified or externally attested replacements only when they cite independent evidence;
+worker wire messages remain limited to built-in provenance. See
+[`docs/RESOURCE_PROBING.md`](docs/RESOURCE_PROBING.md).
 Controller-authorized worker pools and domain-neutral placement requests
 let `cairn-migration` validation tiers ask for resources without assigning business roles to workers.
 Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
@@ -126,8 +131,9 @@ it to generic platform/pool/backend/capability/resource constraints; its fixture
 worker without leaking migration roles into execution types. Scheduler enablement, policy, session
 time, claim time, and lease time are configuration rather than constants. See
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
-executor deliberately returns `NotStarted`; real local/container backends, dynamic resource refresh,
-static-registry import, and real-host job execution remain subsequent slices. The active
+executor deliberately returns `NotStarted`; real local/container backends, concrete resource
+challenge/attestation adapters, static-registry import, and real-host job execution remain
+subsequent slices. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 The remaining architecture in the normative documents is still target design. The old repositories
@@ -150,7 +156,7 @@ Start with [`docs/README.md`](docs/README.md). The normative baseline is:
 - [`docs/RELEASE.md`](docs/RELEASE.md) — pinned cross-link toolchain, reproducible bundles, and the
   real-host deployment gate.
 - [`docs/RESOURCE_PROBING.md`](docs/RESOURCE_PROBING.md) — startup resource facts, operator
-  expectations, quantitative matching, and the explicit D2 boundary.
+  expectations, dynamic observation authority, and quantitative reservation accounting.
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — the integrated authority,
   scheduling, probing, registry, and onboarding delivery plan.
 

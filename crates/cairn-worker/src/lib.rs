@@ -37,7 +37,7 @@ use rcgen::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::time::Instant;
+use tokio::time::{Instant, Interval};
 
 pub use probe::{
     ExpectedResourceConstraints, HostResourceProbe, ResourceProbeConfig, ResourceProbeError,
@@ -137,6 +137,7 @@ pub enum WorkerError {
 enum Wake<T> {
     Message(T),
     Heartbeat,
+    ResourceRefresh,
 }
 
 struct NotStartedExecutor;
@@ -301,9 +302,9 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 4 {
+        if self.schema_version != 5 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 4 is supported".into(),
+                "only worker schema_version 5 is supported".into(),
             ));
         }
         if self.profile.schema_version != 2 {
@@ -451,13 +452,17 @@ async fn run_session(
         .await?
         .map_err(|error| WorkerError::Session(error.to_string()))?;
     let protocol_version = profile.protocol_version();
+    let hello_observed_at = observed_now()?;
+    let hello_resources = HostResourceProbe::probe(&config.resource_probe, hello_observed_at)
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
     write_wire_message(
         &mut socket,
         &WorkerWireMessage::Hello {
-            hello: Box::new(WorkerHello::new(
+            hello: Box::new(WorkerHello::new_with_resource_observation(
                 identity.worker_id,
                 *incarnation_id,
                 profile.clone(),
+                hello_resources,
             )),
             availability: config.availability(journal, identity.worker_id)?,
         },
@@ -496,6 +501,9 @@ async fn run_session(
     let mut idle_deadline = config
         .idle_timeout_ms
         .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
+    let mut heartbeat_interval = recurring_interval(config.heartbeat_interval_ms);
+    let mut resource_refresh_interval =
+        recurring_interval(config.resource_probe.refresh_interval_ms);
     loop {
         flush_worker(
             &mut socket,
@@ -512,13 +520,10 @@ async fn run_session(
             idle_deadline,
             read_wire_message::<_, ControllerWireMessage>(&mut socket, config.transport),
         );
-        let wake = if let Some(interval) = config.heartbeat_interval_ms {
-            tokio::select! {
-                message = read => Wake::Message(message),
-                () = tokio::time::sleep(Duration::from_millis(interval.get())) => Wake::Heartbeat,
-            }
-        } else {
-            Wake::Message(read.await)
+        let wake = tokio::select! {
+            message = read => Wake::Message(message),
+            () = tick_optional(&mut heartbeat_interval) => Wake::Heartbeat,
+            () = tick_optional(&mut resource_refresh_interval) => Wake::ResourceRefresh,
         };
         match wake {
             Wake::Heartbeat => {
@@ -532,13 +537,28 @@ async fn run_session(
                 .await
                 .map_err(|error| WorkerError::Session(error.to_string()))?;
             }
+            Wake::ResourceRefresh => {
+                let observed_at = observed_now()?;
+                let observation = HostResourceProbe::probe(&config.resource_probe, observed_at)
+                    .map_err(|error| WorkerError::Session(error.to_string()))?;
+                write_wire_message(
+                    &mut socket,
+                    &WorkerWireMessage::ResourcesObserved {
+                        observation: Box::new(observation),
+                    },
+                    config.transport,
+                )
+                .await
+                .map_err(|error| WorkerError::Session(error.to_string()))?;
+            }
             Wake::Message(message) => {
                 let message = message?.map_err(|error| WorkerError::Session(error.to_string()))?;
                 idle_deadline = config
                     .idle_timeout_ms
                     .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
                 match message {
-                    ControllerWireMessage::HeartbeatAccepted { .. } => {}
+                    ControllerWireMessage::HeartbeatAccepted { .. }
+                    | ControllerWireMessage::ResourcesAccepted { .. } => {}
                     ControllerWireMessage::Control { frame } => {
                         inbound
                             .accept(&frame, highest_sent)
@@ -1227,6 +1247,21 @@ where
             .map_err(|_| WorkerError::Session("configured idle timeout elapsed".into()))
     } else {
         Ok(future.await)
+    }
+}
+
+fn recurring_interval(period: Option<NonZeroU64>) -> Option<Interval> {
+    period.map(|period| {
+        let duration = Duration::from_millis(period.get());
+        tokio::time::interval_at(Instant::now() + duration, duration)
+    })
+}
+
+async fn tick_optional(interval: &mut Option<Interval>) {
+    if let Some(interval) = interval {
+        interval.tick().await;
+    } else {
+        std::future::pending::<()>().await;
     }
 }
 

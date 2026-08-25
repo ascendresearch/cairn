@@ -594,16 +594,24 @@ discovery-completeness requirements. An accelerator requirement also contains ca
 capabilities; only devices satisfying all of them contribute to its count. Scheduler filtering and
 assignment recheck use the caller's observation time, so expired evidence cannot remain eligible.
 
-The startup observation remains part of immutable profile identity. Dynamic refresh, exact
-observation revisions, controller/attestation admission, and subtraction of quantitative resources
-consumed by reservations are Phase D2. Until then, the reservation ledger enforces slot capacity
-while quantitative matching treats every request as needing no more than the startup total. An
-operator that configures finite freshness must expect the worker to become unschedulable at expiry
-and restart it or wait for D2 refresh support.
+**Implemented dynamic resource authority (2026-08-25).** The startup observation remains part of
+immutable profile identity, while a distinct typed CAS domain and `worker-resources-observed` fact
+hold the current observation. Worker refresh has an independently optional interval and never
+extends heartbeat liveness. Reconnect performs a new probe before hello. The projection retains the
+exact observation ContentId, worker-stream event revision, and optional controller/external
+admission evidence. Worker transport can submit only `BuiltinProbe`; higher assurance requires an
+on-demand trusted admission capability citing an independent evidence `EventId`.
 
-This is a pre-public compatibility change: pre-V3 job-contract/profile artifacts and pre-V3 worker
-registration payloads are rejected rather than assigned invented pool, platform provenance, or
-credential identity. A
+Placement snapshot V2 and scheduler event V2 freeze that resource evidence. A reservation owns its
+CPU, memory, scratch quantities and deterministic accelerator device IDs. Unreleased reservations
+are subtracted before selection, missing previously reserved devices fail closed, and SQLite
+optimistic concurrency serializes competing claims. Assignment grant requires the exact resource
+ContentId, revision, and admission evidence observed at placement; even a beneficial refresh makes
+the old snapshot stale rather than silently changing its meaning.
+
+This is a pre-public compatibility change: pre-V3 job-contract/profile artifacts, pre-V4 worker
+registration payloads, and V1 scheduler facts/snapshots are rejected rather than assigned invented
+pool, platform provenance, credential, resource, or reservation meaning. A
 deployment retaining development-era state needs the controlled migration/rebuild path before
 upgrade; the first public compatibility baseline will include that migration gate.
 
@@ -728,11 +736,12 @@ recovery, old-certificate rejection after overlap, and final successor revocatio
 **Implemented scheduler reservation kernel C1 (2026-08-25).** The execution layer now separates an
 immutable `PlacementId`, capacity-bearing `ReservationId`, downstream `AssignmentId`, and bounded
 `LeaseId`. A placement freezes a content-addressed snapshot of the canonical worker candidate set.
-Each entry cites exact incarnation, credential, profile, availability and heartbeat evidence,
-captures the controller-owned authority revision when the adapter has one, and records the first
-stable rejection reason or its capacity inputs. Policy `stable-worker-id-v1` filters first and then
-chooses the lowest eligible stable `WorkerId`; selection is therefore replayable rather than a
-function of map iteration or connection arrival order.
+Each entry cites exact incarnation, credential, profile, resource observation, availability, and
+heartbeat evidence, captures the controller-owned authority revision when the adapter has one, and
+records the first stable rejection reason or its capacity inputs. Policy
+`stable-worker-id-quantitative-v2` filters first and then chooses the lowest eligible stable
+`WorkerId`; selection is therefore replayable rather than a function of map iteration or connection
+arrival order.
 
 The reference C1 capacity authority is a singleton append-only scheduler ledger. Before assignment
 grant it commits one reservation against registered concurrency and current reported availability.

@@ -94,7 +94,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         protocol_version: protocol,
         session_timeout_ms: session_timeout,
         scheduler: Some(SchedulerServiceConfig {
-            policy_version: SchedulerPolicyVersion::StableWorkerIdV1,
+            policy_version: SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
             reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(2_000)?,
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(2_000)?,
         }),
@@ -169,10 +169,11 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
                 ObservedAtUnixMillis::new(chrono_free_unix_millis().expect("current Unix time"));
             let a = recover_worker_session(&events, &content, worker_a_id, session_timeout, now);
             let b = recover_worker_session(&events, &content, worker_b_id, session_timeout, now);
-            if matches!(a, Ok(WorkerSessionState::Live(_)))
-                && matches!(b, Ok(WorkerSessionState::Live(_)))
-            {
-                break;
+            if let (Ok(WorkerSessionState::Live(a)), Ok(WorkerSessionState::Live(b))) = (a, b) {
+                break (
+                    a.resource_observation_revision(),
+                    b.resource_observation_revision(),
+                );
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
@@ -185,11 +186,45 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         worker_task_a.is_finished(),
         worker_task_b.is_finished()
     );
+    let initial_resource_revisions = live.expect("durable liveness");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
         !server.is_finished() && !worker_task_a.is_finished() && !worker_task_b.is_finished(),
         "heartbeat acknowledgements must keep both idle-bounded sessions open"
+    );
+    let refreshed_events = SqliteEventStore::open(&event_database)?;
+    let refreshed_content = SqliteContentStore::open(&content_database, &content_directory)?;
+    let refreshed_at = ObservedAtUnixMillis::new(chrono_free_unix_millis()?);
+    let WorkerSessionState::Live(refreshed_a) = recover_worker_session(
+        &refreshed_events,
+        &refreshed_content,
+        worker_a_id,
+        session_timeout,
+        refreshed_at,
+    )?
+    else {
+        return Err("worker A lost liveness during resource refresh".into());
+    };
+    let WorkerSessionState::Live(refreshed_b) = recover_worker_session(
+        &refreshed_events,
+        &refreshed_content,
+        worker_b_id,
+        session_timeout,
+        refreshed_at,
+    )?
+    else {
+        return Err("worker B lost liveness during resource refresh".into());
+    };
+    assert_ne!(
+        refreshed_a.resource_observation_revision(),
+        initial_resource_revisions.0,
+        "worker A resource refresh must become a distinct durable fact"
+    );
+    assert_ne!(
+        refreshed_b.resource_observation_revision(),
+        initial_resource_revisions.1,
+        "worker B resource refresh must become a distinct durable fact"
     );
 
     let mut content = SqliteContentStore::open(&content_database, &content_directory)?;
@@ -284,7 +319,7 @@ fn worker_config(
     protocol: WorkerProtocolVersion,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     Ok(WorkerConfig {
-        schema_version: 4,
+        schema_version: 5,
         controller,
         identity: WorkerIdentityConfig::External {
             worker_id,
@@ -308,6 +343,7 @@ fn worker_config(
             scratch_path: directory.to_path_buf(),
             accelerator_sysfs: None,
             freshness_ms: None,
+            refresh_interval_ms: NonZeroU64::new(100),
             expected: ExpectedResourceConstraints::default(),
         },
         availability: WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())?,

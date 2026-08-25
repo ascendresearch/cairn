@@ -19,20 +19,28 @@ observation time, exact candidate evidence, every rejection, and the selected wo
 `ReservationId` is capacity authority, not an alias for the choice or lease. It is committed before
 the assignment layer can create delivery authority.
 
-The supported policy is `stable-worker-id-v1`: candidates are canonicalized by `WorkerId`, pass
-pool/platform/backend/capability, liveness, availability, controller credential authority, and
-reservation-capacity gates, then the first eligible worker is selected. A no-candidate result is
-also durable and retains the complete rejection trace.
+The supported policy is `stable-worker-id-quantitative-v2`: candidates are canonicalized by
+`WorkerId`, pass pool/platform/backend/capability, liveness, availability, controller credential
+authority, and slot/quantitative reservation-capacity gates, then the first eligible worker is
+selected. A no-candidate result is also durable and retains the complete rejection trace.
 
 ## Capacity and concurrency
 
-The V1 reservation ledger is one global event stream. For each worker, effective one-slot admission
+The V2 reservation ledger is one global event stream. For each worker, effective slot admission
 is bounded by registered maximum concurrency minus unreleased reservations. Dynamic availability
 also subtracts reservations whose `AttemptId` is not yet present in the worker heartbeat; attempts
 already reported active are not double-subtracted. SQLite expected-revision concurrency means
 competing controller writers cannot both commit against the same free slot. One `AttemptId` cannot
 hold parallel active reservations. A revision loser may retry with a fresh `PlacementId`; it cannot
 reinterpret the losing snapshot as authority.
+
+Each placement also freezes the current typed resource-observation ContentId, worker-stream event
+revision, and optional trusted-admission evidence. Its reservation records the requested CPU,
+memory, and scratch quantities plus exact accelerator device IDs. All unreleased quantities are
+subtracted before a new candidate becomes eligible. Devices are selected deterministically from the
+canonical matching set and are exclusive; disappearance of an actively reserved device blocks new
+quantitative placement until safe release. The same global optimistic revision protects slot and
+quantitative accounting, including concurrent writers.
 
 This singleton design favors an auditable correctness baseline over horizontal write throughput.
 A later sharded ledger must retain the same `PlacementId`, `ReservationId`, snapshot, and release
@@ -41,9 +49,10 @@ proof semantics.
 ## Staleness and release
 
 Before assignment lease grant, the scheduler reloads the selected worker and requires the same
-incarnation, credential, profile, availability artifact, and heartbeat observation. It separately
-rechecks controller-owned credential authority. Any change fails closed and leaves the bounded
-reservation for recovery.
+incarnation, credential, profile, resource ContentId/revision/admission evidence, availability
+artifact, and heartbeat observation. It separately rechecks controller-owned credential authority.
+Any change—including a resource refresh that reports more capacity—fails closed and leaves the
+bounded reservation for recovery.
 
 Reservation claim timing is an explicit positive `ReservationClaimTimeoutMillis`; it is not a
 hard-coded budget. An unclaimed reservation may be released after that deadline only if no
