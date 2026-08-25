@@ -276,15 +276,30 @@ cgroup/PID/IPC namespaces, and hard PID/CPU/memory-and-swap ceilings. Golden arg
 identity/layout/network/device/resource tests prevent policy downgrade. No execution configuration,
 runtime invocation, or lifecycle mutation was added.
 
-### Next implementation slice: F2d-c recoverable container supervisor
+**F2d-c implemented (2026-08-25).** The provider-neutral runtime contract now includes typed local
+image/declared-volume observation, exit codes, and a minimal launch-plan-parameterized
+`ContainerLifecycleRuntime` capability for create/start/wait. The worker supervisor inspects the
+deterministic name before mutation and after successful create/start, validates the complete
+binding and full runtime ID before reattachment, rejects image-declared volumes, and separates the
+sole initial entry from conservative recovery. Unknown mutation responses are `Ambiguous`; recovery
+converges through `Absent`, `Created`, `Running`, or `Exited` without reconstructing job authority,
+starting an exited container, deleting a conflict, or producing a second runtime subject. The fake
+runtime crash matrix covers before/after-effect response loss, a concurrent create winner, binding
+conflict, completion during disconnect, and terminal replay. No concrete runtime adapter,
+execution configuration, bounded capture, or worker activation was added.
 
-Implement step 3 above by extending the narrow runtime port only with the minimum typed
-inspect/create/start/wait operations needed by reconciliation. Freeze mutation outcomes so an
-unknown response after create/start becomes `Ambiguous`, inspect every deterministic name before
-mutation, and require the full immutable binding before reattachment. Add a fake Docker-compatible
-adapter and crash-boundary matrix proving one `AttemptId` never acquires a second subject. This
-slice must keep worker activation disabled and must not yet claim bounded terminal capture or
-real-host isolation; those remain F2d-d and F2d-e.
+### Next implementation slice: F2d-d bounded capture and trusted evidence
+
+Implement step 4 above without activating the backend. Extend the typed runtime capability with
+only the exact-container log/output/stop observations required for supervision. Drain stdout and
+stderr independently under their contract bounds, enforce timeout and stream exhaustion by
+stopping and then reconciling the same full runtime ID, admit only declared regular output files
+below individual and aggregate bounds, and construct trusted evidence from runtime-observed image,
+policy, identity, timing, and exit state outside candidate-writable mounts. Add fake-runtime races
+for stop ambiguity and result completion during disconnect, then freeze the rule that cleanup is
+ineligible until the terminal observation is durably published. Concrete Docker-compatible CLI
+execution, user-namespace/runtime preflight, worker configuration, and real-host isolation remain
+F2d-e.
 
 Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They will add explicit
 device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on

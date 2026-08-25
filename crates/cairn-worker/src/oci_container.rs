@@ -5,10 +5,11 @@ use std::{
 };
 
 use cairn_execution::{
-    ContainerBinding, ContainerName, ContainerSandboxPolicy, EnvironmentVariable,
-    ExecutionEnvironmentArtifact, InputBundleArtifact, InputBundleEntry, InputBundleV1,
-    JobContract, JobContractArtifact, NetworkPolicy, OCI_CONTAINER_BACKEND,
-    OciExecutionEnvironmentV1, OciImageDigest, VerifiedAssignmentMaterials,
+    ContainerBinding, ContainerExitObservation, ContainerImageVolumeState, ContainerInspection,
+    ContainerLifecycleRuntime, ContainerName, ContainerRuntimeError, ContainerSandboxPolicy,
+    EnvironmentVariable, ExecutionEnvironmentArtifact, InputBundleArtifact, InputBundleEntry,
+    InputBundleV1, JobContract, JobContractArtifact, NetworkPolicy, OCI_CONTAINER_BACKEND,
+    OciExecutionEnvironmentV1, OciImageDigest, RuntimeContainerId, VerifiedAssignmentMaterials,
 };
 use cairn_protocol::{AttemptId, ContentId};
 use thiserror::Error;
@@ -352,6 +353,303 @@ fn tmpfs_argument(target: &str, limit: ContainerWritableByteLimit, executable: b
     )
 }
 
+/// Durable external-effect classification for an unfinished container-supervisor call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContainerSupervisorFailureClass {
+    /// Inspection and preflight prove that no container was created by the initial call.
+    NotStarted,
+    /// A matching or conflicting container may exist or the subject may have executed.
+    Ambiguous,
+}
+
+/// Recoverable CPU-container lifecycle failure.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum ContainerSupervisorError {
+    #[error("container subject was not started: {0}")]
+    NotStarted(String),
+    #[error("container lifecycle requires reconciliation: {0}")]
+    Ambiguous(String),
+}
+
+impl ContainerSupervisorError {
+    #[must_use]
+    pub const fn failure_class(&self) -> ContainerSupervisorFailureClass {
+        match self {
+            Self::NotStarted(_) => ContainerSupervisorFailureClass::NotStarted,
+            Self::Ambiguous(_) => ContainerSupervisorFailureClass::Ambiguous,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SupervisorEntry {
+    Initial,
+    Recovery,
+}
+
+/// Performs the only initial inspect/create/start/wait lifecycle for one immutable plan.
+///
+/// This entry point is for the first invocation only. An ambiguous result must be resumed through
+/// [`recover_container_supervision`], never by reconstructing job or attempt authority.
+///
+/// # Errors
+///
+/// Returns `NotStarted` only while the deterministic name is absent and no mutation may have been
+/// applied. Once a container exists or a mutation response is uncertain, returns `Ambiguous`.
+pub fn start_container_supervision<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+) -> Result<ContainerExitObservation, ContainerSupervisorError>
+where
+    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    supervise_container(runtime, plan, SupervisorEntry::Initial)
+}
+
+/// Reconciles one previously entered lifecycle from the deterministic runtime state.
+///
+/// Recovery may create an absent container or start the exact matching `Created` container. Name
+/// uniqueness and full identity checks ensure those retries converge on one runtime subject. It
+/// never starts an `Exited` container and never mutates a conflicting container.
+///
+/// # Errors
+///
+/// Any inability to reconcile a recovery call is `Ambiguous`; recovery never grants a fresh
+/// attempt or claims that the prior invocation had no effect.
+pub fn recover_container_supervision<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+) -> Result<ContainerExitObservation, ContainerSupervisorError>
+where
+    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    supervise_container(runtime, plan, SupervisorEntry::Recovery)
+}
+
+fn supervise_container<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    entry: SupervisorEntry,
+) -> Result<ContainerExitObservation, ContainerSupervisorError>
+where
+    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    let inspection = runtime
+        .inspect(plan.name())
+        .map_err(|error| entry_error(entry, "initial inspect", &error))?;
+    validate_name(&inspection, plan)?;
+    match inspection {
+        ContainerInspection::Absent { .. } => create_then_advance(runtime, plan, entry),
+        present => advance_present(runtime, plan, present),
+    }
+}
+
+fn create_then_advance<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    entry: SupervisorEntry,
+) -> Result<ContainerExitObservation, ContainerSupervisorError>
+where
+    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    let image = runtime
+        .resolve_image(plan.image())
+        .map_err(|error| entry_error(entry, "image preflight", &error))?;
+    if image.image() != plan.image() {
+        return Err(entry_message(
+            entry,
+            "resolved image identity differs from the immutable launch plan",
+        ));
+    }
+    if image.volume_state() != ContainerImageVolumeState::None {
+        return Err(entry_message(
+            entry,
+            "image declares volumes that would synthesize writable mounts",
+        ));
+    }
+    match runtime.create(plan) {
+        Ok(()) => {}
+        Err(ContainerRuntimeError::Ambiguous(diagnostic)) => {
+            return Err(ContainerSupervisorError::Ambiguous(format!(
+                "create response is unknown: {diagnostic}"
+            )));
+        }
+        Err(error) => {
+            let inspection = runtime.inspect(plan.name()).map_err(|inspect_error| {
+                ContainerSupervisorError::Ambiguous(format!(
+                    "create failed definitively but reconciliation inspect failed: {inspect_error}"
+                ))
+            })?;
+            validate_name(&inspection, plan)?;
+            return match inspection {
+                ContainerInspection::Absent { .. } => Err(entry_error(entry, "create", &error)),
+                present => advance_present(runtime, plan, present),
+            };
+        }
+    }
+    let inspection = runtime.inspect(plan.name()).map_err(|error| {
+        ContainerSupervisorError::Ambiguous(format!("post-create inspection failed: {error}"))
+    })?;
+    validate_name(&inspection, plan)?;
+    match inspection {
+        ContainerInspection::Absent { .. } => Err(ContainerSupervisorError::Ambiguous(
+            "runtime reported success but the created container is absent".into(),
+        )),
+        present => advance_present(runtime, plan, present),
+    }
+}
+
+fn advance_present<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    inspection: ContainerInspection,
+) -> Result<ContainerExitObservation, ContainerSupervisorError>
+where
+    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    validate_binding(&inspection, plan, None)?;
+    match inspection {
+        ContainerInspection::Created { runtime_id, .. } => {
+            runtime
+                .start(plan.name(), &runtime_id)
+                .map_err(|error| mutation_error("start", &error))?;
+            let inspection = runtime.inspect(plan.name()).map_err(|error| {
+                ContainerSupervisorError::Ambiguous(format!(
+                    "post-start inspection failed: {error}"
+                ))
+            })?;
+            validate_binding(&inspection, plan, Some(&runtime_id))?;
+            match inspection {
+                ContainerInspection::Running { .. } => wait_for_exit(runtime, plan, &runtime_id),
+                ContainerInspection::Exited { .. } => exited_container(inspection),
+                ContainerInspection::Absent { .. } | ContainerInspection::Created { .. } => {
+                    Err(ContainerSupervisorError::Ambiguous(
+                        "runtime accepted start without observing running or exited state".into(),
+                    ))
+                }
+            }
+        }
+        ContainerInspection::Running { runtime_id, .. } => {
+            wait_for_exit(runtime, plan, &runtime_id)
+        }
+        ContainerInspection::Exited { .. } => exited_container(inspection),
+        ContainerInspection::Absent { .. } => Err(ContainerSupervisorError::Ambiguous(
+            "present-container transition received absent state".into(),
+        )),
+    }
+}
+
+fn wait_for_exit<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    runtime_id: &RuntimeContainerId,
+) -> Result<ContainerExitObservation, ContainerSupervisorError>
+where
+    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    let observation = runtime
+        .wait(plan.name(), runtime_id)
+        .map_err(|error| mutation_error("wait", &error))?;
+    validate_exit_observation(&observation, plan, runtime_id)?;
+    Ok(observation)
+}
+
+fn validate_name(
+    inspection: &ContainerInspection,
+    plan: &ContainerLaunchPlan,
+) -> Result<(), ContainerSupervisorError> {
+    if inspection.name() != plan.name() {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "runtime inspection returned another deterministic name".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_binding(
+    inspection: &ContainerInspection,
+    plan: &ContainerLaunchPlan,
+    expected_runtime_id: Option<&RuntimeContainerId>,
+) -> Result<(), ContainerSupervisorError> {
+    validate_name(inspection, plan)?;
+    if inspection.binding() != Some(plan.binding()) {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "container name is occupied by a conflicting immutable binding".into(),
+        ));
+    }
+    let Some(runtime_id) = inspection.runtime_id() else {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "present container omitted its full runtime identity".into(),
+        ));
+    };
+    if expected_runtime_id.is_some_and(|expected| runtime_id != expected) {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "container runtime identity changed during reconciliation".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn exited_container(
+    inspection: ContainerInspection,
+) -> Result<ContainerExitObservation, ContainerSupervisorError> {
+    let ContainerInspection::Exited {
+        name,
+        runtime_id,
+        binding,
+        exit_code,
+    } = inspection
+    else {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "terminal conversion received a non-exited phase".into(),
+        ));
+    };
+    Ok(ContainerExitObservation::new(
+        name, runtime_id, binding, exit_code,
+    ))
+}
+
+fn validate_exit_observation(
+    observation: &ContainerExitObservation,
+    plan: &ContainerLaunchPlan,
+    expected_runtime_id: &RuntimeContainerId,
+) -> Result<(), ContainerSupervisorError> {
+    if observation.name() != plan.name()
+        || observation.binding() != plan.binding()
+        || observation.runtime_id() != expected_runtime_id
+    {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "wait returned a conflicting terminal container identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn entry_error(
+    entry: SupervisorEntry,
+    operation: &str,
+    error: &ContainerRuntimeError,
+) -> ContainerSupervisorError {
+    if matches!(error, ContainerRuntimeError::Ambiguous(_)) {
+        return ContainerSupervisorError::Ambiguous(format!("{operation} is unknown: {error}"));
+    }
+    entry_message(entry, format!("{operation} failed: {error}"))
+}
+
+fn entry_message(
+    entry: SupervisorEntry,
+    diagnostic: impl Into<String>,
+) -> ContainerSupervisorError {
+    match entry {
+        SupervisorEntry::Initial => ContainerSupervisorError::NotStarted(diagnostic.into()),
+        SupervisorEntry::Recovery => ContainerSupervisorError::Ambiguous(diagnostic.into()),
+    }
+}
+
+fn mutation_error(operation: &str, error: &ContainerRuntimeError) -> ContainerSupervisorError {
+    ContainerSupervisorError::Ambiguous(format!("{operation} failed after creation: {error}"))
+}
+
 /// Builds the sole admitted CPU-only create plan from worker-verified exact material.
 ///
 /// # Errors
@@ -583,11 +881,12 @@ mod tests {
 
     use cairn_execution::{
         AcceleratorDeviceCount, AcceleratorResourceRequest, AssignmentMaterialChunkSize,
-        CapturePolicy, CommandArgument, CommandContract, DiagnosticByteLimit,
-        EnvironmentVariableName, EvidenceByteLimit, ExecutionBackend, ExecutionPlatformRequirement,
-        ExecutionTimeoutMillis, ExpectedOutput, InputFileMode, LogicalCpuCount, MemoryByteCount,
-        OutputByteLimit, OutputName, PlacementRequest, QuantitativeResourceRequest,
-        ResourceRequest, SandboxPath, ScratchByteCount, load_assignment_material_manifest,
+        CapturePolicy, CommandArgument, CommandContract, ContainerExitCode, ContainerPhase,
+        ContainerRuntime, DiagnosticByteLimit, EnvironmentVariableName, EvidenceByteLimit,
+        ExecutionBackend, ExecutionPlatformRequirement, ExecutionTimeoutMillis, ExpectedOutput,
+        InputFileMode, LogicalCpuCount, MemoryByteCount, OutputByteLimit, OutputName,
+        PlacementRequest, QuantitativeResourceRequest, ResolvedContainerImage, ResourceRequest,
+        SandboxPath, ScratchByteCount, load_assignment_material_manifest,
         verify_persisted_assignment_materials,
     };
     use cairn_protocol::JobId;
@@ -786,6 +1085,489 @@ mod tests {
             .into_iter()
             .map(|argument| argument.into_string().expect("UTF-8 argv"))
             .collect()
+    }
+
+    #[derive(Clone, Copy)]
+    enum MutationFault {
+        AmbiguousBeforeEffect,
+        AmbiguousAfterEffect,
+        Rejected,
+        RejectedAfterConcurrentCreate,
+    }
+
+    struct FakeRuntime {
+        image: ResolvedContainerImage,
+        inspection: ContainerInspection,
+        runtime_id: RuntimeContainerId,
+        resolve_error: Option<ContainerRuntimeError>,
+        create_fault: Option<MutationFault>,
+        start_fault: Option<MutationFault>,
+        wait_fault: Option<MutationFault>,
+        replace_runtime_id_after_start: bool,
+        create_calls: u64,
+        successful_creates: u64,
+        start_calls: u64,
+        successful_starts: u64,
+        wait_calls: u64,
+    }
+
+    impl FakeRuntime {
+        fn absent(plan: &ContainerLaunchPlan) -> Self {
+            Self {
+                image: ResolvedContainerImage::new(
+                    plan.image().clone(),
+                    ContainerImageVolumeState::None,
+                ),
+                inspection: ContainerInspection::Absent {
+                    name: plan.name().clone(),
+                },
+                runtime_id: RuntimeContainerId::new(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+                .expect("runtime ID"),
+                resolve_error: None,
+                create_fault: None,
+                start_fault: None,
+                wait_fault: None,
+                replace_runtime_id_after_start: false,
+                create_calls: 0,
+                successful_creates: 0,
+                start_calls: 0,
+                successful_starts: 0,
+                wait_calls: 0,
+            }
+        }
+
+        fn apply_create(&mut self, plan: &ContainerLaunchPlan) {
+            assert_eq!(self.inspection.phase(), ContainerPhase::Absent);
+            self.successful_creates += 1;
+            self.inspection = ContainerInspection::Created {
+                name: plan.name().clone(),
+                runtime_id: self.runtime_id.clone(),
+                binding: plan.binding().clone(),
+            };
+        }
+
+        fn apply_start(&mut self) {
+            let ContainerInspection::Created {
+                name,
+                runtime_id,
+                binding,
+            } = &self.inspection
+            else {
+                panic!("start requires created state");
+            };
+            self.successful_starts += 1;
+            let runtime_id = if self.replace_runtime_id_after_start {
+                RuntimeContainerId::new(
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .expect("replacement runtime ID")
+            } else {
+                runtime_id.clone()
+            };
+            self.inspection = ContainerInspection::Running {
+                name: name.clone(),
+                runtime_id,
+                binding: binding.clone(),
+            };
+        }
+
+        fn apply_exit(&mut self) {
+            let (name, runtime_id, binding) = match &self.inspection {
+                ContainerInspection::Running {
+                    name,
+                    runtime_id,
+                    binding,
+                }
+                | ContainerInspection::Exited {
+                    name,
+                    runtime_id,
+                    binding,
+                    ..
+                } => (name.clone(), runtime_id.clone(), binding.clone()),
+                _ => panic!("exit requires running state"),
+            };
+            self.inspection = ContainerInspection::Exited {
+                name,
+                runtime_id,
+                binding,
+                exit_code: ContainerExitCode::new(0),
+            };
+        }
+
+        fn exit_observation(&self) -> ContainerExitObservation {
+            let ContainerInspection::Exited {
+                name,
+                runtime_id,
+                binding,
+                exit_code,
+            } = &self.inspection
+            else {
+                panic!("terminal observation requires exited state");
+            };
+            ContainerExitObservation::new(
+                name.clone(),
+                runtime_id.clone(),
+                binding.clone(),
+                *exit_code,
+            )
+        }
+    }
+
+    impl ContainerRuntime for FakeRuntime {
+        fn resolve_image(
+            &mut self,
+            _requested: &OciImageDigest,
+        ) -> Result<ResolvedContainerImage, ContainerRuntimeError> {
+            if let Some(error) = self.resolve_error.take() {
+                return Err(error);
+            }
+            Ok(self.image.clone())
+        }
+
+        fn inspect(
+            &mut self,
+            _name: &ContainerName,
+        ) -> Result<ContainerInspection, ContainerRuntimeError> {
+            Ok(self.inspection.clone())
+        }
+    }
+
+    impl ContainerLifecycleRuntime for FakeRuntime {
+        type LaunchPlan = ContainerLaunchPlan;
+
+        fn create(&mut self, plan: &Self::LaunchPlan) -> Result<(), ContainerRuntimeError> {
+            self.create_calls += 1;
+            match self.create_fault.take() {
+                Some(MutationFault::AmbiguousBeforeEffect) => Err(
+                    ContainerRuntimeError::Ambiguous("create response lost before effect".into()),
+                ),
+                Some(MutationFault::AmbiguousAfterEffect) => {
+                    self.apply_create(plan);
+                    Err(ContainerRuntimeError::Ambiguous(
+                        "create response lost after effect".into(),
+                    ))
+                }
+                Some(MutationFault::Rejected) => {
+                    Err(ContainerRuntimeError::Rejected("create rejected".into()))
+                }
+                Some(MutationFault::RejectedAfterConcurrentCreate) => {
+                    self.apply_create(plan);
+                    Err(ContainerRuntimeError::Rejected(
+                        "another reconciler won the create race".into(),
+                    ))
+                }
+                None => {
+                    self.apply_create(plan);
+                    Ok(())
+                }
+            }
+        }
+
+        fn start(
+            &mut self,
+            name: &ContainerName,
+            runtime_id: &RuntimeContainerId,
+        ) -> Result<(), ContainerRuntimeError> {
+            self.start_calls += 1;
+            assert_eq!(self.inspection.name(), name);
+            assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            match self.start_fault.take() {
+                Some(MutationFault::AmbiguousBeforeEffect) => Err(
+                    ContainerRuntimeError::Ambiguous("start response lost before effect".into()),
+                ),
+                Some(MutationFault::AmbiguousAfterEffect) => {
+                    self.apply_start();
+                    Err(ContainerRuntimeError::Ambiguous(
+                        "start response lost after effect".into(),
+                    ))
+                }
+                Some(MutationFault::Rejected) => {
+                    Err(ContainerRuntimeError::Rejected("start rejected".into()))
+                }
+                Some(MutationFault::RejectedAfterConcurrentCreate) => {
+                    unreachable!("concurrent-create fault is create-only")
+                }
+                None => {
+                    self.apply_start();
+                    Ok(())
+                }
+            }
+        }
+
+        fn wait(
+            &mut self,
+            name: &ContainerName,
+            runtime_id: &RuntimeContainerId,
+        ) -> Result<ContainerExitObservation, ContainerRuntimeError> {
+            self.wait_calls += 1;
+            assert_eq!(self.inspection.name(), name);
+            assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            match self.wait_fault.take() {
+                Some(MutationFault::AmbiguousBeforeEffect) => {
+                    Err(ContainerRuntimeError::Ambiguous(
+                        "wait response unavailable before exit".into(),
+                    ))
+                }
+                Some(MutationFault::AmbiguousAfterEffect) => {
+                    self.apply_exit();
+                    Err(ContainerRuntimeError::Ambiguous(
+                        "wait response lost after exit".into(),
+                    ))
+                }
+                Some(MutationFault::Rejected) => {
+                    Err(ContainerRuntimeError::Rejected("wait rejected".into()))
+                }
+                Some(MutationFault::RejectedAfterConcurrentCreate) => {
+                    unreachable!("concurrent-create fault is create-only")
+                }
+                None => {
+                    self.apply_exit();
+                    Ok(self.exit_observation())
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn supervisor_runs_one_subject_and_exited_recovery_is_observational() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut runtime = FakeRuntime::absent(&plan);
+
+        let exited = start_container_supervision(&mut runtime, &plan).expect("terminal exit");
+        assert_eq!(exited.name(), plan.name());
+        assert_eq!(exited.binding(), plan.binding());
+        assert_eq!(exited.runtime_id(), &runtime.runtime_id);
+        assert_eq!(exited.exit_code().get(), 0);
+        assert_eq!(runtime.create_calls, 1);
+        assert_eq!(runtime.successful_creates, 1);
+        assert_eq!(runtime.start_calls, 1);
+        assert_eq!(runtime.successful_starts, 1);
+        assert_eq!(runtime.wait_calls, 1);
+
+        assert_eq!(
+            recover_container_supervision(&mut runtime, &plan).expect("recover exit"),
+            exited
+        );
+        assert_eq!(runtime.create_calls, 1);
+        assert_eq!(runtime.start_calls, 1);
+        assert_eq!(runtime.wait_calls, 1);
+    }
+
+    #[test]
+    fn ambiguous_create_recovery_converges_on_one_created_subject() {
+        for fault in [
+            MutationFault::AmbiguousBeforeEffect,
+            MutationFault::AmbiguousAfterEffect,
+        ] {
+            let fixture = Fixture::new();
+            let plan = fixture.build(AttemptId::new()).expect("launch plan");
+            let mut runtime = FakeRuntime::absent(&plan);
+            runtime.create_fault = Some(fault);
+
+            let error = start_container_supervision(&mut runtime, &plan).expect_err("ambiguous");
+            assert_eq!(
+                error.failure_class(),
+                ContainerSupervisorFailureClass::Ambiguous
+            );
+            let exited =
+                recover_container_supervision(&mut runtime, &plan).expect("reconciled exit");
+            assert_eq!(exited.binding(), plan.binding());
+            assert_eq!(runtime.successful_creates, 1);
+            assert_eq!(runtime.successful_starts, 1);
+            assert_eq!(runtime.start_calls, 1);
+            assert!(runtime.create_calls <= 2);
+        }
+    }
+
+    #[test]
+    fn definitive_create_race_reinspects_and_uses_the_single_matching_container() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut runtime = FakeRuntime::absent(&plan);
+        runtime.create_fault = Some(MutationFault::RejectedAfterConcurrentCreate);
+
+        start_container_supervision(&mut runtime, &plan).expect("race reconciliation");
+        assert_eq!(runtime.create_calls, 1);
+        assert_eq!(runtime.successful_creates, 1);
+        assert_eq!(runtime.start_calls, 1);
+        assert_eq!(runtime.successful_starts, 1);
+    }
+
+    #[test]
+    fn ambiguous_start_recovery_never_starts_the_subject_twice() {
+        for fault in [
+            MutationFault::AmbiguousBeforeEffect,
+            MutationFault::AmbiguousAfterEffect,
+        ] {
+            let fixture = Fixture::new();
+            let plan = fixture.build(AttemptId::new()).expect("launch plan");
+            let mut runtime = FakeRuntime::absent(&plan);
+            runtime.start_fault = Some(fault);
+
+            assert_eq!(
+                start_container_supervision(&mut runtime, &plan)
+                    .expect_err("ambiguous")
+                    .failure_class(),
+                ContainerSupervisorFailureClass::Ambiguous
+            );
+            recover_container_supervision(&mut runtime, &plan).expect("reconciled exit");
+            assert_eq!(runtime.successful_creates, 1);
+            assert_eq!(runtime.successful_starts, 1);
+            assert!(runtime.start_calls <= 2);
+        }
+    }
+
+    #[test]
+    fn completed_while_wait_response_is_lost_recovers_without_restart() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut runtime = FakeRuntime::absent(&plan);
+        runtime.wait_fault = Some(MutationFault::AmbiguousAfterEffect);
+
+        assert_eq!(
+            start_container_supervision(&mut runtime, &plan)
+                .expect_err("ambiguous")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
+        assert_eq!(runtime.inspection.phase(), ContainerPhase::Exited);
+        recover_container_supervision(&mut runtime, &plan).expect("recover completed result");
+        assert_eq!(runtime.successful_starts, 1);
+        assert_eq!(runtime.start_calls, 1);
+        assert_eq!(runtime.wait_calls, 1);
+    }
+
+    #[test]
+    fn running_subject_completed_during_disconnect_recovers_terminal_state() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut runtime = FakeRuntime::absent(&plan);
+        runtime.wait_fault = Some(MutationFault::AmbiguousBeforeEffect);
+
+        start_container_supervision(&mut runtime, &plan).expect_err("wait unavailable");
+        assert_eq!(runtime.inspection.phase(), ContainerPhase::Running);
+        runtime.apply_exit();
+        recover_container_supervision(&mut runtime, &plan).expect("recover completed result");
+        assert_eq!(runtime.successful_starts, 1);
+        assert_eq!(runtime.start_calls, 1);
+        assert_eq!(runtime.wait_calls, 1);
+    }
+
+    #[test]
+    fn conflicting_binding_fails_closed_without_mutation() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut runtime = FakeRuntime::absent(&plan);
+        let conflict = ContainerBinding::new(
+            plan.binding().attempt_id(),
+            JobId::new(),
+            plan.binding().contract_id(),
+            plan.binding().input_bundle_id(),
+            plan.binding().environment_id(),
+            ContainerSandboxPolicy::CpuUntrustedV1,
+        );
+        runtime.inspection = ContainerInspection::Created {
+            name: plan.name().clone(),
+            runtime_id: runtime.runtime_id.clone(),
+            binding: conflict,
+        };
+
+        assert_eq!(
+            recover_container_supervision(&mut runtime, &plan)
+                .expect_err("binding conflict")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
+        assert_eq!(runtime.create_calls, 0);
+        assert_eq!(runtime.start_calls, 0);
+        assert_eq!(runtime.wait_calls, 0);
+        assert_eq!(runtime.inspection.phase(), ContainerPhase::Created);
+    }
+
+    #[test]
+    fn changed_name_or_runtime_identity_fails_closed() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+
+        let mut wrong_name = FakeRuntime::absent(&plan);
+        wrong_name.inspection = ContainerInspection::Created {
+            name: ContainerName::for_attempt(AttemptId::new()),
+            runtime_id: wrong_name.runtime_id.clone(),
+            binding: plan.binding().clone(),
+        };
+        assert_eq!(
+            recover_container_supervision(&mut wrong_name, &plan)
+                .expect_err("wrong name")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
+        assert_eq!(wrong_name.start_calls, 0);
+
+        let mut changed_runtime = FakeRuntime::absent(&plan);
+        changed_runtime.replace_runtime_id_after_start = true;
+        assert_eq!(
+            start_container_supervision(&mut changed_runtime, &plan)
+                .expect_err("changed runtime ID")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
+        assert_eq!(changed_runtime.successful_starts, 1);
+        assert_eq!(changed_runtime.wait_calls, 0);
+    }
+
+    #[test]
+    fn image_preflight_and_definitive_create_failure_have_no_start_effect() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+
+        let mut volumes = FakeRuntime::absent(&plan);
+        volumes.image =
+            ResolvedContainerImage::new(plan.image().clone(), ContainerImageVolumeState::Declared);
+        assert_eq!(
+            start_container_supervision(&mut volumes, &plan)
+                .expect_err("declared volumes")
+                .failure_class(),
+            ContainerSupervisorFailureClass::NotStarted
+        );
+        assert_eq!(volumes.create_calls, 0);
+
+        let mut wrong_image = FakeRuntime::absent(&plan);
+        wrong_image.image = ResolvedContainerImage::new(
+            OciImageDigest::new(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .expect("other image"),
+            ContainerImageVolumeState::None,
+        );
+        assert_eq!(
+            start_container_supervision(&mut wrong_image, &plan)
+                .expect_err("image identity")
+                .failure_class(),
+            ContainerSupervisorFailureClass::NotStarted
+        );
+        assert_eq!(wrong_image.create_calls, 0);
+
+        let mut rejected = FakeRuntime::absent(&plan);
+        rejected.create_fault = Some(MutationFault::Rejected);
+        assert_eq!(
+            start_container_supervision(&mut rejected, &plan)
+                .expect_err("create rejected")
+                .failure_class(),
+            ContainerSupervisorFailureClass::NotStarted
+        );
+        assert_eq!(rejected.successful_creates, 0);
+        assert_eq!(rejected.start_calls, 0);
+
+        rejected.create_fault = Some(MutationFault::Rejected);
+        assert_eq!(
+            recover_container_supervision(&mut rejected, &plan)
+                .expect_err("recovery remains conservative")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
     }
 
     #[test]

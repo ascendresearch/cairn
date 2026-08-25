@@ -18,9 +18,11 @@ pub use assignment::{
     recover_execution_assignment, renew_assignment_lease, start_accepted_assignment,
 };
 pub use container::{
-    ContainerBinding, ContainerContractError, ContainerInspection, ContainerMountRole,
+    ContainerBinding, ContainerContractError, ContainerExitCode, ContainerExitObservation,
+    ContainerImageVolumeState, ContainerInspection, ContainerLifecycleRuntime, ContainerMountRole,
     ContainerName, ContainerPhase, ContainerRuntime, ContainerRuntimeError, ContainerSandboxPolicy,
-    OCI_CONTAINER_BACKEND, OciExecutionEnvironmentV1, OciImageDigest, RuntimeContainerId,
+    OCI_CONTAINER_BACKEND, OciExecutionEnvironmentV1, OciImageDigest, ResolvedContainerImage,
+    RuntimeContainerId,
 };
 pub use contract::{
     AcceleratorDeviceCount, AcceleratorResourceRequest, ArchitectureName, ArchivedOutput,

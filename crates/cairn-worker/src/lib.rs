@@ -52,8 +52,9 @@ use local_process::LocalProcessExecutor;
 pub use local_process::{LinuxNamespaceConfig, WorkerExecutionConfig};
 pub use oci_container::{
     ContainerLaunchLimits, ContainerLaunchPlan, ContainerLaunchPlanError, ContainerLogicalCpuLimit,
-    ContainerMemoryByteLimit, ContainerPidsLimit, ContainerStateRoot, ContainerWritableByteLimit,
-    build_container_launch_plan,
+    ContainerMemoryByteLimit, ContainerPidsLimit, ContainerStateRoot, ContainerSupervisorError,
+    ContainerSupervisorFailureClass, ContainerWritableByteLimit, build_container_launch_plan,
+    recover_container_supervision, start_container_supervision,
 };
 
 pub use probe::{

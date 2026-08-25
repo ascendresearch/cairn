@@ -1,13 +1,14 @@
 # OCI container security boundary
 
-- Status: F2d-b typed contract and fixed launch plan implemented; runtime mutation not implemented
+- Status: F2d-c typed lifecycle capability and recoverable supervisor implemented; no concrete runtime adapter or worker activation
 - Backend claim: `oci-container-v1`
 - Scope: untrusted CPU-only candidate and oracle processes
 
 This document freezes the security boundary before Cairn invokes a Docker-compatible runtime. The
-current code validates identities, lifecycle observations, and OCI environment bytes and renders a
-canonical create argv without a shell. It does not invoke a runtime or activate a container
-executor and must not yet be treated as an operational isolation claim.
+current code validates identities, lifecycle observations, and OCI environment bytes, renders a
+canonical create argv without a shell, and reconciles lifecycle mutations through a generic typed
+runtime capability. It has no concrete Docker-compatible mutation adapter and does not activate a
+container executor, so it must not yet be treated as an operational isolation claim.
 
 ## Threat model
 
@@ -45,11 +46,18 @@ this policy.
 - `ContainerSandboxPolicy::cpu-untrusted-v1`: a code-owned policy identity;
 - `ContainerBinding`: exact attempt, job, contract, input, environment, and policy identities;
 - `ContainerInspection`: a tagged state in which present phases cannot omit runtime identity or
-  binding and the absent phase cannot invent them;
+  binding, exited state cannot omit its typed exit code, and the absent phase cannot invent them;
+- `ContainerExitObservation`: the only wait result, requiring exact name, full runtime ID, complete
+  binding, and typed exit code rather than permitting a nonterminal phase;
+- `ResolvedContainerImage`: exact local immutable image identity plus a typed observation of
+  image-declared volumes, which the CPU policy rejects before create;
 - `OciExecutionEnvironmentV1`: strict canonical JSON containing one image digest and a canonical
   environment-variable set;
-- `ContainerRuntime`: the initial read-only resolution/inspection port returning typed observations
-  rather than Docker/Podman output.
+- `ContainerRuntime`: the read-only resolution/inspection port returning typed observations rather
+  than Docker/Podman output;
+- `ContainerLifecycleRuntime`: the minimal create/start/wait capability parameterized by the
+  backend-owned launch-plan type. Definite mutation errors prove no effect, while ambiguous errors
+  may have applied and can be decided only by later exact inspection.
 
 The OCI environment bytes occupy the existing typed `ExecutionEnvironmentArtifact` content domain.
 The job's backend determines which strict decoder is entitled to interpret those bytes. There is no
@@ -83,16 +91,17 @@ state root and may set documented numeric ceilings. It cannot add mounts, capabi
 namespace sharing, or network access to `cpu-untrusted-v1`. Numeric ceilings used for one accepted
 job cannot be disabled and must satisfy the contract minima. Because a Docker CLI flag cannot force
 a daemon into a private user namespace, activation must later preflight a rootless runtime or
-daemon-level user-namespace remapping; the plan never emits `--userns=host`. F2d-c must also stage
-the read-only input tree with permissions readable by the remapped non-root subject without making
-worker-owned state visible, and must reject image/runtime inspection that would synthesize
-additional mounts (including image-declared volumes) or otherwise weaken the fixed plan.
+daemon-level user-namespace remapping; the plan never emits `--userns=host`. Image-declared volumes
+are now rejected before create. Activation must later stage the read-only input tree with
+permissions readable by the remapped non-root subject without making worker-owned state visible,
+and concrete runtime preflight must reject any observed policy weakening.
 
 ## Recovery boundary
 
 One `AttemptId` has one deterministic `ContainerName`. Before Cairn reattaches to a present
-container, every immutable `ContainerBinding` field must match. A name collision with different
-labels is hostile/conflicting state: Cairn does not start, delete, rename, or reuse it.
+container, its full runtime ID and every immutable `ContainerBinding` field must match. A name
+collision with different labels is hostile/conflicting state: Cairn does not start, delete, rename,
+or reuse it.
 
 The intended lifecycle is:
 
@@ -100,17 +109,26 @@ The intended lifecycle is:
 Absent → Created → Running → Exited
 ```
 
-An unavailable runtime before creation is `NotStarted`. Uncertainty after create or start is
-`Ambiguous` until inspection of the exact name, full runtime ID, and binding proves a phase. A
-worker restart may recover the same container; it must never create a second subject for an already
-started `AttemptId`. Cleanup becomes eligible only after terminal evidence is durable and cleanup
-failure cannot authorize re-execution.
+`start_container_supervision` is the sole initial entry; `recover_container_supervision` is the
+reconciliation-only entry after uncertainty or restart. Both inspect the deterministic name before
+mutation and after every successful create/start. Initial runtime/preflight or definitive create
+failure is `NotStarted` only while a second inspection still proves the name absent. Recovery never
+returns `NotStarted`.
+
+An unknown create/start response is immediately `Ambiguous`; a later recovery inspects rather than
+reconstructing job authority. Absent recovery may create the same deterministic name. `Created`
+recovery may reissue start against the same full runtime ID, which converges on one runtime subject;
+it never starts an `Exited` container. Running recovery waits for the same ID, and exited recovery
+is purely observational. A definitive create race is re-inspected before classification, so a
+matching winner is reused and a conflicting winner fails closed. Cleanup becomes eligible only
+after terminal evidence is durable and cleanup failure cannot authorize re-execution.
 
 ## Acceptance boundary
 
-F2d-b ordinary tests now cover the exact golden create argv, absence of privilege-downgrade flags,
-the single read-only host mount, identity/layout controls, device/network rejection, and resource
-ceiling failure. F2d is not complete until offline fake-runtime tests also cover phase recovery,
-binding conflicts, ambiguous mutation, bounded capture, and cleanup ordering, and opt-in real-host
+F2d-c ordinary tests now cover the exact golden create argv, policy-downgrade rejection, typed exit
+state, image-declared-volume rejection, every lifecycle phase, binding/runtime identity conflicts,
+create/start ambiguity before and after effect, concurrent create races, completion during
+disconnect, and exited replay without another start. F2d is not complete until offline tests also
+cover bounded capture, stop/timeout, trusted evidence, and cleanup ordering, and opt-in real-host
 tests prove filesystem/network/device isolation on both release architectures. Until then,
 `cairn-worker` must not advertise or activate `oci-container-v1`.

@@ -156,9 +156,11 @@ adapter is for controlled utilities and is not presented as hostile-code filesys
 immutable OCI image/name/runtime/binding types, strict OCI environment bytes, the threat model, and
 one deterministic shell-free launch plan with a read-only root/input, bounded tmpfs writes,
 non-root execution, denied network/devices, and fixed resource ceilings; see
-[`docs/OCI_CONTAINER_SECURITY.md`](docs/OCI_CONTAINER_SECURITY.md). It still grants no runtime
-mutation or worker activation. Its recoverable supervisor, bounded capture, concrete resource
-challenge/attestation adapters, and oracle-grade real-host jobs remain subsequent slices. Managed
+[`docs/OCI_CONTAINER_SECURITY.md`](docs/OCI_CONTAINER_SECURITY.md). It still provides no concrete
+runtime adapter or worker activation, but now includes a typed recoverable lifecycle supervisor that
+converges inspect/create/start/wait on one deterministic container across ambiguous responses and
+restart. Its bounded capture, concrete Docker-compatible adapter, resource challenge/attestation
+adapters, and oracle-grade real-host jobs remain subsequent slices. Managed
 enrollment is the only path into the persistent registry; controller configuration has no static
 certificate list or import gate. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).

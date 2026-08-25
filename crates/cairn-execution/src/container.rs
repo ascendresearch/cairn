@@ -176,6 +176,44 @@ pub enum ContainerMountRole {
     Temporary,
 }
 
+/// Whether immutable image metadata would synthesize writable container mounts.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerImageVolumeState {
+    /// The image declares no volumes; only the code-owned launch mounts can exist.
+    None,
+    /// The image declares at least one volume and is inadmissible for the CPU sandbox.
+    Declared,
+}
+
+/// Exact local image resolution plus the security-relevant image mount observation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedContainerImage {
+    image: OciImageDigest,
+    volume_state: ContainerImageVolumeState,
+}
+
+impl ResolvedContainerImage {
+    #[must_use]
+    pub const fn new(image: OciImageDigest, volume_state: ContainerImageVolumeState) -> Self {
+        Self {
+            image,
+            volume_state,
+        }
+    }
+
+    #[must_use]
+    pub const fn image(&self) -> &OciImageDigest {
+        &self.image
+    }
+
+    #[must_use]
+    pub const fn volume_state(&self) -> ContainerImageVolumeState {
+        self.volume_state
+    }
+}
+
 /// Code-owned sandbox policy; operator configuration cannot weaken its individual controls.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -278,6 +316,7 @@ pub enum ContainerInspection {
         name: ContainerName,
         runtime_id: RuntimeContainerId,
         binding: ContainerBinding,
+        exit_code: ContainerExitCode,
     },
 }
 
@@ -320,6 +359,78 @@ impl ContainerInspection {
             | Self::Running { binding, .. }
             | Self::Exited { binding, .. } => Some(binding),
         }
+    }
+
+    #[must_use]
+    pub const fn exit_code(&self) -> Option<ContainerExitCode> {
+        match self {
+            Self::Exited { exit_code, .. } => Some(*exit_code),
+            Self::Absent { .. } | Self::Created { .. } | Self::Running { .. } => None,
+        }
+    }
+}
+
+/// Non-negative OCI subject exit code.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ContainerExitCode(u8);
+
+impl ContainerExitCode {
+    #[must_use]
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+/// Complete terminal observation returned only after waiting for one exact container.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerExitObservation {
+    name: ContainerName,
+    runtime_id: RuntimeContainerId,
+    binding: ContainerBinding,
+    exit_code: ContainerExitCode,
+}
+
+impl ContainerExitObservation {
+    #[must_use]
+    pub const fn new(
+        name: ContainerName,
+        runtime_id: RuntimeContainerId,
+        binding: ContainerBinding,
+        exit_code: ContainerExitCode,
+    ) -> Self {
+        Self {
+            name,
+            runtime_id,
+            binding,
+            exit_code,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &ContainerName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn runtime_id(&self) -> &RuntimeContainerId {
+        &self.runtime_id
+    }
+
+    #[must_use]
+    pub const fn binding(&self) -> &ContainerBinding {
+        &self.binding
+    }
+
+    #[must_use]
+    pub const fn exit_code(&self) -> ContainerExitCode {
+        self.exit_code
     }
 }
 
@@ -408,7 +519,7 @@ pub trait ContainerRuntime {
     fn resolve_image(
         &mut self,
         requested: &OciImageDigest,
-    ) -> Result<OciImageDigest, ContainerRuntimeError>;
+    ) -> Result<ResolvedContainerImage, ContainerRuntimeError>;
 
     /// Inspects only the deterministic name and returns a provider-neutral lifecycle observation.
     ///
@@ -421,13 +532,55 @@ pub trait ContainerRuntime {
     ) -> Result<ContainerInspection, ContainerRuntimeError>;
 }
 
-/// Failure of the trusted runtime capability before a lifecycle mutation is admitted.
+/// Minimal lifecycle mutation capability parameterized by a backend-owned launch-plan type.
+///
+/// A definite `Unavailable` or `Rejected` mutation error proves that mutation was not applied.
+/// `Ambiguous` means it may have been applied and must be reconciled through `inspect`. Successful
+/// create/start calls are also inspected before the next transition. `wait` is observational and
+/// must return the exact exited container rather than a provider-native response.
+pub trait ContainerLifecycleRuntime: ContainerRuntime {
+    type LaunchPlan;
+
+    /// Creates but does not start the exact planned container.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified definitive or ambiguous runtime failure.
+    fn create(&mut self, plan: &Self::LaunchPlan) -> Result<(), ContainerRuntimeError>;
+
+    /// Starts only the exact full runtime identity already observed in `Created`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified definitive or ambiguous runtime failure.
+    fn start(
+        &mut self,
+        name: &ContainerName,
+        runtime_id: &RuntimeContainerId,
+    ) -> Result<(), ContainerRuntimeError>;
+
+    /// Waits for and returns a typed terminal observation of the exact running container.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime observation failure without mutating another container.
+    fn wait(
+        &mut self,
+        name: &ContainerName,
+        runtime_id: &RuntimeContainerId,
+    ) -> Result<ContainerExitObservation, ContainerRuntimeError>;
+}
+
+/// Classified failure of the trusted runtime capability.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum ContainerRuntimeError {
+    /// The request did not cross the mutation boundary.
     #[error("container runtime is unavailable: {0}")]
     Unavailable(String),
+    /// The runtime definitively rejected the request without applying a mutation.
     #[error("container runtime rejected the request: {0}")]
     Rejected(String),
+    /// The request may have taken effect and only exact inspection may reconcile it.
     #[error("container runtime observation is ambiguous: {0}")]
     Ambiguous(String),
 }
@@ -566,8 +719,11 @@ mod tests {
             fn resolve_image(
                 &mut self,
                 _requested: &OciImageDigest,
-            ) -> Result<OciImageDigest, ContainerRuntimeError> {
-                Ok(self.resolved.clone())
+            ) -> Result<ResolvedContainerImage, ContainerRuntimeError> {
+                Ok(ResolvedContainerImage::new(
+                    self.resolved.clone(),
+                    ContainerImageVolumeState::None,
+                ))
             }
 
             fn inspect(
@@ -606,12 +762,36 @@ mod tests {
             inspection: running,
         };
         assert_eq!(
-            runtime.resolve_image(&requested).expect("resolve"),
-            requested
+            runtime.resolve_image(&requested).expect("resolve").image(),
+            &requested
         );
         let inspected = runtime.inspect(&name).expect("inspect");
         assert_eq!(inspected.phase(), ContainerPhase::Running);
         assert_eq!(inspected.runtime_id(), Some(&runtime_id));
         assert_eq!(inspected.binding(), Some(&binding));
+
+        let exited = ContainerInspection::Exited {
+            name,
+            runtime_id,
+            binding,
+            exit_code: ContainerExitCode::new(137),
+        };
+        let exited_bytes = cairn_codec::to_vec(&exited).expect("exited bytes");
+        let decoded = cairn_codec::from_slice::<ContainerInspection>(&exited_bytes)
+            .expect("exited inspection");
+        assert_eq!(decoded.exit_code().map(ContainerExitCode::get), Some(137));
+
+        let terminal = ContainerExitObservation::new(
+            exited.name().clone(),
+            exited.runtime_id().expect("exited runtime ID").clone(),
+            exited.binding().expect("exited binding").clone(),
+            exited.exit_code().expect("exited code"),
+        );
+        let terminal_bytes = cairn_codec::to_vec(&terminal).expect("terminal bytes");
+        assert_eq!(
+            cairn_codec::from_slice::<ContainerExitObservation>(&terminal_bytes)
+                .expect("terminal observation"),
+            terminal
+        );
     }
 }
