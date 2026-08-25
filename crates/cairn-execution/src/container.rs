@@ -183,6 +183,16 @@ pub enum ContainerSandboxPolicy {
     CpuUntrustedV1,
 }
 
+impl ContainerSandboxPolicy {
+    /// Returns the stable label value recorded on every runtime container.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CpuUntrustedV1 => "cpu-untrusted-v1",
+        }
+    }
+}
+
 /// Immutable labels that must agree before Cairn may reuse or reconcile a named container.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -386,8 +396,9 @@ impl OciExecutionEnvironmentV1 {
 
 /// Read-only portion of the replaceable container-runtime capability.
 ///
-/// Lifecycle mutation is added only after F2d freezes a non-weakenable launch plan. Product code
-/// never parses Docker/Podman output directly; adapters must return these typed observations.
+/// F2d-b has frozen the non-weakenable launch plan; lifecycle mutation remains a later capability.
+/// Product code never parses Docker/Podman output directly; adapters must return these typed
+/// observations.
 pub trait ContainerRuntime {
     /// Resolves the requested registry digest to the exact local immutable image identity.
     ///

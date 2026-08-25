@@ -229,6 +229,20 @@ pub struct VerifiedAssignmentMaterials {
     environment_id: ContentId<ExecutionEnvironmentArtifact>,
 }
 
+impl VerifiedAssignmentMaterials {
+    /// Returns the input identity reloaded from worker-local verified storage.
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
+    }
+
+    /// Returns the environment identity reloaded from worker-local verified storage.
+    #[must_use]
+    pub const fn environment_id(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.environment_id
+    }
+}
+
 /// Ephemeral, retry-safe request for one contiguous material range.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

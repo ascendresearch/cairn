@@ -267,12 +267,24 @@ canonical JSON and rejects tags and non-V1 input. The initial `ContainerRuntime`
 typed image resolution and inspection; it deliberately grants no lifecycle mutation yet. Worker
 configuration still cannot advertise or activate the backend.
 
-### Next implementation slice: F2d-b fixed CPU-only isolation plan
+**F2d-b implemented (2026-08-25).** `cairn-worker` now derives one strong
+`ContainerLaunchPlan` from the canonical job, worker-verified exact material, backend-owned state
+root, and positive resource ceilings. It renders deterministic Docker-compatible argv without a
+shell: immutable local image only, read-only root and input, three bounded subject-owned tmpfs
+mounts, numeric non-root user, denied network, dropped capabilities, `no-new-privileges`, private
+cgroup/PID/IPC namespaces, and hard PID/CPU/memory-and-swap ceilings. Golden argv and negative
+identity/layout/network/device/resource tests prevent policy downgrade. No execution configuration,
+runtime invocation, or lifecycle mutation was added.
 
-Implement step 2 above as one canonical `ContainerLaunchPlan` derived from the existing job,
-verified local materials, and backend-owned state roots. Add offline golden argv and policy-downgrade
-tests before extending `ContainerRuntime` with create/start authority. This slice must not invoke a
-real runtime or add worker activation; lifecycle mutation and recovery remain F2d-c.
+### Next implementation slice: F2d-c recoverable container supervisor
+
+Implement step 3 above by extending the narrow runtime port only with the minimum typed
+inspect/create/start/wait operations needed by reconciliation. Freeze mutation outcomes so an
+unknown response after create/start becomes `Ambiguous`, inspect every deterministic name before
+mutation, and require the full immutable binding before reattachment. Add a fake Docker-compatible
+adapter and crash-boundary matrix proving one `AttemptId` never acquires a second subject. This
+slice must keep worker activation disabled and must not yet claim bounded terminal capture or
+real-host isolation; those remain F2d-d and F2d-e.
 
 Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They will add explicit
 device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on

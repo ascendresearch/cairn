@@ -1,12 +1,13 @@
 # OCI container security boundary
 
-- Status: F2d-a typed contract implemented; launcher and runtime mutation not implemented
+- Status: F2d-b typed contract and fixed launch plan implemented; runtime mutation not implemented
 - Backend claim: `oci-container-v1`
 - Scope: untrusted CPU-only candidate and oracle processes
 
-This document freezes the security boundary before Cairn constructs a Docker-compatible command.
-The current code validates identities, lifecycle observations, and OCI environment bytes. It does
-not yet activate a container executor and must not be treated as an isolation claim.
+This document freezes the security boundary before Cairn invokes a Docker-compatible runtime. The
+current code validates identities, lifecycle observations, and OCI environment bytes and renders a
+canonical create argv without a shell. It does not invoke a runtime or activate a container
+executor and must not yet be treated as an operational isolation claim.
 
 ## Threat model
 
@@ -54,17 +55,38 @@ The OCI environment bytes occupy the existing typed `ExecutionEnvironmentArtifac
 The job's backend determines which strict decoder is entitled to interpret those bytes. There is no
 fallback from OCI format to local-process format.
 
-## Fixed policy target
+## Fixed launch policy
 
-The next implementation step must produce one code-owned launch plan, not a list of operator
-checkboxes. The plan will require a read-only image root, non-root subject, denied network, all
-capabilities dropped, `no-new-privileges`, independent PID/mount/IPC/user/network namespaces,
-bounded PIDs/CPU/memory, bounded writable work/output/tmpfs mounts, and a read-only input mount.
-Worker state, host paths, runtime state, credentials, and devices are never launch-plan inputs.
+`cairn-worker` now derives one `ContainerLaunchPlan` from the exact canonical contract,
+worker-verified material identities and bytes, a backend-owned absolute state root, and strong
+positive resource ceilings. The plan is data only: it contains no runtime executable and grants no
+create, start, stop, or delete authority. Its Docker-compatible renderer emits one argv vector and
+never constructs a shell command.
 
-Operator configuration may select a trusted runtime executable and state roots and may set or
-disable documented numeric budgets where safe. It cannot add mounts, capabilities, devices,
-namespace sharing, or network access to `cpu-untrusted-v1`.
+The fixed argv requires a read-only image root, numeric non-root subject `65532:65532`, denied
+network, all capabilities dropped, `no-new-privileges`, private cgroup/PID/IPC namespaces, bounded
+PIDs/CPU/memory-and-swap, and no health check or restart policy. The only host bind is the exact
+attempt input directory mounted read-only at `/cairn/input`. `/cairn/work`, `/cairn/output`, and
+`/tmp` are separate size-bounded tmpfs mounts owned by the subject; output and temporary mounts are
+also `noexec`. The working directory is exactly `/cairn/work`, declared outputs must remain below
+`/cairn/output`, and the contract program replaces any image-defined entrypoint. The image is
+addressed only by its immutable digest with pulling disabled.
+
+The plan rejects non-OCI backends, enabled network, every accelerator/device request, an
+insufficient configured CPU/memory/work/output ceiling, reserved input paths, a non-executable
+program, identity mismatch, and unsafe state-root syntax. Worker credentials, journal, CAS,
+SQLite, runtime socket, runtime state, unrelated host paths, arbitrary mounts, devices, and
+privilege switches cannot be supplied as plan fields.
+
+Operator configuration in later slices may select a trusted runtime executable and backend-owned
+state root and may set documented numeric ceilings. It cannot add mounts, capabilities, devices,
+namespace sharing, or network access to `cpu-untrusted-v1`. Numeric ceilings used for one accepted
+job cannot be disabled and must satisfy the contract minima. Because a Docker CLI flag cannot force
+a daemon into a private user namespace, activation must later preflight a rootless runtime or
+daemon-level user-namespace remapping; the plan never emits `--userns=host`. F2d-c must also stage
+the read-only input tree with permissions readable by the remapped non-root subject without making
+worker-owned state visible, and must reject image/runtime inspection that would synthesize
+additional mounts (including image-declared volumes) or otherwise weaken the fixed plan.
 
 ## Recovery boundary
 
@@ -86,7 +108,9 @@ failure cannot authorize re-execution.
 
 ## Acceptance boundary
 
-F2d is not complete until offline fake-runtime tests cover fixed launch arguments, phase recovery,
+F2d-b ordinary tests now cover the exact golden create argv, absence of privilege-downgrade flags,
+the single read-only host mount, identity/layout controls, device/network rejection, and resource
+ceiling failure. F2d is not complete until offline fake-runtime tests also cover phase recovery,
 binding conflicts, ambiguous mutation, bounded capture, and cleanup ordering, and opt-in real-host
 tests prove filesystem/network/device isolation on both release architectures. Until then,
 `cairn-worker` must not advertise or activate `oci-container-v1`.

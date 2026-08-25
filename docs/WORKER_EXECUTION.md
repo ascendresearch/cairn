@@ -104,8 +104,11 @@ does not discard a still-running supervisor's terminal observation.
 
 ## OCI container status
 
-The F2d-a typed contract and threat model are now implemented, but the container launcher is not.
-Workers therefore still reject configuration/profile combinations that advertise
-`oci-container-v1`. See [`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md) for the frozen
-CPU-only boundary, exact image/name/runtime/binding types, recovery rules, and remaining acceptance
-gates. No current configuration edit can turn these types into execution authority.
+The F2d-b typed contract, threat model, and canonical CPU-only launch plan are now implemented. The
+plan verifies exact material and job identities and renders fixed shell-free Docker-compatible
+create argv, but contains no runtime executable or lifecycle authority. The recoverable supervisor,
+bounded capture, runtime/user-namespace preflight, activation, and real-host isolation gates remain
+unfinished. Workers therefore still reject configuration/profile combinations that advertise
+`oci-container-v1`. See [`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md) for the exact
+image/name/runtime/binding types, fixed mount/resource policy, recovery rules, and remaining gates.
+No current configuration edit can turn the launch plan into execution authority.

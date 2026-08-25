@@ -543,12 +543,14 @@ lineage against the frozen contract. Recorded and scripted executors provide det
 `local-process-v1` now provides an explicitly activated controlled-host adapter with versioned
 material, create-only workspace expansion, Linux user/network namespace preflight, process-group
 supervision, and bounded capture. It is not classified as hostile-code filesystem isolation;
-hardened container execution and richer remote-worker adapters remain target work. F2d-a now freezes
-the first hardened backend's provider-neutral contract: immutable OCI image digests, deterministic
-attempt-owned names, full runtime IDs, typed lifecycle phases/mount roles, exact identity bindings,
-a code-owned CPU sandbox policy, strict canonical OCI environment bytes, and a narrow read-only
-runtime resolution/inspection port. No worker advertises this backend yet, and no runtime mutation
-or isolation claim exists until the fixed launch plan and recoverable supervisor land. See
+hardened container execution and richer remote-worker adapters remain target work. F2d-b now
+freezes the first hardened backend's provider-neutral contract and launch policy: immutable OCI
+image digests, deterministic attempt-owned names, full runtime IDs, typed lifecycle phases/mount
+roles, exact identity bindings, a code-owned CPU sandbox policy, strict canonical OCI environment
+bytes, a narrow read-only runtime resolution/inspection port, and deterministic shell-free create
+argv derived from verified material and strong ceilings. No worker advertises this backend yet, and
+no runtime mutation or operational isolation claim exists until the recoverable supervisor,
+capture, activation, and real-host gates land. See
 [`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md).
 
 ### 10.2 Worker protocol
@@ -1177,7 +1179,7 @@ Worker evidence storage and credentials are not mounted into the sandbox.
 
 The initial `oci-container-v1` target is deliberately CPU-only and denies every device rather than
 interpreting “no device request” as ambient host access. Its code-owned policy, threat model,
-identity binding, and implementation status are defined in
+identity binding, fixed launch plan, and implementation status are defined in
 [`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md). OCI containment trusts the host kernel and
 runtime; it is not a defense against either component being compromised.
 

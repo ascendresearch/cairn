@@ -1,6 +1,7 @@
 //! Runnable outbound Cairn worker composition root.
 
 mod local_process;
+mod oci_container;
 mod probe;
 
 use std::{
@@ -49,6 +50,11 @@ use tokio::time::{Instant, Interval};
 
 use local_process::LocalProcessExecutor;
 pub use local_process::{LinuxNamespaceConfig, WorkerExecutionConfig};
+pub use oci_container::{
+    ContainerLaunchLimits, ContainerLaunchPlan, ContainerLaunchPlanError, ContainerLogicalCpuLimit,
+    ContainerMemoryByteLimit, ContainerPidsLimit, ContainerStateRoot, ContainerWritableByteLimit,
+    build_container_launch_plan,
+};
 
 pub use probe::{
     ExpectedResourceConstraints, HostResourceProbe, ResourceProbeConfig, ResourceProbeError,
