@@ -3,6 +3,8 @@
 mod enrollment;
 mod scheduling;
 
+pub use enrollment::StaticEnrollmentImportOutcome;
+
 pub use scheduling::{
     ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome,
     ScheduledAssignmentPhase, SchedulerServiceConfig, release_execution_reservation,
@@ -53,9 +55,9 @@ use tokio::{
 
 use enrollment::{
     EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, create_rotation_offer,
-    redeem,
+    import_static_credentials, redeem,
 };
-use enrollment::{disable_worker, revoke_credential, revoke_enrollment};
+use enrollment::{StaticCredentialImport, disable_worker, revoke_credential, revoke_enrollment};
 
 /// Strict controller process configuration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -64,6 +66,7 @@ pub struct ServerConfig {
     pub schema_version: u16,
     pub listen: SocketAddr,
     pub tls: ServerTlsFiles,
+    /// Legacy V2 static bindings consumed only by `registry import-static`; V3 requires empty.
     pub enrollment: Vec<WorkerEnrollment>,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
@@ -102,7 +105,7 @@ pub struct EnrollmentServiceConfig {
     pub transport: TransportPolicy,
 }
 
-/// Static binding from a logical worker ID and credential ID to one exact leaf certificate.
+/// Legacy V2 migration binding from logical identities to one exact leaf certificate.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerEnrollment {
@@ -132,7 +135,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> | cairn-server worker disable <config.json> <worker-id>"
+        "usage: cairn-server <config.json> | cairn-server registry import-static <legacy-controller-v2.json> <command-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> | cairn-server worker disable <config.json> <worker-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -161,6 +164,9 @@ pub async fn run_from_arguments(
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let first = arguments.next().ok_or(ServerError::Usage)?;
+    if first == "registry" {
+        return run_registry_command(&mut arguments);
+    }
     if first == "enrollment" {
         let action = arguments.next().ok_or(ServerError::Usage)?;
         let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
@@ -248,6 +254,27 @@ pub async fn run_from_arguments(
     run(load_config(&config_path)?).await
 }
 
+fn run_registry_command(arguments: &mut impl Iterator<Item = OsString>) -> Result<(), ServerError> {
+    let action = arguments.next().ok_or(ServerError::Usage)?;
+    let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+    let command_id = parse_argument::<CommandId>(arguments.next())?;
+    if action != "import-static" || arguments.next().is_some() {
+        return Err(ServerError::Usage);
+    }
+    let outcome = import_static_enrollments(&load_config(&config_path)?, &command_id)?;
+    eprintln!(
+        "imported {} static credential(s) in {}{}",
+        outcome.imported_credentials(),
+        outcome.event_id(),
+        if outcome.was_replay() {
+            " (idempotent replay)"
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
 fn parse_argument<T>(value: Option<OsString>) -> Result<T, ServerError>
 where
     T: std::str::FromStr,
@@ -289,6 +316,43 @@ fn load_config(config_path: &Path) -> Result<ServerConfig, ServerError> {
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
     config.resolve_paths(base);
     Ok(config)
+}
+
+/// Imports all transitional static bindings from one legacy V2 controller configuration.
+///
+/// The operation is atomic and retains exact certificate fingerprints rather than unstable source
+/// paths. After success, ordinary startup requires a V3 configuration with an empty `enrollment`
+/// list. Retrying with the same command and legacy input returns the original import fact.
+///
+/// # Errors
+///
+/// Returns an error for a non-V2 migration input, invalid certificate material, credential,
+/// certificate, or worker ownership collisions, command reuse, or storage failure.
+pub fn import_static_enrollments(
+    legacy_config: &ServerConfig,
+    command_id: &CommandId,
+) -> Result<StaticEnrollmentImportOutcome, ServerError> {
+    if legacy_config.schema_version != 2 {
+        return Err(ServerError::Configuration(
+            "registry import-static requires a legacy schema_version 2 configuration".into(),
+        ));
+    }
+    let credentials = legacy_config
+        .enrollments()?
+        .into_iter()
+        .map(
+            |(certificate_fingerprint, enrolled)| StaticCredentialImport {
+                worker_id: enrolled.worker_id,
+                credential_id: enrolled.credential_id,
+                pool: enrolled.pool,
+                certificate_fingerprint,
+            },
+        )
+        .collect();
+    let mut events = SqliteEventStore::open(&legacy_config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    import_static_credentials(&mut events, credentials, command_id, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
 }
 
 /// Creates and durably records a one-shot enrollment bundle. The secret is returned only here.
@@ -403,22 +467,7 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     let registry = EnrollmentRegistry::load(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
-    let mut enrolled = config.enrollments()?;
-    if enrolled
-        .values()
-        .any(|worker| registry.credential_is_known(worker.credential_id))
-    {
-        return Err(ServerError::Startup(
-            "static and managed enrollments contain the same credential identity".into(),
-        ));
-    }
-    for (fingerprint, worker) in registry.enrolled() {
-        if enrolled.insert(*fingerprint, worker.clone()).is_some() {
-            return Err(ServerError::Startup(
-                "static and issued enrollments contain the same certificate".into(),
-            ));
-        }
-    }
+    let enrolled = registry.enrolled().clone();
     let enrollments = Arc::new(RwLock::new(enrolled));
     let state = Arc::new(Mutex::new(ControllerState {
         events,
@@ -494,9 +543,9 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
 
 impl ServerConfig {
     fn validate_schema(&self) -> Result<(), ServerError> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err(ServerError::Configuration(
-                "only server schema_version 2 is supported".into(),
+                "only server schema_version 3 is supported for ordinary operation".into(),
             ));
         }
         Ok(())
@@ -511,9 +560,10 @@ impl ServerConfig {
                 "only scheduler policy stable-worker-id-quantitative-v2 is supported".into(),
             ));
         }
-        if self.enrollment.is_empty() && self.enrollment_service.is_none() {
+        if !self.enrollment.is_empty() {
             return Err(ServerError::Configuration(
-                "at least one static enrollment or enrollment_service is required".into(),
+                "server schema_version 3 requires an empty enrollment list; import legacy static bindings first"
+                    .into(),
             ));
         }
         if let Some(service) = &self.enrollment_service {
@@ -735,6 +785,8 @@ fn enrollment_rejection(error: &EnrollmentError) -> (EnrollmentRejectCode, &'sta
         | EnrollmentError::CredentialNotActive
         | EnrollmentError::WorkerNotActive
         | EnrollmentError::EnrollmentAlreadyIssued
+        | EnrollmentError::StaticImportConflict(_)
+        | EnrollmentError::CommandConflict
         | EnrollmentError::Issuance(_) => (
             EnrollmentRejectCode::ControllerUnavailable,
             "controller could not durably issue a credential",
@@ -1085,8 +1137,7 @@ async fn credential_is_authorized(
     let locked = state.lock().await;
     let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
-    Ok(!registry.credential_is_known(worker.credential_id)
-        || registry.credential_is_authorized(worker.credential_id, worker.worker_id))
+    Ok(registry.credential_is_authorized(worker.credential_id, worker.worker_id))
 }
 
 async fn session_credential_is_authorized(
@@ -1096,8 +1147,7 @@ async fn session_credential_is_authorized(
     let locked = state.lock().await;
     let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
-    Ok(!registry.credential_is_known(session.credential_id())
-        || registry.credential_is_authorized(session.credential_id(), session.worker_id()))
+    Ok(registry.credential_is_authorized(session.credential_id(), session.worker_id()))
 }
 
 async fn process_worker_frame(
@@ -1437,6 +1487,31 @@ mod tests {
                 .to_string()
                 .contains("stable-worker-id-quantitative-v2")
         );
+    }
+
+    #[test]
+    fn ordinary_startup_requires_v3_with_no_static_authority() {
+        let documented = include_str!("../../../config/controller.example.json");
+        let legacy: ServerConfig = serde_json::from_str(
+            &documented.replace("\"schema_version\": 3", "\"schema_version\": 2"),
+        )
+        .expect("legacy migration input remains decodable");
+        assert!(legacy.validate_schema().is_err());
+
+        let mut static_v3: serde_json::Value =
+            serde_json::from_str(documented).expect("documented JSON");
+        static_v3["enrollment"] = serde_json::json!([{
+            "certificate": "pki/worker.pem",
+            "credential_id": "credential:019c0000-0000-7000-8000-000000000002",
+            "pool": "default",
+            "worker_id": "worker:019c0000-0000-7000-8000-000000000001"
+        }]);
+        let static_v3: ServerConfig =
+            serde_json::from_value(static_v3).expect("static V3 remains structurally decodable");
+        let error = static_v3
+            .validate()
+            .expect_err("runtime static authority must be rejected");
+        assert!(error.to_string().contains("import legacy static bindings"));
     }
 
     #[test]

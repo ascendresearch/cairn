@@ -11,14 +11,36 @@ trusted by the control listener's `tls.client_ca`, and `issuer_private_key` must
 certificate. Bootstrap handshake, diagnostic, wire-message, token TTL, and issued-credential
 validity values are explicit configuration or command inputs.
 
-Controller configuration schema V2 also gives every transitional static enrollment an explicit
-strong `credential_id`; it must not be generated afresh at each startup. Pre-V2 development
-configuration must be upgraded deliberately. Existing pre-V3 worker-registration facts require
-the controlled development-state migration/rebuild gate described in the implementation plan.
+Controller configuration schema V3 requires `enrollment: []`. Worker authentication and scheduling
+consume only the append-only registry; a controller may start with an empty registry so onboarding
+does not require any copied worker certificate. Schema V2 is accepted only by the explicit legacy
+static-import command described below. Existing pre-V4 worker-registration facts require the
+controlled development-state migration/rebuild gate described in the implementation plan.
 
 The reference adapter currently reads an issuer certificate/key from files. The issuance boundary
 is deliberately separate from the registry so an enterprise CA, offline signer, or SPIFFE adapter
 can replace it without changing `EnrollmentId`, `WorkerId`, pool, or credential history semantics.
+
+## Import a legacy static deployment
+
+Keep one resolved copy of the old schema V2 configuration long enough to perform the migration.
+Stop the old controller, allocate and retain one strong command identity, then run:
+
+```bash
+cairn-server registry import-static controller.v2.json command:019c0000-0000-7000-8000-000000000010
+```
+
+The command reads every configured leaf certificate, canonicalizes the batch by `CredentialId`,
+and atomically records the exact certificate fingerprint, `WorkerId`, `CredentialId`, and pool. It
+does not persist source paths or certificate bytes. Repeating the same command identity with the
+same resolved certificates returns the original import event; reusing it with changed input fails.
+A new command cannot import an already owned credential, fingerprint, or worker.
+
+After success, change the operational file to `schema_version: 3` and replace the static array with
+`"enrollment": []`. The V3 server refuses a non-empty list, while ordinary startup refuses V2, so
+there is no interval in which static configuration and registry history silently compete. Keep the
+legacy file according to the operator's audit/backup policy; Cairn no longer reads it during normal
+operation.
 
 ## Create a one-shot bundle
 
@@ -123,8 +145,8 @@ replay deliberately returns the original (now revoked) issuance and is not a sec
 - A fresh controller process reconstructs certificate fingerprint to `WorkerId`/pool authorization
   from the append-only registry stream.
 - The issued certificate serial is the strong `CredentialId`; it is not the permanent worker ID.
-- Static file enrollment remains available for externally provisioned identities during the
-  transition, but managed enrollment is the normal open-source path.
+- Externally provisioned identities enter the same registry through the explicit static-import
+  migration boundary; no separate runtime authority remains.
 
 ## Revoke authority
 
@@ -144,7 +166,7 @@ an observed live session is closed no later than the configured positive
 `authority_poll_interval_ms` (or an earlier control message/outbox poll).
 
 Application authorization is authoritative even when TLS accepts a certificate chain, so the
-baseline does not require CRL or OCSP. Static file enrollments are not revocable through this
-managed registry until the planned `import-static` transition. Worker disablement remains a
-one-directional emergency action until the registry lifecycle phase adds re-enable. See
+baseline does not require CRL or OCSP. Imported static credentials support the same credential
+revocation and worker disablement facts as controller-issued credentials. Worker disablement
+remains a one-directional emergency action until E2 adds re-enable. See
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).

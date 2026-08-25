@@ -32,7 +32,8 @@ Acceptance gate:
 - revoked credentials and disabled workers cannot create a registration fact;
 - an unused revoked `EnrollmentId` cannot issue a credential;
 - authority decisions survive controller restart and concurrent administrative SQLite access;
-- static enrollment remains explicitly transitional and cannot collide with managed credential IDs.
+- the then-transitional static enrollment cannot collide with managed credential IDs and is later
+  removed from runtime authority by Phase E1's explicit migration gate.
 
 ## Phase B — safe credential rotation (implemented 2026-08-25)
 
@@ -122,12 +123,19 @@ Acceptance gate:
 - externally attested or controller-verified claims can replace a built-in claim through a typed
   admission seam.
 
-## Phase E — registry and operator lifecycle closure
+## Phase E — registry and operator lifecycle closure (E1 implemented 2026-08-25)
 
 Finish migration away from controller static certificate lists. Add `import-static` with collision
 and ownership checks, list/show/audit commands, worker re-enable, credential inspection, and
 separate pool reassignment. Keep worker, credential, enrollment, and pool histories distinct. Add a
 versioned migration gate for pre-release server configuration and worker-registration facts.
+
+E1 implements the static-authority migration boundary. `registry import-static` atomically freezes
+the canonical credential/fingerprint/worker/pool batch under an explicit `CommandId`; exact retries
+recover the original event while changed input or any ownership collision fails closed. Controller
+schema V3 requires `enrollment: []`, and authentication plus scheduling now consume only the
+persistent registry. E2 retains list/show/audit, worker re-enable, credential inspection, separate
+pool reassignment, and explicit-command upgrades for the earlier lifecycle commands.
 
 Acceptance gate:
 

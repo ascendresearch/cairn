@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::path::PathBuf;
 
 use cairn_execution::{
     AssignmentBinding, AssignmentControlMessageIds, AssignmentLeaseDurationMillis,
@@ -84,7 +84,6 @@ pub enum ControllerSchedulingOutcome {
 
 struct ControllerPlacementAuthority {
     event_database: PathBuf,
-    static_credentials: BTreeSet<(WorkerId, CredentialId)>,
 }
 
 impl WorkerPlacementAuthority for ControllerPlacementAuthority {
@@ -98,16 +97,9 @@ impl WorkerPlacementAuthority for ControllerPlacementAuthority {
             .map_err(|error| PlacementAuthorityError::new(error.to_string()))?;
         let registry = EnrollmentRegistry::load(&events, observed_at)
             .map_err(|error| PlacementAuthorityError::new(error.to_string()))?;
-        if registry.credential_is_known(credential_id) {
-            return Ok(PlacementAuthorityObservation::new(
-                registry.credential_is_authorized(credential_id, worker_id),
-                registry.last_event_id(),
-            ));
-        }
         Ok(PlacementAuthorityObservation::new(
-            self.static_credentials
-                .contains(&(worker_id, credential_id)),
-            None,
+            registry.credential_is_authorized(credential_id, worker_id),
+            registry.last_event_id(),
         ))
     }
 }
@@ -156,13 +148,9 @@ pub fn schedule_execution_contract_at(
     .map_err(|error| ServerError::Scheduling(error.to_string()))?;
     let registry = EnrollmentRegistry::load(&events, observed_at)
         .map_err(|error| ServerError::Scheduling(error.to_string()))?;
-    let static_credentials = static_credentials(config, &registry)?;
-    let mut candidate_worker_ids = registry.worker_ids();
-    candidate_worker_ids.extend(config.enrollment.iter().map(|entry| entry.worker_id));
-    let candidate_worker_ids: Vec<_> = candidate_worker_ids.into_iter().collect();
+    let candidate_worker_ids: Vec<_> = registry.worker_ids().into_iter().collect();
     let authority = ControllerPlacementAuthority {
         event_database: config.storage.event_database.clone(),
-        static_credentials,
     };
 
     let prepared = prepare_execution_job(&mut content, contract)
@@ -327,29 +315,6 @@ pub fn release_execution_reservation_at(
         observed_at,
     )
     .map_err(|error| ServerError::Scheduling(error.to_string()))
-}
-
-fn static_credentials(
-    config: &ServerConfig,
-    registry: &EnrollmentRegistry,
-) -> Result<BTreeSet<(WorkerId, CredentialId)>, ServerError> {
-    let mut result = BTreeSet::new();
-    let mut workers = BTreeSet::new();
-    for entry in &config.enrollment {
-        if registry.credential_is_known(entry.credential_id) {
-            return Err(ServerError::Configuration(
-                "static and managed enrollments contain the same credential identity".into(),
-            ));
-        }
-        if !workers.insert(entry.worker_id) {
-            return Err(ServerError::Configuration(format!(
-                "worker {} has more than one static credential",
-                entry.worker_id
-            )));
-        }
-        result.insert((entry.worker_id, entry.credential_id));
-    }
-    Ok(result)
 }
 
 fn validate_recovered_binding(
@@ -576,10 +541,7 @@ mod tests {
             ObservedAtUnixMillis::new(5),
         )
         .expect("authorize attempt");
-        let authority = ControllerPlacementAuthority {
-            event_database,
-            static_credentials: BTreeSet::new(),
-        };
+        let authority = ControllerPlacementAuthority { event_database };
         let grant = AssignmentLeaseGrant::new(
             AssignmentId::new(),
             LeaseId::new(),

@@ -78,12 +78,12 @@ recovered from running state and reuses the frozen start-message identity. The l
 control carries one assignment through offer, acceptance, start, the worker's conservative
 `NotStarted` result, terminal reconciliation, exact scheduling retry, and reservation release.
 
-The candidate universe is the canonical union of managed-registry and transitional static worker
-identities. Every managed credential observation reopens and projects the SQLite enrollment stream,
-then cites its latest `EventId`. Consequently the assignment-grant recheck cannot reuse the
-placement-time registry view: revocation, worker disablement, rotation retirement, or authority
-unavailability between snapshot and grant fails closed. Static credentials cite no registry event
-until Phase E imports them into managed history.
+The candidate universe comes exclusively from persistent registry worker identities. Every
+credential observation reopens and projects the SQLite enrollment stream, then cites its latest
+`EventId`. Consequently the assignment-grant recheck cannot reuse the placement-time registry view:
+revocation, worker disablement, rotation retirement, import, or authority unavailability between
+snapshot and grant fails closed. Legacy static credentials must pass the explicit V2-to-V3 import
+gate before either authentication or scheduling can use them.
 
 `scheduler` is an optional controller configuration object. Omitting it or setting it to `null`
 disables new placement without disabling worker control or reconciliation. When enabled, the policy

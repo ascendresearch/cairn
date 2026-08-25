@@ -132,8 +132,10 @@ worker without leaking migration roles into execution types. Scheduler enablemen
 time, claim time, and lease time are configuration rather than constants. See
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
 executor deliberately returns `NotStarted`; real local/container backends, concrete resource
-challenge/attestation adapters, static-registry import, and real-host job execution remain
-subsequent slices. The active
+challenge/attestation adapters, registry inspection/re-enable/pool lifecycle, and real-host job
+execution remain subsequent slices. Legacy static credentials now enter the persistent registry
+through an atomic, explicitly idempotent V2-to-V3 import gate; ordinary startup accepts only V3
+configuration with an empty static enrollment list. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 The remaining architecture in the normative documents is still target design. The old repositories

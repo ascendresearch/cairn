@@ -21,7 +21,8 @@ use cairn_record::ContentStore;
 use cairn_server::{
     ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome,
     ScheduledAssignmentPhase, SchedulerServiceConfig, ServerConfig, ServerStorageConfig,
-    WorkerEnrollment, release_execution_reservation_at, schedule_execution_contract_at,
+    WorkerEnrollment, import_static_enrollments, release_execution_reservation_at,
+    schedule_execution_contract_at,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
@@ -63,7 +64,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     let content_directory = directory.path().join("controller-content");
     let protocol = WorkerProtocolVersion::new(1)?;
     let session_timeout = WorkerSessionTimeoutMillis::new(10_000)?;
-    let controller_config = ServerConfig {
+    let mut controller_config = ServerConfig {
         schema_version: 2,
         listen,
         tls: ServerTlsFiles {
@@ -105,6 +106,19 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         transport: TransportPolicy::default(),
         diagnostic_byte_limit: NonZeroU64::new(256),
     };
+    let import_command = CommandId::new();
+    let imported = import_static_enrollments(&controller_config, &import_command)?;
+    assert_eq!(imported.imported_credentials(), 2);
+    assert!(!imported.was_replay());
+    let replayed = import_static_enrollments(&controller_config, &import_command)?;
+    assert_eq!(replayed.event_id(), imported.event_id());
+    assert!(replayed.was_replay());
+    assert!(
+        import_static_enrollments(&controller_config, &CommandId::new()).is_err(),
+        "a new command cannot erase prior import provenance"
+    );
+    controller_config.schema_version = 3;
+    controller_config.enrollment.clear();
     let scheduling_config = controller_config.clone();
     let server = tokio::spawn(cairn_server::run(controller_config));
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -188,7 +202,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     );
     let initial_resource_revisions = live.expect("durable liveness");
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(650)).await;
     assert!(
         !server.is_finished() && !worker_task_a.is_finished() && !worker_task_b.is_finished(),
         "heartbeat acknowledgements must keep both idle-bounded sessions open"
@@ -343,7 +357,7 @@ fn worker_config(
             scratch_path: directory.to_path_buf(),
             accelerator_sysfs: None,
             freshness_ms: None,
-            refresh_interval_ms: NonZeroU64::new(100),
+            refresh_interval_ms: NonZeroU64::new(500),
             expected: ExpectedResourceConstraints::default(),
         },
         availability: WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())?,

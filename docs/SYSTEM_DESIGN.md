@@ -670,8 +670,8 @@ both outboxes empty after another reopen.
 **Implemented outbound transport slice (2026-08-25).** `cairn-control-transport` now carries only
 binary canonical JSON over WebSocket on a mutually authenticated TLS stream. The worker verifies
 the controller certificate and DNS name; the controller verifies the client chain, hashes the
-verified leaf DER, and admits a hello only when that fingerprint is statically configured or
-durably issued to the exact strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId`
+verified leaf DER, and admits a hello only when that fingerprint is durably registered to the exact
+strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId`
 and negotiated protocol version before either side accepts control frames. TLS/WebSocket bytes
 never become execution facts by themselves.
 
@@ -693,8 +693,7 @@ The append-only singleton registry stores offer and issuance events but never th
 An issuance records the CSR digest, certificate result, fingerprint, stable worker, credential, and
 pool. After a lost response, the same secret plus exact staged CSR returns the persisted result even
 after token expiry; another CSR is rejected. A fresh controller rebuilds
-fingerprint-to-credential/worker/pool authentication from that stream. Static certificate bindings
-remain a transition/external-issuer input.
+fingerprint-to-credential/worker/pool authentication from that stream.
 
 **Implemented credential-authority foundation (2026-08-25).** Registration V3 records the exact
 `CredentialId` independently of stable subject, `WorkerId`, pool, and incarnation. The controller
@@ -709,8 +708,18 @@ registration and on each active control-loop iteration, so an observed managed s
 and its reconnect is rejected. This application check remains authoritative even when certificate
 chain validation succeeds. SQLite schema V2 uses WAL plus immediate writer transactions so a
 separate administrative command and the running controller serialize authority facts without a
-deferred read-to-write deadlock. Worker re-enable and static-registry import remain subsequent
-lifecycle work.
+deferred read-to-write deadlock. Worker re-enable remains subsequent lifecycle work.
+
+**Implemented static-registry migration E1 (2026-08-25).** Controller schema V3 requires an empty
+static enrollment array. A schema V2 file is accepted only by `registry import-static`, which reads
+and fingerprints the configured leaf certificates, canonicalizes the complete batch by strong
+`CredentialId`, and appends one atomic import fact under an operator-supplied `CommandId`. That fact
+retains exact worker, credential, pool, and certificate provenance without persisting unstable file
+paths. Exact command replay returns the original event; changed command input or any credential,
+fingerprint, or worker-ownership collision fails closed, as does contradictory persisted history.
+Normal authentication, liveness authority checks, candidate discovery, and grant rechecks now
+consume only the persistent registry. An empty registry is a valid startup state for a fresh
+open-source deployment.
 
 **Implemented safe credential rotation slice (2026-08-25).** Enrollment authority V2 distinguishes
 bootstrap from rotation. A rotation offer freezes the exact active predecessor credential,
@@ -758,8 +767,8 @@ singleton ledger is an initial correctness boundary, not a permanent scale claim
 later while retaining placement/snapshot/reservation identities.
 
 **Implemented scheduler composition C2 (2026-08-25).** The controller now derives its canonical
-candidate set from managed and transitional static enrollment, reloads the managed registry for
-every placement-authority observation, and cites the latest registry event. Contract preparation,
+candidate set from persistent registry enrollment, reloads the registry for every placement-
+authority observation, and cites the latest registry event. Contract preparation,
 placement reservation, conditional attempt authorization, assignment grant, and durable offer
 enqueue form one
 recoverable application service. Callers retain strong identities for every boundary; exact retry

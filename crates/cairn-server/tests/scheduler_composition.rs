@@ -1,4 +1,4 @@
-use std::{error::Error, io::Cursor, net::SocketAddr, num::NonZeroU64};
+use std::{error::Error, fs, io::Cursor, net::SocketAddr, num::NonZeroU64};
 
 use cairn_control_transport::{ServerTlsFiles, TransportPolicy};
 use cairn_execution::{
@@ -23,9 +23,11 @@ use cairn_record::ContentStore;
 use cairn_server::{
     ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome,
     ScheduledAssignmentPhase, SchedulerServiceConfig, ServerConfig, ServerStorageConfig,
-    WorkerEnrollment, release_execution_reservation_at, schedule_execution_contract_at,
+    WorkerEnrollment, import_static_enrollments, release_execution_reservation_at,
+    schedule_execution_contract_at,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
+use rcgen::{CertificateParams, KeyPair};
 
 #[test]
 #[expect(
@@ -41,7 +43,15 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
     let worker_id = WorkerId::new();
     let credential_id = CredentialId::new();
     let pool = WorkerPoolName::new("target-lab")?;
-    let config = ServerConfig {
+    let worker_certificate = directory.path().join("worker.pem");
+    let worker_key = KeyPair::generate()?;
+    fs::write(
+        &worker_certificate,
+        CertificateParams::new(Vec::<String>::new())?
+            .self_signed(&worker_key)?
+            .pem(),
+    )?;
+    let mut config = ServerConfig {
         schema_version: 2,
         listen: "127.0.0.1:7443".parse::<SocketAddr>()?,
         tls: ServerTlsFiles {
@@ -53,7 +63,7 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
             worker_id,
             credential_id,
             pool: pool.clone(),
-            certificate: directory.path().join("unused-worker.pem"),
+            certificate: worker_certificate,
         }],
         enrollment_service: None,
         storage: ServerStorageConfig {
@@ -75,6 +85,9 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
         transport: TransportPolicy::default(),
         diagnostic_byte_limit: None,
     };
+    import_static_enrollments(&config, &CommandId::new())?;
+    config.schema_version = 3;
+    config.enrollment.clear();
 
     let mut events = SqliteEventStore::open(&event_database)?;
     let mut content = SqliteContentStore::open(&content_database, &content_directory)?;

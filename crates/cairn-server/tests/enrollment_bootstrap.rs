@@ -369,7 +369,7 @@ fn server_config(
     content_directory: &Path,
 ) -> Result<ServerConfig, Box<dyn Error + Send + Sync>> {
     Ok(ServerConfig {
-        schema_version: 2,
+        schema_version: 3,
         listen,
         tls: ServerTlsFiles {
             certificate: server_certificate.to_path_buf(),
