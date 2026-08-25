@@ -13,10 +13,10 @@ use thiserror::Error;
 use crate::dispatch::recover_turn_input_decision;
 use crate::{
     AgentRoleName, AgentStep, AgentStepState, BoundStepOperations, DispatchAuthority,
-    ModelAttemptState, OperationResult, PreparedToolOperation, StepCoordinatorError,
-    ToolCallProposal, ToolEffectClass, ToolImplementationVersion, ToolName,
+    ModelAttemptState, OperationResult, PreparedNativeRequest, PreparedToolOperation,
+    StepCoordinatorError, ToolCallProposal, ToolEffectClass, ToolImplementationVersion, ToolName,
     ToolOperationAssignment, TurnInputDecision, bind_step_operations, prepare_agent_step,
-    recover_agent_step, recover_model_attempt,
+    prepare_native_agent_step, recover_agent_step, recover_model_attempt,
 };
 
 const EPISODE_OPENED: &str = "agent.episode-opened";
@@ -612,6 +612,43 @@ pub fn prepare_episode_step<E: EventStore, C: cairn_record::ContentStore>(
         content,
         &step,
         decision,
+        model_attempt_id,
+        command_id,
+        observed_at,
+    )
+    .map_err(Into::into)
+}
+
+/// Prepares an episode step with an exact protocol-native request and durable recovery context.
+///
+/// # Errors
+///
+/// Returns [`EpisodeCoordinatorError`] when pending results differ, input/native state is
+/// incomplete, or the step fact cannot commit.
+pub fn prepare_native_episode_step<E: EventStore, C: cairn_record::ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    authority: EpisodeStepAuthority,
+    decision: &TurnInputDecision,
+    native: &PreparedNativeRequest,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<DispatchAuthority, EpisodeCoordinatorError> {
+    let EpisodeStepAuthority {
+        episode_id: _,
+        step,
+        model_attempt_id,
+        expected_pending_results,
+    } = authority;
+    if decision.pending_results != expected_pending_results {
+        return invalid_episode("step input does not carry the episode's ordered pending results");
+    }
+    prepare_native_agent_step(
+        events,
+        content,
+        &step,
+        decision,
+        native,
         model_attempt_id,
         command_id,
         observed_at,
@@ -1747,20 +1784,23 @@ mod tests {
         EpisodeProviderTokenLimit, EpisodeStepLimit, EpisodeToolOperationLimit,
         OperationsAdmittedPayload, admission_payload_from_assignments, admit_episode_operations,
         advance_agent_episode, append_operation_admission, open_agent_episode,
-        prepare_episode_step, project_episode, recover_agent_episode, validate_previous_steps,
+        prepare_episode_step, prepare_native_episode_step, project_episode, recover_agent_episode,
+        validate_previous_steps,
     };
     use crate::{
         AdapterModelTurn, AdapterOutputItem, AdapterVersion, AgentRoleName, AgentStep,
-        CanonicalToolResult, ContextBlock, DeploymentName, DispatchAuthority, DispatchCompletion,
-        HistoryItem, InstructionBlock, ModelName, ModelSelection, ModelTransportResponse,
-        OperationResult, PolicyDocument, PreparedModelRequest, ProviderName, ProviderTokenCount,
-        ProviderTokenUsage, ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter,
-        RecordedToolExchange, RecordedToolGateway, ScriptedModelTransport, SettledAgentStep,
+        AgentStepState, CanonicalToolResult, ContextBlock, DeploymentName, DispatchAuthority,
+        DispatchCompletion, HistoryItem, InstructionBlock, ModelName, ModelOutputTokenLimit,
+        ModelProtocolConfig, ModelSelection, ModelTransportResponse, NativeProtocolCodec,
+        NativeRequestSpec, NativeToolDefinition, OperationResult, PolicyDocument,
+        PreparedModelRequest, ProviderName, ProviderTokenCount, ProviderTokenUsage,
+        ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter, RecordedToolExchange,
+        RecordedToolGateway, ResponsesReasoningReplay, ScriptedModelTransport, SettledAgentStep,
         StepOperationSettlement, ToolCatalog, ToolEffectClass, ToolImplementationVersion, ToolName,
         ToolOperationAssignment, ToolRegistration, TransportError, TurnInputDecision,
         authorize_tool_operation, begin_model_dispatch, begin_tool_operation, bind_step_operations,
         decode_model_response, execute_model_dispatch, execute_tool_operation, prepare_agent_step,
-        settle_decoded_step, settle_step_operations,
+        recover_agent_step, settle_decoded_step, settle_step_operations,
     };
 
     struct ReadyEpisode {
@@ -2242,6 +2282,305 @@ mod tests {
             recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode,)
                 .expect("recover complete"),
             AgentEpisodeState::Completed {
+                reason: EpisodeCompletionReason::Yielded,
+                steps_started: 2,
+            }
+        ));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the protocol-native end-to-end test intentionally keeps the complete two-step lineage visible"
+    )]
+    fn protocol_native_episode_closes_tool_loop_and_yields_on_second_step() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut content = SqliteContentStore::open(
+            directory.path().join("content.db"),
+            directory.path().join("cas"),
+        )
+        .expect("content");
+        let mut events = SqliteEventStore::in_memory().expect("events");
+        let episode = AgentEpisode::new(EpisodeId::new()).expect("episode");
+        let first_step_id = StepId::new();
+        let first_attempt_id = ModelAttemptId::new();
+        let first_authority = open_agent_episode(
+            &mut events,
+            &episode,
+            TaskId::new(),
+            AgentRoleName::new("candidate-author").expect("role"),
+            EpisodeBudget {
+                step_limit: Some(EpisodeStepLimit::new(3).expect("limit")),
+                tool_operation_limit: Some(EpisodeToolOperationLimit::new(3)),
+                provider_token_limit: None,
+                deadline_unix_ms: None,
+                external_meter_limits: None,
+            },
+            first_step_id,
+            first_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(1),
+        )
+        .expect("open");
+        let codec = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiResponses {
+            store: false,
+            reasoning_replay: ResponsesReasoningReplay::PreserveOutputItems,
+        })
+        .expect("codec");
+        let native_spec = NativeRequestSpec {
+            wire_model: ModelName::new("fixture").expect("model"),
+            instructions: "Use the registered tool, then answer.".to_owned(),
+            tools: vec![NativeToolDefinition {
+                name: ToolName::new("read_source").expect("tool"),
+                description: "Read one source path".to_owned(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "properties":{"path":{"type":"string"}},
+                    "required":["path"]
+                }),
+                strict: true,
+            }],
+            max_output_tokens: ModelOutputTokenLimit::new(1024).expect("tokens"),
+        };
+        let first_native = codec
+            .prepare_initial(&native_spec, "inspect src/lib.rs")
+            .expect("first native request");
+        let first_decision = decision(&mut content, Vec::new());
+        let first_dispatch = prepare_native_episode_step(
+            &mut events,
+            &mut content,
+            first_authority,
+            &first_decision,
+            &first_native,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(2),
+        )
+        .expect("prepare first");
+        let first_started = begin_model_dispatch(
+            &mut events,
+            first_dispatch,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(3),
+        )
+        .expect("begin first");
+        let first_response = br#"{
+            "output":[
+                {"type":"reasoning","id":"rs-1","encrypted_content":"opaque-state"},
+                {"type":"function_call","call_id":"call-1","name":"read_source","arguments":"{\"path\":\"src/lib.rs\"}"}
+            ]
+        }"#;
+        let mut first_transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                first_response.to_vec(),
+            ))
+        });
+        execute_model_dispatch(
+            &mut events,
+            &mut content,
+            &mut first_transport,
+            first_started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(4),
+        )
+        .expect("first response");
+        let first_step = AgentStep::new(first_step_id).expect("first step");
+        let AgentStepState::ReadyToDecode(first_received) =
+            recover_agent_step(&events, &mut content, &first_step, first_attempt_id)
+                .expect("recover first response")
+        else {
+            panic!("first decode authority");
+        };
+        let first_decoded = codec
+            .decode_recovered_received(
+                &mut events,
+                &mut content,
+                first_received,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(5),
+            )
+            .expect("decode first");
+        let first_continuation = first_decoded.continuation().clone();
+        let settled = settle_decoded_step(
+            &mut events,
+            &content,
+            &first_step,
+            first_attempt_id,
+            first_decoded.into_semantic(),
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(6),
+        )
+        .expect("settle first");
+        assert!(matches!(
+            settled,
+            SettledAgentStep::AwaitingOperations { .. }
+        ));
+
+        let EpisodeOperationAdmissionOutcome::Admitted(admission) = admit_episode_operations(
+            &mut events,
+            &mut content,
+            &episode,
+            vec![read_source_assignment(OperationId::new())],
+            &CommandId::new(),
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(7),
+        )
+        .expect("admit") else {
+            panic!("operation admission");
+        };
+        let operation = admission.into_operations().pop().expect("operation");
+        let arguments_id = operation.arguments_id();
+        let operation_authority = authorize_tool_operation(
+            &mut events,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(8),
+            operation,
+        )
+        .expect("authorize operation");
+        let operation_started = begin_tool_operation(
+            &mut events,
+            operation_authority,
+            AttemptId::new(),
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(9),
+        )
+        .expect("begin operation");
+        let mut gateway = RecordedToolGateway::new([RecordedToolExchange {
+            arguments_id,
+            result: CanonicalToolResult::from_value(&serde_json::json!({"source":"ok"}))
+                .expect("result"),
+        }]);
+        execute_tool_operation(
+            &mut events,
+            &mut content,
+            &mut gateway,
+            operation_started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(10),
+        )
+        .expect("execute operation");
+        let StepOperationSettlement::ReadyForNextStep {
+            pending_results, ..
+        } = settle_step_operations(
+            &mut events,
+            &mut content,
+            &first_step,
+            first_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(11),
+        )
+        .expect("settle operation")
+        else {
+            panic!("results ready");
+        };
+        let settled_native = codec
+            .append_archived_tool_results(&content, &first_continuation, &pending_results)
+            .expect("append archived results");
+        let second_native = codec
+            .prepare_continuation(&native_spec, &settled_native)
+            .expect("second native request");
+        let expected_second_bytes = second_native.request_bytes().to_vec();
+
+        let second_step_id = StepId::new();
+        let second_attempt_id = ModelAttemptId::new();
+        let EpisodeAdvance::NextStep(second_authority) = advance_agent_episode(
+            &mut events,
+            &mut content,
+            &episode,
+            second_step_id,
+            second_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(12),
+        )
+        .expect("advance") else {
+            panic!("second authority");
+        };
+        let second_decision = decision(&mut content, pending_results);
+        let second_dispatch = prepare_native_episode_step(
+            &mut events,
+            &mut content,
+            second_authority,
+            &second_decision,
+            &second_native,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(13),
+        )
+        .expect("prepare second");
+        drop(second_native);
+        let second_started = begin_model_dispatch(
+            &mut events,
+            second_dispatch,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(14),
+        )
+        .expect("begin second");
+        let second_response = br#"{
+            "output":[
+                {"type":"reasoning","id":"rs-2","encrypted_content":"opaque-final"},
+                {"type":"message","id":"msg-2","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}
+            ]
+        }"#;
+        let mut second_transport =
+            ScriptedModelTransport::new(move |request: &PreparedModelRequest| {
+                assert_eq!(request.request_bytes(), expected_second_bytes);
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.request_bytes()).expect("request JSON");
+                assert_eq!(body["input"][1]["encrypted_content"], "opaque-state");
+                assert_eq!(body["input"][3]["type"], "function_call_output");
+                assert_eq!(body["input"][3]["output"], "{\"source\":\"ok\"}");
+                Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                    second_response.to_vec(),
+                ))
+            });
+        execute_model_dispatch(
+            &mut events,
+            &mut content,
+            &mut second_transport,
+            second_started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(15),
+        )
+        .expect("second response");
+        let second_step = AgentStep::new(second_step_id).expect("second step");
+        let AgentStepState::ReadyToDecode(second_received) =
+            recover_agent_step(&events, &mut content, &second_step, second_attempt_id)
+                .expect("recover second response")
+        else {
+            panic!("second decode authority");
+        };
+        let second_decoded = codec
+            .decode_recovered_received(
+                &mut events,
+                &mut content,
+                second_received,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(16),
+            )
+            .expect("decode second");
+        assert!(matches!(
+            settle_decoded_step(
+                &mut events,
+                &content,
+                &second_step,
+                second_attempt_id,
+                second_decoded.into_semantic(),
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(17),
+            )
+            .expect("settle second"),
+            SettledAgentStep::Yielded { .. }
+        ));
+        assert!(matches!(
+            advance_agent_episode(
+                &mut events,
+                &mut content,
+                &episode,
+                StepId::new(),
+                ModelAttemptId::new(),
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(18),
+            )
+            .expect("complete"),
+            EpisodeAdvance::Completed {
                 reason: EpisodeCompletionReason::Yielded,
                 steps_started: 2,
             }

@@ -54,11 +54,15 @@ template also describes Chat Completions and Anthropic Messages. A private endpo
 deployment configuration, and codec selection never uses provider-name branches. Resolution freezes
 the exact template identity and a typed secret-free snapshot. Protocol-native continuation now
 preserves Responses items, Chat assistant messages, Anthropic blocks, thinking state, and tool
-correlations in a sensitive typed CAS domain. A bounded HTTPS transport resolves credentials only at
-dispatch, disables redirects, archives raw responses, extracts provider usage receipts, and retains
-ambiguous-effect semantics. The DeepSeek Responses conformance path has completed two real turns
-with a SQLite/CAS close-reopen boundary and a byte-identical reconstructed second request. Later
-configuration changes affect new episodes, not historical meaning.
+correlations in a sensitive typed CAS domain. Native request state is independently typed and
+recoverable; one response parse atomically publishes native, semantic, and tool-proposal facts. The
+durable `AgentStep`/`AgentEpisode` path has completed a two-step tool loop with trusted execution,
+crash-boundary recovery, and a byte-identical reconstructed second request. A bounded HTTPS
+transport resolves credentials only at dispatch, disables redirects, archives raw responses,
+extracts provider usage receipts, and retains ambiguous-effect semantics. The opt-in DeepSeek
+Responses check has also completed a real tool-call continuation across a SQLite/CAS close-reopen
+boundary without printing thinking or answer content. Later configuration changes affect new
+episodes, not historical meaning.
 The remaining architecture in the normative documents is still target design. The old repositories
 are evidence and compatibility references, not source trees to copy mechanically.
 
@@ -95,8 +99,9 @@ cargo run -p cairn-agent --example deepseek_responses_live -- \
   config/live-conformance.example.json
 ```
 
-The tool prints only typed identities, token usage, and the restart byte-equality result. It does not
-print the key, model thinking, or answer content.
+The tool requires one `echo_fixture` call, resumes from its deterministic result after restart, and
+prints only typed identities, token usage, and boolean closure checks. It does not print the key,
+model thinking, tool arguments, or answer content.
 
 ## License
 

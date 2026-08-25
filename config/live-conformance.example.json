@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "max_output_tokens": 128,
-  "initial_user_text": "Reply with exactly CAIRN_LIVE_OK.",
-  "followup_user_text": "Now reply with exactly CAIRN_REPLAY_OK."
+  "initial_user_text": "Call echo_fixture exactly once with value CAIRN_L2, then use its result to answer.",
+  "tool_input_value": "CAIRN_L2",
+  "tool_output_value": "CAIRN_L2_TOOL_OK"
 }

@@ -184,6 +184,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-AGENT-015 | A model template MUST be versioned and MAY define different capabilities, defaults, and protocol-specific request settings for each supported protocol family. User overrides MUST remain within the selected template section's declared bounds. | Three-protocol template fixture plus unsupported protocol, output ceiling, reasoning effort, and duplicate-section controls. |
 | FR-AGENT-016 | Stateless OpenAI Responses continuation MUST replay every prior response output item in order. A model profile using OpenAI encrypted reasoning MUST request, archive, and resend `reasoning.encrypted_content`; absence is a pre-dispatch completeness failure. | Encrypted-reasoning positive and missing-state fixtures. |
 | FR-AGENT-017 | A DeepSeek Chat tool-calling assistant message MUST retain and resend `reasoning_content` when its model template declares it required. Anthropic `thinking`, `redacted_thinking`, signatures, block order, and tool-use correlations MUST be replayed without mutation. | DeepSeek and Anthropic positive, mutation, omission, and restart fixtures. |
+| FR-AGENT-018 | A protocol-native response MUST be parsed once into a lossless continuation and a provider-neutral semantic projection. The native-continuation fact, semantic-turn fact, and all tool-call proposal facts MUST commit as one event batch; the neutral adapter path MUST reject native responses. | Three-protocol golden/negative suites, failed-batch fault injection, and event adjacency test. |
 
 ### 5.5 Execution substrate
 
@@ -227,6 +228,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-REC-012 | Physical `BlobDigest` and semantic `ContentId<T>` MUST remain distinct. Identical bytes MAY share physical storage without making semantic identities interchangeable. | Same-bytes/different-domain fixture and deduplication contract test. |
 | FR-REC-013 | An identity-algorithm upgrade MUST run as a restartable verified migration with an immutable mapping manifest, projection/index rebuild, and atomic writer cutover. It MUST NOT rewrite historical event bytes or verdict meaning. | Interrupted-migration recovery, old export resolution, and partial-cutover rejection tests. |
 | FR-REC-014 | The event stream MUST cite the typed native-continuation artifact produced from an archived raw response. After SQLite/CAS restart, Cairn MUST discover that artifact from attempt history and materialize the same next-request bytes without an out-of-band continuation identifier. | Close/reopen event-store and content-store integration test with byte equality. |
+| FR-REC-015 | A prepared native model request MUST cite a typed request-state artifact binding its exact request bytes, base continuation, protocol, and offered tool names. Recovery MUST validate this binding before restoring dispatch authority or decoding a response. | Restart-before-dispatch byte equality, mismatched-state negative fixture, and response-only recovery test. |
 
 Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md).
 

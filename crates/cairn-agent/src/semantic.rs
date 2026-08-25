@@ -296,8 +296,8 @@ impl ToolCallProposal {
 /// Durable semantic turn plus ordered unforgeable tool-call proposals.
 #[derive(Debug)]
 pub struct DecodedModelTurn {
-    turn_id: ContentId<SemanticModelTurnArtifact>,
-    proposals: Vec<ToolCallProposal>,
+    pub(crate) turn_id: ContentId<SemanticModelTurnArtifact>,
+    pub(crate) proposals: Vec<ToolCallProposal>,
 }
 
 impl DecodedModelTurn {
@@ -343,6 +343,9 @@ pub enum DecodeCoordinatorError {
         /// Runtime adapter offered for decoding.
         actual: AdapterVersion,
     },
+    /// A native request must use the atomic protocol decoder, not an independent adapter pass.
+    #[error("protocol-native response requires atomic native and semantic decoding")]
+    ProtocolNativeDecodeRequired,
     /// Semantic artifacts exist but their fact batch could not be committed.
     #[error(
         "attempt {attempt_id} archived semantic turn {turn_id}, but recording decoded facts failed ({record})"
@@ -404,6 +407,9 @@ pub fn decode_model_response<E: EventStore, C: ContentStore, A: ModelAdapter>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<DecodedModelTurn, DecodeCoordinatorError> {
+    if received.native_state_id.is_some() {
+        return Err(DecodeCoordinatorError::ProtocolNativeDecodeRequired);
+    }
     let ReceivedModelResponse {
         attempt_id,
         stream,
@@ -411,6 +417,7 @@ pub fn decode_model_response<E: EventStore, C: ContentStore, A: ModelAdapter>(
         response_event_id,
         response_id,
         adapter_version: expected_adapter_version,
+        native_state_id: _,
         usage: _,
     } = received;
     let actual_adapter_version = adapter.adapter_version().clone();
@@ -459,7 +466,7 @@ pub fn decode_model_response<E: EventStore, C: ContentStore, A: ModelAdapter>(
     })
 }
 
-fn materialize_turn<C: ContentStore>(
+pub(crate) fn materialize_turn<C: ContentStore>(
     content: &mut C,
     attempt_id: ModelAttemptId,
     response_id: ContentId<ModelResponseArtifact>,
@@ -517,7 +524,7 @@ fn materialize_turn<C: ContentStore>(
     ))
 }
 
-fn semantic_facts(
+pub(crate) fn semantic_facts(
     attempt_id: ModelAttemptId,
     response_id: ContentId<ModelResponseArtifact>,
     response_event_id: cairn_protocol::EventId,
@@ -842,6 +849,7 @@ mod tests {
             request_id: ContentId::<MaterializedRequestArtifact>::derive(b"request")
                 .expect("request"),
             adapter_version: AdapterVersion::new("recorded-v1").expect("adapter"),
+            native_state_id: None,
             request_bytes: b"request".to_vec(),
         };
         let authority = authorize_model_request(

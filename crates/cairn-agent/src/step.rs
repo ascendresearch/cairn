@@ -12,10 +12,11 @@ use thiserror::Error;
 use crate::step_operation::{StepOperationProjection, project_step_operations};
 use crate::{
     DecodeCoordinatorError, DecodedModelTurn, DispatchAuthority, DispatchCoordinatorError,
-    InputAuditError, ModelAttemptState, ReceivedModelResponse, SemanticModelTurnArtifact,
-    ToolCallId, ToolCallProposal, TurnInputDecision, authorize_model_request,
-    prepare_model_request, recover_decoded_model_turn, recover_dispatch_authority,
-    recover_model_attempt, recover_received_model_response,
+    InputAuditError, ModelAttemptState, PreparedNativeRequest, ReceivedModelResponse,
+    SemanticModelTurnArtifact, ToolCallId, ToolCallProposal, TurnInputDecision,
+    authorize_model_request, prepare_model_request, prepare_native_dispatch_request,
+    recover_decoded_model_turn, recover_dispatch_authority, recover_model_attempt,
+    recover_received_model_response,
 };
 
 const STEP_SETTLED: &str = "agent.step-settled";
@@ -174,6 +175,40 @@ pub fn prepare_agent_step<E: EventStore, C: ContentStore>(
     observed_at: ObservedAtUnixMillis,
 ) -> Result<DispatchAuthority, StepCoordinatorError> {
     let request = prepare_model_request(content, decision)?;
+    authorize_model_request(
+        events,
+        &step.stream,
+        ExpectedRevision::NoStream,
+        command_id,
+        attempt_id,
+        observed_at,
+        request,
+    )
+    .map_err(Into::into)
+}
+
+/// Audits an input decision, archives its exact protocol-native request context, and commits the
+/// first step fact.
+///
+/// # Errors
+///
+/// Returns [`StepCoordinatorError`] when input or native request state cannot be archived, or when
+/// the prepared fact cannot commit.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the durable native preparation boundary keeps every authority input explicit"
+)]
+pub fn prepare_native_agent_step<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    step: &AgentStep,
+    decision: &TurnInputDecision,
+    native: &PreparedNativeRequest,
+    attempt_id: ModelAttemptId,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<DispatchAuthority, StepCoordinatorError> {
+    let request = prepare_native_dispatch_request(content, decision, native)?;
     authorize_model_request(
         events,
         &step.stream,
@@ -428,17 +463,18 @@ mod tests {
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 
     use super::{
-        AgentStep, AgentStepState, SettledAgentStep, prepare_agent_step, recover_agent_step,
-        settle_decoded_step,
+        AgentStep, AgentStepState, SettledAgentStep, prepare_agent_step, prepare_native_agent_step,
+        recover_agent_step, settle_decoded_step,
     };
     use crate::{
         AdapterModelTurn, AdapterOutputItem, AdapterVersion, ContextBlock, DeploymentName,
-        DispatchCompletion, HistoryItem, InstructionBlock, ModelName, ModelSelection,
-        ModelTransportResponse, OperationResult, PolicyDocument, PreparedModelRequest,
-        ProviderName, ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter,
-        ScriptedModelTransport, ToolCatalog, ToolName, TransportError, TurnInputDecision,
-        begin_model_dispatch, decode_model_response, execute_model_dispatch,
-        recover_decoded_model_turn,
+        DispatchCompletion, HistoryItem, InstructionBlock, ModelName, ModelOutputTokenLimit,
+        ModelProtocolConfig, ModelSelection, ModelTransportResponse, NativeProtocolCodec,
+        NativeRequestSpec, NativeToolDefinition, OperationResult, PolicyDocument,
+        PreparedModelRequest, ProviderName, ProviderToolCallId, RecordedAdapterExchange,
+        RecordedModelAdapter, ResponsesReasoningReplay, ScriptedModelTransport, ToolCatalog,
+        ToolName, TransportError, TurnInputDecision, begin_model_dispatch, decode_model_response,
+        execute_model_dispatch, recover_decoded_model_turn,
     };
 
     fn put_json<T: ContentType>(
@@ -484,12 +520,11 @@ mod tests {
     #[test]
     fn restart_projection_advances_only_through_durable_authority() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let mut content = SqliteContentStore::open(
-            directory.path().join("content.db"),
-            directory.path().join("cas"),
-        )
-        .expect("content");
-        let mut events = SqliteEventStore::in_memory().expect("events");
+        let content_database = directory.path().join("content.db");
+        let event_database = directory.path().join("events.db");
+        let cas = directory.path().join("cas");
+        let mut content = SqliteContentStore::open(&content_database, &cas).expect("content");
+        let mut events = SqliteEventStore::open(&event_database).expect("events");
         let step = AgentStep::new(StepId::new()).expect("step");
         let attempt_id = ModelAttemptId::new();
         let decision = decision(&mut content);
@@ -571,6 +606,173 @@ mod tests {
         ));
 
         assert_operation_boundary_recovery(&mut events, &mut content, &step, attempt_id, decoded);
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the restart test keeps request recovery and atomic response publication together"
+    )]
+    fn native_restart_recovers_exact_request_and_atomically_projects_tool_call() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let content_database = directory.path().join("native-content.db");
+        let event_database = directory.path().join("native-events.db");
+        let cas = directory.path().join("native-cas");
+        let mut content = SqliteContentStore::open(&content_database, &cas).expect("content");
+        let mut events = SqliteEventStore::open(&event_database).expect("events");
+        let step = AgentStep::new(StepId::new()).expect("step");
+        let attempt_id = ModelAttemptId::new();
+        let decision = decision(&mut content);
+        let codec = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiResponses {
+            store: false,
+            reasoning_replay: ResponsesReasoningReplay::PreserveOutputItems,
+        })
+        .expect("codec");
+        let spec = NativeRequestSpec {
+            wire_model: ModelName::new("fixture").expect("model"),
+            instructions: "be exact".to_owned(),
+            tools: vec![NativeToolDefinition {
+                name: ToolName::new("read_source").expect("tool"),
+                description: "Read one source path".to_owned(),
+                input_schema: serde_json::json!({
+                    "type":"object",
+                    "properties":{"path":{"type":"string"}},
+                    "required":["path"]
+                }),
+                strict: true,
+            }],
+            max_output_tokens: ModelOutputTokenLimit::new(1024).expect("tokens"),
+        };
+        let native = codec
+            .prepare_initial(&spec, "inspect")
+            .expect("native request");
+        let expected_request = native.request_bytes().to_vec();
+        let _lost = prepare_native_agent_step(
+            &mut events,
+            &mut content,
+            &step,
+            &decision,
+            &native,
+            attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(1),
+        )
+        .expect("prepare native step");
+        drop(native);
+        drop(events);
+        drop(content);
+
+        let mut content =
+            SqliteContentStore::open(&content_database, &cas).expect("reopen content");
+        let mut events = SqliteEventStore::open(&event_database).expect("reopen events");
+
+        let AgentStepState::ReadyToStart(authority) =
+            recover_agent_step(&events, &mut content, &step, attempt_id).expect("recover request")
+        else {
+            panic!("ready to start");
+        };
+        let started = begin_model_dispatch(
+            &mut events,
+            authority,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(2),
+        )
+        .expect("begin");
+        let response = br#"{
+            "output":[
+                {"type":"reasoning","encrypted_content":"opaque"},
+                {"type":"function_call","call_id":"call-1","name":"read_source","arguments":"{\"path\":\"src/lib.rs\"}"}
+            ]
+        }"#;
+        let mut transport = ScriptedModelTransport::new(move |request: &PreparedModelRequest| {
+            assert_eq!(request.request_bytes(), expected_request);
+            assert!(request.native_state_id().is_some());
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(response.to_vec()))
+        });
+        let DispatchCompletion::Response(_) = execute_model_dispatch(
+            &mut events,
+            &mut content,
+            &mut transport,
+            started,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(3),
+        )
+        .expect("dispatch") else {
+            panic!("response");
+        };
+        drop(events);
+        drop(content);
+
+        let mut content =
+            SqliteContentStore::open(&content_database, &cas).expect("reopen response content");
+        let mut events = SqliteEventStore::open(&event_database).expect("reopen response events");
+
+        let AgentStepState::ReadyToDecode(received) =
+            recover_agent_step(&events, &mut content, &step, attempt_id).expect("recover response")
+        else {
+            panic!("ready to decode");
+        };
+        assert!(received.native_state_id().is_some());
+        let mut forbidden_adapter = RecordedModelAdapter::new(
+            AdapterVersion::new("v1").expect("adapter"),
+            Vec::<RecordedAdapterExchange>::new(),
+        );
+        assert!(matches!(
+            decode_model_response(
+                &mut events,
+                &mut content,
+                &mut forbidden_adapter,
+                received,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(4),
+            ),
+            Err(crate::DecodeCoordinatorError::ProtocolNativeDecodeRequired)
+        ));
+        let AgentStepState::ReadyToDecode(received) =
+            recover_agent_step(&events, &mut content, &step, attempt_id)
+                .expect("recover native decode authority")
+        else {
+            panic!("ready for native decode");
+        };
+        let decoded = codec
+            .decode_recovered_received(
+                &mut events,
+                &mut content,
+                received,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(4),
+            )
+            .expect("atomic protocol decode");
+        assert_eq!(decoded.semantic().proposals().len(), 1);
+        assert_eq!(
+            decoded.semantic().proposals()[0].tool().as_str(),
+            "read_source"
+        );
+
+        let history = events.read_stream(step.stream_id(), None).expect("history");
+        let schemas = history
+            .iter()
+            .map(|event| event.schema_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &schemas[3..],
+            &[
+                "agent.native-continuation-recorded",
+                "agent.model-response-decoded",
+                "agent.tool-call-proposed"
+            ]
+        );
+        let (continuation_id, recovered) = codec
+            .recover_recorded(&events, &content, step.stream_id(), attempt_id)
+            .expect("recover native")
+            .expect("native fact");
+        assert_eq!(continuation_id, decoded.continuation_id());
+        assert_eq!(recovered, *decoded.continuation());
+        assert!(matches!(
+            recover_agent_step(&events, &mut content, &step, attempt_id)
+                .expect("recover atomic turn"),
+            AgentStepState::Decoded(_)
+        ));
     }
 
     fn assert_operation_boundary_recovery(

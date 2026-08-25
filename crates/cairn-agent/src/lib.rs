@@ -30,7 +30,7 @@ pub use episode::{
     EpisodeOperationAdmissionOutcome, EpisodeProviderTokenLimit, EpisodeProviderTokenLimitError,
     EpisodeStepAuthority, EpisodeStepLimit, EpisodeToolOperationLimit, EpisodeValueError,
     admit_episode_operations, advance_agent_episode, open_agent_episode, prepare_episode_step,
-    recover_agent_episode,
+    prepare_native_episode_step, recover_agent_episode,
 };
 pub use http_transport::{HttpModelTransport, HttpTransportConfigError};
 pub use metering::{
@@ -40,9 +40,9 @@ pub use metering::{
     reserve_metered_action,
 };
 pub use native_protocol::{
-    NativeCodecError, NativeContinuation, NativeProtocolCodec, NativeRequestSpec,
-    NativeToolDefinition, NativeToolResult, PreparedNativeRequest, RecordedNativeResponse,
-    prepare_native_dispatch_request,
+    DecodedProtocolModelTurn, NativeCodecError, NativeContinuation, NativeProtocolCodec,
+    NativeRequestSpec, NativeToolDefinition, NativeToolResult, PreparedNativeRequest,
+    ProtocolDecodeCoordinatorError, ProtocolDecodedTurn, prepare_native_dispatch_request,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -72,7 +72,7 @@ pub use semantic::{
 };
 pub use step::{
     AgentStep, AgentStepState, SettledAgentStep, StepCoordinatorError, prepare_agent_step,
-    recover_agent_step, settle_decoded_step,
+    prepare_native_agent_step, recover_agent_step, settle_decoded_step,
 };
 pub use step_operation::{
     BoundStepOperations, StepOperationBlocker, StepOperationIdentity, StepOperationSettlement,
@@ -190,6 +190,10 @@ content_type!(
     NativeContinuationArtifact,
     "agent.native-model-continuation-sensitive.v1"
 );
+content_type!(
+    NativeRequestStateArtifact,
+    "agent.native-model-request-state-sensitive.v1"
+);
 content_type!(ToolArguments, "agent.tool-arguments.v1");
 content_type!(SemanticModelTurnArtifact, "agent.semantic-model-turn.v1");
 content_type!(ToolCallIdentity, "agent.tool-call-identity.v1");
@@ -299,6 +303,8 @@ pub struct PreparedModelRequest {
     request_id: ContentId<MaterializedRequestArtifact>,
     /// Semantic adapter version pinned when the input decision was made.
     adapter_version: AdapterVersion,
+    /// Optional archived protocol-native reconstruction context.
+    native_state_id: Option<Box<ContentId<NativeRequestStateArtifact>>>,
     /// Exact bytes supplied to the transport adapter.
     request_bytes: Vec<u8>,
 }
@@ -326,6 +332,15 @@ impl PreparedModelRequest {
     #[must_use]
     pub fn request_bytes(&self) -> &[u8] {
         &self.request_bytes
+    }
+
+    /// Returns the protocol-native request context when this is a native dispatch.
+    #[must_use]
+    pub const fn native_state_id(&self) -> Option<ContentId<NativeRequestStateArtifact>> {
+        match &self.native_state_id {
+            Some(state_id) => Some(**state_id),
+            None => None,
+        }
     }
 }
 
@@ -388,6 +403,7 @@ pub fn prepare_model_request<S: ContentStore>(
         decision_id: decision_descriptor.content_id,
         request_id: request_descriptor.content_id,
         adapter_version: decision.selection.adapter_version.clone(),
+        native_state_id: None,
         request_bytes,
     })
 }
@@ -859,6 +875,7 @@ mod tests {
             decision_id: ContentId::derive(b"{}").expect("decision identity"),
             request_id,
             adapter_version: AdapterVersion::new("v1").expect("adapter"),
+            native_state_id: None,
             request_bytes: b"{}".to_vec(),
         };
         let usage = ProviderTokenUsage::new(ProviderTokenCount::new(8), ProviderTokenCount::new(2))

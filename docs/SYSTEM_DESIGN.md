@@ -383,6 +383,11 @@ classification: ordinary logs and default exports must cite identities, not prin
 Encryption at rest remains a deployment/storage responsibility until Cairn has an explicit encrypted
 CAS capability.
 
+The prepared request also cites `agent.native-model-request-state-sensitive.v1`, which binds the
+exact provider request identity to its base continuation, selected protocol, and offered tool names.
+This artifact is what makes a response decodable after process loss: recovery does not depend on an
+in-memory codec object retaining the previous request boundary.
+
 The codec must retain unrecognized but policy-allowed native blocks in the archived continuation or
 fail explicitly; it must not silently coerce them into text. Tool arguments remain untrusted bytes
 until Cairn's schema validator accepts them. The SDK/transport performs one provider turn only. Tool
@@ -424,15 +429,22 @@ overrides, capability and credential-reference validation, and a content-address
 resolution. `model-templates/deepseek/deepseek-v4-pro.json` supplies model characteristics while
 `config/runtime-models.example.json` contains only the enabled Responses deployment. The native
 protocol slice now provides closed per-protocol history variants, typed tool-call correlations,
-model-template replay policies, CAS archival, an `agent.native-continuation-recorded` event, and
-SQLite/CAS close/reopen tests. Those tests define stability as an identical history boundary and
-byte-identical next request; they do not claim that a fresh live model output is deterministic.
+model-template replay policies, and sensitive CAS archival for both continuation and prepared
+request state. One parse of immutable response bytes produces the native continuation and semantic
+turn; `agent.native-continuation-recorded`, `agent.model-response-decoded`, and every
+`agent.tool-call-proposed` fact commit in one optimistic event batch. The generic `AgentStep` and
+`AgentEpisode` paths reject independent semantic decoding for native requests and can recover the
+exact request context from events plus CAS after memory loss. A hardware-free two-step fixture runs
+model tool call → trusted binding/execution → durable result → native result correlation → second
+model yield, while checking byte-identical reconstruction. These tests do not claim that a fresh
+live model output is deterministic.
 The bounded HTTPS transport reads its credential file only at dispatch, marks authorization headers
 sensitive, disables redirects, applies configured connect/request/body limits, extracts validated
 usage receipts, and preserves not-sent/rejected/ambiguous effect classes. The opt-in DeepSeek
-Responses conformance executable performs two real provider turns around a SQLite/CAS close-reopen
-boundary and checks byte identity before the second dispatch. It emits identities and usage only;
-thinking and answer bodies remain archived rather than printed.
+Responses conformance executable performs a real tool call and tool-result continuation around a
+SQLite/CAS close-reopen boundary, checks byte identity before the second dispatch, and rejects a
+missing or repeated tool call. It emits identities, usage, and boolean checks only; thinking and
+answer bodies remain archived rather than printed.
 
 The wire rules are based on the provider documentation current at implementation time:
 

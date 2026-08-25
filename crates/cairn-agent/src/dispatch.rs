@@ -95,6 +95,7 @@ pub struct ReceivedModelResponse {
     pub(crate) response_event_id: EventId,
     pub(crate) response_id: ContentId<ModelResponseArtifact>,
     pub(crate) adapter_version: AdapterVersion,
+    pub(crate) native_state_id: Option<Box<ContentId<crate::NativeRequestStateArtifact>>>,
     pub(crate) usage: Option<ProviderTokenUsage>,
 }
 
@@ -121,6 +122,15 @@ impl ReceivedModelResponse {
     #[must_use]
     pub const fn usage(&self) -> Option<ProviderTokenUsage> {
         self.usage
+    }
+
+    /// Returns the archived protocol-native request context, when present.
+    #[must_use]
+    pub const fn native_state_id(&self) -> Option<ContentId<crate::NativeRequestStateArtifact>> {
+        match &self.native_state_id {
+            Some(state_id) => Some(**state_id),
+            None => None,
+        }
     }
 }
 
@@ -161,6 +171,8 @@ struct PreparedPayload {
     #[serde(rename = "request_id")]
     request: ContentId<MaterializedRequestArtifact>,
     adapter_version: AdapterVersion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_state_id: Option<ContentId<crate::NativeRequestStateArtifact>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -211,6 +223,7 @@ pub fn authorize_model_request<E: EventStore>(
         decision: request.decision_id,
         request: request.request_id,
         adapter_version: request.adapter_version.clone(),
+        native_state_id: request.native_state_id.as_deref().copied(),
     };
     let outcome = append_fact(
         events,
@@ -359,6 +372,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 response_event_id: outcome.event_ids[0],
                 response_id: descriptor.content_id,
                 adapter_version: request.adapter_version,
+                native_state_id: request.native_state_id,
                 usage,
             }))
         }
@@ -567,6 +581,7 @@ pub fn recover_received_model_response(
         return Ok(None);
     };
     let adapter_version = prepared_adapter_version(events, attempt_id)?;
+    let native_state_id = prepared_native_state_id(events, attempt_id)?;
     for event in events.iter().rev() {
         if event.schema_name.as_str() != RESPONSE {
             continue;
@@ -583,6 +598,7 @@ pub fn recover_received_model_response(
                 response_event_id: event.event_id,
                 response_id,
                 adapter_version,
+                native_state_id: native_state_id.map(Box::new),
                 usage,
             }));
         }
@@ -617,13 +633,34 @@ pub fn recover_dispatch_authority<C: ContentStore>(
         content.write_to(&payload.decision, &mut decision_bytes)?;
         let decision: TurnInputDecision = cairn_codec::from_slice(&decision_bytes)
             .map_err(|error| DispatchCoordinatorError::InvalidHistory(error.to_string()))?;
-        let request = prepare_model_request(content, &decision)?;
-        if request.decision_id != payload.decision
-            || request.request_id != payload.request
-            || request.adapter_version != payload.adapter_version
+        let audited = prepare_model_request(content, &decision)?;
+        if audited.decision_id != payload.decision
+            || audited.adapter_version != payload.adapter_version
         {
             return invalid_history("reconstructed request differs from prepared fact");
         }
+        let request = if let Some(native_state_id) = payload.native_state_id {
+            crate::native_protocol::validate_native_request_state_reference(
+                content,
+                &native_state_id,
+                payload.request,
+            )
+            .map_err(|error| DispatchCoordinatorError::InvalidHistory(error.to_string()))?;
+            let mut request_bytes = Vec::new();
+            content.write_to(&payload.request, &mut request_bytes)?;
+            PreparedModelRequest {
+                decision_id: audited.decision_id,
+                request_id: payload.request,
+                adapter_version: audited.adapter_version,
+                native_state_id: Some(Box::new(native_state_id)),
+                request_bytes,
+            }
+        } else {
+            if audited.request_id != payload.request {
+                return invalid_history("reconstructed request differs from prepared fact");
+            }
+            audited
+        };
         return Ok(Some(DispatchAuthority {
             attempt_id,
             stream: event.stream.clone(),
@@ -654,10 +691,20 @@ pub(crate) fn recover_turn_input_decision<C: ContentStore>(
             .map_err(|error| DispatchCoordinatorError::InvalidHistory(error.to_string()))?;
         let request = prepare_model_request(content, &decision)?;
         if request.decision_id != payload.decision
-            || request.request_id != payload.request
             || request.adapter_version != payload.adapter_version
+            || (payload.native_state_id.is_none() && request.request_id != payload.request)
         {
             return invalid_history("recovered input decision differs from prepared request fact");
+        }
+        if let Some(native_state_id) = payload.native_state_id {
+            crate::native_protocol::validate_native_request_state_reference(
+                content,
+                &native_state_id,
+                payload.request,
+            )
+            .map_err(|error| DispatchCoordinatorError::InvalidHistory(error.to_string()))?;
+            let mut request_bytes = Vec::new();
+            content.write_to(&payload.request, &mut request_bytes)?;
         }
         return Ok(Some(decision));
     }
@@ -678,6 +725,22 @@ fn prepared_adapter_version(
         }
     }
     invalid_history("completed attempt has no prepared adapter version")
+}
+
+fn prepared_native_state_id(
+    events: &[EventEnvelope],
+    attempt_id: ModelAttemptId,
+) -> Result<Option<ContentId<crate::NativeRequestStateArtifact>>, DispatchCoordinatorError> {
+    for event in events {
+        if event.schema_name.as_str() != PREPARED {
+            continue;
+        }
+        let payload: PreparedPayload = decode_payload(event)?;
+        if payload.attempt == attempt_id {
+            return Ok(payload.native_state_id);
+        }
+    }
+    invalid_history("completed attempt has no prepared native state")
 }
 
 fn decode_payload<P: for<'de> Deserialize<'de>>(
@@ -738,6 +801,7 @@ mod tests {
             request_id: ContentId::<MaterializedRequestArtifact>::derive(b"request")
                 .expect("request id"),
             adapter_version: crate::AdapterVersion::new("v1").expect("adapter"),
+            native_state_id: None,
             request_bytes: b"request".to_vec(),
         }
     }

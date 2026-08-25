@@ -373,12 +373,19 @@ that the resulting request represents the same recorded boundary before calling 
 Provider-hosted continuation may later be an optimization or an additional observation, but never
 the only authority for reconstruction.
 
-The raw response is decoded into a versioned native artifact before semantic projection. The event
-`agent.native-continuation-recorded` cites the response, protocol, and artifact identity. A recovery
-walk starts from the model attempt, verifies the response parent and raw-response CAS object,
-rehydrates the cited continuation, appends durably recorded tool results, and materializes the next
-request. Repeating this process before and after closing SQLite/CAS must produce identical request
-bytes. A new live response to those bytes remains a counterfactual observation and may differ.
+Before dispatch, a typed native-request-state artifact binds the exact request identity to the base
+continuation, protocol, and offered tool names. A recovery walk validates that binding before it may
+restore dispatch authority or interpret a later response.
+
+The immutable raw response is parsed once into a versioned native continuation and a semantic turn.
+Their artifacts may be written to CAS independently, but their authoritative facts are indivisible:
+`agent.native-continuation-recorded`, `agent.model-response-decoded`, and all ordered
+`agent.tool-call-proposed` events commit in one batch with the raw response as parent. A native
+response cannot enter the independent neutral-adapter decode path. Recovery then verifies the
+response parent and CAS objects, rehydrates the cited continuation, appends ordered durable tool
+results, and materializes the next request. Repeating this process before and after closing
+SQLite/CAS must produce identical request bytes. A new live response to those bytes remains a
+counterfactual observation and may differ.
 
 ## 9. Completeness audit
 

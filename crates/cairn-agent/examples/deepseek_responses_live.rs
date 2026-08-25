@@ -1,4 +1,4 @@
-//! Opt-in `DeepSeek` Responses conformance: live turn, durable restart, live continuation.
+//! Opt-in `DeepSeek` Responses conformance: live tool call, durable restart, live continuation.
 
 use std::{
     io::Cursor,
@@ -9,9 +9,10 @@ use cairn_agent::{
     AdapterVersion, ContextBlock, DeploymentName, DispatchCompletion, HistoryItem,
     HttpModelTransport, InstructionBlock, ModelName, ModelOutputTokenLimit, ModelProtocolKind,
     ModelSelection, ModelTemplate, ModelTemplateRegistry, NativeProtocolCodec, NativeRequestSpec,
-    OperationResult, PolicyDocument, ProviderName, ReceivedModelResponse, RuntimeModelCatalog,
-    ToolCatalog, TurnInputDecision, authorize_model_request, begin_model_dispatch,
-    execute_model_dispatch, prepare_native_dispatch_request,
+    NativeToolDefinition, NativeToolResult, OperationResult, PolicyDocument, ProviderName,
+    ReceivedModelResponse, RuntimeModelCatalog, ToolCatalog, ToolName, TurnInputDecision,
+    authorize_model_request, begin_model_dispatch, execute_model_dispatch,
+    prepare_native_dispatch_request,
 };
 use cairn_protocol::{
     AggregateId, AggregateKind, CommandId, ContentId, ContentType, ModelAttemptId,
@@ -27,7 +28,8 @@ struct LiveConfig {
     schema_version: u16,
     max_output_tokens: u64,
     initial_user_text: String,
-    followup_user_text: String,
+    tool_input_value: String,
+    tool_output_value: String,
 }
 
 #[allow(clippy::too_many_lines)] // Keep the end-to-end conformance narrative linear and auditable.
@@ -39,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let live: LiveConfig = serde_json::from_slice(&std::fs::read(root.join(config_path))?)?;
     if live.schema_version != 1
         || live.initial_user_text.trim().is_empty()
-        || live.followup_user_text.trim().is_empty()
+        || live.tool_input_value.trim().is_empty()
+        || live.tool_output_value.trim().is_empty()
     {
         return Err("invalid live conformance configuration".into());
     }
@@ -62,8 +65,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let codec = NativeProtocolCodec::from_config(model.protocol())?;
     let request_spec = NativeRequestSpec {
         wire_model: model.wire_model().clone(),
-        instructions: "This is a bounded Cairn transport conformance check.".to_owned(),
-        tools: Vec::new(),
+        instructions: "You must call echo_fixture exactly once before answering.".to_owned(),
+        tools: vec![NativeToolDefinition {
+            name: ToolName::new("echo_fixture")?,
+            description: "Returns a deterministic fixture value.".to_owned(),
+            input_schema: serde_json::json!({
+                "type":"object",
+                "properties":{"value":{"type":"string"}},
+                "required":["value"],
+                "additionalProperties":false
+            }),
+            strict: true,
+        }],
         max_output_tokens: output_limit,
     };
     let initial_native = codec.prepare_initial(&request_spec, &live.initial_user_text)?;
@@ -81,6 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut content,
         &model,
         &serde_json::json!({"role":"user","content":live.initial_user_text}),
+        Vec::new(),
     )?;
     let first_received = dispatch(
         &mut events,
@@ -94,21 +108,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let first_response_id = first_received.response_id();
     let first_usage = first_received.usage();
-    let recorded = codec.record_received(
+    let decoded = codec.decode_recovered_received(
         &mut events,
         &mut content,
-        &initial_native,
         first_received,
         &CommandId::new(),
         now()?,
     )?;
-    let continuation_id = recorded.continuation_id();
-    let before_restart = codec.prepare_continuation(
-        &request_spec,
-        &codec.append_user_text(recorded.continuation(), &live.followup_user_text)?,
+    if decoded.semantic().proposals().len() != 1
+        || decoded.semantic().proposals()[0].tool().as_str() != "echo_fixture"
+    {
+        return Err("DeepSeek did not produce exactly one echo_fixture call".into());
+    }
+    let arguments_id = decoded.semantic().proposals()[0].arguments_id();
+    let mut argument_bytes = Vec::new();
+    content.write_to(&arguments_id, &mut argument_bytes)?;
+    let arguments: serde_json::Value = cairn_codec::from_slice(&argument_bytes)?;
+    if arguments != serde_json::json!({"value":live.tool_input_value}) {
+        return Err("DeepSeek echo_fixture arguments differed from the fixture".into());
+    }
+    let continuation_id = decoded.continuation_id();
+    let call_id = decoded
+        .continuation()
+        .pending_call_ids()
+        .first()
+        .ok_or("native continuation lost the tool call")?
+        .clone();
+    let settled = codec.append_tool_results(
+        decoded.continuation(),
+        &[NativeToolResult {
+            call_id,
+            output: live.tool_output_value.clone(),
+        }],
     )?;
+    let before_restart = codec.prepare_continuation(&request_spec, &settled)?;
 
-    drop(recorded);
+    drop(decoded);
     drop(events);
     drop(content);
 
@@ -120,7 +155,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if recovered_id != continuation_id {
         return Err("recovered continuation identity changed".into());
     }
-    let recovered = codec.append_user_text(&recovered, &live.followup_user_text)?;
+    let recovered = codec.append_tool_results(
+        &recovered,
+        &[NativeToolResult {
+            call_id: recovered
+                .pending_call_ids()
+                .first()
+                .ok_or("recovered continuation lost the tool call")?
+                .clone(),
+            output: live.tool_output_value.clone(),
+        }],
+    )?;
     let after_restart = codec.prepare_continuation(&request_spec, &recovered)?;
     if before_restart.request_bytes() != after_restart.request_bytes() {
         return Err("restart changed the next provider request bytes".into());
@@ -133,8 +178,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &model,
         &serde_json::json!({
             "native_continuation_id": recovered_id.to_wire(),
-            "new_user_text": live.followup_user_text
+            "tool_result": live.tool_output_value
         }),
+        Vec::new(),
     )?;
     let second_received = dispatch(
         &mut events,
@@ -148,14 +194,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let second_response_id = second_received.response_id();
     let second_usage = second_received.usage();
-    let _second_recorded = codec.record_received(
+    let second_decoded = codec.decode_recovered_received(
         &mut events,
         &mut content,
-        &after_restart,
         second_received,
         &CommandId::new(),
         now()?,
     )?;
+    if !second_decoded.semantic().proposals().is_empty() {
+        return Err("DeepSeek requested another tool after the fixture result".into());
+    }
 
     println!(
         "{}",
@@ -167,6 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "first_usage": first_usage,
             "continuation_id": continuation_id,
             "restart_request_byte_identical": true,
+            "tool_loop_completed": true,
             "second_attempt_id": second_attempt,
             "second_response_id": second_response_id,
             "second_usage": second_usage,
@@ -217,6 +266,7 @@ fn decision(
     content: &mut SqliteContentStore,
     model: &cairn_agent::ResolvedRuntimeModel,
     history: &serde_json::Value,
+    pending_results: Vec<ContentId<OperationResult>>,
 ) -> Result<TurnInputDecision, Box<dyn std::error::Error>> {
     Ok(TurnInputDecision {
         selection: ModelSelection {
@@ -229,10 +279,13 @@ fn decision(
             content,
             &serde_json::json!({"text":"bounded live conformance"}),
         )?],
-        tool_catalog: put_json::<ToolCatalog>(content, &serde_json::json!({"tools":[]}))?,
+        tool_catalog: put_json::<ToolCatalog>(
+            content,
+            &serde_json::json!({"tools":["echo_fixture"]}),
+        )?,
         history: vec![put_json::<HistoryItem>(content, history)?],
         context: Vec::<ContentId<ContextBlock>>::new(),
-        pending_results: Vec::<ContentId<OperationResult>>::new(),
+        pending_results,
         policy: put_json::<PolicyDocument>(
             content,
             &serde_json::json!({"network":"configured_provider_only"}),

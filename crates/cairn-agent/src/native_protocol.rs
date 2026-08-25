@@ -7,7 +7,6 @@ use std::{
 
 use cairn_protocol::{
     CommandId, ContentId, ModelAttemptId, ObservedAtUnixMillis, SchemaName, SchemaVersion,
-    StreamRevision,
 };
 use cairn_record::{
     ContentStore, ContentStoreError, EventStore, EventStoreError, ExpectedRevision, NewEvent,
@@ -17,11 +16,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
+use crate::semantic::{materialize_turn, semantic_facts};
 use crate::{
-    ChatReasoningReplay, InputAuditError, MaterializedRequestArtifact, ModelName,
+    AdapterModelTurn, AdapterOutputItem, ChatReasoningReplay, DecodeCoordinatorError,
+    DecodedModelTurn, InputAuditError, MaterializedRequestArtifact, ModelName,
     ModelOutputTokenLimit, ModelProtocolConfig, ModelProtocolKind, ModelResponseArtifact,
-    NativeContinuationArtifact, PreparedModelRequest, ProviderToolCallId, ReceivedModelResponse,
-    ResponsesReasoningReplay, ToolName, TurnInputDecision, prepare_model_request,
+    NativeContinuationArtifact, NativeRequestStateArtifact, OperationResult, PreparedModelRequest,
+    ProviderToolCallId, ReceivedModelResponse, ResponsesReasoningReplay, SemanticModelTurnArtifact,
+    ToolName, TurnInputDecision, prepare_model_request,
 };
 
 const NATIVE_CONTINUATION_SCHEMA_V1: u16 = 1;
@@ -118,31 +120,75 @@ pub struct PreparedNativeRequest {
     offered_tools: BTreeSet<ToolName>,
 }
 
-/// Durable native decode result that retains the response proof for later semantic projection.
-#[derive(Debug)]
-pub struct RecordedNativeResponse {
-    received: ReceivedModelResponse,
-    continuation_id: ContentId<NativeContinuationArtifact>,
-    continuation: NativeContinuation,
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeRequestState {
+    schema_version: u16,
+    protocol: ModelProtocolKind,
+    request_id: ContentId<MaterializedRequestArtifact>,
+    base_continuation: NativeContinuation,
+    offered_tools: BTreeSet<ToolName>,
 }
 
-impl RecordedNativeResponse {
-    /// Returns the typed identity discoverable from the episode event stream.
-    #[must_use]
-    pub const fn continuation_id(&self) -> ContentId<NativeContinuationArtifact> {
-        self.continuation_id
-    }
+/// One provider response decoded once into both replay state and provider-neutral semantics.
+///
+/// Keeping these projections together prevents protocol validation and semantic tool discovery
+/// from silently disagreeing about the same immutable response bytes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProtocolDecodedTurn {
+    continuation: NativeContinuation,
+    semantic: AdapterModelTurn,
+}
 
-    /// Returns the validated protocol-native continuation.
+impl ProtocolDecodedTurn {
+    /// Returns the lossless provider-native continuation boundary.
     #[must_use]
     pub const fn continuation(&self) -> &NativeContinuation {
         &self.continuation
     }
 
-    /// Restores the one-shot response proof for the independent semantic decode projection.
+    /// Returns the ordered provider-neutral semantic projection.
     #[must_use]
-    pub fn into_received(self) -> ReceivedModelResponse {
-        self.received
+    pub const fn semantic(&self) -> &AdapterModelTurn {
+        &self.semantic
+    }
+
+    fn into_parts(self) -> (NativeContinuation, AdapterModelTurn) {
+        (self.continuation, self.semantic)
+    }
+}
+
+/// Atomically published protocol-native and semantic response boundary.
+#[derive(Debug)]
+pub struct DecodedProtocolModelTurn {
+    continuation_id: ContentId<NativeContinuationArtifact>,
+    continuation: NativeContinuation,
+    semantic: DecodedModelTurn,
+}
+
+impl DecodedProtocolModelTurn {
+    /// Returns the durable provider-native continuation identity.
+    #[must_use]
+    pub const fn continuation_id(&self) -> ContentId<NativeContinuationArtifact> {
+        self.continuation_id
+    }
+
+    /// Returns the validated provider-native continuation.
+    #[must_use]
+    pub const fn continuation(&self) -> &NativeContinuation {
+        &self.continuation
+    }
+
+    /// Returns the durable semantic turn and its one-shot tool proposals.
+    #[must_use]
+    pub const fn semantic(&self) -> &DecodedModelTurn {
+        &self.semantic
+    }
+
+    /// Consumes the boundary and returns the semantic turn.
+    #[must_use]
+    pub fn into_semantic(self) -> DecodedModelTurn {
+        self.semantic
     }
 }
 
@@ -188,12 +234,57 @@ pub fn prepare_native_dispatch_request<S: ContentStore>(
     let descriptor = store
         .put::<MaterializedRequestArtifact>(&mut Cursor::new(native.request_bytes()))
         .map_err(|error| crate::audit_from_store("native_request", "unmaterialized", &error))?;
+    let state = NativeRequestState {
+        schema_version: 1,
+        protocol: native.base_continuation.protocol(),
+        request_id: descriptor.content_id,
+        base_continuation: native.base_continuation.clone(),
+        offered_tools: native.offered_tools.clone(),
+    };
+    let state_bytes = serde_json::to_vec(&state)
+        .map_err(|error| crate::audit_from_codec("native_request_state", error.to_string()))?;
+    let state_descriptor = store
+        .put::<NativeRequestStateArtifact>(&mut Cursor::new(state_bytes))
+        .map_err(|error| {
+            crate::audit_from_store("native_request_state", "unmaterialized", &error)
+        })?;
     Ok(PreparedModelRequest {
         decision_id: audited.decision_id,
         request_id: descriptor.content_id,
         adapter_version: audited.adapter_version,
+        native_state_id: Some(Box::new(state_descriptor.content_id)),
         request_bytes: native.request_bytes().to_vec(),
     })
+}
+
+pub(crate) fn validate_native_request_state_reference<S: ContentStore>(
+    store: &S,
+    state_id: &ContentId<NativeRequestStateArtifact>,
+    expected_request_id: ContentId<MaterializedRequestArtifact>,
+) -> Result<(), NativeCodecError> {
+    let mut state_bytes = Vec::new();
+    store
+        .write_to(state_id, &mut state_bytes)
+        .map_err(NativeCodecError::Storage)?;
+    let state: NativeRequestState = serde_json::from_slice(&state_bytes)
+        .map_err(|error| NativeCodecError::InvalidJson(error.to_string()))?;
+    if serde_json::to_vec(&state)
+        .map_err(|error| NativeCodecError::Serialization(error.to_string()))?
+        != state_bytes
+    {
+        return Err(NativeCodecError::NonCanonicalRequestState);
+    }
+    if state.schema_version != 1 {
+        return Err(NativeCodecError::UnsupportedRequestSchema(
+            state.schema_version,
+        ));
+    }
+    if state.protocol != state.base_continuation.protocol()
+        || state.request_id != expected_request_id
+    {
+        return Err(NativeCodecError::RequestStateMismatch);
+    }
+    Ok(())
 }
 
 /// A closed codec selected from a model template's protocol profile.
@@ -333,6 +424,22 @@ impl NativeProtocolCodec {
         response_id: ContentId<ModelResponseArtifact>,
         response_bytes: &[u8],
     ) -> Result<NativeContinuation, NativeCodecError> {
+        self.decode_turn(request, response_id, response_bytes)
+            .map(|turn| turn.continuation)
+    }
+
+    /// Decodes one immutable response into lossless replay state and semantic output in one pass.
+    ///
+    /// # Errors
+    ///
+    /// Rejects identity mismatch, malformed protocol state, invalid semantic tool arguments, or
+    /// references to tools that were not offered by the exact request.
+    pub fn decode_turn(
+        self,
+        request: &PreparedNativeRequest,
+        response_id: ContentId<ModelResponseArtifact>,
+        response_bytes: &[u8],
+    ) -> Result<ProtocolDecodedTurn, NativeCodecError> {
         let actual = ContentId::<ModelResponseArtifact>::derive(response_bytes)
             .map_err(|error| NativeCodecError::Identity(error.to_string()))?;
         if actual != response_id {
@@ -345,13 +452,13 @@ impl NativeProtocolCodec {
         let response: Value = serde_json::from_slice(response_bytes)
             .map_err(|error| NativeCodecError::InvalidJson(error.to_string()))?;
         let mut continuation = request.base_continuation.clone();
-        let pending = match (&mut continuation.history, self.kind) {
+        let (pending, semantic) = match (&mut continuation.history, self.kind) {
             (NativeHistory::OpenAiResponses { input }, ModelProtocolKind::OpenAiResponses) => {
                 let output = required_array(&response, "output")?;
-                let pending =
-                    responses_calls(output, &request.offered_tools, self.responses_reasoning)?;
+                let decoded =
+                    responses_turn(output, &request.offered_tools, self.responses_reasoning)?;
                 input.extend(output.iter().cloned());
-                pending
+                decoded
             }
             (
                 NativeHistory::OpenAiChatCompletions { messages },
@@ -371,9 +478,9 @@ impl NativeProtocolCodec {
                         "Chat response message must have assistant role".to_owned(),
                     ));
                 }
-                let pending = chat_calls(message, &request.offered_tools, self.chat_reasoning)?;
+                let decoded = chat_turn(message, &request.offered_tools, self.chat_reasoning)?;
                 messages.push(message.clone());
-                pending
+                decoded
             }
             (
                 NativeHistory::AnthropicMessages { messages },
@@ -387,16 +494,19 @@ impl NativeProtocolCodec {
                     ));
                 }
                 let content = required_array(&response, "content")?;
-                let pending = anthropic_calls(content, &request.offered_tools)?;
+                let decoded = anthropic_turn(content, &request.offered_tools)?;
                 messages.push(json!({"role": "assistant", "content": content}));
-                pending
+                decoded
             }
             _ => return Err(NativeCodecError::ProtocolMismatch),
         };
         continuation.pending_call_ids = pending;
         continuation.source_response_ids.push(response_id);
         self.validate(&continuation)?;
-        Ok(continuation)
+        Ok(ProtocolDecodedTurn {
+            continuation,
+            semantic: AdapterModelTurn { items: semantic },
+        })
     }
 
     /// Appends exactly one result for every pending native call, in provider call order.
@@ -449,6 +559,42 @@ impl NativeProtocolCodec {
         next.pending_call_ids.clear();
         self.validate(&next)?;
         Ok(next)
+    }
+
+    /// Loads ordered durable operation results and appends them to the pending native calls.
+    ///
+    /// The step state machine preserves proposal order when producing `result_ids`; this method
+    /// binds that order to the provider-native call IDs and therefore does not accept caller-made
+    /// correlation strings.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/corrupt result artifacts, non-UTF-8 model-visible results, or a cardinality
+    /// mismatch with the pending provider calls.
+    pub fn append_archived_tool_results<S: ContentStore>(
+        self,
+        store: &S,
+        continuation: &NativeContinuation,
+        result_ids: &[ContentId<OperationResult>],
+    ) -> Result<NativeContinuation, NativeCodecError> {
+        if continuation.pending_call_ids.len() != result_ids.len() {
+            return Err(NativeCodecError::ToolResultMismatch);
+        }
+        let mut results = Vec::with_capacity(result_ids.len());
+        for (call_id, result_id) in continuation.pending_call_ids.iter().zip(result_ids) {
+            let mut bytes = Vec::new();
+            store
+                .write_to(result_id, &mut bytes)
+                .map_err(NativeCodecError::Storage)?;
+            let output = String::from_utf8(bytes).map_err(|_| {
+                NativeCodecError::InvalidToolResultEncoding(call_id.as_str().to_owned())
+            })?;
+            results.push(NativeToolResult {
+                call_id: call_id.clone(),
+                output,
+            });
+        }
+        self.append_tool_results(continuation, &results)
     }
 
     /// Appends a new human turn after a settled assistant turn.
@@ -529,58 +675,168 @@ impl NativeProtocolCodec {
         Ok(continuation)
     }
 
-    /// Decodes and archives a received response, then cites the native continuation from the event
-    /// stream before semantic projection proceeds.
+    /// Reconstructs the exact native request and its decode context from a typed CAS artifact.
     ///
     /// # Errors
     ///
-    /// Returns an error when raw response recovery, native decoding, archival, or optimistic event
-    /// append fails. An artifact archived before a failed append is an inert recoverable orphan.
-    pub fn record_received<E: EventStore, C: ContentStore>(
+    /// Rejects missing/corrupt state, a mismatched protocol, unsupported schema, or request bytes
+    /// whose typed identity no longer matches the archived state.
+    pub fn recover_request<S: ContentStore>(
+        self,
+        store: &S,
+        state_id: &ContentId<NativeRequestStateArtifact>,
+    ) -> Result<PreparedNativeRequest, NativeCodecError> {
+        let mut state_bytes = Vec::new();
+        store
+            .write_to(state_id, &mut state_bytes)
+            .map_err(NativeCodecError::Storage)?;
+        let state: NativeRequestState = serde_json::from_slice(&state_bytes)
+            .map_err(|error| NativeCodecError::InvalidJson(error.to_string()))?;
+        if serde_json::to_vec(&state)
+            .map_err(|error| NativeCodecError::Serialization(error.to_string()))?
+            != state_bytes
+        {
+            return Err(NativeCodecError::NonCanonicalRequestState);
+        }
+        if state.schema_version != 1 {
+            return Err(NativeCodecError::UnsupportedRequestSchema(
+                state.schema_version,
+            ));
+        }
+        if state.protocol != self.kind || state.base_continuation.protocol() != self.kind {
+            return Err(NativeCodecError::ProtocolMismatch);
+        }
+        self.validate(&state.base_continuation)?;
+        let mut bytes = Vec::new();
+        store
+            .write_to(&state.request_id, &mut bytes)
+            .map_err(NativeCodecError::Storage)?;
+        let actual = ContentId::<MaterializedRequestArtifact>::derive(&bytes)
+            .map_err(|error| NativeCodecError::Identity(error.to_string()))?;
+        if actual != state.request_id {
+            return Err(NativeCodecError::RequestIdentityMismatch);
+        }
+        Ok(PreparedNativeRequest {
+            bytes,
+            base_continuation: state.base_continuation,
+            offered_tools: state.offered_tools,
+        })
+    }
+
+    /// Recovers the exact request context carried by a durable response, then atomically decodes
+    /// and publishes the response without relying on process memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this was not a protocol-native dispatch or if request recovery and
+    /// response publication fail.
+    pub fn decode_recovered_received<E: EventStore, C: ContentStore>(
+        self,
+        events: &mut E,
+        content: &mut C,
+        received: ReceivedModelResponse,
+        command_id: &CommandId,
+        observed_at: ObservedAtUnixMillis,
+    ) -> Result<DecodedProtocolModelTurn, ProtocolDecodeCoordinatorError> {
+        let state_id = received
+            .native_state_id
+            .as_deref()
+            .copied()
+            .ok_or(NativeCodecError::MissingNativeRequestState)?;
+        let request = self.recover_request(content, &state_id)?;
+        self.decode_received(events, content, &request, received, command_id, observed_at)
+    }
+
+    /// Decodes a durable response once and atomically publishes its native replay boundary,
+    /// semantic turn, and every ordered tool-call proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when response recovery, protocol validation, semantic materialization,
+    /// artifact archival, or the indivisible event batch fails. Artifacts written before a failed
+    /// append are inert CAS orphans; the durable raw response remains safe to decode again.
+    pub fn decode_received<E: EventStore, C: ContentStore>(
         self,
         events: &mut E,
         content: &mut C,
         request: &PreparedNativeRequest,
-        mut received: ReceivedModelResponse,
+        received: ReceivedModelResponse,
         command_id: &CommandId,
         observed_at: ObservedAtUnixMillis,
-    ) -> Result<RecordedNativeResponse, NativeCodecError> {
+    ) -> Result<DecodedProtocolModelTurn, ProtocolDecodeCoordinatorError> {
+        let ReceivedModelResponse {
+            attempt_id,
+            stream,
+            revision,
+            response_event_id,
+            response_id,
+            adapter_version,
+            native_state_id: _,
+            usage: _,
+        } = received;
         let mut response_bytes = Vec::new();
         content
-            .write_to(&received.response_id, &mut response_bytes)
+            .write_to(&response_id, &mut response_bytes)
             .map_err(NativeCodecError::Storage)?;
-        let continuation = self.decode_response(request, received.response_id, &response_bytes)?;
+        let decoded = self.decode_turn(request, response_id, &response_bytes)?;
+        let (continuation, adapter_turn) = decoded.into_parts();
         let continuation_id = self.archive(content, &continuation)?;
-        let payload = NativeRecordedPayload {
-            attempt_id: received.attempt_id,
-            response_id: received.response_id,
+        let (semantic_turn, proposals) = materialize_turn(
+            content,
+            attempt_id,
+            response_id,
+            adapter_version,
+            adapter_turn,
+        )?;
+        let turn_bytes = cairn_codec::to_vec(&semantic_turn)
+            .map_err(|error| DecodeCoordinatorError::InvalidSemanticTurn(error.to_string()))?;
+        let turn_id = content
+            .put::<SemanticModelTurnArtifact>(&mut Cursor::new(turn_bytes))
+            .map_err(DecodeCoordinatorError::Content)?
+            .content_id;
+
+        let native_payload = NativeRecordedPayload {
+            attempt_id,
+            response_id,
             continuation_id,
             protocol: self.kind,
         };
-        let event = NewEvent {
+        let native_fact = NewEvent {
             schema_name: SchemaName::new(NATIVE_CONTINUATION_RECORDED)
                 .map_err(|error| NativeCodecError::InvalidShape(error.to_string()))?,
             schema_version: SchemaVersion::new(1)
                 .map_err(|error| NativeCodecError::InvalidShape(error.to_string()))?,
-            parent_event_id: Some(received.response_event_id),
+            parent_event_id: Some(response_event_id),
             observed_at_unix_ms: observed_at.get(),
-            payload: cairn_codec::to_vec(&payload)
+            payload: cairn_codec::to_vec(&native_payload)
                 .map_err(|error| NativeCodecError::Serialization(error.to_string()))?,
         };
-        let outcome = events
+        let mut facts = vec![native_fact];
+        facts.extend(semantic_facts(
+            attempt_id,
+            response_id,
+            response_event_id,
+            turn_id,
+            observed_at,
+            &semantic_turn,
+        )?);
+        events
             .append(
-                &received.stream,
-                ExpectedRevision::Exact(received.revision),
+                &stream,
+                ExpectedRevision::Exact(revision),
                 command_id,
-                &[event],
+                &facts,
             )
-            .map_err(NativeCodecError::Event)?;
-        received.revision = StreamRevision::new(outcome.last_sequence.get())
-            .map_err(|error| NativeCodecError::InvalidShape(error.to_string()))?;
-        Ok(RecordedNativeResponse {
-            received,
+            .map_err(|record| ProtocolDecodeCoordinatorError::UnrecordedTurn {
+                attempt_id,
+                continuation_id,
+                turn_id,
+                record: record.to_string(),
+            })?;
+        Ok(DecodedProtocolModelTurn {
             continuation_id,
             continuation,
+            semantic: DecodedModelTurn { turn_id, proposals },
         })
     }
 
@@ -767,12 +1023,18 @@ pub enum NativeCodecError {
     ProtocolMismatch,
     #[error("native continuation schema {0} is unsupported")]
     UnsupportedSchema(u16),
+    #[error("native request-state schema {0} is unsupported")]
+    UnsupportedRequestSchema(u16),
     #[error("native continuation event schema {0} is unsupported")]
     UnsupportedEventSchema(u32),
     #[error("native continuation still has pending tool results")]
     PendingToolResults,
     #[error("raw response bytes do not match their typed content identity")]
     ResponseIdentityMismatch,
+    #[error("native request bytes do not match their typed content identity")]
+    RequestIdentityMismatch,
+    #[error("model response has no archived protocol-native request context")]
+    MissingNativeRequestState,
     #[error("provider JSON is invalid: {0}")]
     InvalidJson(String),
     #[error("provider-native shape is invalid: {0}")]
@@ -787,6 +1049,8 @@ pub enum NativeCodecError {
     ToolResultMismatch,
     #[error("tool result must not be empty: {0}")]
     EmptyToolResult(String),
+    #[error("tool result is not valid UTF-8: {0}")]
+    InvalidToolResultEncoding(String),
     #[error("required reasoning/thinking continuation material is missing: {0}")]
     MissingThinkingState(String),
     #[error("tool definition is invalid: {0}")]
@@ -795,12 +1059,41 @@ pub enum NativeCodecError {
     Serialization(String),
     #[error("native continuation bytes are not the stable V1 encoding")]
     NonCanonicalContinuation,
+    #[error("native request-state bytes are not the stable V1 encoding")]
+    NonCanonicalRequestState,
+    #[error("native request state does not match its prepared request fact")]
+    RequestStateMismatch,
     #[error("native continuation identity derivation failed: {0}")]
     Identity(String),
     #[error("native continuation storage failed: {0}")]
     Storage(#[source] ContentStoreError),
     #[error("native continuation event storage failed: {0}")]
     Event(#[source] EventStoreError),
+}
+
+/// Failure while publishing the native replay boundary and semantic tool proposals together.
+#[derive(Debug, Error)]
+pub enum ProtocolDecodeCoordinatorError {
+    /// Protocol-native validation or archival failed.
+    #[error(transparent)]
+    Native(#[from] NativeCodecError),
+    /// Semantic materialization or archival failed.
+    #[error(transparent)]
+    Semantic(#[from] DecodeCoordinatorError),
+    /// Both artifacts exist, but their indivisible fact batch could not be committed.
+    #[error(
+        "attempt {attempt_id} archived native continuation {continuation_id} and semantic turn {turn_id}, but recording their fact batch failed ({record})"
+    )]
+    UnrecordedTurn {
+        /// Attempt whose durable raw response remains safe to decode again.
+        attempt_id: ModelAttemptId,
+        /// Recoverable provider-native replay artifact.
+        continuation_id: ContentId<NativeContinuationArtifact>,
+        /// Recoverable semantic artifact.
+        turn_id: ContentId<SemanticModelTurnArtifact>,
+        /// Event-store failure diagnostic.
+        record: String,
+    },
 }
 
 fn encode_continuation(continuation: &NativeContinuation) -> Result<Vec<u8>, NativeCodecError> {
@@ -943,6 +1236,45 @@ fn responses_calls(
     Ok(calls)
 }
 
+fn responses_turn(
+    output: &[Value],
+    offered: &BTreeSet<ToolName>,
+    reasoning_policy: ResponsesReasoningReplay,
+) -> Result<(Vec<ProviderToolCallId>, Vec<AdapterOutputItem>), NativeCodecError> {
+    let calls = responses_calls(output, offered, reasoning_policy)?;
+    let mut semantic = Vec::new();
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                for content in required_array(item, "content")? {
+                    match content.get("type").and_then(Value::as_str) {
+                        Some("output_text") => semantic.push(AdapterOutputItem::Text {
+                            text: required_string(content, "text")?.to_owned(),
+                        }),
+                        Some("refusal") => semantic.push(AdapterOutputItem::Text {
+                            text: required_string(content, "refusal")?.to_owned(),
+                        }),
+                        Some(_) => {}
+                        None => {
+                            return Err(NativeCodecError::InvalidShape(
+                                "Responses message content has no type".to_owned(),
+                            ));
+                        }
+                    }
+                }
+            }
+            Some("function_call") => semantic.push(AdapterOutputItem::ToolCall {
+                provider_call_id: provider_call_id(required_string(item, "call_id")?)?,
+                tool: tool_name(required_string(item, "name")?)?,
+                arguments: json_object_string(required_string(item, "arguments")?)?,
+            }),
+            Some(_) => {}
+            None => unreachable!("responses_calls validated item types"),
+        }
+    }
+    Ok((calls, semantic))
+}
+
 fn chat_calls(
     message: &Value,
     offered: &BTreeSet<ToolName>,
@@ -987,6 +1319,47 @@ fn chat_calls(
     Ok(calls)
 }
 
+fn chat_turn(
+    message: &Value,
+    offered: &BTreeSet<ToolName>,
+    reasoning_policy: ChatReasoningReplay,
+) -> Result<(Vec<ProviderToolCallId>, Vec<AdapterOutputItem>), NativeCodecError> {
+    let calls = chat_calls(message, offered, reasoning_policy)?;
+    let mut semantic = Vec::new();
+    if let Some(content) = message.get("content") {
+        if !content.is_null() {
+            let text = content.as_str().ok_or_else(|| {
+                NativeCodecError::InvalidShape(
+                    "Chat message.content must be a string or null".to_owned(),
+                )
+            })?;
+            if !text.is_empty() {
+                semantic.push(AdapterOutputItem::Text {
+                    text: text.to_owned(),
+                });
+            }
+        }
+    }
+    if let Some(refusal) = message.get("refusal").and_then(Value::as_str) {
+        if !refusal.is_empty() {
+            semantic.push(AdapterOutputItem::Text {
+                text: refusal.to_owned(),
+            });
+        }
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for call in tool_calls {
+            let function = call.get("function").expect("chat_calls validated function");
+            semantic.push(AdapterOutputItem::ToolCall {
+                provider_call_id: provider_call_id(required_string(call, "id")?)?,
+                tool: tool_name(required_string(function, "name")?)?,
+                arguments: json_object_string(required_string(function, "arguments")?)?,
+            });
+        }
+    }
+    Ok((calls, semantic))
+}
+
 fn anthropic_calls(
     content: &[Value],
     offered: &BTreeSet<ToolName>,
@@ -1029,6 +1402,51 @@ fn anthropic_calls(
         }
     }
     Ok(calls)
+}
+
+fn anthropic_turn(
+    content: &[Value],
+    offered: &BTreeSet<ToolName>,
+) -> Result<(Vec<ProviderToolCallId>, Vec<AdapterOutputItem>), NativeCodecError> {
+    let calls = anthropic_calls(content, offered)?;
+    let mut semantic = Vec::new();
+    for block in content {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => semantic.push(AdapterOutputItem::Text {
+                text: required_string(block, "text")?.to_owned(),
+            }),
+            Some("tool_use") => semantic.push(AdapterOutputItem::ToolCall {
+                provider_call_id: provider_call_id(required_string(block, "id")?)?,
+                tool: tool_name(required_string(block, "name")?)?,
+                arguments: block.get("input").cloned().expect("tool input validated"),
+            }),
+            Some(_) => {}
+            None => unreachable!("anthropic_calls validated block types"),
+        }
+    }
+    Ok((calls, semantic))
+}
+
+fn provider_call_id(value: &str) -> Result<ProviderToolCallId, NativeCodecError> {
+    ProviderToolCallId::new(value)
+        .map_err(|_| NativeCodecError::InvalidShape("call ID is invalid".to_owned()))
+}
+
+fn tool_name(value: &str) -> Result<ToolName, NativeCodecError> {
+    ToolName::new(value)
+        .map_err(|_| NativeCodecError::InvalidShape("tool name is invalid".to_owned()))
+}
+
+fn json_object_string(value: &str) -> Result<Value, NativeCodecError> {
+    let arguments: Value = serde_json::from_str(value).map_err(|error| {
+        NativeCodecError::InvalidShape(format!("tool arguments are invalid JSON: {error}"))
+    })?;
+    if !arguments.is_object() {
+        return Err(NativeCodecError::InvalidShape(
+            "tool arguments must decode to an object".to_owned(),
+        ));
+    }
+    Ok(arguments)
 }
 
 fn correlate_results<'a>(
@@ -1140,22 +1558,18 @@ fn validate_anthropic_history(messages: &[Value]) -> Result<(), NativeCodecError
 mod tests {
     use std::io::Cursor;
 
-    use cairn_protocol::{
-        AggregateId, AggregateKind, CommandId, ContentId, ModelAttemptId, ObservedAtUnixMillis,
-        SchemaName, SchemaVersion, StreamRevision,
-    };
-    use cairn_record::{ContentStore, EventStore, ExpectedRevision, NewEvent, StreamId};
+    use cairn_protocol::ContentId;
+    use cairn_record::ContentStore;
     use cairn_store_sqlite::SqliteContentStore;
-    use cairn_store_sqlite::SqliteEventStore;
 
     use super::{
-        NativeCodecError, NativeProtocolCodec, NativeRequestSpec, NativeToolDefinition,
-        NativeToolResult,
+        NativeCodecError, NativeProtocolCodec, NativeRequestSpec, NativeRequestState,
+        NativeToolDefinition, NativeToolResult, validate_native_request_state_reference,
     };
     use crate::{
-        ChatReasoningReplay, ModelName, ModelOutputTokenLimit, ModelProtocolConfig,
-        ModelResponseArtifact, ProviderToolCallId, ReceivedModelResponse, ResponsesReasoningReplay,
-        ToolName,
+        AdapterOutputItem, ChatReasoningReplay, MaterializedRequestArtifact, ModelName,
+        ModelOutputTokenLimit, ModelProtocolConfig, ModelResponseArtifact,
+        NativeRequestStateArtifact, ProviderToolCallId, ResponsesReasoningReplay, ToolName,
     };
 
     fn spec() -> NativeRequestSpec {
@@ -1200,9 +1614,20 @@ mod tests {
         let initial = codec
             .prepare_initial(&spec, "find the value")
             .expect("initial request");
-        let continuation = codec
-            .decode_response(&initial, response_id(response), response)
+        let decoded = codec
+            .decode_turn(&initial, response_id(response), response)
             .expect("decode response");
+        assert!(matches!(
+            decoded.semantic().items.as_slice(),
+            [AdapterOutputItem::ToolCall {
+                provider_call_id,
+                tool,
+                arguments,
+            }] if provider_call_id.as_str() == call_id
+                && tool.as_str() == "lookup"
+                && arguments == &serde_json::json!({"key":"x"})
+        ));
+        let continuation = decoded.continuation().clone();
         let settled = codec
             .append_tool_results(&continuation, &[tool_result(call_id)])
             .expect("append result");
@@ -1386,87 +1811,89 @@ mod tests {
     }
 
     #[test]
-    fn event_stream_recovers_native_boundary_without_an_out_of_band_continuation_id() {
+    fn malformed_tool_arguments_fail_before_semantic_proposals_exist() {
+        let responses = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiResponses {
+            store: false,
+            reasoning_replay: ResponsesReasoningReplay::PreserveOutputItems,
+        })
+        .expect("Responses codec");
+        let initial = responses
+            .prepare_initial(&spec(), "find the value")
+            .expect("initial");
+        let invalid_json = br#"{"output":[{"type":"function_call","call_id":"call-r","name":"lookup","arguments":"{"}]}"#;
+        assert!(matches!(
+            responses.decode_turn(&initial, response_id(invalid_json), invalid_json),
+            Err(NativeCodecError::InvalidShape(_))
+        ));
+
+        let chat = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiChatCompletions {
+            thinking_parameter: false,
+            reasoning_replay: ChatReasoningReplay::PreserveIfPresent,
+        })
+        .expect("Chat codec");
+        let initial = chat
+            .prepare_initial(&spec(), "find the value")
+            .expect("initial");
+        let non_object = br#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-c","type":"function","function":{"name":"lookup","arguments":"[]"}}]}}]}"#;
+        assert!(matches!(
+            chat.decode_turn(&initial, response_id(non_object), non_object),
+            Err(NativeCodecError::InvalidShape(_))
+        ));
+
+        let anthropic = NativeProtocolCodec::from_config(&ModelProtocolConfig::AnthropicMessages {
+            api_version: "2023-06-01".to_owned(),
+        })
+        .expect("Anthropic codec");
+        let initial = anthropic
+            .prepare_initial(&spec(), "find the value")
+            .expect("initial");
+        let non_object = br#"{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"call-a","name":"lookup","input":[]}]}"#;
+        assert!(matches!(
+            anthropic.decode_turn(&initial, response_id(non_object), non_object),
+            Err(NativeCodecError::InvalidShape(_))
+        ));
+    }
+
+    #[test]
+    fn native_request_state_cannot_be_rebound_to_different_request_bytes() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let content_database = directory.path().join("content.db");
-        let event_database = directory.path().join("events.db");
-        let cas = directory.path().join("cas");
-        let stream = StreamId {
-            kind: AggregateKind::new("agent-episode").expect("kind"),
-            id: AggregateId::new("agent-episode:native-recovery").expect("id"),
-        };
-        let attempt_id = ModelAttemptId::new();
+        let mut content = SqliteContentStore::open(
+            directory.path().join("content.db"),
+            directory.path().join("cas"),
+        )
+        .expect("content");
         let codec = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiResponses {
             store: false,
             reasoning_replay: ResponsesReasoningReplay::PreserveOutputItems,
         })
         .expect("codec");
-        let initial = codec
+        let prepared = codec
             .prepare_initial(&spec(), "find the value")
-            .expect("initial request");
-        let response = br#"{"output":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"call_event","name":"lookup","arguments":"{}"}]}"#;
-        {
-            let mut content =
-                SqliteContentStore::open(&content_database, &cas).expect("content store");
-            let descriptor = content
-                .put::<ModelResponseArtifact>(&mut Cursor::new(response))
-                .expect("archive response");
-            let mut events = SqliteEventStore::open(&event_database).expect("event store");
-            let response_fact = NewEvent {
-                schema_name: SchemaName::new("agent.model-response-received").expect("schema"),
-                schema_version: SchemaVersion::new(1).expect("version"),
-                parent_event_id: None,
-                observed_at_unix_ms: 1,
-                payload: cairn_codec::to_vec(&serde_json::json!({
-                    "attempt_id": attempt_id,
-                    "response_id": descriptor.content_id
-                }))
-                .expect("payload"),
-            };
-            let appended = events
-                .append(
-                    &stream,
-                    ExpectedRevision::NoStream,
-                    &CommandId::new(),
-                    &[response_fact],
-                )
-                .expect("append response fact");
-            let received = ReceivedModelResponse {
-                attempt_id,
-                stream: stream.clone(),
-                revision: StreamRevision::new(appended.last_sequence.get()).expect("revision"),
-                response_event_id: appended.event_ids[0],
-                response_id: descriptor.content_id,
-                adapter_version: crate::AdapterVersion::new("fixture-v1").expect("adapter"),
-                usage: None,
-            };
-            codec
-                .record_received(
-                    &mut events,
-                    &mut content,
-                    &initial,
-                    received,
-                    &CommandId::new(),
-                    ObservedAtUnixMillis::new(2),
-                )
-                .expect("record native continuation");
-        }
-
-        let content = SqliteContentStore::open(content_database, cas).expect("reopen content");
-        let events = SqliteEventStore::open(event_database).expect("reopen events");
-        let (_, recovered) = codec
-            .recover_recorded(&events, &content, &stream, attempt_id)
-            .expect("recover event-sourced continuation")
-            .expect("recorded continuation");
-        let settled = codec
-            .append_tool_results(&recovered, &[tool_result("call_event")])
-            .expect("append persisted operation result");
-        let next = codec
-            .prepare_continuation(&spec(), &settled)
-            .expect("prepare next request");
-        let request: serde_json::Value =
-            serde_json::from_slice(next.request_bytes()).expect("request JSON");
-        assert_eq!(request["input"][1]["encrypted_content"], "opaque");
-        assert_eq!(request["input"][3]["call_id"], "call_event");
+            .expect("request");
+        let original_request_id = content
+            .put::<MaterializedRequestArtifact>(&mut Cursor::new(prepared.request_bytes()))
+            .expect("request bytes")
+            .content_id;
+        let state = NativeRequestState {
+            schema_version: 1,
+            protocol: codec.kind(),
+            request_id: original_request_id,
+            base_continuation: prepared.base_continuation.clone(),
+            offered_tools: prepared.offered_tools.clone(),
+        };
+        let state_id = content
+            .put::<NativeRequestStateArtifact>(&mut Cursor::new(
+                serde_json::to_vec(&state).expect("state bytes"),
+            ))
+            .expect("state")
+            .content_id;
+        let different_request_id = content
+            .put::<MaterializedRequestArtifact>(&mut Cursor::new(b"different"))
+            .expect("different request")
+            .content_id;
+        assert!(matches!(
+            validate_native_request_state_reference(&content, &state_id, different_request_id),
+            Err(NativeCodecError::RequestStateMismatch)
+        ));
     }
 }
