@@ -353,9 +353,9 @@ Model selection is resolved through independent layers:
 
 | Layer | Owns | Must not decide |
 |---|---|---|
-| runtime alias | operator-facing choice of wire model, deployment, profile, and generation policy | wire encoding or credentials |
-| model profile | context/output bounds, tools, reasoning, parallel-call, and schema capabilities | endpoint ownership |
-| deployment | provider label, protocol, HTTPS endpoint, credential reference, transport bounds, and data boundary | agent-loop behavior |
+| model template | wire model plus per-protocol context/output bounds, tools, reasoning, parallel-call, schema capabilities, defaults, and model quirks | endpoint, account, or secrets |
+| runtime alias | operator-facing choice of template, deployment, and optional bounded generation overrides | model capabilities |
+| deployment | provider label, protocol choice, HTTPS endpoint, credential reference, transport bounds, and data boundary | model capability declarations or agent-loop behavior |
 | protocol codec | request encoding, response decoding, usage extraction, and native continuation | HTTP, retries, tools, or vendor routing |
 | transport | one bounded HTTP exchange and byte limits | response semantics or tool execution |
 | credential resolver | dispatch-time header value from an external reference | durable model configuration |
@@ -377,15 +377,27 @@ execution, retry authority, budgets, and episode termination remain in the gener
 V1 uses locally reconstructable continuation. OpenAI Responses deployments therefore set
 `store=false`; Chat Completions and Anthropic Messages replay their recorded native history. A future
 hosted continuation ID may be recorded as external evidence, but it cannot be the sole reconstruction
-authority. Changing model, deployment, protocol, or codec version creates a new episode or explicit
-counterfactual branch rather than mutating an episode's frozen selection.
+authority. Changing model, template revision, deployment, protocol, or codec version creates a new
+episode or explicit counterfactual branch rather than mutating an episode's frozen selection.
 
-The initial example configuration selects `deepseek-v4-pro` through DeepSeek's Anthropic-compatible
-deployment and provides a Chat Completions alternative. DeepSeek's current Responses compatibility
-does not declare `deepseek-v4-pro`, so Cairn does not advertise that combination. Responses remains
-an independent protocol family for OpenAI and other deployments that explicitly support it. These
-are configuration capabilities, not vendor branches. Credentials are file references only and their
-bytes are read at dispatch, never copied into the resolved snapshot or record.
+Model characteristics and operator deployment choices are stored separately. Repository-maintained
+`model-templates/<vendor>/<model>.json` files own the wire model, per-protocol capability profiles,
+protocol-specific request settings, and safe defaults. User configuration states which template is
+enabled, which protocol/output form to use, its endpoint and authentication reference, the data
+boundary and transport bounds, and optional generation overrides. It never asks the operator to
+retype whether the model supports tools, parallel calls, reasoning, or a context size.
+
+The initial DeepSeek V4 Pro template declares the OpenAI Responses, OpenAI Chat Completions, and
+Anthropic Messages combinations exercised or required by this project. The runtime example enables
+Responses, matching the prior Alloyport integration evidence; choosing Chat or Anthropic requires
+only a different deployment protocol and endpoint. A private deployment changes those user-owned
+fields without copying the model template. Future conformance receipts can qualify a particular
+endpoint's actual behavior without moving model capability declarations back into user config.
+
+Template files are versioned data rather than Rust constants. Resolution validates the selected
+protocol section and user overrides, then freezes the template's typed content identity, model
+capabilities/defaults, and user deployment into the episode snapshot. Updating a template affects
+new resolutions only; an old episode continues to cite its exact template revision.
 
 Authentication shape is also deployment configuration rather than a protocol inference: official
 OpenAI commonly uses Bearer and official Anthropic uses `x-api-key`, but a compatible gateway may
@@ -393,10 +405,11 @@ make a different choice. Cairn validates that only an external secret reference 
 deployment check determines whether its configured endpoint accepts that authentication shape.
 
 **Implemented:** `cairn-agent` now has the strict runtime model catalog, strongly typed quantities,
-three protocol discriminants, capability and credential-reference validation, and a
-content-addressable frozen resolution. `config/runtime-models.example.json` supplies the initial
-DeepSeek default. Protocol codecs, native-continuation artifacts, HTTP transport, and live
-conformance remain the next slices.
+the separate `ModelTemplateRegistry`, three protocol-specific template sections, bounded preference
+overrides, capability and credential-reference validation, and a content-addressable frozen
+resolution. `model-templates/deepseek/deepseek-v4-pro.json` supplies model characteristics while
+`config/runtime-models.example.json` contains only the enabled Responses deployment. Protocol codecs,
+native-continuation artifacts, HTTP transport, and live conformance remain the next slices.
 
 ### 9.3 Durable versus live events
 

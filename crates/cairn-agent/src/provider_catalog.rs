@@ -1,4 +1,4 @@
-//! Provider/model/deployment/protocol resolution without vendor branches in the agent loop.
+//! Model-template and user-deployment resolution without vendor branches in the agent loop.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -7,17 +7,18 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    DeploymentName, ModelName, ModelProfileName, ProviderName, ResolvedRuntimeModelArtifact,
-    RuntimeModelAlias,
+    DeploymentName, ModelName, ModelTemplateArtifact, ModelTemplateName, ProviderName,
+    ResolvedRuntimeModelArtifact, RuntimeModelAlias,
 };
 
-const CATALOG_SCHEMA_V1: u16 = 1;
+const MODEL_TEMPLATE_SCHEMA_V1: u16 = 1;
+const RUNTIME_CATALOG_SCHEMA_V1: u16 = 1;
 
-/// Invalid positive quantity or bounded sampling value in provider configuration.
+/// Invalid positive quantity or bounded sampling value in model configuration.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ProviderConfigValueError {
     /// A required positive quantity was zero.
-    #[error("provider configuration quantity must be greater than zero")]
+    #[error("model/provider configuration quantity must be greater than zero")]
     Zero,
     /// Temperature exceeded the portable 0.000 through 2.000 range.
     #[error("sampling temperature in millis must not exceed 2000")]
@@ -25,19 +26,19 @@ pub enum ProviderConfigValueError {
 }
 
 macro_rules! positive_quantity {
-    ($(#[$meta:meta])* $name:ident, $wire:ty) => {
+    ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
         #[serde(try_from = "u64", into = "u64")]
-        pub struct $name($wire);
+        pub struct $name(u64);
 
         impl $name {
-            /// Creates a positive provider configuration quantity.
+            /// Creates a positive configuration quantity.
             ///
             /// # Errors
             ///
             /// Returns [`ProviderConfigValueError::Zero`] when `value` is zero.
-            pub const fn new(value: $wire) -> Result<Self, ProviderConfigValueError> {
+            pub const fn new(value: u64) -> Result<Self, ProviderConfigValueError> {
                 if value == 0 {
                     Err(ProviderConfigValueError::Zero)
                 } else {
@@ -47,20 +48,20 @@ macro_rules! positive_quantity {
 
             /// Returns the wire quantity.
             #[must_use]
-            pub const fn get(self) -> $wire {
+            pub const fn get(self) -> u64 {
                 self.0
             }
         }
 
-        impl TryFrom<$wire> for $name {
+        impl TryFrom<u64> for $name {
             type Error = ProviderConfigValueError;
 
-            fn try_from(value: $wire) -> Result<Self, Self::Error> {
+            fn try_from(value: u64) -> Result<Self, Self::Error> {
                 Self::new(value)
             }
         }
 
-        impl From<$name> for $wire {
+        impl From<$name> for u64 {
             fn from(value: $name) -> Self {
                 value.0
             }
@@ -69,13 +70,13 @@ macro_rules! positive_quantity {
 }
 
 positive_quantity!(/// Positive model context-window size in tokens.
-ModelContextTokenLimit, u64);
+ModelContextTokenLimit);
 positive_quantity!(/// Positive maximum model output size in tokens.
-ModelOutputTokenLimit, u64);
+ModelOutputTokenLimit);
 positive_quantity!(/// Positive transport timeout in milliseconds.
-TransportTimeoutMillis, u64);
+TransportTimeoutMillis);
 positive_quantity!(/// Positive transport body bound in bytes.
-TransportByteLimit, u64);
+TransportByteLimit);
 
 /// Sampling temperature represented without a raw JSON floating-point number.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -117,7 +118,7 @@ impl From<SamplingTemperatureMillis> for u16 {
     }
 }
 
-/// HTTPS endpoint used by one concrete deployment.
+/// HTTPS endpoint used by one user-configured deployment.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ProviderEndpoint(String);
@@ -166,7 +167,7 @@ impl From<ProviderEndpoint> for String {
     }
 }
 
-/// Filesystem reference to a secret whose bytes never enter the catalog or durable model snapshot.
+/// Filesystem reference to a secret whose bytes never enter durable configuration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct SecretFilePath(String);
@@ -253,14 +254,14 @@ pub enum ModelProtocolKind {
     AnthropicMessages,
 }
 
-/// Protocol-specific request/header settings selected by a deployment.
+/// Protocol-specific model behavior supplied by a built-in template.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum ModelProtocolConfig {
     /// Stateless/local-continuation Responses requests.
     #[serde(rename = "openai_responses")]
     OpenAiResponses {
-        /// Server-side response storage. V1 requires `false` for reconstructable local history.
+        /// Server-side response storage. V1 templates require `false` for local reconstruction.
         #[serde(default)]
         store: bool,
     },
@@ -271,10 +272,10 @@ pub enum ModelProtocolConfig {
         #[serde(default)]
         thinking_parameter: bool,
     },
-    /// Anthropic Messages with an explicit compatibility header value.
+    /// Anthropic Messages with a model-compatible default header value.
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages {
-        /// Value sent in `anthropic-version`.
+        /// Value sent in `anthropic-version` unless transport policy later overrides it.
         api_version: String,
     },
 }
@@ -301,13 +302,13 @@ pub enum ModelDataBoundary {
     PrivateDeployment,
 }
 
-/// Tool-schema dialect supported by a model profile.
+/// Tool-schema dialect supported by one model/protocol combination.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSchemaDialect {
     /// General JSON Schema accepted with runtime validation.
     JsonSchema,
-    /// Provider-specific strict subset, requiring schema conformance fixtures.
+    /// Model-specific strict subset, requiring schema conformance fixtures.
     StrictSubset,
 }
 
@@ -321,8 +322,8 @@ pub enum ModelReasoningMode {
     Enabled,
 }
 
-/// Portable reasoning effort requested from a model profile.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Portable reasoning effort mapped by a protocol template.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelReasoningEffort {
     /// Low effort.
@@ -351,14 +352,14 @@ impl ModelReasoningSettings {
         self.mode
     }
 
-    /// Returns the requested portable effort, or provider default when absent.
+    /// Returns the requested portable effort, or model default when absent.
     #[must_use]
     pub const fn effort(&self) -> Option<ModelReasoningEffort> {
         self.effort
     }
 }
 
-/// Per-alias generation policy, separate from deployment and model-family capabilities.
+/// Fully materialized generation policy for one runtime alias.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelGenerationSettings {
@@ -377,7 +378,7 @@ impl ModelGenerationSettings {
         self.max_output_tokens
     }
 
-    /// Returns the configured temperature; `None` leaves it to the protocol/model default.
+    /// Returns the configured temperature; `None` leaves it to the model default.
     #[must_use]
     pub const fn temperature_millis(&self) -> Option<SamplingTemperatureMillis> {
         self.temperature_millis
@@ -389,14 +390,28 @@ impl ModelGenerationSettings {
         &self.reasoning
     }
 
-    /// Returns whether the request may ask the model for parallel client-tool calls.
+    /// Returns whether the request may ask for parallel client-tool calls.
     #[must_use]
     pub const fn parallel_tool_calls(&self) -> bool {
         self.parallel_tool_calls
     }
 }
 
-/// Transport bounds selected independently from provider protocol and model profile.
+/// Optional user overrides applied within a template's declared capability bounds.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelGenerationOverrides {
+    #[serde(default)]
+    max_output_tokens: Option<ModelOutputTokenLimit>,
+    #[serde(default)]
+    temperature_millis: Option<SamplingTemperatureMillis>,
+    #[serde(default)]
+    reasoning: Option<ModelReasoningSettings>,
+    #[serde(default)]
+    parallel_tool_calls: Option<bool>,
+}
+
+/// Transport bounds selected independently from model characteristics.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelTransportConfig {
@@ -412,48 +427,21 @@ pub struct ModelTransportConfig {
     pub max_response_bytes: TransportByteLimit,
 }
 
-/// Alias-level choice of wire model, deployment, profile, and generation policy.
+/// Capabilities inherent to one model through one protocol family.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RuntimeModelConfig {
-    wire_model: ModelName,
-    deployment: DeploymentName,
-    profile: ModelProfileName,
-    settings: ModelGenerationSettings,
-}
-
-/// One HTTP endpoint, authentication scheme, protocol, and data boundary.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ModelDeploymentConfig {
-    provider: ProviderName,
-    protocol: ModelProtocolConfig,
-    endpoint: ProviderEndpoint,
-    credential: CredentialSource,
-    transport: ModelTransportConfig,
-    data_boundary: ModelDataBoundary,
-}
-
-/// Declared model-family capabilities, independent from endpoint ownership.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelProfileConfig {
-    supported_protocols: BTreeSet<ModelProtocolKind>,
+pub struct ModelProtocolCapabilities {
     supports_tools: bool,
     supports_parallel_tool_calls: bool,
     supports_reasoning: bool,
+    #[serde(default)]
+    reasoning_efforts: BTreeSet<ModelReasoningEffort>,
     tool_schema_dialect: ToolSchemaDialect,
     max_context_tokens: ModelContextTokenLimit,
     max_output_tokens: ModelOutputTokenLimit,
 }
 
-impl ModelProfileConfig {
-    /// Returns the protocol families verified for this profile.
-    #[must_use]
-    pub const fn supported_protocols(&self) -> &BTreeSet<ModelProtocolKind> {
-        &self.supported_protocols
-    }
-
+impl ModelProtocolCapabilities {
     /// Returns whether the model accepts client-tool definitions.
     #[must_use]
     pub const fn supports_tools(&self) -> bool {
@@ -470,6 +458,12 @@ impl ModelProfileConfig {
     #[must_use]
     pub const fn supports_reasoning(&self) -> bool {
         self.supports_reasoning
+    }
+
+    /// Returns the explicit reasoning efforts accepted by this protocol mapping.
+    #[must_use]
+    pub const fn reasoning_efforts(&self) -> &BTreeSet<ModelReasoningEffort> {
+        &self.reasoning_efforts
     }
 
     /// Returns the declared tool-schema dialect.
@@ -491,7 +485,182 @@ impl ModelProfileConfig {
     }
 }
 
-/// Strict configuration catalog. It performs no file or network I/O.
+/// One protocol-specific section inside a versioned model template.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelProtocolTemplate {
+    protocol: ModelProtocolConfig,
+    capabilities: ModelProtocolCapabilities,
+    defaults: ModelGenerationSettings,
+}
+
+impl ModelProtocolTemplate {
+    /// Returns protocol wire settings.
+    #[must_use]
+    pub const fn protocol(&self) -> &ModelProtocolConfig {
+        &self.protocol
+    }
+
+    /// Returns model capabilities for this protocol.
+    #[must_use]
+    pub const fn capabilities(&self) -> &ModelProtocolCapabilities {
+        &self.capabilities
+    }
+
+    /// Returns model defaults for this protocol.
+    #[must_use]
+    pub const fn defaults(&self) -> &ModelGenerationSettings {
+        &self.defaults
+    }
+}
+
+/// Repository-maintained model characteristics, normally loaded from one template file.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTemplate {
+    schema_version: u16,
+    name: ModelTemplateName,
+    wire_model: ModelName,
+    protocols: Vec<ModelProtocolTemplate>,
+}
+
+impl ModelTemplate {
+    /// Returns the stable template name.
+    #[must_use]
+    pub const fn name(&self) -> &ModelTemplateName {
+        &self.name
+    }
+
+    /// Returns the model string placed on the wire.
+    #[must_use]
+    pub const fn wire_model(&self) -> &ModelName {
+        &self.wire_model
+    }
+
+    /// Returns all protocol-specific model sections.
+    #[must_use]
+    pub fn protocols(&self) -> &[ModelProtocolTemplate] {
+        &self.protocols
+    }
+
+    fn protocol(&self, kind: ModelProtocolKind) -> Option<&ModelProtocolTemplate> {
+        self.protocols
+            .iter()
+            .find(|candidate| candidate.protocol.kind() == kind)
+    }
+
+    /// Validates template-internal uniqueness and capability/default relationships.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelCatalogError`] for unsupported schema, duplicate protocol sections, or
+    /// defaults outside declared model capabilities.
+    pub fn validate(&self) -> Result<(), ModelCatalogError> {
+        if self.schema_version != MODEL_TEMPLATE_SCHEMA_V1 {
+            return Err(ModelCatalogError::UnsupportedTemplateSchema {
+                template: self.name.as_str().to_owned(),
+                schema: self.schema_version,
+            });
+        }
+        if self.protocols.is_empty() {
+            return Err(ModelCatalogError::EmptyTemplateProtocols(
+                self.name.as_str().to_owned(),
+            ));
+        }
+        let mut kinds = BTreeSet::new();
+        for protocol in &self.protocols {
+            let kind = protocol.protocol.kind();
+            if !kinds.insert(kind) {
+                return Err(ModelCatalogError::DuplicateTemplateProtocol {
+                    template: self.name.as_str().to_owned(),
+                    protocol: kind,
+                });
+            }
+            validate_protocol_config(self.name.as_str(), &protocol.protocol)?;
+            validate_capabilities(self.name.as_str(), &protocol.capabilities)?;
+            validate_generation(
+                self.name.as_str(),
+                &protocol.defaults,
+                &protocol.capabilities,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Derives the typed identity of this exact template revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelCatalogError::Encoding`] when canonical encoding or identity derivation
+    /// fails.
+    pub fn content_id(&self) -> Result<ContentId<ModelTemplateArtifact>, ModelCatalogError> {
+        let bytes = cairn_codec::to_vec(self)
+            .map_err(|error| ModelCatalogError::Encoding(error.to_string()))?;
+        ContentId::derive(&bytes).map_err(|error| ModelCatalogError::Encoding(error.to_string()))
+    }
+}
+
+/// Validated in-memory index assembled from repository model-template files.
+#[derive(Clone, Debug, Default)]
+pub struct ModelTemplateRegistry {
+    templates: BTreeMap<ModelTemplateName, ModelTemplate>,
+}
+
+impl ModelTemplateRegistry {
+    /// Builds a validated registry from independently decoded template files.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelCatalogError`] when a template is invalid or a name is duplicated.
+    pub fn from_templates(
+        templates: impl IntoIterator<Item = ModelTemplate>,
+    ) -> Result<Self, ModelCatalogError> {
+        let mut registry = Self::default();
+        for template in templates {
+            template.validate()?;
+            let name = template.name.clone();
+            if registry.templates.insert(name.clone(), template).is_some() {
+                return Err(ModelCatalogError::DuplicateTemplate(
+                    name.as_str().to_owned(),
+                ));
+            }
+        }
+        if registry.templates.is_empty() {
+            return Err(ModelCatalogError::EmptyTemplateRegistry);
+        }
+        Ok(registry)
+    }
+
+    /// Returns a registered template.
+    #[must_use]
+    pub fn get(&self, name: &ModelTemplateName) -> Option<&ModelTemplate> {
+        self.templates.get(name)
+    }
+}
+
+/// Alias-level user choice of model template, deployment, and optional preference overrides.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeModelConfig {
+    template: ModelTemplateName,
+    deployment: DeploymentName,
+    #[serde(default)]
+    settings: ModelGenerationOverrides,
+}
+
+/// User-owned endpoint, authentication, protocol selection, and data boundary.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ModelDeploymentConfig {
+    provider: ProviderName,
+    protocol: ModelProtocolKind,
+    endpoint: ProviderEndpoint,
+    credential: CredentialSource,
+    transport: ModelTransportConfig,
+    data_boundary: ModelDataBoundary,
+}
+
+/// Strict user runtime catalog. Model capabilities are deliberately absent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeModelCatalog {
@@ -499,11 +668,10 @@ pub struct RuntimeModelCatalog {
     default_runtime_model: RuntimeModelAlias,
     runtime_models: BTreeMap<RuntimeModelAlias, RuntimeModelConfig>,
     deployments: BTreeMap<DeploymentName, ModelDeploymentConfig>,
-    profiles: BTreeMap<ModelProfileName, ModelProfileConfig>,
 }
 
 impl RuntimeModelCatalog {
-    /// Returns the catalog schema understood by this configuration.
+    /// Returns the runtime-catalog schema.
     #[must_use]
     pub const fn schema_version(&self) -> u16 {
         self.schema_version
@@ -515,15 +683,17 @@ impl RuntimeModelCatalog {
         &self.default_runtime_model
     }
 
-    /// Validates all references and capability relationships without reading credentials.
+    /// Validates user references against repository model templates without reading credentials.
     ///
     /// # Errors
     ///
-    /// Returns [`ModelCatalogError`] for an unsupported schema, invalid key/reference, unsafe
-    /// protocol setting, hosted state, or unsupported requested capability.
-    pub fn validate(&self) -> Result<(), ModelCatalogError> {
-        if self.schema_version != CATALOG_SCHEMA_V1 {
-            return Err(ModelCatalogError::UnsupportedSchema(self.schema_version));
+    /// Returns [`ModelCatalogError`] for unsupported schema, invalid references, unsupported model
+    /// protocol, or preference overrides outside template bounds.
+    pub fn validate(&self, templates: &ModelTemplateRegistry) -> Result<(), ModelCatalogError> {
+        if self.schema_version != RUNTIME_CATALOG_SCHEMA_V1 {
+            return Err(ModelCatalogError::UnsupportedRuntimeSchema(
+                self.schema_version,
+            ));
         }
         if !self
             .runtime_models
@@ -533,25 +703,8 @@ impl RuntimeModelCatalog {
                 self.default_runtime_model.as_str().to_owned(),
             ));
         }
-        if self.runtime_models.is_empty() || self.deployments.is_empty() || self.profiles.is_empty()
-        {
-            return Err(ModelCatalogError::EmptyCatalog);
-        }
-
-        for (name, deployment) in &self.deployments {
-            validate_deployment(name, deployment)?;
-        }
-        for (name, profile) in &self.profiles {
-            if profile.supported_protocols.is_empty() {
-                return Err(ModelCatalogError::EmptyProtocolSet(
-                    name.as_str().to_owned(),
-                ));
-            }
-            if profile.max_output_tokens.get() > profile.max_context_tokens.get() {
-                return Err(ModelCatalogError::InvalidProfileBounds(
-                    name.as_str().to_owned(),
-                ));
-            }
+        if self.runtime_models.is_empty() || self.deployments.is_empty() {
+            return Err(ModelCatalogError::EmptyRuntimeCatalog);
         }
         for (alias, runtime) in &self.runtime_models {
             let deployment = self.deployments.get(&runtime.deployment).ok_or_else(|| {
@@ -560,27 +713,35 @@ impl RuntimeModelCatalog {
                     deployment: runtime.deployment.as_str().to_owned(),
                 }
             })?;
-            let profile = self.profiles.get(&runtime.profile).ok_or_else(|| {
-                ModelCatalogError::UnknownProfile {
+            let template = templates.get(&runtime.template).ok_or_else(|| {
+                ModelCatalogError::UnknownTemplate {
                     alias: alias.as_str().to_owned(),
-                    profile: runtime.profile.as_str().to_owned(),
+                    template: runtime.template.as_str().to_owned(),
                 }
             })?;
-            validate_runtime(alias, runtime, deployment, profile)?;
+            let protocol = template.protocol(deployment.protocol).ok_or_else(|| {
+                ModelCatalogError::UnsupportedProtocol {
+                    alias: alias.as_str().to_owned(),
+                    protocol: deployment.protocol,
+                }
+            })?;
+            let settings = merge_settings(&protocol.defaults, &runtime.settings);
+            validate_generation(alias.as_str(), &settings, &protocol.capabilities)?;
         }
         Ok(())
     }
 
-    /// Resolves an alias into the complete immutable, secret-free episode snapshot.
+    /// Resolves a user alias and repository template into a frozen secret-free episode snapshot.
     ///
     /// # Errors
     ///
-    /// Returns [`ModelCatalogError`] when the catalog is invalid or the alias is unknown.
+    /// Returns [`ModelCatalogError`] when either catalog is invalid or the alias is unknown.
     pub fn resolve(
         &self,
+        templates: &ModelTemplateRegistry,
         alias: Option<&RuntimeModelAlias>,
     ) -> Result<ResolvedRuntimeModel, ModelCatalogError> {
-        self.validate()?;
+        self.validate(templates)?;
         let alias = alias.unwrap_or(&self.default_runtime_model);
         let runtime = self
             .runtime_models
@@ -592,37 +753,46 @@ impl RuntimeModelCatalog {
                 deployment: runtime.deployment.as_str().to_owned(),
             }
         })?;
-        let profile = self.profiles.get(&runtime.profile).ok_or_else(|| {
-            ModelCatalogError::UnknownProfile {
+        let template =
+            templates
+                .get(&runtime.template)
+                .ok_or_else(|| ModelCatalogError::UnknownTemplate {
+                    alias: alias.as_str().to_owned(),
+                    template: runtime.template.as_str().to_owned(),
+                })?;
+        let protocol = template.protocol(deployment.protocol).ok_or_else(|| {
+            ModelCatalogError::UnsupportedProtocol {
                 alias: alias.as_str().to_owned(),
-                profile: runtime.profile.as_str().to_owned(),
+                protocol: deployment.protocol,
             }
         })?;
         Ok(ResolvedRuntimeModel {
             alias: alias.clone(),
-            wire_model: runtime.wire_model.clone(),
+            template_name: template.name.clone(),
+            template_id: template.content_id()?,
+            wire_model: template.wire_model.clone(),
             deployment: runtime.deployment.clone(),
-            profile_name: runtime.profile.clone(),
             provider: deployment.provider.clone(),
-            protocol: deployment.protocol.clone(),
+            protocol: protocol.protocol.clone(),
             endpoint: deployment.endpoint.clone(),
             credential: deployment.credential.clone(),
             transport: deployment.transport.clone(),
             data_boundary: deployment.data_boundary,
-            settings: runtime.settings.clone(),
-            profile: profile.clone(),
+            settings: merge_settings(&protocol.defaults, &runtime.settings),
+            capabilities: protocol.capabilities.clone(),
         })
     }
 }
 
-/// Fully resolved model/deployment/protocol snapshot frozen for an episode.
+/// Fully resolved model/template/deployment/protocol snapshot frozen for an episode.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolvedRuntimeModel {
     alias: RuntimeModelAlias,
+    template_name: ModelTemplateName,
+    template_id: ContentId<ModelTemplateArtifact>,
     wire_model: ModelName,
     deployment: DeploymentName,
-    profile_name: ModelProfileName,
     provider: ProviderName,
     protocol: ModelProtocolConfig,
     endpoint: ProviderEndpoint,
@@ -630,7 +800,7 @@ pub struct ResolvedRuntimeModel {
     transport: ModelTransportConfig,
     data_boundary: ModelDataBoundary,
     settings: ModelGenerationSettings,
-    profile: ModelProfileConfig,
+    capabilities: ModelProtocolCapabilities,
 }
 
 impl ResolvedRuntimeModel {
@@ -640,22 +810,28 @@ impl ResolvedRuntimeModel {
         &self.alias
     }
 
-    /// Returns the provider-visible model string.
+    /// Returns the selected repository template name.
+    #[must_use]
+    pub const fn template_name(&self) -> &ModelTemplateName {
+        &self.template_name
+    }
+
+    /// Returns the exact selected template revision identity.
+    #[must_use]
+    pub const fn template_id(&self) -> ContentId<ModelTemplateArtifact> {
+        self.template_id
+    }
+
+    /// Returns the provider-visible model string supplied by the template.
     #[must_use]
     pub const fn wire_model(&self) -> &ModelName {
         &self.wire_model
     }
 
-    /// Returns the selected deployment.
+    /// Returns the selected user deployment.
     #[must_use]
     pub const fn deployment(&self) -> &DeploymentName {
         &self.deployment
-    }
-
-    /// Returns the selected capability profile name.
-    #[must_use]
-    pub const fn profile_name(&self) -> &ModelProfileName {
-        &self.profile_name
     }
 
     /// Returns the endpoint owner label. It does not select a codec.
@@ -664,13 +840,13 @@ impl ResolvedRuntimeModel {
         &self.provider
     }
 
-    /// Returns the protocol configuration that selects the codec.
+    /// Returns the protocol configuration selected from the model template.
     #[must_use]
     pub const fn protocol(&self) -> &ModelProtocolConfig {
         &self.protocol
     }
 
-    /// Returns the deployment endpoint.
+    /// Returns the user-configured deployment endpoint.
     #[must_use]
     pub const fn endpoint(&self) -> &ProviderEndpoint {
         &self.endpoint
@@ -694,16 +870,16 @@ impl ResolvedRuntimeModel {
         self.data_boundary
     }
 
-    /// Returns per-alias generation settings.
+    /// Returns template defaults after bounded user overrides.
     #[must_use]
     pub const fn settings(&self) -> &ModelGenerationSettings {
         &self.settings
     }
 
-    /// Returns the resolved capability profile.
+    /// Returns model/protocol capabilities from the frozen template revision.
     #[must_use]
-    pub const fn profile(&self) -> &ModelProfileConfig {
-        &self.profile
+    pub const fn capabilities(&self) -> &ModelProtocolCapabilities {
+        &self.capabilities
     }
 
     /// Encodes the secret-free frozen snapshot using Cairn's canonical codec.
@@ -727,87 +903,138 @@ impl ResolvedRuntimeModel {
     }
 }
 
-fn validate_deployment(
-    name: &DeploymentName,
-    deployment: &ModelDeploymentConfig,
+fn merge_settings(
+    defaults: &ModelGenerationSettings,
+    overrides: &ModelGenerationOverrides,
+) -> ModelGenerationSettings {
+    ModelGenerationSettings {
+        max_output_tokens: overrides
+            .max_output_tokens
+            .unwrap_or(defaults.max_output_tokens),
+        temperature_millis: overrides.temperature_millis.or(defaults.temperature_millis),
+        reasoning: overrides
+            .reasoning
+            .clone()
+            .unwrap_or_else(|| defaults.reasoning.clone()),
+        parallel_tool_calls: overrides
+            .parallel_tool_calls
+            .unwrap_or(defaults.parallel_tool_calls),
+    }
+}
+
+fn validate_protocol_config(
+    owner: &str,
+    protocol: &ModelProtocolConfig,
 ) -> Result<(), ModelCatalogError> {
     if matches!(
-        deployment.protocol,
+        protocol,
         ModelProtocolConfig::OpenAiResponses { store: true }
     ) {
-        return Err(ModelCatalogError::HostedStateUnsupported(
-            name.as_str().to_owned(),
-        ));
+        return Err(ModelCatalogError::HostedStateUnsupported(owner.to_owned()));
     }
-    if let ModelProtocolConfig::AnthropicMessages { api_version } = &deployment.protocol {
+    if let ModelProtocolConfig::AnthropicMessages { api_version } = protocol {
         if api_version.is_empty()
             || api_version.trim() != api_version
             || api_version.chars().any(char::is_control)
         {
-            return Err(ModelCatalogError::InvalidApiVersion(
-                name.as_str().to_owned(),
-            ));
+            return Err(ModelCatalogError::InvalidApiVersion(owner.to_owned()));
         }
     }
     Ok(())
 }
 
-fn validate_runtime(
-    alias: &RuntimeModelAlias,
-    runtime: &RuntimeModelConfig,
-    deployment: &ModelDeploymentConfig,
-    profile: &ModelProfileConfig,
+fn validate_capabilities(
+    owner: &str,
+    capabilities: &ModelProtocolCapabilities,
 ) -> Result<(), ModelCatalogError> {
-    let protocol = deployment.protocol.kind();
-    if !profile.supported_protocols.contains(&protocol) {
-        return Err(ModelCatalogError::UnsupportedProtocol {
-            alias: alias.as_str().to_owned(),
-            protocol,
-        });
+    if capabilities.max_output_tokens.get() > capabilities.max_context_tokens.get() {
+        return Err(ModelCatalogError::InvalidCapabilityBounds(owner.to_owned()));
     }
-    if runtime.settings.max_output_tokens.get() > profile.max_output_tokens.get() {
-        return Err(ModelCatalogError::OutputLimitExceeded(
-            alias.as_str().to_owned(),
+    if capabilities.supports_parallel_tool_calls && !capabilities.supports_tools {
+        return Err(ModelCatalogError::ParallelToolsWithoutTools(
+            owner.to_owned(),
         ));
     }
-    if runtime.settings.parallel_tool_calls && !profile.supports_parallel_tool_calls {
+    if !capabilities.supports_reasoning && !capabilities.reasoning_efforts.is_empty() {
+        return Err(ModelCatalogError::ReasoningEffortsWithoutReasoning(
+            owner.to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_generation(
+    owner: &str,
+    settings: &ModelGenerationSettings,
+    capabilities: &ModelProtocolCapabilities,
+) -> Result<(), ModelCatalogError> {
+    if settings.max_output_tokens.get() > capabilities.max_output_tokens.get() {
+        return Err(ModelCatalogError::OutputLimitExceeded(owner.to_owned()));
+    }
+    if settings.parallel_tool_calls && !capabilities.supports_parallel_tool_calls {
         return Err(ModelCatalogError::ParallelToolsUnsupported(
-            alias.as_str().to_owned(),
+            owner.to_owned(),
         ));
     }
-    if runtime.settings.parallel_tool_calls && !profile.supports_tools {
-        return Err(ModelCatalogError::ToolsUnsupported(
-            alias.as_str().to_owned(),
-        ));
+    if settings.parallel_tool_calls && !capabilities.supports_tools {
+        return Err(ModelCatalogError::ToolsUnsupported(owner.to_owned()));
     }
-    match (
-        runtime.settings.reasoning.mode,
-        runtime.settings.reasoning.effort,
-    ) {
+    match (settings.reasoning.mode, settings.reasoning.effort) {
         (ModelReasoningMode::Disabled, Some(_)) => {
             return Err(ModelCatalogError::DisabledReasoningHasEffort(
-                alias.as_str().to_owned(),
+                owner.to_owned(),
             ));
         }
-        (ModelReasoningMode::Enabled, _) if !profile.supports_reasoning => {
-            return Err(ModelCatalogError::ReasoningUnsupported(
-                alias.as_str().to_owned(),
-            ));
+        (ModelReasoningMode::Enabled, _) if !capabilities.supports_reasoning => {
+            return Err(ModelCatalogError::ReasoningUnsupported(owner.to_owned()));
+        }
+        (ModelReasoningMode::Enabled, Some(effort))
+            if !capabilities.reasoning_efforts.contains(&effort) =>
+        {
+            return Err(ModelCatalogError::ReasoningEffortUnsupported {
+                owner: owner.to_owned(),
+                effort,
+            });
         }
         _ => {}
     }
     Ok(())
 }
 
-/// Invalid runtime-model catalog or resolution request.
+/// Invalid model template, runtime catalog, or resolution request.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum ModelCatalogError {
-    /// Catalog schema is not supported by this build.
+    /// Runtime catalog schema is not supported by this build.
     #[error("unsupported runtime model catalog schema {0}")]
-    UnsupportedSchema(u16),
-    /// One of the required catalog maps is empty.
-    #[error("runtime model catalog maps must not be empty")]
-    EmptyCatalog,
+    UnsupportedRuntimeSchema(u16),
+    /// One template file uses an unsupported schema.
+    #[error("model template {template} uses unsupported schema {schema}")]
+    UnsupportedTemplateSchema {
+        /// Template name.
+        template: String,
+        /// Unsupported schema.
+        schema: u16,
+    },
+    /// No templates were supplied to the registry.
+    #[error("model template registry must not be empty")]
+    EmptyTemplateRegistry,
+    /// A template contains no protocol section.
+    #[error("model template {0} contains no protocol definitions")]
+    EmptyTemplateProtocols(String),
+    /// Two files declared the same template name.
+    #[error("duplicate model template {0}")]
+    DuplicateTemplate(String),
+    /// A template declared one protocol family more than once.
+    #[error("model template {template} duplicates protocol {protocol:?}")]
+    DuplicateTemplateProtocol {
+        /// Template name.
+        template: String,
+        /// Repeated protocol.
+        protocol: ModelProtocolKind,
+    },
+    /// Required runtime maps are empty.
+    #[error("runtime model and deployment maps must not be empty")]
+    EmptyRuntimeCatalog,
     /// Default alias does not exist.
     #[error("unknown default runtime model {0}")]
     UnknownDefault(String),
@@ -822,13 +1049,13 @@ pub enum ModelCatalogError {
         /// Missing deployment name.
         deployment: String,
     },
-    /// Alias references an absent capability profile.
-    #[error("runtime model {alias} references unknown profile {profile}")]
-    UnknownProfile {
+    /// Alias references an absent repository template.
+    #[error("runtime model {alias} references unknown template {template}")]
+    UnknownTemplate {
         /// Runtime-model alias.
         alias: String,
-        /// Missing profile name.
-        profile: String,
+        /// Missing template name.
+        template: String,
     },
     /// Configured HTTPS endpoint is unsafe or ambiguous.
     #[error("invalid provider HTTPS endpoint {0}")]
@@ -837,42 +1064,53 @@ pub enum ModelCatalogError {
     #[error("invalid provider secret file path {0}")]
     InvalidSecretPath(String),
     /// V1 local-replay mode forbids hosted provider continuation.
-    #[error("deployment {0} enables unsupported hosted response state")]
+    #[error("model template {0} enables unsupported hosted response state")]
     HostedStateUnsupported(String),
     /// Anthropic version header is not a stable label.
-    #[error("deployment {0} has an invalid Anthropic API version")]
+    #[error("model template {0} has an invalid Anthropic API version")]
     InvalidApiVersion(String),
-    /// Profile supports no protocol.
-    #[error("model profile {0} supports no protocol")]
-    EmptyProtocolSet(String),
-    /// Profile output ceiling exceeds its context window.
-    #[error("model profile {0} has invalid token bounds")]
-    InvalidProfileBounds(String),
-    /// Deployment protocol is outside the selected profile.
-    #[error("runtime model {alias} profile does not support {protocol:?}")]
+    /// Capability output ceiling exceeds the context window.
+    #[error("model template {0} has invalid token capability bounds")]
+    InvalidCapabilityBounds(String),
+    /// Parallel-tool capability was declared without tool capability.
+    #[error("model template {0} declares parallel tools without tools")]
+    ParallelToolsWithoutTools(String),
+    /// Reasoning efforts were declared for a non-reasoning model/protocol.
+    #[error("model template {0} declares reasoning efforts without reasoning")]
+    ReasoningEffortsWithoutReasoning(String),
+    /// Deployment protocol is outside the selected model template.
+    #[error("runtime model {alias} template does not support {protocol:?}")]
     UnsupportedProtocol {
         /// Runtime-model alias.
         alias: String,
         /// Requested deployment protocol.
         protocol: ModelProtocolKind,
     },
-    /// Alias output setting exceeds profile capability.
-    #[error("runtime model {0} output limit exceeds its profile")]
+    /// Resolved output setting exceeds template capability.
+    #[error("model selection {0} output limit exceeds its template")]
     OutputLimitExceeded(String),
-    /// Alias requests parallel tools from a profile without that capability.
-    #[error("runtime model {0} requests unsupported parallel tool calls")]
+    /// Resolved settings request parallel tools without that capability.
+    #[error("model selection {0} requests unsupported parallel tool calls")]
     ParallelToolsUnsupported(String),
-    /// Alias requests tools from a model-only profile.
-    #[error("runtime model {0} requests unsupported tools")]
+    /// Resolved settings request tools from a model-only template.
+    #[error("model selection {0} requests unsupported tools")]
     ToolsUnsupported(String),
-    /// Alias requests reasoning from a profile without that capability.
-    #[error("runtime model {0} requests unsupported reasoning")]
+    /// Resolved settings request reasoning without that capability.
+    #[error("model selection {0} requests unsupported reasoning")]
     ReasoningUnsupported(String),
+    /// Selected reasoning effort is outside the template set.
+    #[error("model selection {owner} requests unsupported reasoning effort {effort:?}")]
+    ReasoningEffortUnsupported {
+        /// Template or alias under validation.
+        owner: String,
+        /// Unsupported effort.
+        effort: ModelReasoningEffort,
+    },
     /// Disabled reasoning cannot carry an effort value.
-    #[error("runtime model {0} configures effort while reasoning is disabled")]
+    #[error("model selection {0} configures effort while reasoning is disabled")]
     DisabledReasoningHasEffort(String),
-    /// Frozen snapshot could not be encoded or identified.
-    #[error("resolved runtime model encoding failed: {0}")]
+    /// Template or frozen snapshot could not be encoded or identified.
+    #[error("model configuration encoding failed: {0}")]
     Encoding(String),
 }
 
@@ -880,48 +1118,67 @@ pub enum ModelCatalogError {
 mod tests {
     use super::{
         CredentialSource, ModelCatalogError, ModelOutputTokenLimit, ModelProtocolConfig,
-        ModelProtocolKind, ProviderConfigValueError, ProviderEndpoint, RuntimeModelCatalog,
-        SamplingTemperatureMillis, SecretFilePath,
+        ModelProtocolKind, ModelTemplate, ModelTemplateRegistry, ProviderConfigValueError,
+        ProviderEndpoint, RuntimeModelCatalog, SamplingTemperatureMillis, SecretFilePath,
     };
     use crate::{ModelName, RuntimeModelAlias};
 
-    fn example() -> RuntimeModelCatalog {
-        let bytes = cairn_codec::canonicalize(include_bytes!(
-            "../../../config/runtime-models.example.json"
-        ))
-        .expect("canonicalized example catalog");
-        cairn_codec::from_slice(&bytes).expect("typed example catalog")
+    fn decode_fixture<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
+        let bytes = cairn_codec::canonicalize(bytes).expect("canonicalized fixture");
+        cairn_codec::from_slice(&bytes).expect("typed fixture")
     }
 
-    fn example_value() -> serde_json::Value {
-        let bytes = cairn_codec::canonicalize(include_bytes!(
+    fn template() -> ModelTemplate {
+        decode_fixture(include_bytes!(
+            "../../../model-templates/deepseek/deepseek-v4-pro.json"
+        ))
+    }
+
+    fn template_value() -> serde_json::Value {
+        decode_fixture(include_bytes!(
+            "../../../model-templates/deepseek/deepseek-v4-pro.json"
+        ))
+    }
+
+    fn registry() -> ModelTemplateRegistry {
+        ModelTemplateRegistry::from_templates([template()]).expect("template registry")
+    }
+
+    fn catalog() -> RuntimeModelCatalog {
+        decode_fixture(include_bytes!(
             "../../../config/runtime-models.example.json"
         ))
-        .expect("canonicalized example catalog");
-        cairn_codec::from_slice(&bytes).expect("example catalog value")
+    }
+
+    fn catalog_value() -> serde_json::Value {
+        decode_fixture(include_bytes!(
+            "../../../config/runtime-models.example.json"
+        ))
     }
 
     #[test]
-    fn deepseek_default_resolves_to_a_secret_free_frozen_snapshot() {
-        let catalog = example();
-        catalog.validate().expect("valid catalog");
-        let resolved = catalog.resolve(None).expect("default model");
+    fn deepseek_responses_default_resolves_from_template_and_user_deployment() {
+        let template = template();
+        let expected_template_id = template.content_id().expect("template ID");
+        let registry =
+            ModelTemplateRegistry::from_templates([template]).expect("template registry");
+        let catalog = catalog();
+        catalog.validate(&registry).expect("valid catalog");
+        let resolved = catalog.resolve(&registry, None).expect("default model");
         assert_eq!(
             resolved.wire_model(),
             &ModelName::new("deepseek-v4-pro").unwrap()
         );
+        assert_eq!(resolved.template_id(), expected_template_id);
         assert_eq!(
             resolved.protocol().kind(),
-            ModelProtocolKind::AnthropicMessages
+            ModelProtocolKind::OpenAiResponses
         );
+        assert!(resolved.capabilities().supports_tools());
         assert!(matches!(
             resolved.credential(),
-            CredentialSource::XApiKeyFile { .. }
+            CredentialSource::BearerFile { .. }
         ));
-        assert_eq!(
-            resolved.credential().path().as_str(),
-            ".cairn/secrets/deepseek-api-key"
-        );
         let bytes = resolved.canonical_bytes().expect("snapshot bytes");
         let text = std::str::from_utf8(&bytes).expect("UTF-8");
         assert!(!text.contains("sk-"));
@@ -932,96 +1189,192 @@ mod tests {
     }
 
     #[test]
-    fn a_fixture_wire_model_can_resolve_through_all_three_protocol_families() {
-        let mut value = example_value();
-        value["profiles"]["fixture-model"] = value["profiles"]["deepseek-v4-pro"].clone();
-        value["profiles"]["fixture-model"]["supported_protocols"] = serde_json::json!([
-            "anthropic_messages",
-            "openai_chat_completions",
-            "openai_responses"
-        ]);
-
-        for (alias, deployment) in [
-            ("fixture-anthropic", "deepseek-anthropic"),
-            ("fixture-chat", "deepseek-chat"),
+    fn user_catalog_contains_no_model_capability_declarations() {
+        let bytes = include_bytes!("../../../config/runtime-models.example.json");
+        let text = std::str::from_utf8(bytes).expect("UTF-8 config");
+        for forbidden in [
+            "supports_tools",
+            "supports_parallel_tool_calls",
+            "supports_reasoning",
+            "max_context_tokens",
+            "tool_schema_dialect",
+            "wire_model",
         ] {
-            value["deployments"][alias] = value["deployments"][deployment].clone();
-            value["deployments"][alias]["provider"] = serde_json::json!("fixture-provider");
+            assert!(
+                !text.contains(forbidden),
+                "user config contains {forbidden}"
+            );
         }
-        value["deployments"]["fixture-responses"] = value["deployments"]["fixture-chat"].clone();
-        value["deployments"]["fixture-responses"]["endpoint"] =
-            serde_json::json!("https://api.example.test/v1/responses");
-        value["deployments"]["fixture-responses"]["protocol"] =
-            serde_json::json!({"kind":"openai_responses","store":false});
+        let template_text = std::str::from_utf8(include_bytes!(
+            "../../../model-templates/deepseek/deepseek-v4-pro.json"
+        ))
+        .expect("UTF-8 template");
+        assert!(template_text.contains("supports_tools"));
+        assert!(template_text.contains("wire_model"));
+    }
 
-        let base_runtime = value["runtime_models"]["deepseek-v4-pro-default"].clone();
-        for (alias, deployment) in [
-            ("fixture-anthropic", "fixture-anthropic"),
-            ("fixture-chat", "fixture-chat"),
-            ("fixture-responses", "fixture-responses"),
+    #[test]
+    fn deepseek_template_resolves_all_three_protocol_families() {
+        let mut value = catalog_value();
+        let base_deployment = value["deployments"]["deepseek-responses"].clone();
+        let base_runtime = value["runtime_models"]["deepseek-v4-pro"].clone();
+        for (suffix, protocol, endpoint, credential) in [
+            (
+                "chat",
+                serde_json::json!("openai_chat_completions"),
+                serde_json::json!("https://private.example.test/v1/chat/completions"),
+                serde_json::json!({"kind":"bearer_file","path":".cairn/secrets/deepseek-api-key"}),
+            ),
+            (
+                "anthropic",
+                serde_json::json!("anthropic_messages"),
+                serde_json::json!("https://private.example.test/anthropic/v1/messages"),
+                serde_json::json!({"kind":"x_api_key_file","path":".cairn/secrets/deepseek-api-key"}),
+            ),
         ] {
-            value["runtime_models"][alias] = base_runtime.clone();
-            value["runtime_models"][alias]["deployment"] = serde_json::json!(deployment);
-            value["runtime_models"][alias]["profile"] = serde_json::json!("fixture-model");
-            value["runtime_models"][alias]["wire_model"] = serde_json::json!("fixture-model");
+            let deployment = format!("deepseek-{suffix}");
+            let alias = format!("deepseek-v4-pro-{suffix}");
+            value["deployments"][&deployment] = base_deployment.clone();
+            value["deployments"][&deployment]["protocol"] = protocol;
+            value["deployments"][&deployment]["endpoint"] = endpoint;
+            value["deployments"][&deployment]["credential"] = credential;
+            value["deployments"][&deployment]["data_boundary"] =
+                serde_json::json!("private_deployment");
+            value["runtime_models"][&alias] = base_runtime.clone();
+            value["runtime_models"][&alias]["deployment"] = serde_json::json!(deployment);
         }
         let bytes = cairn_codec::to_vec(&value).expect("canonical catalog");
         let catalog: RuntimeModelCatalog = cairn_codec::from_slice(&bytes).expect("typed catalog");
-
+        let registry = registry();
         let cases = [
-            ("fixture-anthropic", ModelProtocolKind::AnthropicMessages),
-            ("fixture-responses", ModelProtocolKind::OpenAiResponses),
-            ("fixture-chat", ModelProtocolKind::OpenAiChatCompletions),
+            ("deepseek-v4-pro", ModelProtocolKind::OpenAiResponses),
+            (
+                "deepseek-v4-pro-chat",
+                ModelProtocolKind::OpenAiChatCompletions,
+            ),
+            (
+                "deepseek-v4-pro-anthropic",
+                ModelProtocolKind::AnthropicMessages,
+            ),
         ];
         for (alias, protocol) in cases {
             let alias = RuntimeModelAlias::new(alias).expect("alias");
-            let resolved = catalog.resolve(Some(&alias)).expect("resolved protocol");
+            let resolved = catalog
+                .resolve(&registry, Some(&alias))
+                .expect("resolved protocol");
             assert_eq!(resolved.protocol().kind(), protocol);
-            assert_eq!(
-                resolved.wire_model(),
-                &ModelName::new("fixture-model").unwrap()
-            );
+            assert_eq!(resolved.wire_model().as_str(), "deepseek-v4-pro");
         }
     }
 
     #[test]
-    fn catalog_rejects_hosted_state_and_inline_secrets() {
-        let mut value = example_value();
-        value["deployments"]["deepseek-anthropic"]["protocol"] =
+    fn private_endpoint_changes_deployment_not_model_characteristics() {
+        let mut value = catalog_value();
+        value["deployments"]["deepseek-responses"]["endpoint"] =
+            serde_json::json!("https://llm.internal.example/v1/responses");
+        value["deployments"]["deepseek-responses"]["provider"] =
+            serde_json::json!("internal-platform");
+        value["deployments"]["deepseek-responses"]["data_boundary"] =
+            serde_json::json!("private_deployment");
+        let bytes = cairn_codec::to_vec(&value).expect("canonical catalog");
+        let catalog: RuntimeModelCatalog = cairn_codec::from_slice(&bytes).expect("typed catalog");
+        let resolved = catalog.resolve(&registry(), None).expect("private model");
+        assert_eq!(
+            resolved.endpoint().as_str(),
+            "https://llm.internal.example/v1/responses"
+        );
+        assert!(resolved.capabilities().supports_tools());
+    }
+
+    #[test]
+    fn invalid_template_state_and_inline_secrets_are_rejected() {
+        let mut value = template_value();
+        value["protocols"][0]["protocol"] =
             serde_json::json!({"kind":"openai_responses","store":true});
-        let bytes = cairn_codec::to_vec(&value).unwrap();
-        let catalog: RuntimeModelCatalog = cairn_codec::from_slice(&bytes).unwrap();
+        let bytes = cairn_codec::to_vec(&value).expect("canonical template");
+        let template: ModelTemplate = cairn_codec::from_slice(&bytes).expect("typed template");
         assert!(matches!(
-            catalog.validate(),
+            template.validate(),
             Err(ModelCatalogError::HostedStateUnsupported(_))
         ));
 
-        let mut value = example_value();
-        value["deployments"]["deepseek-anthropic"]["credential"] =
-            serde_json::json!({"kind":"x_api_key_file","api_key":"sk-secret"});
-        let bytes = cairn_codec::to_vec(&value).unwrap();
+        let mut value = catalog_value();
+        value["deployments"]["deepseek-responses"]["credential"] =
+            serde_json::json!({"kind":"bearer_file","api_key":"sk-secret"});
+        let bytes = cairn_codec::to_vec(&value).expect("canonical invalid catalog");
         assert!(cairn_codec::from_slice::<RuntimeModelCatalog>(&bytes).is_err());
     }
 
     #[test]
-    fn protocol_is_selected_by_configuration_not_provider_label() {
-        let mut catalog = example();
+    fn template_protocol_uniqueness_and_runtime_bounds_fail_closed() {
+        let mut value = template_value();
+        let duplicate = value["protocols"][0].clone();
+        value["protocols"].as_array_mut().unwrap().push(duplicate);
+        let bytes = cairn_codec::to_vec(&value).expect("canonical duplicate template");
+        let template: ModelTemplate = cairn_codec::from_slice(&bytes).expect("typed template");
+        assert!(matches!(
+            template.validate(),
+            Err(ModelCatalogError::DuplicateTemplateProtocol { .. })
+        ));
+
+        let mut value = catalog_value();
+        value["runtime_models"]["deepseek-v4-pro"]["settings"] =
+            serde_json::json!({"max_output_tokens":400_000});
+        let bytes = cairn_codec::to_vec(&value).expect("canonical output override");
+        let catalog: RuntimeModelCatalog = cairn_codec::from_slice(&bytes).expect("typed catalog");
+        assert!(matches!(
+            catalog.validate(&registry()),
+            Err(ModelCatalogError::OutputLimitExceeded(_))
+        ));
+
+        let mut value = catalog_value();
+        value["runtime_models"]["deepseek-v4-pro"]["settings"] = serde_json::json!({
+            "reasoning":{"mode":"enabled","effort":"medium"}
+        });
+        let bytes = cairn_codec::to_vec(&value).expect("canonical effort override");
+        let catalog: RuntimeModelCatalog = cairn_codec::from_slice(&bytes).expect("typed catalog");
+        let mut value = template_value();
+        value["protocols"][0]["capabilities"]["reasoning_efforts"] = serde_json::json!(["high"]);
+        let bytes = cairn_codec::to_vec(&value).expect("canonical restricted template");
+        let template: ModelTemplate = cairn_codec::from_slice(&bytes).expect("typed template");
+        let templates = ModelTemplateRegistry::from_templates([template]).expect("registry");
+        assert!(matches!(
+            catalog.validate(&templates),
+            Err(ModelCatalogError::ReasoningEffortUnsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn deployment_cannot_select_a_protocol_absent_from_its_template() {
+        let mut template = template_value();
+        template["protocols"].as_array_mut().unwrap().truncate(1);
+        let bytes = cairn_codec::to_vec(&template).expect("canonical restricted template");
+        let template: ModelTemplate = cairn_codec::from_slice(&bytes).expect("typed template");
+        let templates = ModelTemplateRegistry::from_templates([template]).expect("registry");
+
+        let mut catalog = catalog_value();
+        catalog["deployments"]["deepseek-responses"]["protocol"] =
+            serde_json::json!("anthropic_messages");
+        let bytes = cairn_codec::to_vec(&catalog).expect("canonical catalog");
+        let catalog: RuntimeModelCatalog = cairn_codec::from_slice(&bytes).expect("typed catalog");
+        assert!(matches!(
+            catalog.validate(&templates),
+            Err(ModelCatalogError::UnsupportedProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn protocol_is_selected_by_user_config_not_provider_label() {
+        let mut catalog = catalog();
         catalog
             .deployments
-            .get_mut("deepseek-anthropic")
+            .get_mut("deepseek-responses")
             .unwrap()
             .provider = crate::ProviderName::new("not-a-vendor-branch").unwrap();
-        catalog
-            .deployments
-            .get_mut("deepseek-anthropic")
-            .unwrap()
-            .credential = CredentialSource::BearerFile {
-            path: SecretFilePath::new(".cairn/secrets/gateway-key").unwrap(),
-        };
-        let resolved = catalog.resolve(None).expect("resolved");
+        let resolved = catalog.resolve(&registry(), None).expect("resolved");
         assert!(matches!(
             resolved.protocol(),
-            ModelProtocolConfig::AnthropicMessages { .. }
+            ModelProtocolConfig::OpenAiResponses { .. }
         ));
     }
 
@@ -1038,9 +1391,9 @@ mod tests {
             Err(ProviderConfigValueError::Temperature)
         );
 
-        let mut value = example_value();
+        let mut value = catalog_value();
         value["runtime_models"][" invalid-alias"] =
-            value["runtime_models"]["deepseek-v4-pro-default"].clone();
+            value["runtime_models"]["deepseek-v4-pro"].clone();
         let bytes = cairn_codec::to_vec(&value).expect("canonical invalid catalog");
         assert!(cairn_codec::from_slice::<RuntimeModelCatalog>(&bytes).is_err());
     }

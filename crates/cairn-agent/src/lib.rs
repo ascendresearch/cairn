@@ -48,11 +48,12 @@ pub use operation::{
 };
 pub use provider_catalog::{
     CredentialSource, ModelCatalogError, ModelContextTokenLimit, ModelDataBoundary,
-    ModelGenerationSettings, ModelOutputTokenLimit, ModelProfileConfig, ModelProtocolConfig,
-    ModelProtocolKind, ModelReasoningEffort, ModelReasoningMode, ModelReasoningSettings,
-    ModelTransportConfig, ProviderConfigValueError, ProviderEndpoint, ResolvedRuntimeModel,
-    RuntimeModelCatalog, RuntimeModelConfig, SamplingTemperatureMillis, SecretFilePath,
-    ToolSchemaDialect, TransportByteLimit, TransportTimeoutMillis,
+    ModelGenerationOverrides, ModelGenerationSettings, ModelOutputTokenLimit,
+    ModelProtocolCapabilities, ModelProtocolConfig, ModelProtocolKind, ModelProtocolTemplate,
+    ModelReasoningEffort, ModelReasoningMode, ModelReasoningSettings, ModelTemplate,
+    ModelTemplateRegistry, ModelTransportConfig, ProviderConfigValueError, ProviderEndpoint,
+    ResolvedRuntimeModel, RuntimeModelCatalog, RuntimeModelConfig, SamplingTemperatureMillis,
+    SecretFilePath, ToolSchemaDialect, TransportByteLimit, TransportTimeoutMillis,
 };
 pub use semantic::{
     AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,
@@ -136,8 +137,8 @@ label_type!(/// Provider model identity.
 ModelName);
 label_type!(/// Provider deployment identity.
 DeploymentName);
-label_type!(/// Capability profile selected independently from a deployment.
-ModelProfileName);
+label_type!(/// Versioned built-in model-template identity.
+ModelTemplateName);
 label_type!(/// Semantic adapter version.
 AdapterVersion);
 label_type!(/// Registered tool identity.
@@ -183,6 +184,7 @@ content_type!(
     ResolvedRuntimeModelArtifact,
     "agent.resolved-runtime-model.v1"
 );
+content_type!(ModelTemplateArtifact, "agent.model-template.v1");
 
 /// Pinned provider/model/adapter selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

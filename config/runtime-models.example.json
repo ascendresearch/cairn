@@ -1,1 +1,28 @@
-{"default_runtime_model":"deepseek-v4-pro-default","deployments":{"deepseek-anthropic":{"credential":{"kind":"x_api_key_file","path":".cairn/secrets/deepseek-api-key"},"data_boundary":"external_provider","endpoint":"https://api.deepseek.com/anthropic/v1/messages","protocol":{"api_version":"2023-06-01","kind":"anthropic_messages"},"provider":"deepseek","transport":{"connect_timeout_ms":5000,"max_request_bytes":8388608,"max_response_bytes":8388608,"request_timeout_ms":600000}},"deepseek-chat":{"credential":{"kind":"bearer_file","path":".cairn/secrets/deepseek-api-key"},"data_boundary":"external_provider","endpoint":"https://api.deepseek.com/chat/completions","protocol":{"kind":"openai_chat_completions","thinking_parameter":true},"provider":"deepseek","transport":{"connect_timeout_ms":5000,"max_request_bytes":8388608,"max_response_bytes":8388608,"request_timeout_ms":600000}}},"profiles":{"deepseek-v4-pro":{"max_context_tokens":1000000,"max_output_tokens":384000,"supported_protocols":["anthropic_messages","openai_chat_completions"],"supports_parallel_tool_calls":true,"supports_reasoning":true,"supports_tools":true,"tool_schema_dialect":"json_schema"}},"runtime_models":{"deepseek-v4-pro-chat":{"deployment":"deepseek-chat","profile":"deepseek-v4-pro","settings":{"max_output_tokens":16384,"parallel_tool_calls":true,"reasoning":{"effort":"high","mode":"enabled"},"temperature_millis":null},"wire_model":"deepseek-v4-pro"},"deepseek-v4-pro-default":{"deployment":"deepseek-anthropic","profile":"deepseek-v4-pro","settings":{"max_output_tokens":16384,"parallel_tool_calls":true,"reasoning":{"effort":"high","mode":"enabled"},"temperature_millis":null},"wire_model":"deepseek-v4-pro"}},"schema_version":1}
+{
+  "schema_version": 1,
+  "default_runtime_model": "deepseek-v4-pro",
+  "runtime_models": {
+    "deepseek-v4-pro": {
+      "template": "deepseek/deepseek-v4-pro",
+      "deployment": "deepseek-responses"
+    }
+  },
+  "deployments": {
+    "deepseek-responses": {
+      "provider": "deepseek",
+      "protocol": "openai_responses",
+      "endpoint": "https://api.deepseek.com/v1/responses",
+      "credential": {
+        "kind": "bearer_file",
+        "path": ".cairn/secrets/deepseek-api-key"
+      },
+      "transport": {
+        "connect_timeout_ms": 5000,
+        "request_timeout_ms": 600000,
+        "max_request_bytes": 8388608,
+        "max_response_bytes": 8388608
+      },
+      "data_boundary": "external_provider"
+    }
+  }
+}

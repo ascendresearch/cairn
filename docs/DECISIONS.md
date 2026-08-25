@@ -252,7 +252,28 @@ history. Provider response IDs and hosted continuation state may be recorded as 
 are neither required for reconstruction nor treated as durable authority. A later hosted-state
 optimization must retain a local fallback and prove the represented history boundary.
 
-A catalog alias resolves model, deployment, protocol, profile, settings, transport bounds, and a
-credential reference into a frozen secret-free snapshot. Protocol—not provider or model name—selects
-the codec. Switching model, deployment, protocol, or codec version creates a new episode or an
-explicit counterfactual branch.
+A catalog alias resolves a versioned model template, deployment, protocol, settings, transport
+bounds, and a credential reference into a frozen secret-free snapshot. Protocol—not provider or
+model name—selects the codec. Switching model, deployment, protocol, template revision, or codec
+version creates a new episode or an explicit counterfactual branch.
+
+## D-009 — Repository model templates and user deployment configuration
+
+- Decision: accepted
+
+Model characteristics are project-maintained versioned data under `model-templates/`, not fields an
+operator must copy into runtime configuration. A template owns the provider-visible model name and a
+separate section for every supported protocol. Each section declares context/output limits, tool,
+parallel-call and reasoning capabilities, accepted reasoning efforts, schema dialect, safe defaults,
+and protocol-specific request settings.
+
+User runtime configuration owns only operational choices: enabled template alias, selected protocol,
+endpoint, provider/account label, credential reference, data boundary, transport bounds, and optional
+generation overrides. This permits a private deployment to reuse the same model template without
+claiming that its endpoint defines the model's intrinsic capabilities. Overrides are validated
+against the selected protocol section.
+
+Resolution includes the exact typed template content identity and materialized characteristics in a
+secret-free episode snapshot. A template update changes new episodes only. Endpoint conformance is a
+separate measured fact and may later narrow or reject a configured deployment; it does not require
+operators to maintain a duplicate capability profile.

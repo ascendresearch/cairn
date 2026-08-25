@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "name": "deepseek/deepseek-v4-pro",
+  "wire_model": "deepseek-v4-pro",
+  "protocols": [
+    {
+      "protocol": {"kind": "openai_responses", "store": false},
+      "capabilities": {
+        "supports_tools": true,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning": true,
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "tool_schema_dialect": "json_schema",
+        "max_context_tokens": 1000000,
+        "max_output_tokens": 384000
+      },
+      "defaults": {
+        "max_output_tokens": 16384,
+        "temperature_millis": null,
+        "reasoning": {"mode": "enabled", "effort": "high"},
+        "parallel_tool_calls": true
+      }
+    },
+    {
+      "protocol": {"kind": "openai_chat_completions", "thinking_parameter": true},
+      "capabilities": {
+        "supports_tools": true,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning": true,
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "tool_schema_dialect": "json_schema",
+        "max_context_tokens": 1000000,
+        "max_output_tokens": 384000
+      },
+      "defaults": {
+        "max_output_tokens": 16384,
+        "temperature_millis": null,
+        "reasoning": {"mode": "enabled", "effort": "high"},
+        "parallel_tool_calls": true
+      }
+    },
+    {
+      "protocol": {"kind": "anthropic_messages", "api_version": "2023-06-01"},
+      "capabilities": {
+        "supports_tools": true,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning": true,
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "tool_schema_dialect": "json_schema",
+        "max_context_tokens": 1000000,
+        "max_output_tokens": 384000
+      },
+      "defaults": {
+        "max_output_tokens": 16384,
+        "temperature_millis": null,
+        "reasoning": {"mode": "enabled", "effort": "high"},
+        "parallel_tool_calls": true
+      }
+    }
+  ]
+}
