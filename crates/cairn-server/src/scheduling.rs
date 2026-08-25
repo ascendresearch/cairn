@@ -585,6 +585,7 @@ mod tests {
         revoke_credential(
             &mut events,
             credential.credential_id,
+            &CommandId::new(),
             ObservedAtUnixMillis::new(7),
         )
         .expect("revoke after snapshot");

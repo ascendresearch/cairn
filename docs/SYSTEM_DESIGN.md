@@ -708,7 +708,24 @@ registration and on each active control-loop iteration, so an observed managed s
 and its reconnect is rejected. This application check remains authoritative even when certificate
 chain validation succeeds. SQLite schema V2 uses WAL plus immediate writer transactions so a
 separate administrative command and the running controller serialize authority facts without a
-deferred read-to-write deadlock. Worker re-enable remains subsequent lifecycle work.
+deferred read-to-write deadlock.
+
+**Implemented explicit registry lifecycle E2a (2026-08-25).** Credential and unused-enrollment
+revocation, worker disable/re-enable, and worker-pool reassignment now take an operator-supplied
+strong `CommandId`. Projecting the complete history precedes replay recognition, so corrupt history
+cannot be hidden behind an old command; exact schema and payload retry returns the original event,
+while command reuse with different input fails closed. Pool ownership is a separate per-worker
+projection with its own authority revision. Reassignment is admitted only while the worker is
+disabled and only when the pool changes.
+
+The controller resolves every new certificate handshake from the current durable registry rather
+than its startup enrollment snapshot. If pool authority changed, it first appends
+`execution.worker-pool-assigned`, citing the exact registry event. The execution projector admits
+that fact only after durable disconnect or the exact configured session expiry and then permits
+registration in the new pool. Authentication subject, credential/incarnation boundaries, and the
+rule rejecting implicit pool change remain intact. The managed mTLS integration exercises a live
+worker through disable, reassignment, re-enable, automatic reconnect, and restart-safe cross-link
+projection.
 
 **Implemented static-registry migration E1 (2026-08-25).** Controller schema V3 requires an empty
 static enrollment array. A schema V2 file is accepted only by `registry import-static`, which reads

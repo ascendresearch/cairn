@@ -100,7 +100,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(2_000)?,
         }),
         handshake_timeout_ms: NonZeroU64::new(2_000),
-        idle_timeout_ms: NonZeroU64::new(200),
+        idle_timeout_ms: NonZeroU64::new(500),
         outbox_poll_interval_ms: NonZeroU64::new(25),
         authority_poll_interval_ms: NonZeroU64::new(25).expect("authority poll"),
         transport: TransportPolicy::default(),
@@ -202,7 +202,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     );
     let initial_resource_revisions = live.expect("durable liveness");
 
-    tokio::time::sleep(Duration::from_millis(650)).await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert!(
         !server.is_finished() && !worker_task_a.is_finished() && !worker_task_b.is_finished(),
         "heartbeat acknowledgements must keep both idle-bounded sessions open"
@@ -364,7 +364,10 @@ fn worker_config(
         journal_database: directory.join(format!("worker-{suffix}.sqlite3")),
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
-        heartbeat_interval_ms: NonZeroU64::new(50),
+        // Keep several heartbeats inside the idle window while leaving scheduling a meaningful
+        // quiescent interval; a 50 ms cadence made the explicit-time scheduler test race its own
+        // fixture heartbeat under a loaded CI host.
+        heartbeat_interval_ms: NonZeroU64::new(250),
         identity_poll_interval_ms: NonZeroU64::new(25).expect("identity poll"),
         reconnect_delay_ms: None,
         transport: TransportPolicy::default(),

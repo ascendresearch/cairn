@@ -32,6 +32,8 @@ const CREDENTIAL_ISSUED: &str = "execution.worker-credential-issued";
 const CREDENTIAL_REVOKED: &str = "execution.worker-credential-revoked";
 const STATIC_CREDENTIALS_IMPORTED: &str = "execution.worker-static-credentials-imported";
 const WORKER_DISABLED: &str = "execution.worker-disabled";
+const WORKER_ENABLED: &str = "execution.worker-enabled";
+const WORKER_POOL_ASSIGNED: &str = "execution.worker-registry-pool-assigned";
 const ENROLLMENT_REVOKED: &str = "execution.worker-enrollment-revoked";
 const MAX_CSR_PEM_BYTES: usize = 16 * 1024;
 
@@ -58,7 +60,7 @@ struct CredentialIssuedPayload {
     issued_at: ObservedAtUnixMillis,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CredentialRevokedPayload {
     credential_id: CredentialId,
@@ -107,13 +109,48 @@ impl StaticEnrollmentImportOutcome {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Durable result of one explicit registry lifecycle mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistryMutationOutcome {
+    event_id: EventId,
+    was_replay: bool,
+}
+
+impl RegistryMutationOutcome {
+    /// Returns the exact lifecycle fact authorized by the command.
+    #[must_use]
+    pub const fn event_id(self) -> EventId {
+        self.event_id
+    }
+
+    /// Returns whether this call recovered an already committed exact command.
+    #[must_use]
+    pub const fn was_replay(self) -> bool {
+        self.was_replay
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WorkerDisabledPayload {
     worker_id: WorkerId,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerEnabledPayload {
+    worker_id: WorkerId,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerPoolAssignedPayload {
+    worker_id: WorkerId,
+    previous_pool: WorkerPoolName,
+    pool: WorkerPoolName,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnrollmentRevokedPayload {
     enrollment_id: EnrollmentId,
@@ -147,6 +184,12 @@ struct CredentialRecord {
     predecessor: Option<CredentialId>,
 }
 
+#[derive(Clone)]
+struct WorkerPoolAssignment {
+    pool: WorkerPoolName,
+    authority_revision: EventId,
+}
+
 #[derive(Clone, Copy)]
 enum CredentialProvenance {
     Issued { enrollment_id: EnrollmentId },
@@ -156,6 +199,7 @@ enum CredentialProvenance {
 pub(crate) struct EnrollmentRegistry {
     offers: BTreeMap<EnrollmentId, Offer>,
     credentials: BTreeMap<CredentialId, CredentialRecord>,
+    worker_pools: BTreeMap<WorkerId, WorkerPoolAssignment>,
     disabled_workers: BTreeSet<WorkerId>,
     enrolled: BTreeMap<CertificateFingerprint, EnrolledWorker>,
     revision: Option<StreamRevision>,
@@ -200,6 +244,10 @@ pub(crate) enum EnrollmentError {
     CredentialNotActive,
     #[error("worker is unknown or already disabled")]
     WorkerNotActive,
+    #[error("worker is unknown or not disabled")]
+    WorkerNotDisabled,
+    #[error("worker pool assignment does not change the current pool")]
+    WorkerPoolUnchanged,
     #[error("issued enrollment authority cannot be revoked")]
     EnrollmentAlreadyIssued,
     #[error("static credential import conflicts with registry authority: {0}")]
@@ -393,6 +441,12 @@ pub(crate) fn create_rotation_offer(
                 && record.superseded_by.is_none()
         })
         .ok_or(EnrollmentError::CredentialNotActive)?;
+    let pool = registry
+        .worker_pools
+        .get(&predecessor.enrolled.worker_id)
+        .ok_or_else(|| EnrollmentError::InvalidHistory("worker has no pool assignment".into()))?
+        .pool
+        .clone();
     let ttl = i64::try_from(ttl_ms.get())
         .map_err(|_| EnrollmentError::InvalidRequest("rotation TTL is too large".into()))?;
     let expires_at = ObservedAtUnixMillis::new(
@@ -417,7 +471,7 @@ pub(crate) fn create_rotation_offer(
         &OfferCreatedPayload {
             enrollment_id,
             token_digest: digest_wire(secret.expose()),
-            pool: predecessor.enrolled.pool.clone(),
+            pool,
             expires_at,
             purpose: purpose.clone(),
             rotation_overlap_ms: overlap_ms,
@@ -444,6 +498,10 @@ pub(crate) fn create_rotation_offer(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "redemption keeps one-shot authorization, rotation lineage, issuance, and persistence linear"
+)]
 pub(crate) fn redeem(
     events: &mut impl EventStore,
     issuer: &impl WorkerCredentialIssuer,
@@ -494,7 +552,10 @@ pub(crate) fn redeem(
                 .get(&predecessor_credential_id)
                 .filter(|record| {
                     record.enrolled.worker_id == worker_id
-                        && record.enrolled.pool == offer.pool
+                        && registry
+                            .worker_pools
+                            .get(&worker_id)
+                            .is_some_and(|assignment| assignment.pool == offer.pool)
                         && record.is_authorized_at(&registry.disabled_workers, now)
                         && record.superseded_by.is_none()
                 })
@@ -661,11 +722,7 @@ fn validate_static_import(
                 credential.certificate_fingerprint
             )));
         }
-        if registry
-            .credentials
-            .values()
-            .any(|record| record.enrolled.worker_id == credential.worker_id)
-        {
+        if registry.worker_pools.contains_key(&credential.worker_id) {
             return Err(EnrollmentError::StaticImportConflict(format!(
                 "worker {} already has registry ownership",
                 credential.worker_id
@@ -678,9 +735,14 @@ fn validate_static_import(
 pub(crate) fn revoke_credential(
     events: &mut impl EventStore,
     credential_id: CredentialId,
+    command_id: &CommandId,
     now: ObservedAtUnixMillis,
-) -> Result<(), EnrollmentError> {
-    let registry = project(events, now)?;
+) -> Result<RegistryMutationOutcome, EnrollmentError> {
+    let payload = CredentialRevokedPayload { credential_id };
+    let (history, registry) = history_and_registry(events, now)?;
+    if let Some(replay) = mutation_replay(&history, command_id, CREDENTIAL_REVOKED, 1, &payload)? {
+        return Ok(replay);
+    }
     if registry
         .credentials
         .get(&credential_id)
@@ -688,13 +750,13 @@ pub(crate) fn revoke_credential(
     {
         return Err(EnrollmentError::CredentialNotActive);
     }
-    append(
+    append_mutation(
         events,
         &registry,
         CREDENTIAL_REVOKED,
         1,
-        &CredentialRevokedPayload { credential_id },
-        CommandId::new(),
+        &payload,
+        command_id,
         now,
     )
 }
@@ -702,24 +764,99 @@ pub(crate) fn revoke_credential(
 pub(crate) fn disable_worker(
     events: &mut impl EventStore,
     worker_id: WorkerId,
+    command_id: &CommandId,
     now: ObservedAtUnixMillis,
-) -> Result<(), EnrollmentError> {
-    let registry = project(events, now)?;
+) -> Result<RegistryMutationOutcome, EnrollmentError> {
+    let payload = WorkerDisabledPayload { worker_id };
+    let (history, registry) = history_and_registry(events, now)?;
+    if let Some(replay) = mutation_replay(&history, command_id, WORKER_DISABLED, 1, &payload)? {
+        return Ok(replay);
+    }
     if registry.disabled_workers.contains(&worker_id)
-        || !registry
-            .credentials
-            .values()
-            .any(|record| record.enrolled.worker_id == worker_id)
+        || !registry.worker_pools.contains_key(&worker_id)
     {
         return Err(EnrollmentError::WorkerNotActive);
     }
-    append(
+    append_mutation(
         events,
         &registry,
         WORKER_DISABLED,
         1,
-        &WorkerDisabledPayload { worker_id },
-        CommandId::new(),
+        &payload,
+        command_id,
+        now,
+    )
+}
+
+pub(crate) fn enable_worker(
+    events: &mut impl EventStore,
+    worker_id: WorkerId,
+    command_id: &CommandId,
+    now: ObservedAtUnixMillis,
+) -> Result<RegistryMutationOutcome, EnrollmentError> {
+    let payload = WorkerEnabledPayload { worker_id };
+    let (history, registry) = history_and_registry(events, now)?;
+    if let Some(replay) = mutation_replay(&history, command_id, WORKER_ENABLED, 1, &payload)? {
+        return Ok(replay);
+    }
+    if !registry.disabled_workers.contains(&worker_id) {
+        return Err(EnrollmentError::WorkerNotDisabled);
+    }
+    append_mutation(
+        events,
+        &registry,
+        WORKER_ENABLED,
+        1,
+        &payload,
+        command_id,
+        now,
+    )
+}
+
+pub(crate) fn assign_worker_pool(
+    events: &mut impl EventStore,
+    worker_id: WorkerId,
+    pool: WorkerPoolName,
+    command_id: &CommandId,
+    now: ObservedAtUnixMillis,
+) -> Result<RegistryMutationOutcome, EnrollmentError> {
+    let (history, registry) = history_and_registry(events, now)?;
+    if let Some(prior) = history.iter().find(|event| event.command_id == *command_id) {
+        if prior.schema_name.as_str() != WORKER_POOL_ASSIGNED || prior.schema_version.get() != 1 {
+            return Err(EnrollmentError::CommandConflict);
+        }
+        let payload: WorkerPoolAssignedPayload = decode(&prior.payload)?;
+        if payload.worker_id != worker_id || payload.pool != pool {
+            return Err(EnrollmentError::CommandConflict);
+        }
+        return Ok(RegistryMutationOutcome {
+            event_id: prior.event_id,
+            was_replay: true,
+        });
+    }
+    if !registry.disabled_workers.contains(&worker_id) {
+        return Err(EnrollmentError::WorkerNotDisabled);
+    }
+    let previous_pool = registry
+        .worker_pools
+        .get(&worker_id)
+        .ok_or(EnrollmentError::WorkerNotDisabled)?
+        .pool
+        .clone();
+    if previous_pool == pool {
+        return Err(EnrollmentError::WorkerPoolUnchanged);
+    }
+    append_mutation(
+        events,
+        &registry,
+        WORKER_POOL_ASSIGNED,
+        1,
+        &WorkerPoolAssignedPayload {
+            worker_id,
+            previous_pool,
+            pool,
+        },
+        command_id,
         now,
     )
 }
@@ -727,9 +864,14 @@ pub(crate) fn disable_worker(
 pub(crate) fn revoke_enrollment(
     events: &mut impl EventStore,
     enrollment_id: EnrollmentId,
+    command_id: &CommandId,
     now: ObservedAtUnixMillis,
-) -> Result<(), EnrollmentError> {
-    let registry = project(events, now)?;
+) -> Result<RegistryMutationOutcome, EnrollmentError> {
+    let payload = EnrollmentRevokedPayload { enrollment_id };
+    let (history, registry) = history_and_registry(events, now)?;
+    if let Some(replay) = mutation_replay(&history, command_id, ENROLLMENT_REVOKED, 1, &payload)? {
+        return Ok(replay);
+    }
     let offer = registry
         .offers
         .get(&enrollment_id)
@@ -740,15 +882,86 @@ pub(crate) fn revoke_enrollment(
     if offer.revoked {
         return Err(EnrollmentError::Revoked);
     }
-    append(
+    append_mutation(
         events,
         &registry,
         ENROLLMENT_REVOKED,
         1,
-        &EnrollmentRevokedPayload { enrollment_id },
-        CommandId::new(),
+        &payload,
+        command_id,
         now,
     )
+}
+
+fn history_and_registry(
+    events: &impl EventStore,
+    now: ObservedAtUnixMillis,
+) -> Result<(Vec<EventEnvelope>, EnrollmentRegistry), EnrollmentError> {
+    let history = events
+        .read_stream(&stream()?, None)
+        .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
+    let registry = project_history(&history, now)?;
+    Ok((history, registry))
+}
+
+fn mutation_replay<T: for<'de> Deserialize<'de> + PartialEq>(
+    history: &[EventEnvelope],
+    command_id: &CommandId,
+    schema: &str,
+    schema_version: u32,
+    payload: &T,
+) -> Result<Option<RegistryMutationOutcome>, EnrollmentError> {
+    let Some(prior) = history.iter().find(|event| event.command_id == *command_id) else {
+        return Ok(None);
+    };
+    if prior.schema_name.as_str() != schema
+        || prior.schema_version.get() != schema_version
+        || decode::<T>(&prior.payload)? != *payload
+    {
+        return Err(EnrollmentError::CommandConflict);
+    }
+    Ok(Some(RegistryMutationOutcome {
+        event_id: prior.event_id,
+        was_replay: true,
+    }))
+}
+
+fn append_mutation<T: Serialize>(
+    events: &mut impl EventStore,
+    registry: &EnrollmentRegistry,
+    schema: &str,
+    schema_version: u32,
+    payload: &T,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<RegistryMutationOutcome, EnrollmentError> {
+    let event = NewEvent {
+        schema_name: SchemaName::new(schema)
+            .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
+        schema_version: SchemaVersion::new(schema_version)
+            .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
+        parent_event_id: registry.last_event_id,
+        observed_at_unix_ms: observed_at.get(),
+        payload: cairn_codec::to_vec(payload)
+            .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
+    };
+    let outcome = events
+        .append(
+            &stream()?,
+            registry
+                .revision
+                .map_or(ExpectedRevision::NoStream, ExpectedRevision::Exact),
+            command_id,
+            &[event],
+        )
+        .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
+    let event_id = outcome.event_ids.first().copied().ok_or_else(|| {
+        EnrollmentError::Storage("registry mutation append returned no event identity".into())
+    })?;
+    Ok(RegistryMutationOutcome {
+        event_id,
+        was_replay: outcome.was_replay,
+    })
 }
 
 fn project(
@@ -772,6 +985,7 @@ fn project_history(
     let mut registry = EnrollmentRegistry {
         offers: BTreeMap::new(),
         credentials: BTreeMap::new(),
+        worker_pools: BTreeMap::new(),
         disabled_workers: BTreeSet::new(),
         enrolled: BTreeMap::new(),
         revision: None,
@@ -816,7 +1030,10 @@ fn project_history(
                             .get(predecessor_credential_id)
                             .filter(|record| {
                                 record.enrolled.worker_id == *worker_id
-                                    && record.enrolled.pool == payload.pool
+                                    && registry
+                                        .worker_pools
+                                        .get(worker_id)
+                                        .is_some_and(|assignment| assignment.pool == payload.pool)
                                     && record
                                         .is_authorized_at(&registry.disabled_workers, offered_at)
                                     && record.superseded_by.is_none()
@@ -936,7 +1153,10 @@ fn project_history(
                             .get(predecessor_credential_id)
                             .filter(|record| {
                                 record.enrolled.worker_id == *worker_id
-                                    && record.enrolled.pool == offer.pool
+                                    && registry
+                                        .worker_pools
+                                        .get(worker_id)
+                                        .is_some_and(|assignment| assignment.pool == offer.pool)
                                     && record
                                         .is_authorized_at(&registry.disabled_workers, issued_at)
                                     && record.superseded_by.is_none()
@@ -959,11 +1179,46 @@ fn project_history(
                         Some(*predecessor_credential_id)
                     }
                 };
-                let enrolled = EnrolledWorker {
+                let mut enrolled = EnrolledWorker {
                     worker_id: payload.credential.worker_id,
                     credential_id: payload.credential.credential_id,
                     pool: payload.credential.pool.clone(),
+                    pool_assignment_revision: event.event_id,
                 };
+                if rotation_predecessor.is_none() {
+                    if registry
+                        .worker_pools
+                        .insert(
+                            enrolled.worker_id,
+                            WorkerPoolAssignment {
+                                pool: enrolled.pool.clone(),
+                                authority_revision: event.event_id,
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(EnrollmentError::InvalidHistory(
+                            "bootstrap credential reused an existing worker identity".into(),
+                        ));
+                    }
+                } else if registry
+                    .worker_pools
+                    .get(&enrolled.worker_id)
+                    .is_none_or(|assignment| assignment.pool != enrolled.pool)
+                {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "rotated credential differs from current worker pool".into(),
+                    ));
+                }
+                enrolled.pool_assignment_revision = registry
+                    .worker_pools
+                    .get(&enrolled.worker_id)
+                    .map(|assignment| assignment.authority_revision)
+                    .ok_or_else(|| {
+                        EnrollmentError::InvalidHistory(
+                            "credential has no worker pool authority".into(),
+                        )
+                    })?;
                 if registry
                     .credentials
                     .insert(
@@ -1034,6 +1289,13 @@ fn project_history(
                     ))
                 })?;
                 for credential in payload.credentials {
+                    registry.worker_pools.insert(
+                        credential.worker_id,
+                        WorkerPoolAssignment {
+                            pool: credential.pool.clone(),
+                            authority_revision: event.event_id,
+                        },
+                    );
                     registry.credentials.insert(
                         credential.credential_id,
                         CredentialRecord {
@@ -1042,6 +1304,7 @@ fn project_history(
                                 worker_id: credential.worker_id,
                                 credential_id: credential.credential_id,
                                 pool: credential.pool,
+                                pool_assignment_revision: event.event_id,
                             },
                             provenance: CredentialProvenance::ImportedStatic {
                                 event_id: event.event_id,
@@ -1105,16 +1368,52 @@ fn project_history(
                     ));
                 }
                 let payload: WorkerDisabledPayload = decode(&event.payload)?;
-                if !registry
-                    .credentials
-                    .values()
-                    .any(|record| record.enrolled.worker_id == payload.worker_id)
+                if !registry.worker_pools.contains_key(&payload.worker_id)
                     || !registry.disabled_workers.insert(payload.worker_id)
                 {
                     return Err(EnrollmentError::InvalidHistory(
                         "unknown or disabled worker was disabled".into(),
                     ));
                 }
+            }
+            WORKER_ENABLED => {
+                if event.schema_version.get() != 1 {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "worker enable schema version is unsupported".into(),
+                    ));
+                }
+                let payload: WorkerEnabledPayload = decode(&event.payload)?;
+                if !registry.disabled_workers.remove(&payload.worker_id) {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "unknown or enabled worker was enabled".into(),
+                    ));
+                }
+            }
+            WORKER_POOL_ASSIGNED => {
+                if event.schema_version.get() != 1 {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "worker pool assignment schema version is unsupported".into(),
+                    ));
+                }
+                let payload: WorkerPoolAssignedPayload = decode(&event.payload)?;
+                let assignment = registry
+                    .worker_pools
+                    .get_mut(&payload.worker_id)
+                    .ok_or_else(|| {
+                        EnrollmentError::InvalidHistory(
+                            "unknown worker received a pool assignment".into(),
+                        )
+                    })?;
+                if !registry.disabled_workers.contains(&payload.worker_id)
+                    || assignment.pool != payload.previous_pool
+                    || assignment.pool == payload.pool
+                {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "worker pool assignment contradicts lifecycle state".into(),
+                    ));
+                }
+                assignment.pool = payload.pool;
+                assignment.authority_revision = event.event_id;
             }
             ENROLLMENT_REVOKED => {
                 if event.schema_version.get() != 1 {
@@ -1175,10 +1474,19 @@ fn project_history(
                 }
             }
         }
+        let assignment = registry
+            .worker_pools
+            .get(&record.enrolled.worker_id)
+            .ok_or_else(|| {
+                EnrollmentError::InvalidHistory("credential has no worker pool history".into())
+            })?;
+        let mut enrolled = record.enrolled.clone();
+        enrolled.pool = assignment.pool.clone();
+        enrolled.pool_assignment_revision = assignment.authority_revision;
         if record.is_authorized_at(&registry.disabled_workers, now)
             && registry
                 .enrolled
-                .insert(record.fingerprint, record.enrolled.clone())
+                .insert(record.fingerprint, enrolled)
                 .is_some()
         {
             return Err(EnrollmentError::InvalidHistory(
@@ -1382,6 +1690,146 @@ mod tests {
 
         let registry = project(&events, ObservedAtUnixMillis::new(4)).expect("registry replay");
         assert!(registry.credential_is_authorized(credential_id, worker_id));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one lifecycle proof covers command replay, conflicts, projection, and forged history"
+    )]
+    fn worker_lifecycle_is_explicit_idempotent_and_pool_authority_survives_replay() {
+        let mut events = SqliteEventStore::in_memory().expect("events");
+        let worker_id = WorkerId::new();
+        let credential_id = CredentialId::new();
+        let imported = imported(worker_id, credential_id, b"lifecycle-certificate");
+        let fingerprint = imported.certificate_fingerprint;
+        import_static_credentials(
+            &mut events,
+            vec![imported],
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(1),
+        )
+        .expect("import");
+
+        assert!(matches!(
+            assign_worker_pool(
+                &mut events,
+                worker_id,
+                WorkerPoolName::new("moved-pool").expect("pool"),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(2),
+            ),
+            Err(EnrollmentError::WorkerNotDisabled)
+        ));
+
+        let disable_command = CommandId::new();
+        let disabled = disable_worker(
+            &mut events,
+            worker_id,
+            &disable_command,
+            ObservedAtUnixMillis::new(3),
+        )
+        .expect("disable");
+        let disable_replay = disable_worker(
+            &mut events,
+            worker_id,
+            &disable_command,
+            ObservedAtUnixMillis::new(4),
+        )
+        .expect("disable replay");
+        assert!(disable_replay.was_replay());
+        assert_eq!(disable_replay.event_id(), disabled.event_id());
+        assert!(matches!(
+            enable_worker(
+                &mut events,
+                worker_id,
+                &disable_command,
+                ObservedAtUnixMillis::new(4),
+            ),
+            Err(EnrollmentError::CommandConflict)
+        ));
+
+        let pool = WorkerPoolName::new("moved-pool").expect("pool");
+        let pool_command = CommandId::new();
+        let assigned = assign_worker_pool(
+            &mut events,
+            worker_id,
+            pool.clone(),
+            &pool_command,
+            ObservedAtUnixMillis::new(5),
+        )
+        .expect("assign pool");
+        let assignment_replay = assign_worker_pool(
+            &mut events,
+            worker_id,
+            pool.clone(),
+            &pool_command,
+            ObservedAtUnixMillis::new(6),
+        )
+        .expect("assignment replay");
+        assert!(assignment_replay.was_replay());
+        assert_eq!(assignment_replay.event_id(), assigned.event_id());
+        assert!(matches!(
+            assign_worker_pool(
+                &mut events,
+                worker_id,
+                pool.clone(),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(6),
+            ),
+            Err(EnrollmentError::WorkerPoolUnchanged)
+        ));
+
+        let enable_command = CommandId::new();
+        let enabled = enable_worker(
+            &mut events,
+            worker_id,
+            &enable_command,
+            ObservedAtUnixMillis::new(7),
+        )
+        .expect("enable");
+        let enable_replay = enable_worker(
+            &mut events,
+            worker_id,
+            &enable_command,
+            ObservedAtUnixMillis::new(8),
+        )
+        .expect("enable replay");
+        assert!(enable_replay.was_replay());
+        assert_eq!(enable_replay.event_id(), enabled.event_id());
+
+        let registry = project(&events, ObservedAtUnixMillis::new(9)).expect("registry replay");
+        assert!(registry.credential_is_authorized(credential_id, worker_id));
+        let enrolled = registry
+            .enrolled()
+            .get(&fingerprint)
+            .expect("active worker");
+        assert_eq!(enrolled.pool, pool);
+        assert_eq!(enrolled.pool_assignment_revision, assigned.event_id());
+
+        events
+            .append(
+                &stream().expect("stream"),
+                ExpectedRevision::Exact(registry.revision.expect("registry revision")),
+                &CommandId::new(),
+                &[NewEvent {
+                    schema_name: SchemaName::new(WORKER_POOL_ASSIGNED).expect("schema"),
+                    schema_version: SchemaVersion::new(1).expect("version"),
+                    parent_event_id: registry.last_event_id,
+                    observed_at_unix_ms: 10,
+                    payload: cairn_codec::to_vec(&WorkerPoolAssignedPayload {
+                        worker_id,
+                        previous_pool: WorkerPoolName::new("moved-pool").expect("pool"),
+                        pool: WorkerPoolName::new("forged-pool").expect("pool"),
+                    })
+                    .expect("payload"),
+                }],
+            )
+            .expect("append forged lifecycle fact");
+        assert!(matches!(
+            project(&events, ObservedAtUnixMillis::new(11)),
+            Err(EnrollmentError::InvalidHistory(_))
+        ));
     }
 
     #[test]

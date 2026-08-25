@@ -370,3 +370,20 @@ the separately configured positive claim deadline. Heartbeats prevent double sub
 active attempts, while pending/unreflected reservations still reduce reported availability. One
 attempt cannot hold parallel active reservations. Future sharding must preserve these identities and
 proof obligations.
+
+## D-015 — Worker pool is independently mutable registry authority
+
+- Decision: accepted; lifecycle mutation path implemented
+
+Pool is neither a worker self-asserted resource nor an immutable credential attribute. The
+registry owns one current pool projection per stable `WorkerId`, with the event establishing that
+revision retained independently from credential issuance. Reassignment requires explicit worker
+disablement, an actual target change, and its own idempotent `CommandId`; re-enable is a separate
+fact. This ordering gives operators a fail-closed maintenance window without deleting credential
+or worker history.
+
+Execution history does not infer this change from a reconnect. Before registration in a changed
+pool, the controller appends a typed cross-link citing the exact registry assignment event. The
+execution projector accepts it only for a disconnected or exactly expired predecessor session.
+Consequently a stale startup cache, worker hello, certificate renewal, or ordinary process restart
+cannot silently move scheduling authority between pools.

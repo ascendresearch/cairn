@@ -21,6 +21,7 @@ const WORKER_REPLACED: &str = "execution.worker-replaced-after-expiry";
 const WORKER_HEARTBEAT: &str = "execution.worker-heartbeat";
 const WORKER_RESOURCES_OBSERVED: &str = "execution.worker-resources-observed";
 const WORKER_DISCONNECTED: &str = "execution.worker-disconnected";
+const WORKER_POOL_ASSIGNED: &str = "execution.worker-pool-assigned";
 
 macro_rules! worker_label {
     ($(#[$meta:meta])* $name:ident, $error:ident) => {
@@ -357,6 +358,36 @@ pub struct WorkerResourceObservation {
 pub struct TrustedWorkerResourceAdmission {
     source: WorkerResourceSource,
     evidence_revision: EventId,
+}
+
+/// Controller-authoritative pool assignment citing its exact registry fact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrustedWorkerPoolAssignment {
+    pool: WorkerPoolName,
+    authority_revision: EventId,
+}
+
+impl TrustedWorkerPoolAssignment {
+    /// Creates a trusted assignment from a projected enrollment-registry fact.
+    #[must_use]
+    pub const fn from_registry(pool: WorkerPoolName, authority_revision: EventId) -> Self {
+        Self {
+            pool,
+            authority_revision,
+        }
+    }
+
+    /// Returns the controller-authorized target pool.
+    #[must_use]
+    pub const fn pool(&self) -> &WorkerPoolName {
+        &self.pool
+    }
+
+    /// Returns the exact enrollment-registry event establishing the assignment.
+    #[must_use]
+    pub const fn authority_revision(&self) -> EventId {
+        self.authority_revision
+    }
 }
 
 impl TrustedWorkerResourceAdmission {
@@ -928,6 +959,7 @@ pub struct RegisteredWorkerSession {
     authentication_subject: WorkerAuthenticationSubject,
     credential_id: CredentialId,
     pool: WorkerPoolName,
+    pool_assignment_revision: Option<EventId>,
     profile_id: ContentId<WorkerProfileArtifact>,
     profile: WorkerProfile,
     resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
@@ -968,6 +1000,12 @@ impl RegisteredWorkerSession {
     #[must_use]
     pub const fn pool(&self) -> &WorkerPoolName {
         &self.pool
+    }
+
+    /// Returns the registry fact that explicitly changed the execution pool, if any.
+    #[must_use]
+    pub const fn pool_assignment_revision(&self) -> Option<EventId> {
+        self.pool_assignment_revision
     }
 
     /// Returns the exact static profile identity.
@@ -1123,6 +1161,9 @@ pub enum WorkerControlError {
     /// Pool membership cannot change implicitly with a reconnect or process restart.
     #[error("worker pool changed without explicit reassignment")]
     WorkerPoolChanged,
+    /// Explicit reassignment cannot modify a live worker session.
+    #[error("worker pool assignment requires a disconnected or expired session")]
+    WorkerPoolAssignmentRequiresInactiveSession,
     /// A different incarnation attempted to replace a session still inside its liveness window.
     #[error("worker {worker_id} already has live incarnation {live_incarnation}")]
     DuplicateLiveWorker {
@@ -1190,11 +1231,23 @@ struct DisconnectedPayload {
     incarnation_id: WorkerIncarnationId,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PoolAssignedPayload {
+    worker_id: WorkerId,
+    previous_pool: WorkerPoolName,
+    pool: WorkerPoolName,
+    authority_revision: EventId,
+    session_timeout: WorkerSessionTimeoutMillis,
+    predecessor_expired_at: Option<ObservedAtUnixMillis>,
+}
+
 struct WorkerProjection {
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
     credential_id: CredentialId,
     pool: WorkerPoolName,
+    pool_assignment_revision: Option<EventId>,
     profile_id: ContentId<WorkerProfileArtifact>,
     resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
     resource_observation_revision: EventId,
@@ -1207,6 +1260,66 @@ struct WorkerProjection {
     revision: StreamRevision,
 }
 
+/// Cross-links an enrollment-registry pool assignment into the worker execution stream.
+///
+/// An existing live session is immutable. Synchronization is admitted only after its durable
+/// disconnect or exact configured expiry; initial registration gets its pool directly from the
+/// authenticated registry projection.
+///
+/// # Errors
+///
+/// Returns an error for a live predecessor, regressing time, contradictory history, or storage
+/// failure.
+pub fn synchronize_worker_pool_assignment<E: EventStore>(
+    events: &mut E,
+    worker_id: WorkerId,
+    assignment: &TrustedWorkerPoolAssignment,
+    session_timeout: WorkerSessionTimeoutMillis,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), WorkerControlError> {
+    let stream = worker_stream(worker_id)?;
+    let history = events.read_stream(&stream, None)?;
+    if history.is_empty() {
+        return Ok(());
+    }
+    let projection = project_worker(&history, worker_id)?;
+    if projection.pool == assignment.pool {
+        return Ok(());
+    }
+    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    let predecessor_expired_at = if projection.disconnected {
+        None
+    } else {
+        let expired_at = expiry_at(projection.last_seen_at, session_timeout)?;
+        if observed_at < expired_at {
+            return Err(WorkerControlError::WorkerPoolAssignmentRequiresInactiveSession);
+        }
+        Some(expired_at)
+    };
+    let event = fact(
+        WORKER_POOL_ASSIGNED,
+        1,
+        Some(projection.last_event_id),
+        observed_at,
+        &PoolAssignedPayload {
+            worker_id,
+            previous_pool: projection.pool,
+            pool: assignment.pool.clone(),
+            authority_revision: assignment.authority_revision,
+            session_timeout,
+            predecessor_expired_at,
+        },
+    )?;
+    events.append(
+        &stream,
+        ExpectedRevision::Exact(projection.revision),
+        command_id,
+        &[event],
+    )?;
+    Ok(())
+}
+
 /// Authenticates and durably registers one worker incarnation.
 ///
 /// A new incarnation cannot replace a live one. Once the previous incarnation is explicitly
@@ -1217,10 +1330,6 @@ struct WorkerProjection {
 ///
 /// Returns an error for failed authentication, duplicate live identity, profile mutation, clock
 /// regression, invalid history/content, or append failure.
-#[expect(
-    clippy::too_many_lines,
-    reason = "registration keeps authentication, replacement, profile, and initial observation atomic"
-)]
 pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     events: &mut E,
     content: &mut C,
@@ -1319,24 +1428,13 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             predecessor_expired_at,
         },
     )?;
-    let outcome = events.append(&stream, expected, command_id, &[event])?;
-    let event_id = only_event_id(&outcome.event_ids)?;
-    Ok(RegisteredWorkerSession {
-        worker_id: hello.worker_id,
-        incarnation_id: hello.incarnation_id,
-        authentication_subject: authenticated.subject,
-        credential_id: authenticated.credential_id,
-        pool: authenticated.pool,
-        profile_id,
-        profile: hello.profile.clone(),
-        resource_observation_id,
-        resource_observation_revision: event_id,
-        resource_admission_revision: None,
-        resource_observation: hello.resource_observation.clone(),
-        availability_id: None,
-        availability: None,
-        last_seen_at: observed_at,
-    })
+    events.append(&stream, expected, command_id, &[event])?;
+    let history = events.read_stream(&stream, None)?;
+    materialize_session(
+        content,
+        hello.worker_id,
+        project_worker(&history, hello.worker_id)?,
+    )
 }
 
 /// Commits a dynamic availability heartbeat for the current live incarnation.
@@ -1394,6 +1492,7 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         authentication_subject: session.authentication_subject.clone(),
         credential_id: session.credential_id,
         pool: session.pool.clone(),
+        pool_assignment_revision: session.pool_assignment_revision,
         profile_id: session.profile_id,
         profile: session.profile.clone(),
         resource_observation_id: session.resource_observation_id,
@@ -1793,6 +1892,7 @@ fn materialize_session<C: ContentStore>(
         authentication_subject: projection.authentication_subject,
         credential_id: projection.credential_id,
         pool: projection.pool,
+        pool_assignment_revision: projection.pool_assignment_revision,
         profile_id: projection.profile_id,
         profile,
         resource_observation_id: projection.resource_observation_id,
@@ -1870,6 +1970,9 @@ fn project_worker(
                         "worker replacement has no verified expired predecessor",
                     );
                 }
+                let pool_assignment_revision = projection
+                    .as_ref()
+                    .and_then(|state| state.pool_assignment_revision);
                 bound_subject = Some(payload.authentication_subject.clone());
                 bound_pool = Some(payload.pool.clone());
                 projection = Some(WorkerProjection {
@@ -1877,6 +1980,7 @@ fn project_worker(
                     authentication_subject: payload.authentication_subject,
                     credential_id: payload.credential_id,
                     pool: payload.pool,
+                    pool_assignment_revision,
                     profile_id: payload.profile_id,
                     resource_observation_id: payload.resource_observation_id,
                     resource_observation_revision: event.event_id,
@@ -1888,6 +1992,39 @@ fn project_worker(
                     last_event_id: event.event_id,
                     revision: revision(event)?,
                 });
+            }
+            WORKER_POOL_ASSIGNED => {
+                if event.schema_version.get() != 1 {
+                    return invalid_history("worker pool assignment schema is unsupported");
+                }
+                let payload: PoolAssignedPayload = decode(event)?;
+                let state = projection.as_mut().ok_or_else(|| {
+                    WorkerControlError::InvalidHistory(
+                        "worker pool assignment before registration".into(),
+                    )
+                })?;
+                let inactive_is_valid = if state.disconnected {
+                    payload.predecessor_expired_at.is_none()
+                } else if let Some(expired_at) = payload.predecessor_expired_at {
+                    expired_at == expiry_at(state.last_seen_at, payload.session_timeout)?
+                        && event.observed_at_unix_ms >= expired_at.get()
+                } else {
+                    false
+                };
+                if payload.worker_id != expected_worker_id
+                    || payload.previous_pool != state.pool
+                    || payload.pool == state.pool
+                    || !inactive_is_valid
+                    || event.observed_at_unix_ms < state.last_observed_at.get()
+                {
+                    return invalid_history("worker pool assignment contradicts current session");
+                }
+                state.pool = payload.pool.clone();
+                state.pool_assignment_revision = Some(payload.authority_revision);
+                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_event_id = event.event_id;
+                state.revision = revision(event)?;
+                bound_pool = Some(payload.pool);
             }
             WORKER_HEARTBEAT => {
                 if event.schema_version.get() != 1 {
@@ -2932,6 +3069,105 @@ mod tests {
             ),
             Err(WorkerControlError::WorkerPoolChanged)
         ));
+    }
+
+    #[test]
+    fn trusted_pool_assignment_requires_inactive_session_and_survives_replay() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let hello = WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"));
+        let mut first_auth = authenticator(worker_id, "spiffe://cairn/worker/one");
+        let first = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut first_auth,
+            &hello,
+            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(0),
+        )
+        .expect("register");
+        let moved_pool = WorkerPoolName::new("another-pool").expect("pool");
+        let authority_revision =
+            EventId::derive(b"registry-pool-assignment").expect("authority revision");
+        let assignment =
+            TrustedWorkerPoolAssignment::from_registry(moved_pool.clone(), authority_revision);
+        assert!(matches!(
+            synchronize_worker_pool_assignment(
+                &mut fixture.events,
+                worker_id,
+                &assignment,
+                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(9),
+            ),
+            Err(WorkerControlError::WorkerPoolAssignmentRequiresInactiveSession)
+        ));
+
+        disconnect_worker(
+            &mut fixture.events,
+            &first,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(10),
+        )
+        .expect("disconnect");
+        let synchronize_command = CommandId::new();
+        synchronize_worker_pool_assignment(
+            &mut fixture.events,
+            worker_id,
+            &assignment,
+            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+            &synchronize_command,
+            ObservedAtUnixMillis::new(11),
+        )
+        .expect("synchronize pool");
+        synchronize_worker_pool_assignment(
+            &mut fixture.events,
+            worker_id,
+            &assignment,
+            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+            &synchronize_command,
+            ObservedAtUnixMillis::new(12),
+        )
+        .expect("idempotent synchronization");
+
+        let mut moved_auth = RecordedWorkerAuthenticator::new([(
+            worker_id,
+            AuthenticatedWorkerIdentity::new(
+                WorkerAuthenticationSubject::new("spiffe://cairn/worker/one").expect("subject"),
+                CredentialId::new(),
+                moved_pool.clone(),
+            ),
+        )]);
+        let moved = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut moved_auth,
+            &WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64")),
+            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(13),
+        )
+        .expect("register in reassigned pool");
+        assert_eq!(moved.pool(), &moved_pool);
+        assert_eq!(moved.pool_assignment_revision(), Some(authority_revision));
+
+        fixture.reopen();
+        let WorkerSessionState::Live(recovered) = recover_worker_session(
+            &fixture.events,
+            &fixture.content,
+            worker_id,
+            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+            ObservedAtUnixMillis::new(14),
+        )
+        .expect("recover") else {
+            panic!("reassigned session should be live");
+        };
+        assert_eq!(recovered.pool(), &moved_pool);
+        assert_eq!(
+            recovered.pool_assignment_revision(),
+            Some(authority_revision)
+        );
     }
 
     #[test]

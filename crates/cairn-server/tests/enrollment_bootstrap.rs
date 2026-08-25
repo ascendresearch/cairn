@@ -9,12 +9,12 @@ use cairn_execution::{
     WorkerHealth, WorkerPoolName, WorkerProtocolVersion, WorkerSessionState,
     WorkerSessionTimeoutMillis, WorkerSlotCount, recover_worker_session,
 };
-use cairn_protocol::{AggregateId, AggregateKind, ObservedAtUnixMillis};
+use cairn_protocol::{AggregateId, AggregateKind, CommandId, ObservedAtUnixMillis};
 use cairn_record::{EventStore, StreamId};
 use cairn_server::{
-    EnrollmentServiceConfig, ServerConfig, ServerStorageConfig, create_enrollment_bundle,
-    create_rotation_bundle, disable_enrolled_worker, revoke_enrollment_authority,
-    revoke_worker_credential,
+    EnrollmentServiceConfig, ServerConfig, ServerStorageConfig, assign_enrolled_worker_pool,
+    create_enrollment_bundle, create_rotation_bundle, disable_enrolled_worker,
+    enable_enrolled_worker, revoke_enrollment_authority, revoke_worker_credential,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
@@ -151,7 +151,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         pool.clone(),
         NonZeroU64::new(60_000).expect("TTL"),
     )?;
-    revoke_enrollment_authority(&issuance_config, cancelled.enrollment_id)?;
+    revoke_enrollment_authority(&issuance_config, cancelled.enrollment_id, &CommandId::new())?;
     let error = Box::pin(enroll(
         cancelled,
         &directory.path().join("revoked-authority"),
@@ -167,6 +167,13 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     )?;
     let disabled_state = directory.path().join("disabled-worker");
     let disabled_identity = Box::pin(enroll(disabled_bundle, &disabled_state)).await?;
+    let reassigned_bundle = create_enrollment_bundle(
+        &issuance_config,
+        pool.clone(),
+        NonZeroU64::new(60_000).expect("TTL"),
+    )?;
+    let reassigned_state = directory.path().join("reassigned-worker");
+    let reassigned_identity = Box::pin(enroll(reassigned_bundle, &reassigned_state)).await?;
 
     // A fresh controller instance reconstructs certificate -> stable WorkerId/pool authorization
     // solely from the durable enrollment stream.
@@ -186,11 +193,19 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     let authority_config = config_b.clone();
     let server_b = tokio::spawn(cairn_server::run(config_b));
     tokio::time::sleep(Duration::from_millis(50)).await;
-    disable_enrolled_worker(&authority_config, disabled_identity.worker_id)?;
+    disable_enrolled_worker(
+        &authority_config,
+        disabled_identity.worker_id,
+        &CommandId::new(),
+    )?;
     let mut disabled_worker_config = worker_config(control_b, disabled_state)?;
     disabled_worker_config.reconnect_delay_ms = None;
     let disabled_worker = tokio::spawn(cairn_worker::run(disabled_worker_config));
     let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, state.clone())?));
+    let reassigned_worker = tokio::spawn(cairn_worker::run(worker_config(
+        control_b,
+        reassigned_state,
+    )?));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let events = SqliteEventStore::open(&event_database)?;
@@ -207,6 +222,57 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     };
     assert_eq!(session.pool(), &pool);
     assert_eq!(session.credential_id(), identity.credential_id);
+
+    // Pool authority is a separate registry lifecycle. Disabling closes the existing execution
+    // incarnation; reassignment then re-enable lets the same worker process reconnect, while the
+    // execution stream cites the exact registry assignment fact.
+    let WorkerSessionState::Live(initial_reassigned_session) = recover_worker_session(
+        &events,
+        &content,
+        reassigned_identity.worker_id,
+        WorkerSessionTimeoutMillis::new(10_000)?,
+        ObservedAtUnixMillis::new(unix_millis()?),
+    )?
+    else {
+        return Err("pool-reassignment worker did not establish its initial session".into());
+    };
+    assert_eq!(initial_reassigned_session.pool(), &pool);
+    disable_enrolled_worker(
+        &authority_config,
+        reassigned_identity.worker_id,
+        &CommandId::new(),
+    )?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let moved_pool = WorkerPoolName::new("post-bootstrap-pool")?;
+    let pool_outcome = assign_enrolled_worker_pool(
+        &authority_config,
+        reassigned_identity.worker_id,
+        moved_pool.clone(),
+        &CommandId::new(),
+    )?;
+    enable_enrolled_worker(
+        &authority_config,
+        reassigned_identity.worker_id,
+        &CommandId::new(),
+    )?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let events = SqliteEventStore::open(&event_database)?;
+    let content = SqliteContentStore::open(&content_database, &content_directory)?;
+    let WorkerSessionState::Live(moved_session) = recover_worker_session(
+        &events,
+        &content,
+        reassigned_identity.worker_id,
+        WorkerSessionTimeoutMillis::new(10_000)?,
+        ObservedAtUnixMillis::new(unix_millis()?),
+    )?
+    else {
+        return Err("pool-reassignment worker did not reconnect".into());
+    };
+    assert_eq!(moved_session.pool(), &moved_pool);
+    assert_eq!(
+        moved_session.pool_assignment_revision(),
+        Some(pool_outcome.event_id())
+    );
 
     // A successor is issued to a fresh local key without changing stable worker ownership. If it
     // is revoked inside the overlap, the registry cancels predecessor retirement and the worker
@@ -236,7 +302,11 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         Some(identity.credential_id)
     );
     assert!(first_successor.predecessor_retire_at.is_some());
-    revoke_worker_credential(&authority_config, first_successor.credential_id)?;
+    revoke_worker_credential(
+        &authority_config,
+        first_successor.credential_id,
+        &CommandId::new(),
+    )?;
     let rolled_back = rollback_rotation(&state)?;
     assert_eq!(rolled_back.credential_id, identity.credential_id);
 
@@ -299,7 +369,11 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
 
     // Revocation is a durable authority fact. The running controller observes it, terminates the
     // live session, and rejects the worker's automatic reconnect before a new registration fact.
-    revoke_worker_credential(&authority_config, second_successor.credential_id)?;
+    revoke_worker_credential(
+        &authority_config,
+        second_successor.credential_id,
+        &CommandId::new(),
+    )?;
     tokio::time::sleep(Duration::from_millis(200)).await;
     let events = SqliteEventStore::open(&event_database)?;
     let content = SqliteContentStore::open(&content_database, &content_directory)?;
@@ -347,6 +421,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
 
     worker.abort();
     disabled_worker.abort();
+    reassigned_worker.abort();
     tokio::time::sleep(Duration::from_millis(100)).await;
     server_b.abort();
     server_a.abort();

@@ -123,7 +123,7 @@ Acceptance gate:
 - externally attested or controller-verified claims can replace a built-in claim through a typed
   admission seam.
 
-## Phase E — registry and operator lifecycle closure (E1 implemented 2026-08-25)
+## Phase E — registry and operator lifecycle closure (E1 and E2a implemented 2026-08-25)
 
 Finish migration away from controller static certificate lists. Add `import-static` with collision
 and ownership checks, list/show/audit commands, worker re-enable, credential inspection, and
@@ -134,8 +134,15 @@ E1 implements the static-authority migration boundary. `registry import-static` 
 the canonical credential/fingerprint/worker/pool batch under an explicit `CommandId`; exact retries
 recover the original event while changed input or any ownership collision fails closed. Controller
 schema V3 requires `enrollment: []`, and authentication plus scheduling now consume only the
-persistent registry. E2 retains list/show/audit, worker re-enable, credential inspection, separate
-pool reassignment, and explicit-command upgrades for the earlier lifecycle commands.
+persistent registry.
+
+E2a implements the mutation side of operator lifecycle. Revoke, disable, re-enable, and pool
+assignment require explicit strong `CommandId` values and recover the original fact on exact retry.
+Pool is an independent worker projection: reassignment requires the worker to be disabled and an
+actual pool change. A subsequent handshake reloads current registry authority rather than a startup
+snapshot, then cross-links the exact pool-assignment event into the execution-worker stream. That
+cross-link can modify only a durably disconnected or exactly expired session. E2b retains
+list/show/audit and credential inspection/query commands.
 
 Acceptance gate:
 

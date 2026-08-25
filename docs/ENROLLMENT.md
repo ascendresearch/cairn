@@ -153,9 +153,9 @@ replay deliberately returns the original (now revoked) issuance and is not a sec
 The current managed registry supports three deliberately separate emergency actions:
 
 ```bash
-cairn-server enrollment revoke controller.json enrollment:...
-cairn-server credential revoke controller.json credential:...
-cairn-server worker disable controller.json worker:...
+cairn-server enrollment revoke controller.json enrollment:... command:...
+cairn-server credential revoke controller.json credential:... command:...
+cairn-server worker disable controller.json worker:... command:...
 ```
 
 Enrollment revocation invalidates only an unused bootstrap authority. Credential revocation
@@ -166,7 +166,25 @@ an observed live session is closed no later than the configured positive
 `authority_poll_interval_ms` (or an earlier control message/outbox poll).
 
 Application authorization is authoritative even when TLS accepts a certificate chain, so the
-baseline does not require CRL or OCSP. Imported static credentials support the same credential
-revocation and worker disablement facts as controller-issued credentials. Worker disablement
-remains a one-directional emergency action until E2 adds re-enable. See
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+baseline does not require CRL or OCSP. Imported static credentials support the same lifecycle facts
+as controller-issued credentials. Every command identity is retained for exact retry; reusing it
+for another target or operation fails closed.
+
+## Re-enable and change pool
+
+Pool assignment is controller authority, not worker-reported profile data. Change it only through
+the explicit disabled state:
+
+```bash
+cairn-server worker disable controller.json worker:... command:...
+cairn-server worker set-pool controller.json worker:... post-bootstrap-pool command:...
+cairn-server worker enable controller.json worker:... command:...
+```
+
+The new pool must differ from the current pool. A running controller closes the disabled worker's
+session. On re-enable, the next handshake reloads the current registry and cross-links the exact
+registry pool-assignment event into the execution-worker history before registration. The
+execution projection rejects that cross-link while the predecessor session is live, so an ordinary
+reconnect can never smuggle in an implicit pool change. If a controller died before recording the
+disconnect, reconnect waits for the configured `session_timeout_ms` boundary rather than replacing
+live authority. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
