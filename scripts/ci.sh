@@ -22,7 +22,7 @@ for file in README.md docs/*.md; do
   done < <(sed -n 's/.*](\([^)]*\)).*/\1/p' "$file")
 done
 
-if rg -n '[[:blank:]]+$' README.md LICENSE config model-templates docs crates scripts release Cargo.toml rustfmt.toml rust-toolchain.toml; then
+if rg -n '[[:blank:]]+$' README.md LICENSE .github config model-templates docs crates scripts release Cargo.toml rustfmt.toml rust-toolchain.toml; then
   status=1
 fi
 

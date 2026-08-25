@@ -10,6 +10,7 @@ The normative versions are recorded in [`release/toolchain.toml`](../release/too
 - Rust 1.85.0;
 - cargo-zigbuild 0.21.8;
 - Zig 0.14.1;
+- uv 0.12.5 with Python 3.12 for the build-only Zig environment;
 - `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`;
 - GLIBC 2.28 maximum symbol baseline.
 
@@ -22,13 +23,14 @@ Install the exact external tools without modifying target machines:
 
 ```bash
 cargo +1.85.0 install --locked cargo-zigbuild --version 0.21.8
-python3 -m venv .venv-zig
-.venv-zig/bin/pip install ziglang==0.14.1
+uv venv --python 3.12 .venv-zig
+uv pip install --python .venv-zig/bin/python --requirement release/zig-requirements.txt
 export CARGO_ZIGBUILD_PYTHON_PATH="$PWD/.venv-zig/bin/python"
 ```
 
-The Python environment is only one supported way to obtain the exact Zig binary. It is not part of
-Cairn's runtime or release artifact.
+The Python environment contains only the package pinned in `release/zig-requirements.txt` and is
+used to expose the exact Zig executable to cargo-zigbuild. Python, uv, and that environment are not
+part of Cairn's runtime or release artifact.
 
 ## Build and inspect
 
@@ -51,6 +53,21 @@ highest referenced GLIBC symbol is exactly 2.28, and creates deterministic archi
 
 `CAIRN_RELEASE_ALLOW_DIRTY=1` exists only for development validation. A bundle whose metadata says
 `dirty: true` must not be published or deployed as a release.
+
+## GitHub automation
+
+Pull requests and pushes to `main` run [the CI workflow](../.github/workflows/ci.yml). It executes
+the complete Rust quality gate and builds and verifies both release architectures, so the packaging
+path is exercised before a tag exists. Its bundles are retained briefly as workflow artifacts.
+
+Pushing a semantic-version tag such as `v0.1.0` runs
+[the release workflow](../.github/workflows/release.yml). It repeats the quality gate, builds both
+architectures twice in independent Cargo target directories, compares the resulting archives and
+checksums byte-for-byte, and only then passes the artifacts to a separate job with `contents: write`
+permission. That final job verifies the downloaded checksums and creates the GitHub Release. The
+toolchain setup is shared by both workflows in
+[the local release action](../.github/actions/setup-release-toolchain/action.yml); uv, Python, and
+the Python package are all installed explicitly rather than inherited from the hosted runner.
 
 ## Deployment gate
 

@@ -165,7 +165,10 @@ for target in "${targets[@]}"; do
     -cf - \
     . \
     | gzip -n > "$bundle"
-  sha256sum "$bundle" > "$bundle.sha256"
+  (
+    cd "$OUTPUT_ROOT"
+    sha256sum "$(basename "$bundle")" > "$(basename "$bundle").sha256"
+  )
   rm -rf "$stage"
   echo "created $bundle"
 done

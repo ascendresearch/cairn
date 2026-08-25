@@ -1,0 +1,56 @@
+name: Set up Cairn release toolchain
+description: Install the pinned Rust, cargo-zigbuild, uv, Python, and Zig toolchain
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Cargo release tools
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/bin/cargo-zigbuild
+          ~/.cargo/registry/cache
+          ~/.cargo/registry/index
+          ~/.cargo/git/db
+        key: cairn-release-tools-${{ runner.os }}-${{ hashFiles('release/toolchain.toml') }}
+
+    - name: Install uv and Python
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        version: "0.12.5"
+        python-version: "3.12"
+        enable-cache: true
+        cache-dependency-glob: release/zig-requirements.txt
+
+    - name: Install Rust release targets
+      shell: bash
+      run: >-
+        rustup toolchain install 1.85.0
+        --profile minimal
+        --target aarch64-unknown-linux-gnu
+        --target x86_64-unknown-linux-gnu
+
+    - name: Install cargo-zigbuild
+      shell: bash
+      run: |
+        if ! cargo-zigbuild --version 2>/dev/null | grep -Fqx 'cargo-zigbuild 0.21.8'; then
+          cargo +1.85.0 install --locked cargo-zigbuild --version 0.21.8
+        fi
+
+    - name: Create isolated Zig environment
+      shell: bash
+      run: |
+        readonly python_environment="$GITHUB_WORKSPACE/target/release-python"
+        uv venv --python 3.12 "$python_environment"
+        uv pip install \
+          --python "$python_environment/bin/python" \
+          --requirement release/zig-requirements.txt
+        echo "CARGO_ZIGBUILD_PYTHON_PATH=$python_environment/bin/python" >> "$GITHUB_ENV"
+
+    - name: Verify release toolchain
+      shell: bash
+      run: |
+        test "$(rustc --version)" = 'rustc 1.85.0 (4d91de4e4 2025-02-17)'
+        test "$(cargo-zigbuild --version)" = 'cargo-zigbuild 0.21.8'
+        uv --version | grep -Eq '^uv 0\.12\.5([[:space:]]|$)'
+        test "$("$CARGO_ZIGBUILD_PYTHON_PATH" -m ziglang version)" = '0.14.1'
