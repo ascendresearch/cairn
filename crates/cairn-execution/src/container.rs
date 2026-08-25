@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    EnvironmentVariable, ExecutionEnvironmentArtifact, ExecutionEnvironmentV1, InputBundleArtifact,
-    JobContractArtifact, MaterialFormatError,
+    EnvironmentVariable, ExecutionElapsedMillis, ExecutionEnvironmentArtifact,
+    ExecutionEnvironmentV1, ExecutionTimeoutMillis, InputBundleArtifact, JobContractArtifact,
+    MaterialFormatError, OutputByteLimit, ResolvedProgramIdentity, SandboxPath,
 };
 
 /// Exact generic backend claim for the hardened CPU-only OCI adapter.
@@ -397,6 +398,205 @@ pub struct ContainerExitObservation {
     exit_code: ContainerExitCode,
 }
 
+/// Independent runtime-owned stream drained without coupling stdout progress to stderr progress.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerStream {
+    Stdout,
+    Stderr,
+}
+
+/// Bounded bytes returned by a trusted runtime adapter.
+///
+/// `LimitExceeded` carries at most the configured prefix while proving that additional bytes were
+/// observed and discarded. This prevents an adapter API from materializing an unbounded stream.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    tag = "state",
+    content = "bytes"
+)]
+pub enum BoundedContainerBytes {
+    Complete(Vec<u8>),
+    LimitExceeded(Vec<u8>),
+}
+
+impl BoundedContainerBytes {
+    /// Creates a complete bounded observation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects adapter output larger than the requested bound.
+    pub fn complete(
+        bytes: Vec<u8>,
+        limit: OutputByteLimit,
+    ) -> Result<Self, ContainerContractError> {
+        Self::validate_len(&bytes, limit)?;
+        Ok(Self::Complete(bytes))
+    }
+
+    /// Creates an over-limit observation with only a bounded retained prefix.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a retained prefix larger than the requested bound.
+    pub fn limit_exceeded(
+        prefix: Vec<u8>,
+        limit: OutputByteLimit,
+    ) -> Result<Self, ContainerContractError> {
+        Self::validate_len(&prefix, limit)?;
+        Ok(Self::LimitExceeded(prefix))
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Complete(bytes) | Self::LimitExceeded(bytes) => bytes,
+        }
+    }
+
+    #[must_use]
+    pub const fn exceeded_limit(&self) -> bool {
+        matches!(self, Self::LimitExceeded(_))
+    }
+
+    fn validate_len(bytes: &[u8], limit: OutputByteLimit) -> Result<(), ContainerContractError> {
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit.get() {
+            return Err(ContainerContractError::AdapterCaptureExceedsBound);
+        }
+        Ok(())
+    }
+}
+
+/// Runtime classification for one declared candidate output path.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "state")]
+pub enum ContainerOutputObservation {
+    Missing,
+    NonRegular,
+    Regular { capture: BoundedContainerBytes },
+}
+
+/// Total execution bound and independent stream bounds passed to one runtime wait operation.
+///
+/// The execution timeout is total time since the runtime-observed container start, not time since
+/// this call. Consequently recovery cannot reset the contract deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContainerWaitPolicy {
+    execution_timeout: ExecutionTimeoutMillis,
+    stdout_limit: OutputByteLimit,
+    stderr_limit: OutputByteLimit,
+}
+
+impl ContainerWaitPolicy {
+    #[must_use]
+    pub const fn new(
+        execution_timeout: ExecutionTimeoutMillis,
+        stdout_limit: OutputByteLimit,
+        stderr_limit: OutputByteLimit,
+    ) -> Self {
+        Self {
+            execution_timeout,
+            stdout_limit,
+            stderr_limit,
+        }
+    }
+
+    #[must_use]
+    pub const fn execution_timeout(self) -> ExecutionTimeoutMillis {
+        self.execution_timeout
+    }
+
+    #[must_use]
+    pub const fn stdout_limit(self) -> OutputByteLimit {
+        self.stdout_limit
+    }
+
+    #[must_use]
+    pub const fn stderr_limit(self) -> OutputByteLimit {
+        self.stderr_limit
+    }
+}
+
+/// Trusted reason for forcing a still-running subject to stop.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerStopReason {
+    ExecutionTimeout,
+    StdoutLimitExceeded,
+    StderrLimitExceeded,
+}
+
+impl ContainerStopReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExecutionTimeout => "execution-timeout",
+            Self::StdoutLimitExceeded => "stdout-limit-exceeded",
+            Self::StderrLimitExceeded => "stderr-limit-exceeded",
+        }
+    }
+}
+
+/// Result of a bounded wait while the runtime drains both output streams independently.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContainerWaitOutcome {
+    Exited(ContainerExitObservation),
+    StopRequired(ContainerStopReason),
+}
+
+/// Runtime-owned terminal facts stored outside all candidate-writable mounts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerTerminalEvidence {
+    exit: ContainerExitObservation,
+    observed_image: OciImageDigest,
+    resolved_program: ResolvedProgramIdentity,
+    elapsed_ms: ExecutionElapsedMillis,
+    forced_stop: Option<ContainerStopReason>,
+}
+
+impl ContainerTerminalEvidence {
+    #[must_use]
+    pub const fn new(
+        exit: ContainerExitObservation,
+        observed_image: OciImageDigest,
+        resolved_program: ResolvedProgramIdentity,
+        elapsed_ms: ExecutionElapsedMillis,
+        forced_stop: Option<ContainerStopReason>,
+    ) -> Self {
+        Self {
+            exit,
+            observed_image,
+            resolved_program,
+            elapsed_ms,
+            forced_stop,
+        }
+    }
+
+    #[must_use]
+    pub const fn exit(&self) -> &ContainerExitObservation {
+        &self.exit
+    }
+    #[must_use]
+    pub const fn observed_image(&self) -> &OciImageDigest {
+        &self.observed_image
+    }
+    #[must_use]
+    pub const fn resolved_program(&self) -> &ResolvedProgramIdentity {
+        &self.resolved_program
+    }
+    #[must_use]
+    pub const fn elapsed_ms(&self) -> ExecutionElapsedMillis {
+        self.elapsed_ms
+    }
+    #[must_use]
+    pub const fn forced_stop(&self) -> Option<ContainerStopReason> {
+        self.forced_stop
+    }
+}
+
 impl ContainerExitObservation {
     #[must_use]
     pub const fn new(
@@ -532,12 +732,12 @@ pub trait ContainerRuntime {
     ) -> Result<ContainerInspection, ContainerRuntimeError>;
 }
 
-/// Minimal lifecycle mutation capability parameterized by a backend-owned launch-plan type.
+/// Minimal create/start capability parameterized by a backend-owned launch-plan type.
 ///
 /// A definite `Unavailable` or `Rejected` mutation error proves that mutation was not applied.
 /// `Ambiguous` means it may have been applied and must be reconciled through `inspect`. Successful
-/// create/start calls are also inspected before the next transition. `wait` is observational and
-/// must return the exact exited container rather than a provider-native response.
+/// create/start calls are also inspected before the next transition. Terminal wait/capture belongs
+/// to the stricter `ContainerCaptureRuntime` capability below.
 pub trait ContainerLifecycleRuntime: ContainerRuntime {
     type LaunchPlan;
 
@@ -558,17 +758,73 @@ pub trait ContainerLifecycleRuntime: ContainerRuntime {
         name: &ContainerName,
         runtime_id: &RuntimeContainerId,
     ) -> Result<(), ContainerRuntimeError>;
+}
 
-    /// Waits for and returns a typed terminal observation of the exact running container.
+/// Terminal supervision and bounded capture capability for one exact runtime identity.
+///
+/// This capability intentionally has no remove/cleanup operation. The worker cannot acquire
+/// cleanup authority through this port before its terminal result has been durably published.
+pub trait ContainerCaptureRuntime: ContainerLifecycleRuntime {
+    /// Waits under the original total execution deadline while draining both streams independently.
     ///
     /// # Errors
     ///
-    /// Returns a runtime observation failure without mutating another container.
-    fn wait(
+    /// Returns a classified runtime observation failure for this exact container.
+    fn wait_bounded(
         &mut self,
         name: &ContainerName,
         runtime_id: &RuntimeContainerId,
-    ) -> Result<ContainerExitObservation, ContainerRuntimeError>;
+        policy: ContainerWaitPolicy,
+    ) -> Result<ContainerWaitOutcome, ContainerRuntimeError>;
+
+    /// Forces the exact container to stop and records the reason outside candidate-writable mounts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified definite or ambiguous stop failure.
+    fn stop(
+        &mut self,
+        name: &ContainerName,
+        runtime_id: &RuntimeContainerId,
+        reason: ContainerStopReason,
+    ) -> Result<(), ContainerRuntimeError>;
+
+    /// Returns one independently drained terminal stream under the supplied contract bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified failure when the exact bounded stream cannot be observed.
+    fn capture_stream(
+        &mut self,
+        name: &ContainerName,
+        runtime_id: &RuntimeContainerId,
+        stream: ContainerStream,
+        limit: OutputByteLimit,
+    ) -> Result<BoundedContainerBytes, ContainerRuntimeError>;
+
+    /// Reads only one declared sandbox path and classifies its file type before returning bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified failure when the declared path cannot be observed safely.
+    fn capture_output(
+        &mut self,
+        name: &ContainerName,
+        runtime_id: &RuntimeContainerId,
+        path: &SandboxPath,
+        limit: OutputByteLimit,
+    ) -> Result<ContainerOutputObservation, ContainerRuntimeError>;
+
+    /// Returns runtime-owned terminal identity, timing, image, program, and forced-stop facts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified failure when exact trusted terminal facts cannot be obtained.
+    fn terminal_evidence(
+        &mut self,
+        name: &ContainerName,
+        runtime_id: &RuntimeContainerId,
+    ) -> Result<ContainerTerminalEvidence, ContainerRuntimeError>;
 }
 
 /// Classified failure of the trusted runtime capability.
@@ -600,6 +856,8 @@ pub enum ContainerContractError {
     NonCanonicalEnvironment,
     #[error("OCI execution environment JSON failed: {0}")]
     Codec(String),
+    #[error("container runtime adapter returned bytes above the requested capture bound")]
+    AdapterCaptureExceedsBound,
     #[error(transparent)]
     Material(#[from] MaterialFormatError),
 }

@@ -1,14 +1,14 @@
 # OCI container security boundary
 
-- Status: F2d-c typed lifecycle capability and recoverable supervisor implemented; no concrete runtime adapter or worker activation
+- Status: F2d-d bounded capture/evidence supervisor implemented; no concrete runtime adapter or worker activation
 - Backend claim: `oci-container-v1`
 - Scope: untrusted CPU-only candidate and oracle processes
 
 This document freezes the security boundary before Cairn invokes a Docker-compatible runtime. The
-current code validates identities, lifecycle observations, and OCI environment bytes, renders a
-canonical create argv without a shell, and reconciles lifecycle mutations through a generic typed
-runtime capability. It has no concrete Docker-compatible mutation adapter and does not activate a
-container executor, so it must not yet be treated as an operational isolation claim.
+current code validates identities, lifecycle and bounded terminal observations, and OCI environment
+bytes, renders a canonical create argv without a shell, and reconciles lifecycle/capture operations
+through generic typed runtime capabilities. It has no concrete Docker-compatible adapter and does
+not activate a container executor, so it must not yet be treated as an operational isolation claim.
 
 ## Threat model
 
@@ -47,17 +47,27 @@ this policy.
 - `ContainerBinding`: exact attempt, job, contract, input, environment, and policy identities;
 - `ContainerInspection`: a tagged state in which present phases cannot omit runtime identity or
   binding, exited state cannot omit its typed exit code, and the absent phase cannot invent them;
-- `ContainerExitObservation`: the only wait result, requiring exact name, full runtime ID, complete
+- `ContainerExitObservation`: an exact exited identity requiring name, full runtime ID, complete
   binding, and typed exit code rather than permitting a nonterminal phase;
+- `ContainerWaitPolicy` and `ContainerWaitOutcome`: total runtime-relative timeout plus independent
+  stream bounds, producing either the exact exit or one typed stop requirement without resetting
+  the deadline on recovery;
+- `BoundedContainerBytes`, `ContainerOutputObservation`, and `ContainerStream`: bounded retained
+  prefixes, explicit overrun, regular-file classification, and independently drained streams;
+- `ContainerTerminalEvidence`: runtime-owned exact exit, observed image, program identity, elapsed
+  time, and optional forced-stop reason outside candidate-writable mounts;
 - `ResolvedContainerImage`: exact local immutable image identity plus a typed observation of
   image-declared volumes, which the CPU policy rejects before create;
 - `OciExecutionEnvironmentV1`: strict canonical JSON containing one image digest and a canonical
   environment-variable set;
 - `ContainerRuntime`: the read-only resolution/inspection port returning typed observations rather
   than Docker/Podman output;
-- `ContainerLifecycleRuntime`: the minimal create/start/wait capability parameterized by the
-  backend-owned launch-plan type. Definite mutation errors prove no effect, while ambiguous errors
-  may have applied and can be decided only by later exact inspection.
+- `ContainerLifecycleRuntime`: the minimal create/start capability parameterized by the
+  backend-owned launch-plan type;
+- `ContainerCaptureRuntime`: bounded wait, exact-ID stop, independent stream capture, declared-path
+  capture, and terminal evidence. It intentionally exposes no remove/cleanup operation. Definite
+  mutation errors prove no effect, while ambiguous errors may have applied and can be decided only
+  by later exact inspection.
 
 The OCI environment bytes occupy the existing typed `ExecutionEnvironmentArtifact` content domain.
 The job's backend determines which strict decoder is entitled to interpret those bytes. There is no
@@ -120,15 +130,26 @@ reconstructing job authority. Absent recovery may create the same deterministic 
 recovery may reissue start against the same full runtime ID, which converges on one runtime subject;
 it never starts an `Exited` container. Running recovery waits for the same ID, and exited recovery
 is purely observational. A definitive create race is re-inspected before classification, so a
-matching winner is reused and a conflicting winner fails closed. Cleanup becomes eligible only
-after terminal evidence is durable and cleanup failure cannot authorize re-execution.
+matching winner is reused and a conflicting winner fails closed.
+
+Bounded wait evaluates the contract timeout from the runtime-observed original start, not from each
+API call. Deadline or independent stream exhaustion requests stop only for the matching full ID;
+success, rejection, and ambiguous response are all followed by exact inspection. Capture begins
+only from `Exited`, verifies terminal evidence against the immutable plan, returns no more than each
+stream/output bound, and marks missing, symlink/special/directory, or over-limit declared output as
+an integrity violation. Runtime image, program, elapsed time, exit, fixed policy, termination reason,
+and full ID are trusted only because the adapter obtains them outside writable mounts.
+
+There is no cleanup method in the lifecycle/capture ports. A future integration may mint separate
+cleanup authority only after the exact terminal worker observation is durable. Cleanup failure must
+retain evidence and cannot authorize re-execution.
 
 ## Acceptance boundary
 
-F2d-c ordinary tests now cover the exact golden create argv, policy-downgrade rejection, typed exit
-state, image-declared-volume rejection, every lifecycle phase, binding/runtime identity conflicts,
-create/start ambiguity before and after effect, concurrent create races, completion during
-disconnect, and exited replay without another start. F2d is not complete until offline tests also
-cover bounded capture, stop/timeout, trusted evidence, and cleanup ordering, and opt-in real-host
-tests prove filesystem/network/device isolation on both release architectures. Until then,
+F2d-d ordinary tests cover the exact golden create argv, policy-downgrade rejection, lifecycle
+races, completion during disconnect, exited replay, stop ambiguity before/after effect, deadline
+preservation across recovery, independent bounded streams, missing/non-regular/oversized output,
+runtime-image conflict, evidence bounds, and the absence of cleanup from pre-publication ports.
+F2d is not complete until a concrete adapter and opt-in real-host tests prove
+filesystem/network/device/resource isolation on both release architectures. Until then,
 `cairn-worker` must not advertise or activate `oci-container-v1`.

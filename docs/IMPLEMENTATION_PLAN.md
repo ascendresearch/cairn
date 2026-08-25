@@ -288,18 +288,33 @@ runtime crash matrix covers before/after-effect response loss, a concurrent crea
 conflict, completion during disconnect, and terminal replay. No concrete runtime adapter,
 execution configuration, bounded capture, or worker activation was added.
 
-### Next implementation slice: F2d-d bounded capture and trusted evidence
+**F2d-d implemented (2026-08-25).** `ContainerCaptureRuntime` is now the only terminal supervision
+port. Its bounded wait receives the original total execution timeout and independent stdout/stderr
+bounds, so reconnect cannot grant a fresh deadline. Timeout or stream exhaustion requests a typed
+stop against the same full runtime ID and always re-inspects before classification, including a
+lost stop response. Terminal capture independently retrieves both bounded stream prefixes,
+classifies each declared path as missing/non-regular/regular, rejects individual overrun, and
+builds `ExecutionCapture` from runtime-owned image, full identity, policy, program, timing,
+termination reason, and exit observations. Evidence size is checked before return. The fake runtime
+matrix covers both stop ambiguity windows, deadline preservation across recovery, bounded stream
+exhaustion, missing/symlink-or-special/oversized output, image conflict, evidence exhaustion,
+completion during disconnect, and stable exited replay. The capture capability deliberately has no
+cleanup operation; deletion cannot become callable through this path before terminal worker-result
+publication is durable. No concrete runtime adapter, execution configuration, or worker activation
+was added.
 
-Implement step 4 above without activating the backend. Extend the typed runtime capability with
-only the exact-container log/output/stop observations required for supervision. Drain stdout and
-stderr independently under their contract bounds, enforce timeout and stream exhaustion by
-stopping and then reconciling the same full runtime ID, admit only declared regular output files
-below individual and aggregate bounds, and construct trusted evidence from runtime-observed image,
-policy, identity, timing, and exit state outside candidate-writable mounts. Add fake-runtime races
-for stop ambiguity and result completion during disconnect, then freeze the rule that cleanup is
-ineligible until the terminal observation is durably published. Concrete Docker-compatible CLI
-execution, user-namespace/runtime preflight, worker configuration, and real-host isolation remain
-F2d-e.
+### Next implementation slice: F2d-e concrete adapter and activation gate
+
+Implement the Docker-compatible CLI adapter behind the frozen typed ports, with configurable
+executable/state paths and optional operation timeouts. Startup preflight must prove runtime
+reachability, rootless or daemon-level user-namespace remapping, immutable local image resolution,
+absence of image-declared volumes, required namespace/security controls, and disjoint worker state.
+Add explicit V1 `oci_container` worker configuration and advertise `oci-container-v1` only after
+preflight succeeds. Connect terminal capture to the existing durable worker outbox; a separate
+cleanup capability may be granted only after that exact terminal observation is committed, and
+cleanup failure must retain recovery state without authorizing re-execution. Finish with opt-in
+real-host escape/resource/capture gates on x86-64 and AArch64; ordinary CI continues using the fake
+runtime.
 
 Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They will add explicit
 device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on

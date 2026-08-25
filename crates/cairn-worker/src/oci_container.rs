@@ -5,11 +5,15 @@ use std::{
 };
 
 use cairn_execution::{
-    ContainerBinding, ContainerExitObservation, ContainerImageVolumeState, ContainerInspection,
-    ContainerLifecycleRuntime, ContainerName, ContainerRuntimeError, ContainerSandboxPolicy,
-    EnvironmentVariable, ExecutionEnvironmentArtifact, InputBundleArtifact, InputBundleEntry,
-    InputBundleV1, JobContract, JobContractArtifact, NetworkPolicy, OCI_CONTAINER_BACKEND,
-    OciExecutionEnvironmentV1, OciImageDigest, RuntimeContainerId, VerifiedAssignmentMaterials,
+    CapturedOutput, ContainerBinding, ContainerCaptureRuntime, ContainerExitObservation,
+    ContainerImageVolumeState, ContainerInspection, ContainerName, ContainerOutputObservation,
+    ContainerRuntimeError, ContainerSandboxPolicy, ContainerStopReason, ContainerStream,
+    ContainerTerminalEvidence, ContainerWaitOutcome, ContainerWaitPolicy, EnvironmentVariable,
+    EvidenceByteLimit, ExecutionBackend, ExecutionCapture, ExecutionEnvironmentArtifact,
+    ExecutionObservation, ExecutionOutcome, ExecutionTimeoutMillis, ExpectedOutput,
+    InputBundleArtifact, InputBundleEntry, InputBundleV1, JobContract, JobContractArtifact,
+    NetworkPolicy, OCI_CONTAINER_BACKEND, OciExecutionEnvironmentV1, OciImageDigest,
+    OutputByteLimit, RuntimeContainerId, TrustedExecutionEvidence, VerifiedAssignmentMaterials,
 };
 use cairn_protocol::{AttemptId, ContentId};
 use thiserror::Error;
@@ -232,6 +236,11 @@ pub struct ContainerLaunchPlan {
     program: String,
     arguments: Vec<String>,
     limits: ContainerLaunchLimits,
+    execution_timeout: ExecutionTimeoutMillis,
+    stdout_limit: OutputByteLimit,
+    stderr_limit: OutputByteLimit,
+    evidence_limit: EvidenceByteLimit,
+    expected_outputs: Vec<ExpectedOutput>,
 }
 
 impl ContainerLaunchPlan {
@@ -258,6 +267,16 @@ impl ContainerLaunchPlan {
     #[must_use]
     pub const fn limits(&self) -> ContainerLaunchLimits {
         self.limits
+    }
+
+    #[must_use]
+    pub const fn wait_policy(&self) -> ContainerWaitPolicy {
+        ContainerWaitPolicy::new(self.execution_timeout, self.stdout_limit, self.stderr_limit)
+    }
+
+    #[must_use]
+    pub fn expected_outputs(&self) -> &[ExpectedOutput] {
+        &self.expected_outputs
     }
 
     /// Renders deterministic arguments following a trusted Docker-compatible executable.
@@ -387,7 +406,7 @@ enum SupervisorEntry {
     Recovery,
 }
 
-/// Performs the only initial inspect/create/start/wait lifecycle for one immutable plan.
+/// Performs the only initial inspect/create/start/bounded-capture lifecycle for one immutable plan.
 ///
 /// This entry point is for the first invocation only. An ambiguous result must be resumed through
 /// [`recover_container_supervision`], never by reconstructing job or attempt authority.
@@ -399,9 +418,9 @@ enum SupervisorEntry {
 pub fn start_container_supervision<R>(
     runtime: &mut R,
     plan: &ContainerLaunchPlan,
-) -> Result<ContainerExitObservation, ContainerSupervisorError>
+) -> Result<ExecutionCapture, ContainerSupervisorError>
 where
-    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
 {
     supervise_container(runtime, plan, SupervisorEntry::Initial)
 }
@@ -419,9 +438,9 @@ where
 pub fn recover_container_supervision<R>(
     runtime: &mut R,
     plan: &ContainerLaunchPlan,
-) -> Result<ContainerExitObservation, ContainerSupervisorError>
+) -> Result<ExecutionCapture, ContainerSupervisorError>
 where
-    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
 {
     supervise_container(runtime, plan, SupervisorEntry::Recovery)
 }
@@ -430,9 +449,9 @@ fn supervise_container<R>(
     runtime: &mut R,
     plan: &ContainerLaunchPlan,
     entry: SupervisorEntry,
-) -> Result<ContainerExitObservation, ContainerSupervisorError>
+) -> Result<ExecutionCapture, ContainerSupervisorError>
 where
-    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
 {
     let inspection = runtime
         .inspect(plan.name())
@@ -448,9 +467,9 @@ fn create_then_advance<R>(
     runtime: &mut R,
     plan: &ContainerLaunchPlan,
     entry: SupervisorEntry,
-) -> Result<ContainerExitObservation, ContainerSupervisorError>
+) -> Result<ExecutionCapture, ContainerSupervisorError>
 where
-    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
 {
     let image = runtime
         .resolve_image(plan.image())
@@ -503,9 +522,9 @@ fn advance_present<R>(
     runtime: &mut R,
     plan: &ContainerLaunchPlan,
     inspection: ContainerInspection,
-) -> Result<ContainerExitObservation, ContainerSupervisorError>
+) -> Result<ExecutionCapture, ContainerSupervisorError>
 where
-    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
 {
     validate_binding(&inspection, plan, None)?;
     match inspection {
@@ -521,7 +540,7 @@ where
             validate_binding(&inspection, plan, Some(&runtime_id))?;
             match inspection {
                 ContainerInspection::Running { .. } => wait_for_exit(runtime, plan, &runtime_id),
-                ContainerInspection::Exited { .. } => exited_container(inspection),
+                ContainerInspection::Exited { .. } => capture_exited(runtime, plan, inspection),
                 ContainerInspection::Absent { .. } | ContainerInspection::Created { .. } => {
                     Err(ContainerSupervisorError::Ambiguous(
                         "runtime accepted start without observing running or exited state".into(),
@@ -532,7 +551,7 @@ where
         ContainerInspection::Running { runtime_id, .. } => {
             wait_for_exit(runtime, plan, &runtime_id)
         }
-        ContainerInspection::Exited { .. } => exited_container(inspection),
+        ContainerInspection::Exited { .. } => capture_exited(runtime, plan, inspection),
         ContainerInspection::Absent { .. } => Err(ContainerSupervisorError::Ambiguous(
             "present-container transition received absent state".into(),
         )),
@@ -543,15 +562,39 @@ fn wait_for_exit<R>(
     runtime: &mut R,
     plan: &ContainerLaunchPlan,
     runtime_id: &RuntimeContainerId,
-) -> Result<ContainerExitObservation, ContainerSupervisorError>
+) -> Result<ExecutionCapture, ContainerSupervisorError>
 where
-    R: ContainerLifecycleRuntime<LaunchPlan = ContainerLaunchPlan>,
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
 {
-    let observation = runtime
-        .wait(plan.name(), runtime_id)
+    let outcome = runtime
+        .wait_bounded(plan.name(), runtime_id, plan.wait_policy())
         .map_err(|error| mutation_error("wait", &error))?;
-    validate_exit_observation(&observation, plan, runtime_id)?;
-    Ok(observation)
+    match outcome {
+        ContainerWaitOutcome::Exited(observation) => {
+            validate_exit_observation(&observation, plan, runtime_id)?;
+            capture_terminal(runtime, plan, &observation)
+        }
+        ContainerWaitOutcome::StopRequired(reason) => {
+            let stop_result = runtime.stop(plan.name(), runtime_id, reason);
+            let inspection = runtime.inspect(plan.name()).map_err(|error| {
+                ContainerSupervisorError::Ambiguous(format!(
+                    "post-stop inspection failed after {stop_result:?}: {error}"
+                ))
+            })?;
+            validate_binding(&inspection, plan, Some(runtime_id))?;
+            match inspection {
+                ContainerInspection::Exited { .. } => capture_exited(runtime, plan, inspection),
+                ContainerInspection::Created { .. } | ContainerInspection::Running { .. } => {
+                    Err(ContainerSupervisorError::Ambiguous(format!(
+                        "container remained non-terminal after stop request ({stop_result:?})"
+                    )))
+                }
+                ContainerInspection::Absent { .. } => Err(ContainerSupervisorError::Ambiguous(
+                    "container disappeared after stop request".into(),
+                )),
+            }
+        }
+    }
 }
 
 fn validate_name(
@@ -607,6 +650,188 @@ fn exited_container(
     Ok(ContainerExitObservation::new(
         name, runtime_id, binding, exit_code,
     ))
+}
+
+fn capture_exited<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    inspection: ContainerInspection,
+) -> Result<ExecutionCapture, ContainerSupervisorError>
+where
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    let exit = exited_container(inspection)?;
+    capture_terminal(runtime, plan, &exit)
+}
+
+fn capture_terminal<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    exit: &ContainerExitObservation,
+) -> Result<ExecutionCapture, ContainerSupervisorError>
+where
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    validate_exit_observation(exit, plan, exit.runtime_id())?;
+    let terminal = runtime
+        .terminal_evidence(plan.name(), exit.runtime_id())
+        .map_err(|error| mutation_error("terminal evidence", &error))?;
+    validate_terminal_evidence(&terminal, plan, exit)?;
+
+    let stdout = runtime
+        .capture_stream(
+            plan.name(),
+            exit.runtime_id(),
+            ContainerStream::Stdout,
+            plan.stdout_limit,
+        )
+        .map_err(|error| mutation_error("stdout capture", &error))?;
+    let stderr = runtime
+        .capture_stream(
+            plan.name(),
+            exit.runtime_id(),
+            ContainerStream::Stderr,
+            plan.stderr_limit,
+        )
+        .map_err(|error| mutation_error("stderr capture", &error))?;
+    validate_bounded_capture(&stdout, plan.stdout_limit, "stdout")?;
+    validate_bounded_capture(&stderr, plan.stderr_limit, "stderr")?;
+    let (outputs, output_integrity_violation) = capture_declared_outputs(runtime, plan, exit)?;
+    let integrity_violation =
+        stdout.exceeded_limit() || stderr.exceeded_limit() || output_integrity_violation;
+
+    let outcome = match terminal.forced_stop() {
+        Some(ContainerStopReason::ExecutionTimeout) => ExecutionOutcome::TimedOut,
+        Some(
+            ContainerStopReason::StdoutLimitExceeded | ContainerStopReason::StderrLimitExceeded,
+        ) => ExecutionOutcome::IntegrityViolation,
+        None if integrity_violation => ExecutionOutcome::IntegrityViolation,
+        None if exit.exit_code().get() == 0 => ExecutionOutcome::Succeeded,
+        None => ExecutionOutcome::SubjectFailed,
+    };
+    let evidence = build_trusted_evidence(plan, exit, &terminal)?;
+    let evidence_bytes = cairn_codec::to_vec(&evidence)
+        .map_err(|error| ContainerSupervisorError::Ambiguous(error.to_string()))?;
+    if u64::try_from(evidence_bytes.len()).unwrap_or(u64::MAX) > plan.evidence_limit.get() {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "trusted container evidence exceeds the contract bound".into(),
+        ));
+    }
+    Ok(ExecutionCapture::new(
+        outcome,
+        Some(i32::from(exit.exit_code().get())),
+        terminal.elapsed_ms(),
+        stdout.bytes().to_vec(),
+        stderr.bytes().to_vec(),
+        outputs,
+        evidence,
+    ))
+}
+
+fn capture_declared_outputs<R>(
+    runtime: &mut R,
+    plan: &ContainerLaunchPlan,
+    exit: &ContainerExitObservation,
+) -> Result<(Vec<CapturedOutput>, bool), ContainerSupervisorError>
+where
+    R: ContainerCaptureRuntime<LaunchPlan = ContainerLaunchPlan>,
+{
+    let mut captured = Vec::new();
+    let mut integrity_violation = false;
+    for expected in &plan.expected_outputs {
+        let observation = runtime
+            .capture_output(
+                plan.name(),
+                exit.runtime_id(),
+                &expected.path,
+                expected.byte_limit,
+            )
+            .map_err(|error| mutation_error("declared output capture", &error))?;
+        if let ContainerOutputObservation::Regular { capture } = &observation {
+            validate_bounded_capture(capture, expected.byte_limit, "declared output")?;
+        }
+        match observation {
+            ContainerOutputObservation::Regular { capture } if !capture.exceeded_limit() => {
+                captured.push(CapturedOutput {
+                    name: expected.name.clone(),
+                    bytes: capture.bytes().to_vec(),
+                });
+            }
+            ContainerOutputObservation::Missing
+            | ContainerOutputObservation::NonRegular
+            | ContainerOutputObservation::Regular { .. } => integrity_violation = true,
+        }
+    }
+    Ok((captured, integrity_violation))
+}
+
+fn build_trusted_evidence(
+    plan: &ContainerLaunchPlan,
+    exit: &ContainerExitObservation,
+    terminal: &ContainerTerminalEvidence,
+) -> Result<TrustedExecutionEvidence, ContainerSupervisorError> {
+    let backend = ExecutionBackend::new(OCI_CONTAINER_BACKEND)
+        .map_err(|error| ContainerSupervisorError::Ambiguous(error.to_string()))?;
+    let termination = terminal
+        .forced_stop()
+        .map_or("natural", ContainerStopReason::as_str);
+    TrustedExecutionEvidence::new(
+        backend,
+        plan.binding.environment_id(),
+        terminal.resolved_program().clone(),
+        vec![
+            execution_observation(format!(
+                "container:image:{}",
+                terminal.observed_image().as_str()
+            ))?,
+            execution_observation(format!(
+                "container:runtime-id:{}",
+                exit.runtime_id().as_str()
+            ))?,
+            execution_observation(format!(
+                "container:elapsed-ms:{}",
+                terminal.elapsed_ms().get()
+            ))?,
+            execution_observation(format!("container:exit-code:{}", exit.exit_code().get()))?,
+            execution_observation(format!(
+                "container:sandbox-policy:{}",
+                plan.binding.sandbox_policy().as_str()
+            ))?,
+            execution_observation(format!("container:termination:{termination}"))?,
+        ],
+    )
+    .map_err(|error| ContainerSupervisorError::Ambiguous(error.to_string()))
+}
+
+fn validate_bounded_capture(
+    capture: &cairn_execution::BoundedContainerBytes,
+    limit: OutputByteLimit,
+    kind: &str,
+) -> Result<(), ContainerSupervisorError> {
+    if u64::try_from(capture.bytes().len()).unwrap_or(u64::MAX) > limit.get() {
+        return Err(ContainerSupervisorError::Ambiguous(format!(
+            "runtime adapter returned {kind} bytes above the requested bound"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_terminal_evidence(
+    terminal: &ContainerTerminalEvidence,
+    plan: &ContainerLaunchPlan,
+    exit: &ContainerExitObservation,
+) -> Result<(), ContainerSupervisorError> {
+    if terminal.exit() != exit || terminal.observed_image() != plan.image() {
+        return Err(ContainerSupervisorError::Ambiguous(
+            "terminal evidence conflicts with the immutable container identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn execution_observation(value: String) -> Result<ExecutionObservation, ContainerSupervisorError> {
+    ExecutionObservation::new(value)
+        .map_err(|error| ContainerSupervisorError::Ambiguous(error.to_string()))
 }
 
 fn validate_exit_observation(
@@ -738,6 +963,11 @@ pub fn build_container_launch_plan(
             .map(|argument| argument.as_str().to_owned())
             .collect(),
         limits,
+        execution_timeout: contract.resources().timeout(),
+        stdout_limit: contract.capture().stdout_limit(),
+        stderr_limit: contract.capture().stderr_limit(),
+        evidence_limit: contract.capture().evidence_limit(),
+        expected_outputs: contract.capture().expected_outputs().to_vec(),
     })
 }
 
@@ -881,12 +1111,13 @@ mod tests {
 
     use cairn_execution::{
         AcceleratorDeviceCount, AcceleratorResourceRequest, AssignmentMaterialChunkSize,
-        CapturePolicy, CommandArgument, CommandContract, ContainerExitCode, ContainerPhase,
-        ContainerRuntime, DiagnosticByteLimit, EnvironmentVariableName, EvidenceByteLimit,
-        ExecutionBackend, ExecutionPlatformRequirement, ExecutionTimeoutMillis, ExpectedOutput,
-        InputFileMode, LogicalCpuCount, MemoryByteCount, OutputByteLimit, OutputName,
-        PlacementRequest, QuantitativeResourceRequest, ResolvedContainerImage, ResourceRequest,
-        SandboxPath, ScratchByteCount, load_assignment_material_manifest,
+        BoundedContainerBytes, CapturePolicy, CommandArgument, CommandContract, ContainerExitCode,
+        ContainerLifecycleRuntime, ContainerPhase, ContainerRuntime, DiagnosticByteLimit,
+        EnvironmentVariableName, EvidenceByteLimit, ExecutionBackend, ExecutionElapsedMillis,
+        ExecutionPlatformRequirement, ExecutionTimeoutMillis, ExpectedOutput, InputFileMode,
+        LogicalCpuCount, MemoryByteCount, OutputByteLimit, OutputName, PlacementRequest,
+        QuantitativeResourceRequest, ResolvedContainerImage, ResolvedProgramIdentity,
+        ResourceRequest, SandboxPath, ScratchByteCount, load_assignment_material_manifest,
         verify_persisted_assignment_materials,
     };
     use cairn_protocol::JobId;
@@ -1087,6 +1318,11 @@ mod tests {
             .collect()
     }
 
+    fn capture_json(capture: &ExecutionCapture) -> serde_json::Value {
+        serde_json::from_slice(&cairn_codec::to_vec(capture).expect("capture JSON"))
+            .expect("capture value")
+    }
+
     #[derive(Clone, Copy)]
     enum MutationFault {
         AmbiguousBeforeEffect,
@@ -1103,12 +1339,23 @@ mod tests {
         create_fault: Option<MutationFault>,
         start_fault: Option<MutationFault>,
         wait_fault: Option<MutationFault>,
+        stop_fault: Option<MutationFault>,
+        next_wait_stop: Option<ContainerStopReason>,
+        forced_stop: Option<ContainerStopReason>,
+        evidence_image: Option<OciImageDigest>,
+        stdout: BoundedContainerBytes,
+        stderr: BoundedContainerBytes,
+        output: ContainerOutputObservation,
         replace_runtime_id_after_start: bool,
         create_calls: u64,
         successful_creates: u64,
         start_calls: u64,
         successful_starts: u64,
         wait_calls: u64,
+        stop_calls: u64,
+        stream_calls: Vec<ContainerStream>,
+        output_calls: u64,
+        evidence_calls: u64,
     }
 
     impl FakeRuntime {
@@ -1129,12 +1376,31 @@ mod tests {
                 create_fault: None,
                 start_fault: None,
                 wait_fault: None,
+                stop_fault: None,
+                next_wait_stop: None,
+                forced_stop: None,
+                evidence_image: None,
+                stdout: BoundedContainerBytes::complete(b"stdout".to_vec(), plan.stdout_limit)
+                    .expect("bounded stdout"),
+                stderr: BoundedContainerBytes::complete(b"stderr".to_vec(), plan.stderr_limit)
+                    .expect("bounded stderr"),
+                output: ContainerOutputObservation::Regular {
+                    capture: BoundedContainerBytes::complete(
+                        b"result".to_vec(),
+                        plan.expected_outputs[0].byte_limit,
+                    )
+                    .expect("bounded output"),
+                },
                 replace_runtime_id_after_start: false,
                 create_calls: 0,
                 successful_creates: 0,
                 start_calls: 0,
                 successful_starts: 0,
                 wait_calls: 0,
+                stop_calls: 0,
+                stream_calls: Vec::new(),
+                output_calls: 0,
+                evidence_calls: 0,
             }
         }
 
@@ -1295,15 +1561,22 @@ mod tests {
                 }
             }
         }
+    }
 
-        fn wait(
+    impl ContainerCaptureRuntime for FakeRuntime {
+        fn wait_bounded(
             &mut self,
             name: &ContainerName,
             runtime_id: &RuntimeContainerId,
-        ) -> Result<ContainerExitObservation, ContainerRuntimeError> {
+            policy: ContainerWaitPolicy,
+        ) -> Result<ContainerWaitOutcome, ContainerRuntimeError> {
             self.wait_calls += 1;
             assert_eq!(self.inspection.name(), name);
             assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            assert_eq!(
+                policy.execution_timeout(),
+                ExecutionTimeoutMillis::new(30_000).unwrap()
+            );
             match self.wait_fault.take() {
                 Some(MutationFault::AmbiguousBeforeEffect) => {
                     Err(ContainerRuntimeError::Ambiguous(
@@ -1323,10 +1596,93 @@ mod tests {
                     unreachable!("concurrent-create fault is create-only")
                 }
                 None => {
+                    if let Some(reason) = self.next_wait_stop.take() {
+                        return Ok(ContainerWaitOutcome::StopRequired(reason));
+                    }
                     self.apply_exit();
-                    Ok(self.exit_observation())
+                    Ok(ContainerWaitOutcome::Exited(self.exit_observation()))
                 }
             }
+        }
+
+        fn stop(
+            &mut self,
+            name: &ContainerName,
+            runtime_id: &RuntimeContainerId,
+            reason: ContainerStopReason,
+        ) -> Result<(), ContainerRuntimeError> {
+            self.stop_calls += 1;
+            assert_eq!(self.inspection.name(), name);
+            assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            match self.stop_fault.take() {
+                Some(MutationFault::AmbiguousBeforeEffect) => Err(
+                    ContainerRuntimeError::Ambiguous("stop response lost before effect".into()),
+                ),
+                Some(MutationFault::AmbiguousAfterEffect) => {
+                    self.forced_stop = Some(reason);
+                    self.apply_exit();
+                    Err(ContainerRuntimeError::Ambiguous(
+                        "stop response lost after effect".into(),
+                    ))
+                }
+                Some(MutationFault::Rejected) => {
+                    Err(ContainerRuntimeError::Rejected("stop rejected".into()))
+                }
+                Some(MutationFault::RejectedAfterConcurrentCreate) => unreachable!(),
+                None => {
+                    self.forced_stop = Some(reason);
+                    self.apply_exit();
+                    Ok(())
+                }
+            }
+        }
+
+        fn capture_stream(
+            &mut self,
+            name: &ContainerName,
+            runtime_id: &RuntimeContainerId,
+            stream: ContainerStream,
+            _limit: OutputByteLimit,
+        ) -> Result<BoundedContainerBytes, ContainerRuntimeError> {
+            assert_eq!(self.inspection.name(), name);
+            assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            self.stream_calls.push(stream);
+            Ok(match stream {
+                ContainerStream::Stdout => self.stdout.clone(),
+                ContainerStream::Stderr => self.stderr.clone(),
+            })
+        }
+
+        fn capture_output(
+            &mut self,
+            name: &ContainerName,
+            runtime_id: &RuntimeContainerId,
+            _path: &SandboxPath,
+            _limit: OutputByteLimit,
+        ) -> Result<ContainerOutputObservation, ContainerRuntimeError> {
+            assert_eq!(self.inspection.name(), name);
+            assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            self.output_calls += 1;
+            Ok(self.output.clone())
+        }
+
+        fn terminal_evidence(
+            &mut self,
+            name: &ContainerName,
+            runtime_id: &RuntimeContainerId,
+        ) -> Result<ContainerTerminalEvidence, ContainerRuntimeError> {
+            assert_eq!(self.inspection.name(), name);
+            assert_eq!(self.inspection.runtime_id(), Some(runtime_id));
+            self.evidence_calls += 1;
+            Ok(ContainerTerminalEvidence::new(
+                self.exit_observation(),
+                self.evidence_image
+                    .clone()
+                    .unwrap_or_else(|| self.image.image().clone()),
+                ResolvedProgramIdentity::new("sha256:program").expect("program identity"),
+                ExecutionElapsedMillis::new(12),
+                self.forced_stop,
+            ))
         }
     }
 
@@ -1336,20 +1692,22 @@ mod tests {
         let plan = fixture.build(AttemptId::new()).expect("launch plan");
         let mut runtime = FakeRuntime::absent(&plan);
 
-        let exited = start_container_supervision(&mut runtime, &plan).expect("terminal exit");
-        assert_eq!(exited.name(), plan.name());
-        assert_eq!(exited.binding(), plan.binding());
-        assert_eq!(exited.runtime_id(), &runtime.runtime_id);
-        assert_eq!(exited.exit_code().get(), 0);
+        let capture = start_container_supervision(&mut runtime, &plan).expect("terminal capture");
         assert_eq!(runtime.create_calls, 1);
         assert_eq!(runtime.successful_creates, 1);
         assert_eq!(runtime.start_calls, 1);
         assert_eq!(runtime.successful_starts, 1);
         assert_eq!(runtime.wait_calls, 1);
+        assert_eq!(
+            runtime.stream_calls,
+            [ContainerStream::Stdout, ContainerStream::Stderr]
+        );
+        assert_eq!(runtime.output_calls, 1);
+        assert_eq!(runtime.evidence_calls, 1);
 
         assert_eq!(
-            recover_container_supervision(&mut runtime, &plan).expect("recover exit"),
-            exited
+            recover_container_supervision(&mut runtime, &plan).expect("recover capture"),
+            capture
         );
         assert_eq!(runtime.create_calls, 1);
         assert_eq!(runtime.start_calls, 1);
@@ -1372,9 +1730,7 @@ mod tests {
                 error.failure_class(),
                 ContainerSupervisorFailureClass::Ambiguous
             );
-            let exited =
-                recover_container_supervision(&mut runtime, &plan).expect("reconciled exit");
-            assert_eq!(exited.binding(), plan.binding());
+            recover_container_supervision(&mut runtime, &plan).expect("reconciled capture");
             assert_eq!(runtime.successful_creates, 1);
             assert_eq!(runtime.successful_starts, 1);
             assert_eq!(runtime.start_calls, 1);
@@ -1454,6 +1810,143 @@ mod tests {
         assert_eq!(runtime.successful_starts, 1);
         assert_eq!(runtime.start_calls, 1);
         assert_eq!(runtime.wait_calls, 1);
+    }
+
+    #[test]
+    fn timeout_stop_response_loss_reconciles_the_same_terminal_container() {
+        for fault in [
+            MutationFault::AmbiguousBeforeEffect,
+            MutationFault::AmbiguousAfterEffect,
+        ] {
+            let fixture = Fixture::new();
+            let plan = fixture.build(AttemptId::new()).expect("launch plan");
+            let mut runtime = FakeRuntime::absent(&plan);
+            runtime.next_wait_stop = Some(ContainerStopReason::ExecutionTimeout);
+            runtime.stop_fault = Some(fault);
+
+            match fault {
+                MutationFault::AmbiguousAfterEffect => {
+                    let capture = start_container_supervision(&mut runtime, &plan)
+                        .expect("lost stop response reconciles exited container");
+                    assert_eq!(capture_json(&capture)["outcome"], "timed-out");
+                    assert_eq!(runtime.stop_calls, 1);
+                    assert_eq!(runtime.successful_starts, 1);
+                }
+                MutationFault::AmbiguousBeforeEffect => {
+                    assert_eq!(
+                        start_container_supervision(&mut runtime, &plan)
+                            .expect_err("stop had no effect")
+                            .failure_class(),
+                        ContainerSupervisorFailureClass::Ambiguous
+                    );
+                    assert_eq!(runtime.inspection.phase(), ContainerPhase::Running);
+                    // The adapter evaluates the original runtime start time, so recovery observes
+                    // the same expired total deadline rather than granting another full timeout.
+                    runtime.next_wait_stop = Some(ContainerStopReason::ExecutionTimeout);
+                    let capture = recover_container_supervision(&mut runtime, &plan)
+                        .expect("recovery enforces original deadline");
+                    assert_eq!(capture_json(&capture)["outcome"], "timed-out");
+                    assert_eq!(runtime.successful_starts, 1);
+                    assert_eq!(runtime.stop_calls, 2);
+                }
+                MutationFault::Rejected | MutationFault::RejectedAfterConcurrentCreate => {
+                    unreachable!()
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stream_exhaustion_stops_and_returns_only_the_bounded_prefix() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut runtime = FakeRuntime::absent(&plan);
+        runtime.next_wait_stop = Some(ContainerStopReason::StdoutLimitExceeded);
+        runtime.stdout = BoundedContainerBytes::limit_exceeded(
+            vec![b'x'; usize::try_from(plan.stdout_limit.get()).expect("usize limit")],
+            plan.stdout_limit,
+        )
+        .expect("bounded over-limit prefix");
+
+        let capture = start_container_supervision(&mut runtime, &plan).expect("terminal capture");
+        let value = capture_json(&capture);
+        assert_eq!(value["outcome"], "integrity-violation");
+        assert_eq!(
+            value["stdout"].as_array().expect("stdout bytes").len(),
+            usize::try_from(plan.stdout_limit.get()).expect("usize limit")
+        );
+        assert_eq!(runtime.stop_calls, 1);
+        assert_eq!(
+            runtime.stream_calls,
+            [ContainerStream::Stdout, ContainerStream::Stderr]
+        );
+    }
+
+    #[test]
+    fn missing_non_regular_and_oversized_declared_outputs_fail_closed() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let bound = plan.expected_outputs[0].byte_limit;
+        let cases = [
+            ContainerOutputObservation::Missing,
+            // Runtime adapters classify symlinks, directories, and special files as NonRegular.
+            ContainerOutputObservation::NonRegular,
+            ContainerOutputObservation::Regular {
+                capture: BoundedContainerBytes::limit_exceeded(b"prefix".to_vec(), bound)
+                    .expect("bounded prefix"),
+            },
+        ];
+        for output in cases {
+            let mut runtime = FakeRuntime::absent(&plan);
+            runtime.output = output;
+            let capture = start_container_supervision(&mut runtime, &plan)
+                .expect("terminal integrity capture");
+            let value = capture_json(&capture);
+            assert_eq!(value["outcome"], "integrity-violation");
+            assert_eq!(value["outputs"].as_array().expect("outputs").len(), 0);
+        }
+    }
+
+    #[test]
+    fn bounded_capture_type_rejects_an_adapter_that_returns_too_many_bytes() {
+        let limit = OutputByteLimit::new(3).expect("limit");
+        assert_eq!(
+            BoundedContainerBytes::complete(vec![0; 4], limit),
+            Err(cairn_execution::ContainerContractError::AdapterCaptureExceedsBound)
+        );
+        assert_eq!(
+            BoundedContainerBytes::limit_exceeded(vec![0; 4], limit),
+            Err(cairn_execution::ContainerContractError::AdapterCaptureExceedsBound)
+        );
+    }
+
+    #[test]
+    fn terminal_image_identity_and_evidence_bound_are_enforced_before_publication() {
+        let fixture = Fixture::new();
+        let plan = fixture.build(AttemptId::new()).expect("launch plan");
+        let mut wrong_image = FakeRuntime::absent(&plan);
+        wrong_image.evidence_image = Some(
+            OciImageDigest::new(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .expect("other image"),
+        );
+        assert_eq!(
+            start_container_supervision(&mut wrong_image, &plan)
+                .expect_err("runtime-observed image mismatch")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
+
+        let mut tiny_evidence_plan = plan.clone();
+        tiny_evidence_plan.evidence_limit = EvidenceByteLimit::new(1).expect("evidence limit");
+        let mut runtime = FakeRuntime::absent(&tiny_evidence_plan);
+        assert_eq!(
+            start_container_supervision(&mut runtime, &tiny_evidence_plan)
+                .expect_err("evidence exceeds bound")
+                .failure_class(),
+            ContainerSupervisorFailureClass::Ambiguous
+        );
     }
 
     #[test]
