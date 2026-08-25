@@ -11,6 +11,15 @@ trusted by the control listener's `tls.client_ca`, and `issuer_private_key` must
 certificate. Bootstrap handshake, diagnostic, wire-message, token TTL, and issued-credential
 validity values are explicit configuration or command inputs.
 
+For the normal open-source join path, also configure
+`enrollment_service.control_endpoint` with the externally routable control TCP address, WebSocket
+URI, TLS server name, and server CA path. Enrollment and ordinary control may use different
+listeners, names, and server certificates: set `enrollment_service.server_tls` to a dedicated
+bootstrap certificate/key, while `server_ca` pins its issuing CA. If `server_tls` is absent, the
+bootstrap listener reuses the ordinary controller server identity for compatibility. The controller
+embeds both public endpoint descriptions and pinned trust material in a schema V3 bundle; no
+control address is hand-entered on the worker.
+
 Controller configuration schema V3 requires `enrollment: []`. Worker authentication and scheduling
 consume only the append-only registry; a controller may start with an empty registry so onboarding
 does not require any copied worker certificate. Schema V2 is accepted only by the explicit legacy
@@ -55,6 +64,26 @@ the worker submits a CSR.
 
 ## Enroll a worker
 
+The preferred new-machine path is one command:
+
+```bash
+cairn-worker join worker.enrollment.json /var/lib/cairn/worker
+```
+
+It creates a fixed tree containing `identity/`, `scratch/`, `worker.sqlite3` when first run, and a
+strict `worker.json`. Platform and quantitative host resources are observed locally; the running
+executable is identified by its SHA-256 digest. Timeouts, heartbeat, reconnect, resource freshness,
+expectations, availability, and message-size limits remain explicit editable configuration fields.
+The initial worker is unavailable and draining until a real execution backend is configured and
+activated. Repeating join with the same bundle validates and reuses an existing tree; it never
+replaces a differing file or discards operator changes. Start it with:
+
+```bash
+cairn-worker /var/lib/cairn/worker/worker.json
+```
+
+The lower-level identity-only flow remains available for automation and diagnosis.
+
 Transfer the single bundle through an operator-approved channel, then run on the worker:
 
 ```bash
@@ -68,7 +97,7 @@ success the directory contains:
 - `worker-key.pem` — worker-local private key;
 - `enrollment.csr.pem` — exact retry/recovery CSR;
 - `worker.pem` — issued leaf and chain;
-- `ca.pem` — pinned controller trust anchor from the bundle;
+- `ca.pem` — pinned ordinary-control trust anchor from the bundle;
 - `identity.json` — one-shot `EnrollmentId`, stable `WorkerId`, rotatable `CredentialId`,
   authenticated pool, and relative TLS paths.
 
@@ -92,7 +121,7 @@ Worker configuration selects the state directory rather than repeating identity 
 After bootstrap, delete the transferred bundle according to local secret-handling policy. Do not
 delete the staged CSR: it is non-secret recovery evidence bound to the local private key.
 
-Worker configuration schema V3 adds mandatory positive `identity_poll_interval_ms`. A running
+Worker configuration schema V5 has mandatory positive `identity_poll_interval_ms`. A running
 managed worker checks the atomic identity manifest at this interval. When rotation changes the
 credential, it closes the old connection and reconnects with a fresh `WorkerIncarnationId`.
 

@@ -98,6 +98,13 @@ pub struct EnrollmentServiceConfig {
     pub websocket_uri: String,
     pub server_name: String,
     pub server_ca: PathBuf,
+    /// Optional server identity dedicated to the bootstrap listener. When absent, the ordinary
+    /// controller server certificate/key are reused for backward compatibility.
+    #[serde(default)]
+    pub server_tls: Option<EnrollmentServerTlsFiles>,
+    /// Optional ordinary-control endpoint embedded into V3 enrollment bundles.
+    #[serde(default)]
+    pub control_endpoint: Option<PublicWorkerControlEndpointConfig>,
     pub issuer_certificate: PathBuf,
     pub issuer_private_key: PathBuf,
     pub credential_validity_ms: NonZeroU64,
@@ -107,6 +114,24 @@ pub struct EnrollmentServiceConfig {
     pub diagnostic_byte_limit: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
+}
+
+/// Server certificate and key for the server-authenticated bootstrap listener.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentServerTlsFiles {
+    pub certificate: PathBuf,
+    pub private_key: PathBuf,
+}
+
+/// Externally routable worker-control endpoint and its independently pinned server authority.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicWorkerControlEndpointConfig {
+    pub tcp_address: String,
+    pub websocket_uri: String,
+    pub server_name: String,
+    pub server_ca: PathBuf,
 }
 
 /// Legacy V2 migration binding from logical identities to one exact leaf certificate.
@@ -662,8 +687,15 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     if let Some(service) = config.enrollment_service.clone() {
-        let enrollment_tls = config
-            .tls
+        let enrollment_tls_files = service.server_tls.as_ref().map_or_else(
+            || config.tls.clone(),
+            |identity| ServerTlsFiles {
+                certificate: identity.certificate.clone(),
+                private_key: identity.private_key.clone(),
+                client_ca: config.tls.client_ca.clone(),
+            },
+        );
+        let enrollment_tls = enrollment_tls_files
             .load_enrollment()
             .map_err(|error| ServerError::Startup(error.to_string()))?;
         let issuer = Arc::new(
@@ -754,6 +786,15 @@ impl ServerConfig {
                         .into(),
                 ));
             }
+            if service.control_endpoint.as_ref().is_some_and(|endpoint| {
+                endpoint.tcp_address.is_empty()
+                    || endpoint.websocket_uri.is_empty()
+                    || endpoint.server_name.is_empty()
+            }) {
+                return Err(ServerError::Configuration(
+                    "enrollment control_endpoint must have a non-empty public endpoint".into(),
+                ));
+            }
             let trusted = CertificateFingerprint::from_pem_file(&self.tls.client_ca)
                 .map_err(|error| ServerError::Configuration(error.to_string()))?;
             let issuer = CertificateFingerprint::from_pem_file(&service.issuer_certificate)
@@ -777,6 +818,13 @@ impl ServerConfig {
         }
         if let Some(service) = &mut self.enrollment_service {
             resolve(&mut service.server_ca, base);
+            if let Some(tls) = &mut service.server_tls {
+                resolve(&mut tls.certificate, base);
+                resolve(&mut tls.private_key, base);
+            }
+            if let Some(endpoint) = &mut service.control_endpoint {
+                resolve(&mut endpoint.server_ca, base);
+            }
             resolve(&mut service.issuer_certificate, base);
             resolve(&mut service.issuer_private_key, base);
         }

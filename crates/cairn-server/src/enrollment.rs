@@ -7,7 +7,7 @@ use std::{
 
 use cairn_control_transport::{
     CertificateFingerprint, EnrollmentBundle, EnrollmentEndpoint, EnrollmentPurpose,
-    EnrollmentRequest, EnrollmentSecret, IssuedWorkerCredential,
+    EnrollmentRequest, EnrollmentSecret, IssuedWorkerCredential, WorkerControlEndpoint,
 };
 use cairn_execution::WorkerPoolName;
 use cairn_protocol::{
@@ -693,8 +693,9 @@ pub(crate) fn create_offer(
     )?;
     let server_ca_pem = fs::read_to_string(&config.server_ca)
         .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
+    let control_endpoint = bundle_control_endpoint(config)?;
     Ok(EnrollmentBundle {
-        schema_version: 2,
+        schema_version: if control_endpoint.is_some() { 3 } else { 2 },
         enrollment_id,
         purpose: EnrollmentPurpose::Bootstrap,
         secret,
@@ -705,6 +706,7 @@ pub(crate) fn create_offer(
             server_name: config.server_name.clone(),
             server_ca_pem,
         },
+        control_endpoint,
         handshake_timeout_ms: config.handshake_timeout_ms,
         transport: config.transport,
     })
@@ -767,8 +769,9 @@ pub(crate) fn create_rotation_offer(
     )?;
     let server_ca_pem = fs::read_to_string(&config.server_ca)
         .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
+    let control_endpoint = bundle_control_endpoint(config)?;
     Ok(EnrollmentBundle {
-        schema_version: 2,
+        schema_version: if control_endpoint.is_some() { 3 } else { 2 },
         enrollment_id,
         purpose,
         secret,
@@ -779,9 +782,28 @@ pub(crate) fn create_rotation_offer(
             server_name: config.server_name.clone(),
             server_ca_pem,
         },
+        control_endpoint,
         handshake_timeout_ms: config.handshake_timeout_ms,
         transport: config.transport,
     })
+}
+
+fn bundle_control_endpoint(
+    config: &EnrollmentServiceConfig,
+) -> Result<Option<WorkerControlEndpoint>, EnrollmentError> {
+    config
+        .control_endpoint
+        .as_ref()
+        .map(|endpoint| {
+            Ok(WorkerControlEndpoint {
+                tcp_address: endpoint.tcp_address.clone(),
+                websocket_uri: endpoint.websocket_uri.clone(),
+                server_name: endpoint.server_name.clone(),
+                server_ca_pem: fs::read_to_string(&endpoint.server_ca)
+                    .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?,
+            })
+        })
+        .transpose()
 }
 
 #[expect(

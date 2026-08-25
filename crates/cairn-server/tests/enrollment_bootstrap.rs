@@ -19,12 +19,155 @@ use cairn_server::{
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
     ControllerEndpoint, ExpectedResourceConstraints, ResourceProbeConfig, WorkerConfig,
-    WorkerIdentityConfig, WorkerProfileConfig, enroll, rollback_rotation, rotate,
+    WorkerIdentityConfig, WorkerProfileConfig, enroll, join_from_bundle, rollback_rotation, rotate,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose,
 };
+
+static ENROLLMENT_INTEGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the separate-CA bundle, CLI join, exact rerun, and live control session form one proof"
+)]
+async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
+-> Result<(), Box<dyn Error + Send + Sync>> {
+    let _integration_guard = ENROLLMENT_INTEGRATION_LOCK.lock().await;
+    let directory = tempfile::tempdir()?;
+    let pki = test_pki()?;
+    let ca = directory.path().join("ca.pem");
+    let ca_key = directory.path().join("ca-key.pem");
+    let server_certificate = directory.path().join("server.pem");
+    let server_key = directory.path().join("server-key.pem");
+    fs::write(&ca, &pki.ca_certificate)?;
+    fs::write(&ca_key, &pki.ca_private_key)?;
+    fs::write(&server_certificate, &pki.server_certificate)?;
+    fs::write(&server_key, &pki.server_private_key)?;
+    let enrollment_pki = test_pki()?;
+    let enrollment_server_ca = directory.path().join("enrollment-server-ca.pem");
+    let enrollment_server_certificate = directory.path().join("enrollment-server.pem");
+    let enrollment_server_key = directory.path().join("enrollment-server-key.pem");
+    fs::write(&enrollment_server_ca, &enrollment_pki.ca_certificate)?;
+    fs::write(
+        &enrollment_server_certificate,
+        &enrollment_pki.server_certificate,
+    )?;
+    fs::write(&enrollment_server_key, &enrollment_pki.server_private_key)?;
+    let control = free_address()?;
+    let enrollment = free_address()?;
+    let event_database = directory.path().join("controller-events.sqlite3");
+    let content_database = directory.path().join("controller-content.sqlite3");
+    let content_directory = directory.path().join("controller-content");
+    let mut config = server_config(
+        control,
+        enrollment,
+        &ca,
+        &ca_key,
+        &server_certificate,
+        &server_key,
+        &event_database,
+        &content_database,
+        &content_directory,
+    )?;
+    let enrollment_service = config
+        .enrollment_service
+        .as_mut()
+        .expect("enrollment service");
+    enrollment_service
+        .server_ca
+        .clone_from(&enrollment_server_ca);
+    enrollment_service.server_tls = Some(cairn_server::EnrollmentServerTlsFiles {
+        certificate: enrollment_server_certificate,
+        private_key: enrollment_server_key,
+    });
+    let bundle = create_enrollment_bundle(
+        &config,
+        WorkerPoolName::new("join-lab")?,
+        NonZeroU64::new(60_000).expect("TTL"),
+    )?;
+    assert_eq!(bundle.schema_version, 3);
+    assert_ne!(
+        bundle.endpoint.server_ca_pem,
+        bundle
+            .control_endpoint
+            .as_ref()
+            .expect("control endpoint")
+            .server_ca_pem
+    );
+    let mut legacy_bundle = bundle.clone();
+    legacy_bundle.schema_version = 2;
+    legacy_bundle.control_endpoint = None;
+    let legacy_bundle_path = directory.path().join("legacy-bundle.json");
+    fs::write(
+        &legacy_bundle_path,
+        serde_json::to_vec_pretty(&legacy_bundle)?,
+    )?;
+    assert!(
+        Box::pin(join_from_bundle(
+            &legacy_bundle_path,
+            &directory.path().join("legacy-join-state")
+        ))
+        .await
+        .expect_err("legacy bundles cannot define a one-command join")
+        .to_string()
+        .contains("V3 bootstrap bundle")
+    );
+    let bundle_path = directory.path().join("join-bundle.json");
+    fs::write(&bundle_path, serde_json::to_vec_pretty(&bundle)?)?;
+    let server = tokio::spawn(cairn_server::run(config));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let state = directory.path().join("worker-state");
+    cairn_worker::run_from_arguments([
+        std::ffi::OsString::from("cairn-worker"),
+        std::ffi::OsString::from("join"),
+        bundle_path.as_os_str().to_owned(),
+        state.as_os_str().to_owned(),
+    ])
+    .await?;
+    let mut operator_config: WorkerConfig =
+        serde_json::from_slice(&fs::read(state.join("worker.json"))?)?;
+    operator_config.heartbeat_interval_ms = NonZeroU64::new(17_000);
+    let operator_config = serde_json::to_vec_pretty(&operator_config)?;
+    fs::write(state.join("worker.json"), &operator_config)?;
+    let receipt = Box::pin(join_from_bundle(&bundle_path, &state)).await?;
+    assert_eq!(receipt.config_path, state.join("worker.json"));
+    assert!(state.join("identity/worker-key.pem").is_file());
+    assert!(state.join("identity/identity.json").is_file());
+    assert!(state.join("scratch").is_dir());
+    assert_eq!(fs::read(&receipt.config_path)?, operator_config);
+
+    let worker = tokio::spawn(cairn_worker::run_from_arguments([
+        std::ffi::OsString::from("cairn-worker"),
+        receipt.config_path.as_os_str().to_owned(),
+    ]));
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let events = SqliteEventStore::open(&event_database)?;
+    let content = SqliteContentStore::open(&content_database, &content_directory)?;
+    let WorkerSessionState::Live(session) = recover_worker_session(
+        &events,
+        &content,
+        receipt.worker_id,
+        WorkerSessionTimeoutMillis::new(10_000)?,
+        ObservedAtUnixMillis::new(unix_millis()?),
+    )?
+    else {
+        return Err("joined worker did not establish a live control session".into());
+    };
+    assert_eq!(session.credential_id(), receipt.credential_id);
+    assert_eq!(session.pool().as_str(), "join-lab");
+    assert_eq!(
+        session.availability().expect("availability").health(),
+        WorkerHealth::Unavailable
+    );
+
+    worker.abort();
+    server.abort();
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[expect(
@@ -33,6 +176,7 @@ use rcgen::{
 )]
 async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
 -> Result<(), Box<dyn Error + Send + Sync>> {
+    let _integration_guard = ENROLLMENT_INTEGRATION_LOCK.lock().await;
     let directory = tempfile::tempdir()?;
     let pki = test_pki()?;
     let ca = directory.path().join("ca.pem");
@@ -458,6 +602,13 @@ fn server_config(
             websocket_uri: format!("wss://localhost:{}/enrollment", enrollment_listen.port()),
             server_name: "localhost".into(),
             server_ca: ca.to_path_buf(),
+            server_tls: None,
+            control_endpoint: Some(cairn_server::PublicWorkerControlEndpointConfig {
+                tcp_address: listen.to_string(),
+                websocket_uri: format!("wss://localhost:{}/control", listen.port()),
+                server_name: "localhost".into(),
+                server_ca: ca.to_path_buf(),
+            }),
             issuer_certificate: ca.to_path_buf(),
             issuer_private_key: ca_key.to_path_buf(),
             credential_validity_ms: NonZeroU64::new(3_600_000).expect("validity"),

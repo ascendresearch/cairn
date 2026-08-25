@@ -161,6 +161,9 @@ Acceptance gate:
 
 ## Phase F — one-command open-source worker join
 
+Status: F1 join/bootstrap composition implemented; activation, service-unit output, generic
+assignment, restart, and real x86-64/AArch64 host gates remain.
+
 Implement `cairn-worker join` as a composition of enrollment, built-in probe, validated local
 profile creation, control-endpoint configuration, fixed state-directory layout, and optional
 service-unit output. The controller assigns `WorkerId` and pool; the worker reports resources. Keep
@@ -174,6 +177,14 @@ Acceptance gate:
 - rerun is safe, no differing file is overwritten, and diagnostics identify the exact recovery
   action;
 - clean x86-64 and AArch64 hosts join, reconnect, receive a generic assignment, and survive restart.
+
+F1 makes the V3 enrollment bundle self-contained by embedding the independently routable normal
+control endpoint and its pinned CA/name. `cairn-worker join <bundle> <state-dir>` creates a fixed
+identity/scratch/journal/config tree, hashes the running worker binary, runs the built-in host
+probe, and persists a strict V5 worker configuration. Its initial availability is deliberately
+unavailable and draining because the current executor is still `NotStarted`; F2 must provide an
+explicit backend/activation transition rather than making bootstrap authority imply execution
+readiness. Re-running F1 validates and reuses the tree without overwriting operator edits.
 
 ## Cross-cutting gates
 

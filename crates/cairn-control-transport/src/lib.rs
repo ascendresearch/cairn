@@ -10,6 +10,7 @@ mod wire;
 pub use enrollment::{
     EnrollmentBundle, EnrollmentEndpoint, EnrollmentPurpose, EnrollmentRejectCode,
     EnrollmentRequest, EnrollmentResponse, EnrollmentSecret, IssuedWorkerCredential,
+    WorkerControlEndpoint,
 };
 
 pub use tls::{

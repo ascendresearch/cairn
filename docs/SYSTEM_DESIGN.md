@@ -695,6 +695,22 @@ pool. After a lost response, the same secret plus exact staged CSR returns the p
 after token expiry; another CSR is rejected. A fresh controller rebuilds
 fingerprint-to-credential/worker/pool authentication from that stream.
 
+**Implemented one-command join F1 (2026-08-25).** Enrollment bundle V3 carries two explicit trust
+domains: the one-shot bootstrap endpoint and the externally routable ordinary-control endpoint.
+Each includes its own TCP/WebSocket authority, TLS server name, and pinned CA, so isolating
+bootstrap does not force matching DNS or certificates and a worker does not reconstruct endpoint
+configuration from deployment convention.
+
+`cairn-worker join <bundle> <state-dir>` composes the existing enrollment port with a fixed local
+layout, running-binary SHA-256 identity, Linux host/platform probe, strict V5 configuration, and
+preflight validation. The identity private key remains worker-local under `identity/`; scratch and
+journal locations are relative to the fixed root. If a valid configuration already exists, join
+checks that it still names the bundle's controller and managed identity, probes it, and leaves its
+bytes untouched. The generated profile contains no model, oracle, migration stage, or product role.
+Because the executable backend remains unimplemented, initial availability is explicitly
+unavailable/draining with zero slots. Service integration and explicit backend activation remain
+F2 rather than being smuggled into bootstrap.
+
 **Implemented credential-authority foundation (2026-08-25).** Registration V3 records the exact
 `CredentialId` independently of stable subject, `WorkerId`, pool, and incarnation. The controller
 uses the managed certificate fingerprint only to find the credential record, then derives the

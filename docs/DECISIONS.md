@@ -392,3 +392,20 @@ The operator read surface projects these same facts on demand rather than mainta
 administrative table. List/show reports retain strong identity and provenance links; audit succeeds
 only after complete causal replay. This keeps operational visibility from becoming a second source
 of worker or credential authority.
+
+## D-016 — Join bundle owns bootstrap-to-control endpoint handoff
+
+- Decision: accepted; F1 implemented
+
+A one-command join cannot safely infer the normal controller address, TLS name, or trust anchor
+from a bootstrap listener. The short-lived bundle therefore carries separate typed bootstrap and
+ordinary-control endpoint descriptions. They may intentionally use different listeners, DNS names,
+and server CAs. This endpoint material is public configuration; the bearer secret remains the only
+bundle capability and only its digest is durable at the controller.
+
+Join composes existing enrollment and probe ports into a fixed worker state tree. On first success
+it writes an editable strict configuration; later runs validate and reuse that file rather than
+regenerate it, so binary upgrades or operator tuning do not become destructive bootstrap actions.
+Enrollment authority establishes identity and pool membership, not backend correctness or
+readiness. The generated worker therefore fails closed as unavailable/draining until a separate
+explicit activation path configures a real executor.

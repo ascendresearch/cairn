@@ -109,6 +109,11 @@ let `cairn-migration` validation tiers ask for resources without assigning busin
 Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
 retains its own private key. Exact-CSR replay closes a lost-response window, and a fresh controller
 recovers certificate-to-`CredentialId`/`WorkerId`/pool authority from the append-only registry.
+Bundle V3 separately pins bootstrap and ordinary-control endpoints, allowing different listeners,
+TLS names, and CAs. `cairn-worker join <bundle> <state-dir>` now composes enrollment, local
+binary/resource observation, a fixed state tree, and strict editable worker configuration without
+out-of-band endpoint input or destructive reruns; it remains unavailable/draining until a real
+executor is explicitly activated.
 Stable worker principal, rotatable credential, and process incarnation are now distinct in durable
 registration facts. Separate append-only actions revoke an unused enrollment, revoke one managed
 credential, or disable a logical worker; inactive authority is rejected before registration and is

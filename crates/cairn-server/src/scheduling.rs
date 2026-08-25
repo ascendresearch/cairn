@@ -403,6 +403,8 @@ mod tests {
             websocket_uri: "wss://controller.test:7444/enrollment".into(),
             server_name: "controller.test".into(),
             server_ca: ca,
+            server_tls: None,
+            control_endpoint: None,
             issuer_certificate: directory.path().join("unused-ca.pem"),
             issuer_private_key: directory.path().join("unused-ca-key.pem"),
             credential_validity_ms: NonZeroU64::new(60_000).expect("validity"),

@@ -6,7 +6,7 @@ use std::{
     ffi::OsString,
     fs,
     future::Future,
-    io::{BufReader, Write},
+    io::{BufReader, Read, Write},
     num::NonZeroU64,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,8 +20,8 @@ use cairn_control_transport::{
 use cairn_execution::{
     CapabilityRequirement, ControlFrame, ControllerControlMessage, ExecutionBackend,
     ExecutionCapture, ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor,
-    ExecutorError, InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHello,
-    WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
+    ExecutorError, InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth,
+    WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
     WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages,
     active_worker_attempts, admit_worker_assignment, deliver_worker_acknowledgement,
     deliver_worker_messages, execute_worker_attempt, record_worker_execution_start,
@@ -36,6 +36,7 @@ use rcgen::{
     KeyUsagePurpose, PublicKeyData,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::time::{Instant, Interval};
 
@@ -121,11 +122,20 @@ pub struct ControllerEndpoint {
     pub websocket_uri: String,
 }
 
+/// Stable paths and logical identity returned after a successful one-command join.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerJoinReceipt {
+    pub worker_id: WorkerId,
+    pub credential_id: CredentialId,
+    pub state_directory: PathBuf,
+    pub config_path: PathBuf,
+}
+
 /// Configuration, transport, or durable worker-journal process failure.
 #[derive(Debug, Error)]
 pub enum WorkerError {
     #[error(
-        "usage: cairn-worker <config.json> | cairn-worker enroll <bundle.json> <state-dir> | cairn-worker rotate <bundle.json> <state-dir> | cairn-worker rollback <state-dir>"
+        "usage: cairn-worker <config.json> | cairn-worker join <bundle.json> <state-dir> | cairn-worker enroll <bundle.json> <identity-state-dir> | cairn-worker rotate <bundle.json> <identity-state-dir> | cairn-worker rollback <identity-state-dir>"
     )]
     Usage,
     #[error("worker configuration failed: {0}")]
@@ -162,6 +172,15 @@ pub async fn run_from_arguments(
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let first = arguments.next().ok_or(WorkerError::Usage)?;
+    if first == "join" {
+        let bundle_path = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        let state_directory = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        if arguments.next().is_some() {
+            return Err(WorkerError::Usage);
+        }
+        Box::pin(join_from_bundle(&bundle_path, &state_directory)).await?;
+        return Ok(());
+    }
     if first == "enroll" {
         let bundle_path = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
         let state_directory = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
@@ -716,6 +735,176 @@ pub async fn enroll_from_bundle(
     Box::pin(enroll(bundle, state_directory)).await
 }
 
+/// Initializes a complete worker state tree from one self-contained V3 bootstrap bundle.
+///
+/// The generated `worker.json` is intentionally conservative: the worker reports observed host
+/// resources but stays draining and unavailable until an operator configures a real execution
+/// backend. Re-running join validates and reuses the existing identity and configuration without
+/// overwriting operator edits.
+///
+/// # Errors
+///
+/// Returns an error for a legacy/non-bootstrap bundle, enrollment failure, conflicting existing
+/// state, host-probe failure, or durable persistence failure.
+pub async fn join_from_bundle(
+    bundle_path: &Path,
+    state_directory: &Path,
+) -> Result<WorkerJoinReceipt, WorkerError> {
+    let bundle: EnrollmentBundle = serde_json::from_slice(
+        &fs::read(bundle_path).map_err(|error| WorkerError::Configuration(error.to_string()))?,
+    )
+    .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if bundle.schema_version != 3 || bundle.purpose != EnrollmentPurpose::Bootstrap {
+        return Err(WorkerError::Configuration(
+            "join requires a V3 bootstrap bundle with a public control endpoint".into(),
+        ));
+    }
+    let control = bundle.control_endpoint.clone().ok_or_else(|| {
+        WorkerError::Configuration(
+            "join bundle does not contain the ordinary worker-control endpoint".into(),
+        )
+    })?;
+
+    prepare_state_directory(state_directory)?;
+    let state_directory = state_directory
+        .canonicalize()
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let identity_directory = state_directory.join("identity");
+    let scratch_directory = state_directory.join("scratch");
+    prepare_state_directory(&scratch_directory)?;
+    let identity = Box::pin(enroll(bundle, &identity_directory)).await?;
+    let config_path = state_directory.join("worker.json");
+
+    if config_path.exists() {
+        let mut existing: WorkerConfig = serde_json::from_slice(
+            &fs::read(&config_path)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+        )
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        existing.resolve_paths(&state_directory);
+        validate_join_configuration(&existing, &identity_directory, &control)?;
+        let profile = existing.runtime_profile()?;
+        existing.validate(&profile)?;
+        return Ok(WorkerJoinReceipt {
+            worker_id: identity.worker_id,
+            credential_id: identity.credential_id,
+            state_directory,
+            config_path,
+        });
+    }
+
+    let config = generated_join_configuration(&control)?;
+    let mut resolved = config.clone();
+    resolved.resolve_paths(&state_directory);
+    validate_join_configuration(&resolved, &identity_directory, &control)?;
+    let profile = resolved.runtime_profile()?;
+    resolved.validate(&profile)?;
+    let bytes = serde_json::to_vec_pretty(&config)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    persist_exact(&config_path, &bytes, false)?;
+    Ok(WorkerJoinReceipt {
+        worker_id: identity.worker_id,
+        credential_id: identity.credential_id,
+        state_directory,
+        config_path,
+    })
+}
+
+fn generated_join_configuration(
+    control: &cairn_control_transport::WorkerControlEndpoint,
+) -> Result<WorkerConfig, WorkerError> {
+    Ok(WorkerConfig {
+        schema_version: 5,
+        controller: ControllerEndpoint {
+            tcp_address: control.tcp_address.clone(),
+            websocket_uri: control.websocket_uri.clone(),
+        },
+        identity: WorkerIdentityConfig::Managed {
+            state_directory: PathBuf::from("identity"),
+        },
+        profile: WorkerProfileConfig {
+            schema_version: 2,
+            protocol_version: WorkerProtocolVersion::new(1)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+            binary_identity: current_binary_identity()?,
+            backends: vec![
+                ExecutionBackend::new("transport-only")
+                    .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+            ],
+            capabilities: Vec::new(),
+            max_concurrency: WorkerSlotCount::new(1)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+        },
+        expected_platform: ExecutionPlatformRequirement::default(),
+        resource_probe: ResourceProbeConfig {
+            scratch_path: PathBuf::from("scratch"),
+            accelerator_sysfs: Some(PathBuf::from("/sys/class/accel")),
+            freshness_ms: None,
+            refresh_interval_ms: None,
+            expected: ExpectedResourceConstraints::default(),
+        },
+        availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+        journal_database: PathBuf::from("worker.sqlite3"),
+        handshake_timeout_ms: NonZeroU64::new(10_000),
+        idle_timeout_ms: NonZeroU64::new(120_000),
+        heartbeat_interval_ms: NonZeroU64::new(30_000),
+        identity_poll_interval_ms: NonZeroU64::new(1_000)
+            .ok_or_else(|| WorkerError::Configuration("invalid identity poll interval".into()))?,
+        reconnect_delay_ms: NonZeroU64::new(1_000),
+        transport: TransportPolicy::default(),
+    })
+}
+
+fn validate_join_configuration(
+    config: &WorkerConfig,
+    identity_directory: &Path,
+    control: &cairn_control_transport::WorkerControlEndpoint,
+) -> Result<(), WorkerError> {
+    if config.controller.tcp_address != control.tcp_address
+        || config.controller.websocket_uri != control.websocket_uri
+    {
+        return Err(WorkerError::Configuration(
+            "existing worker configuration names another controller endpoint".into(),
+        ));
+    }
+    match &config.identity {
+        WorkerIdentityConfig::Managed { state_directory }
+            if state_directory == identity_directory => {}
+        WorkerIdentityConfig::Managed { .. } => {
+            return Err(WorkerError::Configuration(
+                "existing worker configuration names another managed identity directory".into(),
+            ));
+        }
+        WorkerIdentityConfig::External { .. } => {
+            return Err(WorkerError::Configuration(
+                "join state cannot use an external worker identity".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn current_binary_identity() -> Result<WorkerBinaryIdentity, WorkerError> {
+    let executable =
+        std::env::current_exe().map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let mut file = fs::File::open(executable)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    WorkerBinaryIdentity::new(format!("sha256:{:x}", digest.finalize()))
+        .map_err(|error| WorkerError::Configuration(error.to_string()))
+}
+
 /// Redeems one already-decoded enrollment bundle.
 ///
 /// # Errors
@@ -729,7 +918,7 @@ pub async fn enroll(
     bundle: EnrollmentBundle,
     state_directory: &Path,
 ) -> Result<ManagedWorkerIdentity, WorkerError> {
-    if !matches!(bundle.schema_version, 1 | 2) || bundle.purpose != EnrollmentPurpose::Bootstrap {
+    if !matches!(bundle.schema_version, 1..=3) || bundle.purpose != EnrollmentPurpose::Bootstrap {
         return Err(WorkerError::Configuration(
             "enroll requires a supported bootstrap authority".into(),
         ));
@@ -816,9 +1005,23 @@ pub async fn enroll(
         credential.certificate_chain_pem.as_bytes(),
         false,
     )?;
+    let (control_ca_pem, control_server_name) = bundle.control_endpoint.as_ref().map_or_else(
+        || {
+            (
+                bundle.endpoint.server_ca_pem.as_str(),
+                bundle.endpoint.server_name.as_str(),
+            )
+        },
+        |endpoint| {
+            (
+                endpoint.server_ca_pem.as_str(),
+                endpoint.server_name.as_str(),
+            )
+        },
+    );
     persist_exact(
         &state_directory.join("ca.pem"),
-        bundle.endpoint.server_ca_pem.as_bytes(),
+        control_ca_pem.as_bytes(),
         false,
     )?;
     let identity = ManagedWorkerIdentity {
@@ -833,7 +1036,7 @@ pub async fn enroll(
             certificate: PathBuf::from("worker.pem"),
             private_key: PathBuf::from("worker-key.pem"),
             server_ca: PathBuf::from("ca.pem"),
-            server_name: bundle.endpoint.server_name,
+            server_name: control_server_name.to_owned(),
         },
     };
     let bytes = serde_json::to_vec_pretty(&identity)
@@ -868,7 +1071,7 @@ pub async fn rotate(
             "rotate requires a credential rotation authority".into(),
         ));
     };
-    if bundle.schema_version != 2 {
+    if !matches!(bundle.schema_version, 2 | 3) {
         return Err(WorkerError::Configuration(
             "rotation authority schema is unsupported".into(),
         ));
@@ -970,9 +1173,23 @@ pub async fn rotate(
         credential.certificate_chain_pem.as_bytes(),
         false,
     )?;
+    let (control_ca_pem, control_server_name) = bundle.control_endpoint.as_ref().map_or_else(
+        || {
+            (
+                bundle.endpoint.server_ca_pem.as_str(),
+                bundle.endpoint.server_name.as_str(),
+            )
+        },
+        |endpoint| {
+            (
+                endpoint.server_ca_pem.as_str(),
+                endpoint.server_name.as_str(),
+            )
+        },
+    );
     persist_exact(
         &staging_directory.join("ca.pem"),
-        bundle.endpoint.server_ca_pem.as_bytes(),
+        control_ca_pem.as_bytes(),
         false,
     )?;
     let identity = ManagedWorkerIdentity {
@@ -987,7 +1204,7 @@ pub async fn rotate(
             certificate: relative_directory.join("worker.pem"),
             private_key: relative_directory.join("worker-key.pem"),
             server_ca: relative_directory.join("ca.pem"),
-            server_name: bundle.endpoint.server_name,
+            server_name: control_server_name.to_owned(),
         },
     };
     validate_managed_material(state_directory, &identity)?;

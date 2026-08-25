@@ -94,6 +94,19 @@ pub struct EnrollmentEndpoint {
     pub server_ca_pem: String,
 }
 
+/// Public endpoint and pinned trust material used after enrollment for ordinary worker control.
+///
+/// This is deliberately separate from [`EnrollmentEndpoint`]: operators may isolate bootstrap
+/// traffic on another listener, DNS name, and server certificate.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerControlEndpoint {
+    pub tcp_address: String,
+    pub websocket_uri: String,
+    pub server_name: String,
+    pub server_ca_pem: String,
+}
+
 /// Controller-owned lifecycle purpose of one enrollment authority.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -119,6 +132,9 @@ pub struct EnrollmentBundle {
     pub secret: EnrollmentSecret,
     pub expires_at: ObservedAtUnixMillis,
     pub endpoint: EnrollmentEndpoint,
+    /// Present in schema V3 bundles so `cairn-worker join` needs no out-of-band endpoint config.
+    #[serde(default)]
+    pub control_endpoint: Option<WorkerControlEndpoint>,
     pub handshake_timeout_ms: Option<std::num::NonZeroU64>,
     pub transport: TransportPolicy,
 }

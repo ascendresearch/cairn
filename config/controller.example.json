@@ -4,6 +4,12 @@
   "enrollment": [],
   "enrollment_service": {
     "credential_validity_ms": 2592000000,
+    "control_endpoint": {
+      "server_ca": "pki/ca.pem",
+      "server_name": "controller.example.test",
+      "tcp_address": "controller.example.test:7443",
+      "websocket_uri": "wss://controller.example.test:7443/control"
+    },
     "diagnostic_byte_limit": 1024,
     "handshake_timeout_ms": 10000,
     "issuer_certificate": "pki/ca.pem",
@@ -13,6 +19,10 @@
     "rotation_overlap_ms": 300000,
     "server_ca": "pki/ca.pem",
     "server_name": "controller.example.test",
+    "server_tls": {
+      "certificate": "pki/controller.pem",
+      "private_key": "pki/controller-key.pem"
+    },
     "transport": {
       "message_byte_limit": 1048576
     },
