@@ -383,9 +383,9 @@ impl WorkerConfig {
                         .map_err(|error| WorkerError::Configuration(error.to_string()))?,
                 )
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-                if !matches!(identity.schema_version, 1 | 2) {
+                if identity.schema_version != 1 {
                     return Err(WorkerError::Configuration(
-                        "only managed worker identity schema_version 1 or 2 is supported".into(),
+                        "only managed worker identity schema_version 1 is supported".into(),
                     ));
                 }
                 validate_managed_material(state_directory, &identity)?;
@@ -402,19 +402,14 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if !matches!(self.schema_version, 7 | 8) {
+        if self.schema_version != 1 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 7 or 8 is supported".into(),
+                "only worker schema_version 1 is supported".into(),
             ));
         }
-        if self.schema_version == 7 && !matches!(self.execution, WorkerExecutionConfig::Disabled) {
+        if self.profile.schema_version != 1 {
             return Err(WorkerError::Configuration(
-                "worker schema_version 7 can only use execution mode disabled".into(),
-            ));
-        }
-        if self.profile.schema_version != 2 {
-            return Err(WorkerError::Configuration(
-                "only worker profile configuration schema_version 2 is supported".into(),
+                "only worker profile configuration schema_version 1 is supported".into(),
             ));
         }
         let platform = ExecutionPlatform::detect_host()
@@ -473,11 +468,11 @@ impl WorkerConfig {
 
     fn validate(&self, profile: &WorkerProfile) -> Result<(), WorkerError> {
         if profile.protocol_version()
-            != WorkerProtocolVersion::new(2)
+            != WorkerProtocolVersion::new(1)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?
         {
             return Err(WorkerError::Configuration(
-                "this worker binary implements protocol_version 2".into(),
+                "this worker binary implements protocol_version 1".into(),
             ));
         }
         let configured = WorkerAvailability::new(
@@ -505,17 +500,13 @@ impl WorkerConfig {
             .map_err(|error| WorkerError::Configuration(error.to_string()))?
         {
             None => {
-                let invalid_v8_disabled = if self.schema_version == 8 {
-                    let transport_only = ExecutionBackend::new("transport-only")
-                        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-                    declared_backends != [transport_only]
-                        || self.availability.health() != WorkerHealth::Unavailable
-                        || !self.availability.draining()
-                        || self.availability.available_slots() != 0
-                } else {
-                    false
-                };
-                if invalid_v8_disabled {
+                let transport_only = ExecutionBackend::new("transport-only")
+                    .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+                if declared_backends != [transport_only]
+                    || self.availability.health() != WorkerHealth::Unavailable
+                    || !self.availability.draining()
+                    || self.availability.available_slots() != 0
+                {
                     return Err(WorkerError::Configuration(
                         "disabled execution requires exactly backend transport-only and unavailable, draining, zero-slot availability"
                             .into(),
@@ -1198,7 +1189,7 @@ pub async fn enroll_from_bundle(
     Box::pin(enroll(bundle, state_directory)).await
 }
 
-/// Initializes a complete worker state tree from one self-contained V3 bootstrap bundle.
+/// Initializes a complete worker state tree from one self-contained bootstrap bundle.
 ///
 /// The generated `worker.json` is intentionally conservative: the worker reports observed host
 /// resources but stays draining and unavailable until an operator configures a real execution
@@ -1207,7 +1198,7 @@ pub async fn enroll_from_bundle(
 ///
 /// # Errors
 ///
-/// Returns an error for a legacy/non-bootstrap bundle, enrollment failure, conflicting existing
+/// Returns an error for a non-bootstrap bundle, enrollment failure, conflicting existing
 /// state, host-probe failure, or durable persistence failure.
 pub async fn join_from_bundle(
     bundle_path: &Path,
@@ -1217,16 +1208,12 @@ pub async fn join_from_bundle(
         &fs::read(bundle_path).map_err(|error| WorkerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    if bundle.schema_version != 3 || bundle.purpose != EnrollmentPurpose::Bootstrap {
+    if bundle.schema_version != 1 || bundle.purpose != EnrollmentPurpose::Bootstrap {
         return Err(WorkerError::Configuration(
-            "join requires a V3 bootstrap bundle with a public control endpoint".into(),
+            "join requires a schema_version 1 bootstrap bundle".into(),
         ));
     }
-    let control = bundle.control_endpoint.clone().ok_or_else(|| {
-        WorkerError::Configuration(
-            "join bundle does not contain the ordinary worker-control endpoint".into(),
-        )
-    })?;
+    let control = bundle.control_endpoint.clone();
 
     prepare_state_directory(state_directory)?;
     let state_directory = state_directory
@@ -1280,7 +1267,7 @@ fn generated_join_configuration(
     control: &cairn_control_transport::WorkerControlEndpoint,
 ) -> Result<WorkerConfig, WorkerError> {
     Ok(WorkerConfig {
-        schema_version: 8,
+        schema_version: 1,
         controller: ControllerEndpoint {
             tcp_address: control.tcp_address.clone(),
             websocket_uri: control.websocket_uri.clone(),
@@ -1289,8 +1276,8 @@ fn generated_join_configuration(
             state_directory: PathBuf::from("identity"),
         },
         profile: WorkerProfileConfig {
-            schema_version: 2,
-            protocol_version: WorkerProtocolVersion::new(2)
+            schema_version: 1,
+            protocol_version: WorkerProtocolVersion::new(1)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
             binary_identity: current_binary_identity()?,
             backends: vec![
@@ -1395,7 +1382,7 @@ pub async fn enroll(
     bundle: EnrollmentBundle,
     state_directory: &Path,
 ) -> Result<ManagedWorkerIdentity, WorkerError> {
-    if !matches!(bundle.schema_version, 1..=3) || bundle.purpose != EnrollmentPurpose::Bootstrap {
+    if bundle.schema_version != 1 || bundle.purpose != EnrollmentPurpose::Bootstrap {
         return Err(WorkerError::Configuration(
             "enroll requires a supported bootstrap authority".into(),
         ));
@@ -1408,7 +1395,7 @@ pub async fn enroll(
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         )
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-        if !matches!(identity.schema_version, 1 | 2) {
+        if identity.schema_version != 1 {
             return Err(WorkerError::Configuration(
                 "managed identity has an unsupported schema".into(),
             ));
@@ -1464,7 +1451,7 @@ pub async fn enroll(
     }
 
     let credential = Box::pin(request_credential(&bundle, csr_pem)).await?;
-    if !matches!(credential.schema_version, 1 | 2)
+    if credential.schema_version != 1
         || credential.predecessor_credential_id.is_some()
         || credential.predecessor_retire_at.is_some()
     {
@@ -1482,27 +1469,15 @@ pub async fn enroll(
         credential.certificate_chain_pem.as_bytes(),
         false,
     )?;
-    let (control_ca_pem, control_server_name) = bundle.control_endpoint.as_ref().map_or_else(
-        || {
-            (
-                bundle.endpoint.server_ca_pem.as_str(),
-                bundle.endpoint.server_name.as_str(),
-            )
-        },
-        |endpoint| {
-            (
-                endpoint.server_ca_pem.as_str(),
-                endpoint.server_name.as_str(),
-            )
-        },
-    );
+    let control_ca_pem = bundle.control_endpoint.server_ca_pem.as_str();
+    let control_server_name = bundle.control_endpoint.server_name.as_str();
     persist_exact(
         &state_directory.join("ca.pem"),
         control_ca_pem.as_bytes(),
         false,
     )?;
     let identity = ManagedWorkerIdentity {
-        schema_version: 2,
+        schema_version: 1,
         enrollment_id: bundle.enrollment_id,
         worker_id: credential.worker_id,
         credential_id: credential.credential_id,
@@ -1548,7 +1523,7 @@ pub async fn rotate(
             "rotate requires a credential rotation authority".into(),
         ));
     };
-    if !matches!(bundle.schema_version, 2 | 3) {
+    if bundle.schema_version != 1 {
         return Err(WorkerError::Configuration(
             "rotation authority schema is unsupported".into(),
         ));
@@ -1630,7 +1605,7 @@ pub async fn rotate(
     }
 
     let credential = Box::pin(request_credential(&bundle, csr_pem)).await?;
-    if credential.schema_version != 2
+    if credential.schema_version != 1
         || credential.worker_id != *worker_id
         || credential.pool != predecessor.pool
         || credential.credential_id == *predecessor_credential_id
@@ -1650,27 +1625,15 @@ pub async fn rotate(
         credential.certificate_chain_pem.as_bytes(),
         false,
     )?;
-    let (control_ca_pem, control_server_name) = bundle.control_endpoint.as_ref().map_or_else(
-        || {
-            (
-                bundle.endpoint.server_ca_pem.as_str(),
-                bundle.endpoint.server_name.as_str(),
-            )
-        },
-        |endpoint| {
-            (
-                endpoint.server_ca_pem.as_str(),
-                endpoint.server_name.as_str(),
-            )
-        },
-    );
+    let control_ca_pem = bundle.control_endpoint.server_ca_pem.as_str();
+    let control_server_name = bundle.control_endpoint.server_name.as_str();
     persist_exact(
         &staging_directory.join("ca.pem"),
         control_ca_pem.as_bytes(),
         false,
     )?;
     let identity = ManagedWorkerIdentity {
-        schema_version: 2,
+        schema_version: 1,
         enrollment_id: bundle.enrollment_id,
         worker_id: credential.worker_id,
         credential_id: credential.credential_id,
@@ -1819,7 +1782,7 @@ fn validate_managed_material(
     state_directory: &Path,
     identity: &ManagedWorkerIdentity,
 ) -> Result<(), WorkerError> {
-    if !matches!(identity.schema_version, 1 | 2)
+    if identity.schema_version != 1
         || identity.predecessor_retire_at.is_some() && identity.predecessor_credential_id.is_none()
         || identity.predecessor_credential_id == Some(identity.credential_id)
     {

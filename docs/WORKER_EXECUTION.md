@@ -1,6 +1,6 @@
 # Worker execution and explicit activation
 
-`cairn-worker join` deliberately generates a schema-V8 worker with `execution.mode=disabled`, the
+`cairn-worker join` deliberately generates a schema-V1 worker with `execution.mode=disabled`, the
 single advertised backend `transport-only`, and unavailable/draining/zero-slot availability.
 Enrollment proves identity and pool ownership; it does not prove that a host can execute jobs.
 

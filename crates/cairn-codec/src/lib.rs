@@ -61,7 +61,7 @@ pub fn from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, CodecError> {
 
 /// Parses strict JSON and returns its canonical V1 bytes.
 ///
-/// This is an explicit migration/import operation; durable readers should normally use
+/// This is an explicit normalization operation; durable readers should normally use
 /// [`from_slice`] so non-canonical persisted bytes remain visible as a defect.
 ///
 /// # Errors

@@ -87,15 +87,15 @@ TLS WebSockets, exchange strict binary canonical-JSON hello/welcome/heartbeat/co
 bind the verified leaf-certificate fingerprint to an enrolled strong `WorkerId`. Controller and
 worker use independent SQLite authorities for durable delivery and recovery; configurable wire,
 timeout, heartbeat, polling, reconnect, and diagnostic controls can each be explicitly disabled
-where optional. A two-worker integration test proves that distinct certificates and journals become
-two recoverable live sessions, while post-commit heartbeat acknowledgements keep independently
-idle-bounded connections stable. Worker profile V3 now reports the built-in-observed native
+where optional. Managed-enrollment integration proves certificate-to-worker authority, durable
+registration, reconnect, and restart recovery, while control tests cover post-commit heartbeat
+acknowledgement semantics. Worker profile V1 now reports the built-in-observed native
 architecture/OS/target environment separately from operator-declared backends and capabilities,
 with provenance retained for every claim. Operator `expected_platform` values fail closed instead
 of overriding detection. Its immutable startup resource observation adds strongly typed logical
 CPU, memory-byte, scratch-byte, accelerator discovery, and per-device capability facts. Operator
 configuration provides only probe paths, optional expectations, and optional expiry; it cannot
-forge observed capacity. Job contract V3 expresses quantitative minima and the scheduler rejects
+forge observed capacity. Job contract V1 expresses quantitative minima and the scheduler rejects
 stale or insufficient observations, including accelerator devices that do not satisfy requested
 device capabilities. Dynamic refresh now has an independently optional interval and persists exact
 observation ContentId/revision without changing profile or liveness. Scheduler reservations subtract
@@ -109,7 +109,7 @@ let `cairn-migration` validation tiers ask for resources without assigning busin
 Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
 retains its own private key. Exact-CSR replay closes a lost-response window, and a fresh controller
 recovers certificate-to-`CredentialId`/`WorkerId`/pool authority from the append-only registry.
-Bundle V3 separately pins bootstrap and ordinary-control endpoints, allowing different listeners,
+Bundle V1 separately pins bootstrap and ordinary-control endpoints, allowing different listeners,
 TLS names, and CAs. `cairn-worker join <bundle> <state-dir>` now composes enrollment, local
 binary/resource observation, a fixed state tree with independent local content storage, and strict
 editable worker configuration without
@@ -139,7 +139,7 @@ post-snapshot revocation fails closed. `cairn-migration` owns V0–V3 product me
 it to generic platform/pool/backend/capability/resource constraints; its fixture reaches a selected
 worker without leaking migration roles into execution types. Scheduler enablement, policy, session
 time, claim time, and lease time are configuration rather than constants. See
-[`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. Worker-control V2
+[`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. Worker-control V1
 now freezes a compact typed input/environment manifest, transfers bounded canonical-base64 ranges,
 syncs and resumes private per-offer staging after reconnect, and commits fully verified objects to
 independent worker CAS before accepting the assignment. Start reloads those local objects.
@@ -153,13 +153,13 @@ evidence. Join still defaults to a `NotStarted`, unavailable, draining worker; a
 the execution mode, exact backend claim, and ready availability to change coherently. This host
 adapter is for controlled utilities and is not presented as hostile-code filesystem isolation; see
 [`docs/WORKER_EXECUTION.md`](docs/WORKER_EXECUTION.md). Hardened container backends, concrete resource
-challenge/attestation adapters, and oracle-grade real-host jobs remain subsequent slices. Legacy static credentials now enter the persistent registry
-through an atomic, explicitly idempotent V2-to-V3 import gate; ordinary startup accepts only V3
-configuration with an empty static enrollment list. The active
+challenge/attestation adapters, and oracle-grade real-host jobs remain subsequent slices. Managed
+enrollment is the only path into the persistent registry; controller configuration has no static
+certificate list or import gate. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 The remaining architecture in the normative documents is still target design. The old repositories
-are evidence and compatibility references, not source trees to copy mechanically.
+are evidence references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

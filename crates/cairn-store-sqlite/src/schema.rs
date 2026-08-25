@@ -1,26 +1,26 @@
 use rusqlite::Connection;
 use thiserror::Error;
 
-const CURRENT_VERSION: i64 = 2;
+const CURRENT_VERSION: i64 = 1;
 
 #[derive(Debug, Error)]
 pub(crate) enum SchemaError {
-    #[error("SQLite schema version {found} is newer than supported version {supported}")]
-    TooNew { found: i64, supported: i64 },
-    #[error("SQLite schema migration failed: {0}")]
+    #[error("SQLite schema version {found} is unsupported; expected {supported}")]
+    Unsupported { found: i64, supported: i64 },
+    #[error("SQLite schema initialization failed: {0}")]
     Sql(#[from] rusqlite::Error),
 }
 
-pub(crate) fn migrate(connection: &mut Connection) -> Result<(), SchemaError> {
+pub(crate) fn initialize(connection: &mut Connection) -> Result<(), SchemaError> {
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
     let version = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
-    if version > CURRENT_VERSION {
-        return Err(SchemaError::TooNew {
+    if version != 0 && version != CURRENT_VERSION {
+        return Err(SchemaError::Unsupported {
             found: version,
             supported: CURRENT_VERSION,
         });
     }
-    if version < 1 {
+    if version == 0 {
         let transaction = connection.transaction()?;
         transaction.execute_batch(
             "CREATE TABLE IF NOT EXISTS streams (
@@ -79,15 +79,8 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), SchemaError> {
     }
 
     // WAL lets the long-running controller continue reading while a separate administrative
-    // command appends an authority fact. Journal mode is persistent and must be changed outside a
-    // transaction; FULL synchronization preserves the durable-fact contract.
-    if version < 2 {
-        connection.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = FULL;
-             PRAGMA user_version = 2;",
-        )?;
-    }
+    // command appends an authority fact. FULL synchronization preserves the durable-fact contract.
+    connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
     Ok(())
 }
 
@@ -95,13 +88,13 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), SchemaError> {
 mod tests {
     use rusqlite::Connection;
 
-    use super::{CURRENT_VERSION, SchemaError, migrate};
+    use super::{CURRENT_VERSION, SchemaError, initialize};
 
     #[test]
-    fn migration_is_idempotent_and_versioned() {
+    fn initialization_is_idempotent_and_versioned() {
         let mut connection = Connection::open_in_memory().expect("connection");
-        migrate(&mut connection).expect("first migration");
-        migrate(&mut connection).expect("second migration");
+        initialize(&mut connection).expect("first initialization");
+        initialize(&mut connection).expect("second initialization");
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("version");
@@ -109,25 +102,21 @@ mod tests {
     }
 
     #[test]
-    fn v1_file_store_migrates_to_wal_for_concurrent_controller_and_admin_access() {
+    fn new_file_store_uses_wal_for_concurrent_controller_and_admin_access() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("events.sqlite3");
-        let mut connection = Connection::open(&path).expect("open V1 fixture");
-        connection
-            .execute_batch("PRAGMA user_version = 1;")
-            .expect("mark V1 fixture");
-
-        migrate(&mut connection).expect("migrate V1 fixture");
+        let mut connection = Connection::open(&path).expect("open fixture");
+        initialize(&mut connection).expect("initialize fixture");
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("version");
         let journal_mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("journal mode");
-        assert_eq!(version, CURRENT_VERSION);
+        assert_eq!(version, 1);
         assert_eq!(journal_mode, "wal");
 
-        let reopened = Connection::open(path).expect("reopen migrated fixture");
+        let reopened = Connection::open(path).expect("reopen initialized fixture");
         let persisted_mode: String = reopened
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("persisted journal mode");
@@ -135,14 +124,14 @@ mod tests {
     }
 
     #[test]
-    fn newer_schema_is_rejected() {
+    fn non_v1_schema_is_rejected() {
         let mut connection = Connection::open_in_memory().expect("connection");
         connection
             .execute_batch("PRAGMA user_version = 99;")
             .expect("set version");
         assert!(matches!(
-            migrate(&mut connection),
-            Err(SchemaError::TooNew { .. })
+            initialize(&mut connection),
+            Err(SchemaError::Unsupported { .. })
         ));
     }
 }

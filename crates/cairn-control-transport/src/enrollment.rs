@@ -132,9 +132,7 @@ pub struct EnrollmentBundle {
     pub secret: EnrollmentSecret,
     pub expires_at: ObservedAtUnixMillis,
     pub endpoint: EnrollmentEndpoint,
-    /// Present in schema V3 bundles so `cairn-worker join` needs no out-of-band endpoint config.
-    #[serde(default)]
-    pub control_endpoint: Option<WorkerControlEndpoint>,
+    pub control_endpoint: WorkerControlEndpoint,
     pub handshake_timeout_ms: Option<std::num::NonZeroU64>,
     pub transport: TransportPolicy,
 }

@@ -15,41 +15,18 @@ For the normal open-source join path, also configure
 `enrollment_service.control_endpoint` with the externally routable control TCP address, WebSocket
 URI, TLS server name, and server CA path. Enrollment and ordinary control may use different
 listeners, names, and server certificates: set `enrollment_service.server_tls` to a dedicated
-bootstrap certificate/key, while `server_ca` pins its issuing CA. If `server_tls` is absent, the
-bootstrap listener reuses the ordinary controller server identity for compatibility. The controller
-embeds both public endpoint descriptions and pinned trust material in a schema V3 bundle; no
+bootstrap certificate/key, while `server_ca` pins its issuing CA. Both the bootstrap identity and
+ordinary-control endpoint are required. The controller embeds both public endpoint descriptions
+and pinned trust material in a schema V1 bundle; no
 control address is hand-entered on the worker.
 
-Controller configuration schema V3 requires `enrollment: []`. Worker authentication and scheduling
-consume only the append-only registry; a controller may start with an empty registry so onboarding
-does not require any copied worker certificate. Schema V2 is accepted only by the explicit legacy
-static-import command described below. Existing pre-V4 worker-registration facts require the
-controlled development-state migration/rebuild gate described in the implementation plan.
+Controller configuration schema V1 has no static certificate list. Worker authentication and
+scheduling consume only the append-only registry; a controller may start with an empty registry so
+onboarding does not require any copied worker certificate.
 
 The reference adapter currently reads an issuer certificate/key from files. The issuance boundary
 is deliberately separate from the registry so an enterprise CA, offline signer, or SPIFFE adapter
 can replace it without changing `EnrollmentId`, `WorkerId`, pool, or credential history semantics.
-
-## Import a legacy static deployment
-
-Keep one resolved copy of the old schema V2 configuration long enough to perform the migration.
-Stop the old controller, allocate and retain one strong command identity, then run:
-
-```bash
-cairn-server registry import-static controller.v2.json command:019c0000-0000-7000-8000-000000000010
-```
-
-The command reads every configured leaf certificate, canonicalizes the batch by `CredentialId`,
-and atomically records the exact certificate fingerprint, `WorkerId`, `CredentialId`, and pool. It
-does not persist source paths or certificate bytes. Repeating the same command identity with the
-same resolved certificates returns the original import event; reusing it with changed input fails.
-A new command cannot import an already owned credential, fingerprint, or worker.
-
-After success, change the operational file to `schema_version: 3` and replace the static array with
-`"enrollment": []`. The V3 server refuses a non-empty list, while ordinary startup refuses V2, so
-there is no interval in which static configuration and registry history silently compete. Keep the
-legacy file according to the operator's audit/backup policy; Cairn no longer reads it during normal
-operation.
 
 ## Create a one-shot bundle
 
@@ -71,7 +48,7 @@ cairn-worker join worker.enrollment.json /var/lib/cairn/worker
 ```
 
 It creates a fixed tree containing `identity/`, `scratch/`, `content/`, `transfers/`,
-`worker.sqlite3`, and `content.sqlite3` when first run, plus a strict schema V7 `worker.json`.
+`worker.sqlite3`, and `content.sqlite3` when first run, plus a strict schema V1 `worker.json`.
 Platform and quantitative
 host resources are observed locally; the running
 executable is identified by its SHA-256 digest. Timeouts, heartbeat, reconnect, resource freshness,
@@ -125,7 +102,7 @@ Worker configuration selects the state directory rather than repeating identity 
 After bootstrap, delete the transferred bundle according to local secret-handling policy. Do not
 delete the staged CSR: it is non-secret recovery evidence bound to the local private key.
 
-Worker configuration schema V7 has mandatory positive `identity_poll_interval_ms`. A running
+Worker configuration schema V1 has mandatory positive `identity_poll_interval_ms`. A running
 managed worker checks the atomic identity manifest at this interval. When rotation changes the
 credential, it closes the old connection and reconnects with a fresh `WorkerIncarnationId`.
 
@@ -178,8 +155,8 @@ replay deliberately returns the original (now revoked) issuance and is not a sec
 - A fresh controller process reconstructs certificate fingerprint to `WorkerId`/pool authorization
   from the append-only registry stream.
 - The issued certificate serial is the strong `CredentialId`; it is not the permanent worker ID.
-- Externally provisioned identities enter the same registry through the explicit static-import
-  migration boundary; no separate runtime authority remains.
+- Managed enrollment is the only path into registry authority; no separate static authority or
+  import boundary exists.
 
 ## Revoke authority
 

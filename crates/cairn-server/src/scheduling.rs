@@ -383,7 +383,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        EnrollmentServiceConfig,
+        EnrollmentServerTlsFiles, EnrollmentServiceConfig, PublicWorkerControlEndpointConfig,
         enrollment::{
             EnrollmentError, WorkerCredentialIssuer, create_offer, redeem, revoke_credential,
         },
@@ -421,9 +421,17 @@ mod tests {
             public_tcp_address: "controller.test:7444".into(),
             websocket_uri: "wss://controller.test:7444/enrollment".into(),
             server_name: "controller.test".into(),
-            server_ca: ca,
-            server_tls: None,
-            control_endpoint: None,
+            server_ca: ca.clone(),
+            server_tls: EnrollmentServerTlsFiles {
+                certificate: directory.path().join("unused-enrollment.pem"),
+                private_key: directory.path().join("unused-enrollment-key.pem"),
+            },
+            control_endpoint: PublicWorkerControlEndpointConfig {
+                tcp_address: "controller.test:7443".into(),
+                websocket_uri: "wss://controller.test:7443/control".into(),
+                server_name: "controller.test".into(),
+                server_ca: ca.clone(),
+            },
             issuer_certificate: directory.path().join("unused-ca.pem"),
             issuer_private_key: directory.path().join("unused-ca-key.pem"),
             credential_validity_ms: NonZeroU64::new(60_000).expect("validity"),
@@ -456,7 +464,7 @@ mod tests {
         )
         .expect("redeem offer");
         let profile = WorkerProfile::new(
-            WorkerProtocolVersion::new(2).expect("protocol"),
+            WorkerProtocolVersion::new(1).expect("protocol"),
             WorkerBinaryIdentity::new("sha256:managed-authority-fixture").expect("binary"),
             WorkerResourceInventory::new(
                 WorkerResourceClaim::new(
@@ -581,7 +589,7 @@ mod tests {
             &[credential.worker_id],
             &authority,
             SchedulerPolicy::new(
-                SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
+                SchedulerPolicyVersion::StableWorkerIdQuantitativeV1,
                 session_timeout,
                 ReservationClaimTimeoutMillis::new(20).expect("claim timeout"),
             ),

@@ -23,7 +23,7 @@ document is complete.
 | [`ENROLLMENT.md`](ENROLLMENT.md) | How does a worker bootstrap a local managed identity without copied private keys? | Operator procedure and implemented trust boundary |
 | [`SCHEDULER.md`](SCHEDULER.md) | How are generic candidates selected, reserved, assigned, retried, and safely released? | Implemented scheduling trust boundary |
 | [`RESOURCE_PROBING.md`](RESOURCE_PROBING.md) | Which resource facts are observed, configured, matched, and still deferred? | Implemented D1 probe/operator contract |
-| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | In what dependency order do worker authority, scheduling, probing, registry migration, and onboarding close? | Active delivery plan and acceptance gates |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | In what dependency order do worker authority, scheduling, probing, registry lifecycle, and onboarding close? | Active delivery plan and acceptance gates |
 
 ## Reading order
 
@@ -50,7 +50,7 @@ is expected to be met, but passing prose is not acceptance evidence.
    experiment costs belong in future `docs/evidence/` records.
 5. Open questions are not silently resolved in code. Resolve one by updating the relevant normative
    document and recording the evidence or argument used.
-6. Old Cairn and Alloyport behavior may become a compatibility test, but old names, aggregates, and
+6. Old Cairn and Alloyport behavior may become regression evidence, but old names, aggregates, and
    deployment accidents are not automatically requirements.
 
 ## Source material

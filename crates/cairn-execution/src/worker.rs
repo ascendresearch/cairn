@@ -231,7 +231,7 @@ pub enum WorkerValueError {
     /// Dynamic availability exceeded the registered capacity.
     #[error("worker available slots exceed registered maximum concurrency")]
     SlotsExceedCapacity,
-    /// Only the implemented V3 worker profile is accepted.
+    /// Only the current worker profile schema is accepted.
     #[error("worker profile schema version is unsupported")]
     UnsupportedProfileSchema,
 }
@@ -631,7 +631,7 @@ impl WorkerProfile {
         resources: WorkerResourceInventory,
     ) -> Result<Self, WorkerValueError> {
         let profile = Self {
-            schema_version: 3,
+            schema_version: 1,
             protocol_version,
             binary_identity,
             resources,
@@ -641,7 +641,7 @@ impl WorkerProfile {
     }
 
     fn validate(&self) -> Result<(), WorkerValueError> {
-        if self.schema_version != 3 {
+        if self.schema_version != 1 {
             return Err(WorkerValueError::UnsupportedProfileSchema);
         }
         self.resources.validate()
@@ -936,7 +936,7 @@ impl WorkerAvailability {
 /// Immutable content domain for canonical worker profiles.
 pub struct WorkerProfileArtifact;
 impl ContentType for WorkerProfileArtifact {
-    const DOMAIN: &'static str = "execution.worker-profile.v3";
+    const DOMAIN: &'static str = "execution.worker-profile.v1";
 }
 
 /// Immutable content domain for dynamic availability snapshots.
@@ -1413,7 +1413,7 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         };
     let event = fact(
         schema,
-        4,
+        1,
         parent,
         observed_at,
         &RegistrationPayload {
@@ -1923,7 +1923,7 @@ fn project_worker(
         }
         match event.schema_name.as_str() {
             WORKER_REGISTERED | WORKER_REPLACED => {
-                if event.schema_version.get() != 4 {
+                if event.schema_version.get() != 1 {
                     return invalid_history("worker registration schema version is unsupported");
                 }
                 let payload: RegistrationPayload = decode(event)?;

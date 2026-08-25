@@ -27,7 +27,7 @@ impl SqliteEventStore {
     ///
     /// # Errors
     ///
-    /// Returns [`EventStoreError`] when the database cannot be opened, configured, or migrated.
+    /// Returns [`EventStoreError`] when the database cannot be opened, configured, or initialized.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, EventStoreError> {
         Self::from_connection(Connection::open(path).map_err(storage_error)?)
     }
@@ -36,7 +36,7 @@ impl SqliteEventStore {
     ///
     /// # Errors
     ///
-    /// Returns [`EventStoreError`] when the in-memory database cannot be configured or migrated.
+    /// Returns [`EventStoreError`] when the in-memory database cannot be configured or initialized.
     pub fn in_memory() -> Result<Self, EventStoreError> {
         Self::from_connection(Connection::open_in_memory().map_err(storage_error)?)
     }
@@ -45,7 +45,7 @@ impl SqliteEventStore {
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(storage_error)?;
-        schema::migrate(&mut connection).map_err(protocol_error)?;
+        schema::initialize(&mut connection).map_err(protocol_error)?;
         Ok(Self { connection })
     }
 }

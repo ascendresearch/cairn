@@ -2002,7 +2002,7 @@ fn fact<P: Serialize>(
     Ok(NewEvent {
         schema_name: SchemaName::new(schema)
             .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(2)
+        schema_version: SchemaVersion::new(1)
             .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?,
         parent_event_id,
         observed_at_unix_ms: observed_at.get(),
@@ -2020,7 +2020,7 @@ fn validate_event(
     event: &EventEnvelope,
     previous: Option<EventId>,
 ) -> Result<(), ControlProtocolError> {
-    if event.schema_version.get() != 2 || event.parent_event_id != previous {
+    if event.schema_version.get() != 1 || event.parent_event_id != previous {
         return invalid("event version or causal chain is invalid");
     }
     Ok(())
@@ -2323,7 +2323,7 @@ mod tests {
     }
 
     fn protocol_version() -> crate::WorkerProtocolVersion {
-        WorkerProtocolVersion::new(2).expect("protocol")
+        WorkerProtocolVersion::new(1).expect("protocol")
     }
 
     fn session_timeout() -> WorkerSessionTimeoutMillis {

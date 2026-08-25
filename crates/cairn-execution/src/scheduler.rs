@@ -31,17 +31,15 @@ const RESERVATION_RELEASED: &str = "execution.placement-reservation-released";
 /// Immutable content domain for a complete scheduler candidate evaluation.
 pub struct PlacementSnapshotArtifact;
 impl ContentType for PlacementSnapshotArtifact {
-    const DOMAIN: &'static str = "execution.placement-snapshot.v2";
+    const DOMAIN: &'static str = "execution.placement-snapshot.v1";
 }
 
 /// Deterministic scheduler algorithm frozen into each placement snapshot.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SchedulerPolicyVersion {
-    /// Historical slot-only policy retained only for explicit pre-public rejection/migration.
-    StableWorkerIdV1,
     /// Canonical filtering, quantitative reservation, then ascending stable `WorkerId`.
-    StableWorkerIdQuantitativeV2,
+    StableWorkerIdQuantitativeV1,
 }
 
 /// Configurable scheduler policy that separates liveness and orphan-claim timing.
@@ -512,7 +510,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<PlacementOutcome, SchedulerError> {
-    if policy.version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV2 {
+    if policy.version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV1 {
         return Err(SchedulerError::UnsupportedPolicy);
     }
     let ledger = project_ledger(events)?;
@@ -622,7 +620,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
             .then_some(entry.worker_id)
     });
     let snapshot = PlacementSnapshot {
-        schema_version: 2,
+        schema_version: 1,
         placement_id,
         attempt_id,
         contract_id,
@@ -1305,8 +1303,8 @@ fn verify_contract<C: ContentStore>(
 }
 
 fn validate_snapshot(snapshot: &PlacementSnapshot) -> Result<(), SchedulerError> {
-    if snapshot.schema_version != 2
-        || snapshot.policy.version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV2
+    if snapshot.schema_version != 1
+        || snapshot.policy.version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV1
         || snapshot
             .candidates
             .windows(2)
@@ -1365,7 +1363,7 @@ fn project_ledger(events: &impl EventStore) -> Result<LedgerProjection, Schedule
         last_observed_at: None,
     };
     for event in history {
-        if event.schema_version.get() != 2 || event.parent_event_id != projection.last_event_id {
+        if event.schema_version.get() != 1 || event.parent_event_id != projection.last_event_id {
             return invalid_history("scheduler event schema or causal parent differs");
         }
         let observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
@@ -1437,7 +1435,7 @@ fn fact<T: Serialize>(
     Ok(NewEvent {
         schema_name: SchemaName::new(schema)
             .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(2)
+        schema_version: SchemaVersion::new(1)
             .map_err(|error| SchedulerError::InvalidHistory(error.to_string()))?,
         parent_event_id,
         observed_at_unix_ms: observed_at.get(),
@@ -1688,7 +1686,7 @@ mod tests {
 
     fn scheduler_policy() -> SchedulerPolicy {
         SchedulerPolicy::new(
-            SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
+            SchedulerPolicyVersion::StableWorkerIdQuantitativeV1,
             session_timeout(),
             ReservationClaimTimeoutMillis::new(10).expect("claim timeout"),
         )

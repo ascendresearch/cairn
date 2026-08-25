@@ -19,14 +19,14 @@ observation time, exact candidate evidence, every rejection, and the selected wo
 `ReservationId` is capacity authority, not an alias for the choice or lease. It is committed before
 the assignment layer can create delivery authority.
 
-The supported policy is `stable-worker-id-quantitative-v2`: candidates are canonicalized by
+The supported policy is `stable-worker-id-quantitative-v1`: candidates are canonicalized by
 `WorkerId`, pass pool/platform/backend/capability, liveness, availability, controller credential
 authority, and slot/quantitative reservation-capacity gates, then the first eligible worker is
 selected. A no-candidate result is also durable and retains the complete rejection trace.
 
 ## Capacity and concurrency
 
-The V2 reservation ledger is one global event stream. For each worker, effective slot admission
+The V1 reservation ledger is one global event stream. For each worker, effective slot admission
 is bounded by registered maximum concurrency minus unreleased reservations. Dynamic availability
 also subtracts reservations whose `AttemptId` is not yet present in the worker heartbeat; attempts
 already reported active are not double-subtracted. SQLite expected-revision concurrency means
@@ -74,9 +74,9 @@ necessary.
 When the authenticated worker durably accepts an offer, the controller commits authoritative
 execution start before enqueueing the stable `StartExecution` message. A crash after acceptance is
 recovered from the accepted assignment; a crash after the start fact but before outbox enqueue is
-recovered from running state and reuses the frozen start-message identity. The live two-worker
-control carries one assignment through offer, acceptance, start, the worker's conservative
-`NotStarted` result, terminal reconciliation, exact scheduling retry, and reservation release.
+recovered from running state and reuses the frozen start-message identity. Execution and scheduler
+tests carry assignments through offer, acceptance, start, terminal reconciliation, exact retry, and
+safe reservation release; managed mTLS integration separately proves live registry authority.
 
 Before offer enqueue, the controller fully verifies the contract's typed input and environment in
 controller CAS. Their exact identities and lengths form a compact durable manifest, so retry cannot
@@ -91,9 +91,9 @@ transport limit before startup.
 The candidate universe comes exclusively from persistent registry worker identities. Every
 credential observation reopens and projects the SQLite enrollment stream, then cites its latest
 `EventId`. Consequently the assignment-grant recheck cannot reuse the placement-time registry view:
-revocation, worker disablement, rotation retirement, import, or authority unavailability between
-snapshot and grant fails closed. Legacy static credentials must pass the explicit V2-to-V3 import
-gate before either authentication or scheduling can use them.
+revocation, worker disablement, rotation retirement, or authority unavailability between snapshot
+and grant fails closed. Managed registry authority is the only source for authentication and
+scheduling; there is no static credential fallback or import gate.
 
 `scheduler` is an optional controller configuration object. Omitting it or setting it to `null`
 disables new placement without disabling worker control or reconciliation. When enabled, the policy

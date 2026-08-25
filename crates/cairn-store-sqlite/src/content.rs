@@ -31,7 +31,7 @@ impl SqliteContentStore {
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(metadata_error)?;
-        schema::migrate(&mut connection).map_err(metadata_error)?;
+        schema::initialize(&mut connection).map_err(metadata_error)?;
 
         let blob_root = blob_root.as_ref().to_path_buf();
         fs::create_dir_all(blob_root.join("objects/sha256")).map_err(io_error)?;

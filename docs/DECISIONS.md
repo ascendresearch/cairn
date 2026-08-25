@@ -19,7 +19,7 @@ The choice of JSON is an adapter decision, not a license for serialization detai
 domain and workflow code:
 
 - domain types and state machines live in format-neutral crates;
-- `cairn-codec` owns canonical JSON encoding/decoding, schema dispatch, and compatibility fixtures;
+- `cairn-codec` owns canonical JSON encoding/decoding, strict V1 dispatch, and conformance fixtures;
 - persisted envelopes carry schema and encoding identifiers;
 - content/event identity is computed from canonical encoded bytes under an explicit domain;
 - a future encoding is introduced as a new codec/version and explicit transformation, never by
@@ -179,7 +179,7 @@ historical Cairn/Alloyport material. Such material requires compatible provenanc
 external/private input. Contribution certification, governance, trademark policy, and the detailed
 dependency-license gate remain to be decided before the first public release.
 
-## D-007 — Typed SHA-256 identities with controlled migration
+## D-007 — Typed SHA-256 identities with a pre-release V1 reset policy
 
 - Resolves: OQ-013
 - Decision: accepted
@@ -212,23 +212,14 @@ sequence, schema, command causality, parent, observation time, and payload. Beca
 assigned under optimistic concurrency, trusted record code derives the event identity after
 sequence allocation inside the append transaction; an untrusted caller does not supply it.
 
-### Algorithm upgrade
+### Pre-release algorithm changes
 
 V1 implements a closed SHA-256 algorithm enum rather than a speculative pluggable hashing
-framework. An upgrade runs a controlled, restartable migration:
-
-1. verify old semantic identities and physical bytes;
-2. compute new blob and semantic identities;
-3. write an immutable migration manifest containing the verified old-to-new mapping;
-4. rebuild mutable metadata, projections, and indexes against the new identities;
-5. atomically switch the active writer algorithm/version;
-6. retain old events and exported identities as historical facts until their retention policy
-   allows physical garbage collection.
-
-Historical event bytes and verdict meaning are not rewritten. Legacy lookup consults the migration
-manifest at import/resolution boundaries; ordinary new business logic does not carry a permanent
-general alias graph. A failed migration resumes from verified checkpoints and cannot partially
-authorize the new writer.
+framework. Until Cairn publishes its first compatibility baseline, an algorithm or frame change
+replaces the current V1 definition. Development databases and artifacts are explicitly rebuilt;
+runtime readers do not translate, alias, or auto-upgrade an earlier development format. The
+post-release algorithm-upgrade policy is deliberately deferred to a new decision made with real
+retention and deployment constraints.
 
 ## D-008 — Semantic turns plus protocol-native continuation
 
@@ -434,7 +425,7 @@ so another control message cannot be mistaken for a chunk response. Range traffi
 repeatable; acknowledging the offer is deliberately delayed until complete local-CAS verification
 and assignment admission.
 
-Each response is canonical unpadded-base64 JSON under control protocol V2. Worker staging is a
+Each response is canonical unpadded-base64 JSON under control protocol V1. Worker staging is a
 fixed private per-offer directory; every append is synced, its regular-file length is the restart
 cursor, and invalid range metadata fails before append. The authoritative controller object is
 fully verified once when building the manifest. A replaceable `ContentRangeStore` port then avoids

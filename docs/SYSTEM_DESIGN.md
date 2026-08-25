@@ -179,7 +179,7 @@ crates. The target decomposition is:
 | Crate | Owns | Must not own |
 |---|---|---|
 | `cairn-protocol` | identifiers, canonical envelopes, schema versions, shared error/effect vocabulary | persistence, runtime services, domain policy |
-| `cairn-codec` | canonical JSON encoding/decoding, schema dispatch, compatibility fixtures | domain decisions, persistence, workflow |
+| `cairn-codec` | canonical JSON encoding/decoding, strict V1 schema checks, conformance fixtures | domain decisions, persistence, workflow |
 | `cairn-record` | store ports, event semantics, projections, graph audit, replay loading | SQL, model calls, job execution, verdict policy |
 | `cairn-store-sqlite` | SQLite event/projection/coordination adapters and initial content metadata | product, agent, execution, or verdict policy |
 | `cairn-agent` | episodes, steps, model/tool/context capabilities, role scopes, budgets | CUDA/Ascend/gates/worker scheduling |
@@ -196,7 +196,7 @@ Domain adapters may begin inside `cairn-migration` while only one source/target 
 crate is justified when a second adapter demonstrates a stable interface, not before.
 
 All production crates live in one workspace. A single verification entry point runs formatting,
-linting, tests, schema compatibility, dependency boundaries, mutation controls, and documentation
+linting, tests, strict schema conformance, dependency boundaries, mutation controls, and documentation
 links while preserving each failing exit status.
 
 `cairn-protocol` exposes typed SHA-256 semantic identities and typed UUIDv7 lifecycle identities.
@@ -519,7 +519,7 @@ A job contains:
 
 Product task kind is metadata owned by the workflow, not an execution enum variant.
 
-**Implemented controller kernel (2026-08-24).** `cairn-execution` archives the canonical V2 job
+**Implemented controller kernel (2026-08-24).** `cairn-execution` archives the canonical V1 job
 contract only after verifying its typed input-bundle and environment references. Its current
 identity covers logical job, input, environment, backend, command, resources/capabilities, network,
 and configurable stdout, stderr, diagnostic, trusted-evidence, and declared-output bounds. Mount
@@ -567,7 +567,7 @@ placement and dynamic availability matching are generic and contain no product t
 target environment are strong extensible selector types. `cairn-worker` derives them from the
 compiled/running binary; serialized `expected_platform` fields are assertions that fail closed and
 cannot overwrite the observation. Every profile resource claim retains whether it came from a
-built-in probe, operator declaration, controller verification, or external attestation. The V3
+built-in probe, operator declaration, controller verification, or external attestation. The V1
 profile content domain prevents the new meaning from being confused with earlier flat capability
 bytes.
 
@@ -576,7 +576,7 @@ backend/capability claims. It cannot label its own bytes `ControllerVerified` or
 `ExternalAttestation`; those assurance levels require a later trusted controller challenge or
 attestation adapter and a separate authoritative fact.
 
-**Implemented startup resource observation (2026-08-25).** Worker profile V3 embeds one immutable,
+**Implemented startup resource observation (2026-08-25).** Worker profile V1 embeds one immutable,
 versioned startup observation for the process incarnation. The Linux host probe records logical
 CPU count, total memory bytes, available bytes on a configured scratch filesystem, accelerator
 namespace discovery completeness, and canonical device facts. Every device has a strong device ID
@@ -592,7 +592,7 @@ partial. Unit mismatch, arithmetic overflow, duplicate device/capability identit
 mismatch, future evidence, and expired evidence fail closed. The initial `/sys/class/accel`
 adapter is deliberately generic and does not claim to discover every vendor device class.
 
-Job contract V3 carries optional logical-CPU, memory-byte, scratch-byte, accelerator-count, and
+Job contract V1 carries optional logical-CPU, memory-byte, scratch-byte, accelerator-count, and
 discovery-completeness requirements. An accelerator requirement also contains canonical per-device
 capabilities; only devices satisfying all of them contribute to its count. Scheduler filtering and
 assignment recheck use the caller's observation time, so expired evidence cannot remain eligible.
@@ -605,18 +605,16 @@ exact observation ContentId, worker-stream event revision, and optional controll
 admission evidence. Worker transport can submit only `BuiltinProbe`; higher assurance requires an
 on-demand trusted admission capability citing an independent evidence `EventId`.
 
-Placement snapshot V2 and scheduler event V2 freeze that resource evidence. A reservation owns its
+Placement snapshot V1 and scheduler event V1 freeze that resource evidence. A reservation owns its
 CPU, memory, scratch quantities and deterministic accelerator device IDs. Unreleased reservations
 are subtracted before selection, missing previously reserved devices fail closed, and SQLite
 optimistic concurrency serializes competing claims. Assignment grant requires the exact resource
 ContentId, revision, and admission evidence observed at placement; even a beneficial refresh makes
 the old snapshot stale rather than silently changing its meaning.
 
-This is a pre-public compatibility change: pre-V3 job-contract/profile artifacts, pre-V4 worker
-registration payloads, and V1 scheduler facts/snapshots are rejected rather than assigned invented
-pool, platform provenance, credential, resource, or reservation meaning. A
-deployment retaining development-era state needs the controlled migration/rebuild path before
-upgrade; the first public compatibility baseline will include that migration gate.
+All current job-contract, worker-profile, registration, scheduler, and snapshot formats are V1.
+During pre-release development an incompatible change replaces the V1 definition and requires
+development-state rebuild; runtime readers reject non-V1 data and contain no conversion path.
 
 An immutable `PlacementRequest` now separates optional platform constraints, an authenticated-pool
 allow-list, and additional capability equality from timeout and backend. Pool membership comes from
@@ -667,7 +665,7 @@ Assignment material is also a separate readiness boundary. The controller fully 
 contract's typed `InputBundleArtifact` and `ExecutionEnvironmentArtifact` in CAS and freezes their
 identities, lengths, and chunk policy in the durable offer. While that offer remains pending, the
 authenticated assigned worker requests sequential ranges through an efficient `ContentRangeStore`
-port. Chunk messages are ephemeral protocol V2 data movement, never domain facts. One controller
+port. Chunk messages are ephemeral protocol V1 data movement, never domain facts. One controller
 logical message remains in flight, preventing control/chunk interleaving. The worker syncs each
 range to a private per-offer regular file and resumes from exact length after reconnect. It derives
 both typed identities while publishing the assembled files into its own SQLite/CAS; only that
@@ -676,7 +674,7 @@ earlier proof: it reopens both local objects before appending the start fact. Ag
 independently optional; positive chunk size and exact base64-expanded wire fit are startup-checked.
 Create-only sandbox-tree expansion remains later adapter work.
 
-V2 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
+V1 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
 is a typed configuration value with `None` as its disabled state. Logical outboxes and admissions
 persist storage-domain payloads rather than treating a network frame as a domain fact. A test uses
 independent controller and worker SQLite event stores, drops both directions' acknowledgements,
@@ -711,14 +709,14 @@ pool. After a lost response, the same secret plus exact staged CSR returns the p
 after token expiry; another CSR is rejected. A fresh controller rebuilds
 fingerprint-to-credential/worker/pool authentication from that stream.
 
-**Implemented one-command join F1 (2026-08-25).** Enrollment bundle V3 carries two explicit trust
+**Implemented one-command join F1 (2026-08-25).** Enrollment bundle V1 carries two explicit trust
 domains: the one-shot bootstrap endpoint and the externally routable ordinary-control endpoint.
 Each includes its own TCP/WebSocket authority, TLS server name, and pinned CA, so isolating
 bootstrap does not force matching DNS or certificates and a worker does not reconstruct endpoint
 configuration from deployment convention.
 
 `cairn-worker join <bundle> <state-dir>` composes the existing enrollment port with a fixed local
-layout, running-binary SHA-256 identity, Linux host/platform probe, strict V5 configuration, and
+layout, running-binary SHA-256 identity, Linux host/platform probe, strict V1 configuration, and
 preflight validation. The identity private key remains worker-local under `identity/`; scratch and
 journal locations are relative to the fixed root. If a valid configuration already exists, join
 checks that it still names the bundle's controller and managed identity, probes it, and leaves its
@@ -727,7 +725,7 @@ Because the executable backend remains unimplemented, initial availability is ex
 unavailable/draining with zero slots. Service integration and explicit backend activation remain
 F2 rather than being smuggled into bootstrap.
 
-**Implemented credential-authority foundation (2026-08-25).** Registration V3 records the exact
+**Implemented credential-authority foundation (2026-08-25).** Registration V1 records the exact
 `CredentialId` independently of stable subject, `WorkerId`, pool, and incarnation. The controller
 uses the managed certificate fingerprint only to find the credential record, then derives the
 stable principal from controller-owned worker identity. A live incarnation cannot switch
@@ -738,7 +736,7 @@ The enrollment registry now projects independent append-only facts for credentia
 logical-worker disablement, and unused-enrollment revocation. Inactive authority is checked before
 registration and on each active control-loop iteration, so an observed managed session is closed
 and its reconnect is rejected. This application check remains authoritative even when certificate
-chain validation succeeds. SQLite schema V2 uses WAL plus immediate writer transactions so a
+chain validation succeeds. SQLite schema V1 uses WAL plus immediate writer transactions so a
 separate administrative command and the running controller serialize authority facts without a
 deferred read-to-write deadlock.
 
@@ -767,22 +765,16 @@ credential fingerprint/provenance, rotation predecessor/successor and retirement
 the effective credential state. Audit returns causal head and aggregate counts only after all
 history invariants pass. Report DTOs reject unknown fields and unsupported versions; CLI stdout is
 JSON-only, while not-found and invalid-history diagnostics remain on stderr. Secret digests,
-certificate bodies, private material, and legacy source paths never enter the report boundary.
+certificate bodies and private material never enter the report boundary.
 
-**Implemented static-registry migration E1 (2026-08-25).** Controller schema V3 requires an empty
-static enrollment array. A schema V2 file is accepted only by `registry import-static`, which reads
-and fingerprints the configured leaf certificates, canonicalizes the complete batch by strong
-`CredentialId`, and appends one atomic import fact under an operator-supplied `CommandId`. That fact
-retains exact worker, credential, pool, and certificate provenance without persisting unstable file
-paths. Exact command replay returns the original event; changed command input or any credential,
-fingerprint, or worker-ownership collision fails closed, as does contradictory persisted history.
-Normal authentication, liveness authority checks, candidate discovery, and grant rechecks now
-consume only the persistent registry. An empty registry is a valid startup state for a fresh
-open-source deployment.
+**Implemented registry authority E1 (2026-08-25).** Controller schema V1 has no static enrollment
+array or import command. Normal authentication, liveness authority checks, candidate discovery,
+and grant rechecks consume only the persistent registry. An empty registry is a valid startup state
+for a fresh open-source deployment, and workers enter it only through managed enrollment.
 
-**Implemented safe credential rotation slice (2026-08-25).** Enrollment authority V2 distinguishes
+**Implemented safe credential rotation slice (2026-08-25).** Enrollment authority V1 distinguishes
 bootstrap from rotation. A rotation offer freezes the exact active predecessor credential,
-controller-owned worker/pool, and configured optional overlap. Issuance V2 creates a fresh
+controller-owned worker/pool, and configured optional overlap. Issuance V1 creates a fresh
 `CredentialId` and certificate while recording predecessor lineage and its exact retirement
 instant. Registry replay admits both credentials inside the overlap, then derives predecessor
 retirement from the frozen fact; `null` disables automatic retirement and requires explicit
@@ -791,7 +783,7 @@ revocation.
 Each worker rotation has an immutable `rotations/<EnrollmentId UUID>/` directory containing its
 fresh `0600` key, exact CSR, issued certificate, CA, and predecessor manifest. Only `identity.json`
 is atomically replaced. Exact staged-CSR replay closes response and local-commit loss windows.
-Worker configuration V3 adds a positive identity-manifest poll interval: a running process notices
+Worker configuration V1 includes a positive identity-manifest poll interval: a running process notices
 cutover, closes its old connection, reloads material, and reconnects under a new incarnation while
 the predecessor is still authorized.
 
@@ -807,7 +799,7 @@ immutable `PlacementId`, capacity-bearing `ReservationId`, downstream `Assignmen
 Each entry cites exact incarnation, credential, profile, resource observation, availability, and
 heartbeat evidence, captures the controller-owned authority revision when the adapter has one, and
 records the first stable rejection reason or its capacity inputs. Policy
-`stable-worker-id-quantitative-v2` filters first and then chooses the lowest eligible stable
+`stable-worker-id-quantitative-v1` filters first and then chooses the lowest eligible stable
 `WorkerId`; selection is therefore replayable rather than a function of map iteration or connection
 arrival order.
 
@@ -852,13 +844,13 @@ Runnable `cairn-server` and `cairn-worker` composition roots now connect this ad
 SQLite authorities. The server durably registers and heartbeats workers, validates inbound
 sequence/acknowledgement cursors, drains its durable outbox, and reconciles worker messages. The
 worker derives active-attempt heartbeats from its journal, durably admits offers, records start
-before executor authority, drains its result outbox, and supervises outbound reconnects. A
-two-worker integration control uses distinct client certificates and journals, then reconstructs
-both live sessions through independent SQLite readers. All wire-size, handshake, idle, heartbeat,
+before executor authority, drains its result outbox, and supervises outbound reconnects. Managed
+mTLS integration reconstructs live authority through independent SQLite readers, while execution
+tests cover durable outbox/journal replay. All wire-size, handshake, idle, heartbeat,
 polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
 
 Bootstrap intentionally composes a `NotStarted` executor and unavailable/draining availability.
-Schema-V8 configuration may explicitly activate `local-process-v1` only by changing execution mode,
+Schema-V1 configuration may explicitly activate `local-process-v1` only by changing execution mode,
 the exact advertised backend, and ready availability coherently. Small typed artifact replication,
 resumable chunk transfer, create-only materialization, process-group timeout/stream supervision, and
 terminal evidence capture are implemented. Cancellation delivery, hardened container isolation,
@@ -968,7 +960,7 @@ managers use explicit causality and idempotency keys.
 V1 persists event payloads and structured artifacts as canonical UTF-8 JSON through `cairn-codec`.
 The event/aggregate model is format-neutral; envelopes carry encoding and schema identifiers so a
 future codec is an explicit versioned transformation. JSON object ordering, numbers, duplicate keys,
-escaping, and unknown fields are defined by compatibility fixtures rather than delegated to a
+escaping, and unknown fields are defined by conformance fixtures rather than delegated to a
 particular serializer's defaults.
 
 The first store adapter is SQLite. `cairn-store-sqlite` implements append-only streams, command
@@ -1289,7 +1281,7 @@ Every new measurement or gate includes:
 
 ### 19.3 Historical evidence corpus
 
-Old records are migrated as immutable fixtures, especially:
+Historical failures are retained as immutable regression fixtures, especially:
 
 - the false correctness verdict caused by a single sampled evaluation order;
 - comparator-only mutation and per-case blind spots;

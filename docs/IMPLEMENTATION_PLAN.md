@@ -32,8 +32,8 @@ Acceptance gate:
 - revoked credentials and disabled workers cannot create a registration fact;
 - an unused revoked `EnrollmentId` cannot issue a credential;
 - authority decisions survive controller restart and concurrent administrative SQLite access;
-- the then-transitional static enrollment cannot collide with managed credential IDs and is later
-  removed from runtime authority by Phase E1's explicit migration gate.
+- the managed registry is the only runtime authority; controller configuration has no static
+  enrollment or import path.
 
 ## Phase B — safe credential rotation (implemented 2026-08-25)
 
@@ -98,8 +98,8 @@ Acceptance gate:
 
 - probe fixtures cover x86-64 and AArch64 plus absent/partial accelerator discovery;
 - overflow, unit mismatch, duplicate device, stale evidence, and expected-value mismatch fail closed;
-- frozen contracts and profiles use new V3 identity domains so old bytes cannot gain invented
-  quantitative meaning;
+- frozen contracts and profiles use V1 identity domains and reject non-V1 bytes rather than
+  assigning invented quantitative meaning;
 - matching remains vendor/product neutral and counts only accelerator devices satisfying every
   requested device capability.
 
@@ -125,16 +125,10 @@ Acceptance gate:
 
 ## Phase E — registry and operator lifecycle closure (implemented 2026-08-25)
 
-Finish migration away from controller static certificate lists. Add `import-static` with collision
-and ownership checks, list/show/audit commands, worker re-enable, credential inspection, and
-separate pool reassignment. Keep worker, credential, enrollment, and pool histories distinct. Add a
-versioned migration gate for pre-release server configuration and worker-registration facts.
-
-E1 implements the static-authority migration boundary. `registry import-static` atomically freezes
-the canonical credential/fingerprint/worker/pool batch under an explicit `CommandId`; exact retries
-recover the original event while changed input or any ownership collision fails closed. Controller
-schema V3 requires `enrollment: []`, and authentication plus scheduling now consume only the
-persistent registry.
+Use the persistent enrollment registry as the only worker-credential authority from first startup.
+The controller has no static certificate list or import path. List/show/audit commands, worker
+re-enable, credential inspection, and separate pool reassignment keep worker, credential,
+enrollment, and pool histories distinct.
 
 E2a implements the mutation side of operator lifecycle. Revoke, disable, re-enable, and pool
 assignment require explicit strong `CommandId` values and recover the original fact on exact retry.
@@ -145,7 +139,7 @@ cross-link can modify only a durably disconnected or exactly expired session.
 
 E2b implements the read-only operator surface. `registry list`, `show-worker`, `show-credential`,
 and `audit` rebuild the complete causal history before emitting versioned strict JSON. Reports use
-strong worker/credential/event identities, retain pool and import authority revisions plus rotation
+strong worker/credential/event identities, retain pool authority revisions plus rotation
 lineage, distinguish active/worker-disabled/retired/revoked credential states at an explicit
 observation time, and omit secrets, certificate bytes, and unstable paths. Invalid history fails
 without a partial report.
@@ -179,11 +173,11 @@ Acceptance gate:
   action;
 - clean x86-64 and AArch64 hosts join, reconnect, receive a generic assignment, and survive restart.
 
-F1 makes the V3 enrollment bundle self-contained by embedding the independently routable normal
+F1 makes the V1 enrollment bundle self-contained by embedding the independently routable normal
 control endpoint and its pinned CA/name. `cairn-worker join <bundle> <state-dir>` creates a fixed
 identity/scratch/journal/config tree, hashes the running worker binary, runs the built-in host
-probe, and originally persisted a strict V7 worker configuration. F2c advances newly generated
-configuration to V8 so execution mode is explicit. Its initial availability remains deliberately
+probe, and persists a strict V1 worker configuration with explicit execution mode. Its initial
+availability remains deliberately
 unavailable and draining with `execution.mode=disabled`; enrollment never implies execution
 readiness. Re-running join validates and reuses the tree without overwriting operator edits.
 
@@ -241,7 +235,7 @@ The slice is divided into the following implementation steps:
    version, container ID, timing, and exit state outside candidate-writable mounts. Cleanup occurs
    only after the terminal worker result is durable; cleanup failure retains evidence and cannot
    turn into re-execution.
-5. **Activation and open-source operations.** Extend V8 execution configuration with explicit
+5. **Activation and open-source operations.** Extend V1 execution configuration with explicit
    `oci_container` activation and derive the exact `oci-container-v1` worker claim from it. Startup
    preflight verifies CLI/runtime reachability, immutable-image resolution, required isolation
    features, disjoint absolute state roots, and configured optional limits. Join remains disabled.
@@ -269,10 +263,9 @@ Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They 
 device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on
 top of F2d rather than weakening the CPU container policy.
 
-Because F2b changes both durable offer and worker-admission payloads, worker-control protocol V2
-uses event schema V2 for its controller-outbox and worker-journal streams. Existing V1 control
-streams require the controlled development-state migration/rebuild gate; unrelated domain streams
-and CAS objects are not reinterpreted or silently rewritten.
+Worker-control protocol, controller-outbox facts, and worker-journal facts all use schema V1. During
+pre-release development, an incompatible format change replaces the V1 definition and development
+state is rebuilt; runtime readers do not contain conversion branches.
 
 ## Cross-cutting gates
 

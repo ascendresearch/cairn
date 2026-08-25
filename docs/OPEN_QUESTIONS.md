@@ -10,7 +10,7 @@ it.
 
 ## Priority meanings
 
-- **P0** — blocks the first implementation boundary or would make early persisted data incompatible;
+- **P0** — blocks the first implementation boundary or would force another development-state reset;
 - **P1** — must be answered before the first end-to-end unified migration;
 - **P2** — may wait until a second operator or public platform surface creates evidence;
 - **P3** — deliberate future work; do not build ahead of a trigger.
@@ -33,9 +33,9 @@ it.
   [`D-005`](DECISIONS.md#d-005--separate-numerical-provenance-from-assurance). Allowance provenance
   and assurance are separate; `HeldOutValidated` may produce only an explicitly empirical `Pass`.
 - **OQ-013** — identity algorithm and agility: resolved by
-  [`D-007`](DECISIONS.md#d-007--typed-sha-256-identities-with-controlled-migration). V1 uses typed,
-  domain-separated SHA-256 identities and UUIDv7 lifecycle IDs; upgrades use a verified controlled
-  migration rather than a permanent runtime alias framework.
+  [`D-007`](DECISIONS.md#d-007--typed-sha-256-identities-with-a-pre-release-v1-reset-policy). V1
+  uses typed, domain-separated SHA-256 identities and UUIDv7 lifecycle IDs; pre-release changes
+  rebuild development state and add no runtime alias or migration framework.
 
 ## OQ-004 — Independence of semantic reference
 
@@ -148,7 +148,7 @@ Potential approaches include local-only providers, encrypted/private CAS, redact
 verifier access policies. A redacted export must state exactly which claims cannot be independently
 reconstructed.
 
-## OQ-016 — Historical fixture migration
+## OQ-016 — Historical fixture curation
 
 - Priority: P0
 - Affects: rewrite controls

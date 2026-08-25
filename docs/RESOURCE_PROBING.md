@@ -6,19 +6,19 @@
 
 ## Observation model
 
-Each worker incarnation constructs profile V3 from two different kinds of input:
+Each worker incarnation constructs profile V1 from two different kinds of input:
 
 - observed facts: native platform, logical CPU count, total memory bytes, available bytes on the
   configured scratch filesystem, accelerator discovery completeness, and canonical device facts;
 - operator declarations: supported execution backends and worker-level equality capabilities.
 
-The startup quantitative observation remains archived inside immutable profile V3, but the current
+The startup quantitative observation remains archived inside immutable profile V1, but the current
 observation is a separate `execution.worker-resource-observation.v1` content identity. Each
 registration or `execution.worker-resources-observed` fact freezes that ContentId, its exact worker-
 stream event revision, and optional trusted-admission evidence. A refresh therefore never mutates
 profile identity or extends heartbeat liveness.
 
-Job contract V3 can request independent minimum CPU, memory, and scratch quantities plus an
+Job contract V1 can request independent minimum CPU, memory, and scratch quantities plus an
 accelerator request. An accelerator request is a positive minimum device count and a canonical set
 of per-device equality capabilities. Only devices satisfying every requested capability count.
 
@@ -53,7 +53,7 @@ future/expired timestamps, and configured expectation mismatch fail closed.
 
 ## Configuration contract
 
-`config/worker.example.json` is the strict schema V7 example. `resource_probe` contains:
+`config/worker.example.json` is the strict schema V1 example. `resource_probe` contains:
 
 - `scratch_path`: required path whose available filesystem bytes are observed;
 - `accelerator_sysfs`: path to inspect, or `null` to disable discovery explicitly;
@@ -76,7 +76,7 @@ Candidate filtering and assignment grant evaluate resource freshness at their ow
 observation time. They reject insufficient CPU, memory, scratch, discovery completeness, matching
 accelerator count, or ordinary platform/backend/capability constraints before availability.
 
-Placement snapshot V2 freezes the current observation ContentId, its worker event revision, and any
+Placement snapshot V1 freezes the current observation ContentId, its worker event revision, and any
 admission evidence. Each durable reservation records its requested CPU, memory, and scratch amounts
 and the exact canonical accelerator device IDs selected for it. New placements subtract every
 unreleased reservation. Accelerator devices are exclusive; if an active device disappears from a

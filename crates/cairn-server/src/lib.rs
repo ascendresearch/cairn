@@ -5,8 +5,8 @@ mod scheduling;
 
 pub use enrollment::{
     RegistryCredentialInspection, RegistryCredentialProvenance, RegistryCredentialStatus,
-    RegistryMutationOutcome, RegistryWorkerInspection, StaticEnrollmentImportOutcome,
-    WorkerRegistryAudit, WorkerRegistryInspection,
+    RegistryMutationOutcome, RegistryWorkerInspection, WorkerRegistryAudit,
+    WorkerRegistryInspection,
 };
 
 pub use scheduling::{
@@ -16,7 +16,6 @@ pub use scheduling::{
 };
 
 use std::{
-    collections::BTreeMap,
     ffi::OsString,
     fs,
     io::Write,
@@ -56,11 +55,11 @@ use tokio::{net::TcpListener, sync::Mutex, time::Instant};
 
 use enrollment::{
     EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, create_rotation_offer,
-    import_static_credentials, inspect_registry, redeem,
+    inspect_registry, redeem,
 };
 use enrollment::{
-    StaticCredentialImport, assign_worker_pool, audit_registry, disable_worker, enable_worker,
-    revoke_credential, revoke_enrollment,
+    assign_worker_pool, audit_registry, disable_worker, enable_worker, revoke_credential,
+    revoke_enrollment,
 };
 
 /// Strict controller process configuration.
@@ -70,8 +69,6 @@ pub struct ServerConfig {
     pub schema_version: u16,
     pub listen: SocketAddr,
     pub tls: ServerTlsFiles,
-    /// Legacy V2 static bindings consumed only by `registry import-static`; V3 requires empty.
-    pub enrollment: Vec<WorkerEnrollment>,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
     pub protocol_version: WorkerProtocolVersion,
@@ -98,13 +95,10 @@ pub struct EnrollmentServiceConfig {
     pub websocket_uri: String,
     pub server_name: String,
     pub server_ca: PathBuf,
-    /// Optional server identity dedicated to the bootstrap listener. When absent, the ordinary
-    /// controller server certificate/key are reused for backward compatibility.
-    #[serde(default)]
-    pub server_tls: Option<EnrollmentServerTlsFiles>,
-    /// Optional ordinary-control endpoint embedded into V3 enrollment bundles.
-    #[serde(default)]
-    pub control_endpoint: Option<PublicWorkerControlEndpointConfig>,
+    /// Server identity dedicated to the bootstrap listener.
+    pub server_tls: EnrollmentServerTlsFiles,
+    /// Ordinary-control endpoint embedded into enrollment bundles.
+    pub control_endpoint: PublicWorkerControlEndpointConfig,
     pub issuer_certificate: PathBuf,
     pub issuer_private_key: PathBuf,
     pub credential_validity_ms: NonZeroU64,
@@ -134,16 +128,6 @@ pub struct PublicWorkerControlEndpointConfig {
     pub server_ca: PathBuf,
 }
 
-/// Legacy V2 migration binding from logical identities to one exact leaf certificate.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkerEnrollment {
-    pub worker_id: WorkerId,
-    pub credential_id: CredentialId,
-    pub pool: WorkerPoolName,
-    pub certificate: PathBuf,
-}
-
 #[derive(Clone)]
 pub(crate) struct EnrolledWorker {
     pub(crate) worker_id: WorkerId,
@@ -165,7 +149,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server registry import-static <legacy-controller-v2.json> <command-id> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id>"
+        "usage: cairn-server <config.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -335,24 +319,6 @@ pub async fn run_from_arguments(
 fn run_registry_command(arguments: &mut impl Iterator<Item = OsString>) -> Result<(), ServerError> {
     let action = arguments.next().ok_or(ServerError::Usage)?;
     let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
-    if action == "import-static" {
-        let command_id = parse_argument::<CommandId>(arguments.next())?;
-        if arguments.next().is_some() {
-            return Err(ServerError::Usage);
-        }
-        let outcome = import_static_enrollments(&load_config(&config_path)?, &command_id)?;
-        eprintln!(
-            "imported {} static credential(s) in {}{}",
-            outcome.imported_credentials(),
-            outcome.event_id(),
-            if outcome.was_replay() {
-                " (idempotent replay)"
-            } else {
-                ""
-            }
-        );
-        return Ok(());
-    }
     let config = load_config(&config_path)?;
     if action == "list" || action == "audit" {
         if arguments.next().is_some() {
@@ -454,39 +420,13 @@ fn load_config(config_path: &Path) -> Result<ServerConfig, ServerError> {
     Ok(config)
 }
 
-/// Imports all transitional static bindings from one legacy V2 controller configuration.
-///
-/// The operation is atomic and retains exact certificate fingerprints rather than unstable source
-/// paths. After success, ordinary startup requires a V3 configuration with an empty `enrollment`
-/// list. Retrying with the same command and legacy input returns the original import fact.
-///
-/// # Errors
-///
-/// Returns an error for a non-V2 migration input, invalid certificate material, credential,
-/// certificate, or worker ownership collisions, command reuse, or storage failure.
-pub fn import_static_enrollments(
-    legacy_config: &ServerConfig,
-    command_id: &CommandId,
-) -> Result<StaticEnrollmentImportOutcome, ServerError> {
-    if legacy_config.schema_version != 2 {
-        return Err(ServerError::Configuration(
-            "registry import-static requires a legacy schema_version 2 configuration".into(),
-        ));
-    }
-    let credentials = legacy_config.static_credentials()?;
-    let mut events = SqliteEventStore::open(&legacy_config.storage.event_database)
-        .map_err(|error| ServerError::Startup(error.to_string()))?;
-    import_static_credentials(&mut events, credentials, command_id, observed_now()?)
-        .map_err(|error| ServerError::Startup(error.to_string()))
-}
-
 /// Reconstructs the canonical current worker and credential registry view.
 ///
 /// The report contains no bearer secret, private key, certificate bytes, or unstable source path.
 ///
 /// # Errors
 ///
-/// Returns an error for a non-V3 runtime configuration, storage failure, or contradictory history.
+/// Returns an error for invalid configuration, storage failure, or contradictory history.
 pub fn inspect_worker_registry(
     config: &ServerConfig,
 ) -> Result<WorkerRegistryInspection, ServerError> {
@@ -503,7 +443,7 @@ pub fn inspect_worker_registry(
 ///
 /// # Errors
 ///
-/// Returns an error for a non-V3 runtime configuration, storage failure, or contradictory history.
+/// Returns an error for invalid configuration, storage failure, or contradictory history.
 pub fn audit_worker_registry(config: &ServerConfig) -> Result<WorkerRegistryAudit, ServerError> {
     validate_registry_query(config)?;
     let events = SqliteEventStore::open(&config.storage.event_database)
@@ -513,14 +453,7 @@ pub fn audit_worker_registry(config: &ServerConfig) -> Result<WorkerRegistryAudi
 }
 
 fn validate_registry_query(config: &ServerConfig) -> Result<(), ServerError> {
-    config.validate_schema()?;
-    if config.enrollment.is_empty() {
-        Ok(())
-    } else {
-        Err(ServerError::Configuration(
-            "registry queries require V3 persistent authority with an empty enrollment list".into(),
-        ))
-    }
+    config.validate_schema()
 }
 
 /// Creates and durably records a one-shot enrollment bundle. The secret is returned only here.
@@ -687,14 +620,11 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     if let Some(service) = config.enrollment_service.clone() {
-        let enrollment_tls_files = service.server_tls.as_ref().map_or_else(
-            || config.tls.clone(),
-            |identity| ServerTlsFiles {
-                certificate: identity.certificate.clone(),
-                private_key: identity.private_key.clone(),
-                client_ca: config.tls.client_ca.clone(),
-            },
-        );
+        let enrollment_tls_files = ServerTlsFiles {
+            certificate: service.server_tls.certificate.clone(),
+            private_key: service.server_tls.private_key.clone(),
+            client_ca: config.tls.client_ca.clone(),
+        };
         let enrollment_tls = enrollment_tls_files
             .load_enrollment()
             .map_err(|error| ServerError::Startup(error.to_string()))?;
@@ -752,9 +682,9 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
 
 impl ServerConfig {
     fn validate_schema(&self) -> Result<(), ServerError> {
-        if self.schema_version != 3 {
+        if self.schema_version != 1 {
             return Err(ServerError::Configuration(
-                "only server schema_version 3 is supported for ordinary operation".into(),
+                "only server schema_version 1 is supported".into(),
             ));
         }
         Ok(())
@@ -763,10 +693,10 @@ impl ServerConfig {
     fn validate(&self) -> Result<(), ServerError> {
         self.validate_schema()?;
         if self.scheduler.as_ref().is_some_and(|scheduler| {
-            scheduler.policy_version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV2
+            scheduler.policy_version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV1
         }) {
             return Err(ServerError::Configuration(
-                "only scheduler policy stable-worker-id-quantitative-v2 is supported".into(),
+                "only scheduler policy stable-worker-id-quantitative-v1 is supported".into(),
             ));
         }
         if let Some(scheduler) = self.scheduler {
@@ -775,12 +705,6 @@ impl ServerConfig {
                 scheduler.assignment_material_chunk_size,
             )
             .map_err(|error| ServerError::Configuration(error.to_string()))?;
-        }
-        if !self.enrollment.is_empty() {
-            return Err(ServerError::Configuration(
-                "server schema_version 3 requires an empty enrollment list; import legacy static bindings first"
-                    .into(),
-            ));
         }
         if let Some(service) = &self.enrollment_service {
             if service.listen == self.listen
@@ -793,11 +717,10 @@ impl ServerConfig {
                         .into(),
                 ));
             }
-            if service.control_endpoint.as_ref().is_some_and(|endpoint| {
-                endpoint.tcp_address.is_empty()
-                    || endpoint.websocket_uri.is_empty()
-                    || endpoint.server_name.is_empty()
-            }) {
+            if service.control_endpoint.tcp_address.is_empty()
+                || service.control_endpoint.websocket_uri.is_empty()
+                || service.control_endpoint.server_name.is_empty()
+            {
                 return Err(ServerError::Configuration(
                     "enrollment control_endpoint must have a non-empty public endpoint".into(),
                 ));
@@ -820,56 +743,17 @@ impl ServerConfig {
         resolve(&mut self.tls.certificate, base);
         resolve(&mut self.tls.private_key, base);
         resolve(&mut self.tls.client_ca, base);
-        for enrollment in &mut self.enrollment {
-            resolve(&mut enrollment.certificate, base);
-        }
         if let Some(service) = &mut self.enrollment_service {
             resolve(&mut service.server_ca, base);
-            if let Some(tls) = &mut service.server_tls {
-                resolve(&mut tls.certificate, base);
-                resolve(&mut tls.private_key, base);
-            }
-            if let Some(endpoint) = &mut service.control_endpoint {
-                resolve(&mut endpoint.server_ca, base);
-            }
+            resolve(&mut service.server_tls.certificate, base);
+            resolve(&mut service.server_tls.private_key, base);
+            resolve(&mut service.control_endpoint.server_ca, base);
             resolve(&mut service.issuer_certificate, base);
             resolve(&mut service.issuer_private_key, base);
         }
         resolve(&mut self.storage.event_database, base);
         resolve(&mut self.storage.content_database, base);
         resolve(&mut self.storage.content_directory, base);
-    }
-
-    fn static_credentials(&self) -> Result<Vec<StaticCredentialImport>, ServerError> {
-        let mut result = BTreeMap::new();
-        let mut workers = BTreeMap::new();
-        for enrollment in &self.enrollment {
-            let fingerprint = CertificateFingerprint::from_pem_file(&enrollment.certificate)
-                .map_err(|error| ServerError::Configuration(error.to_string()))?;
-            if result
-                .insert(
-                    fingerprint,
-                    StaticCredentialImport {
-                        worker_id: enrollment.worker_id,
-                        credential_id: enrollment.credential_id,
-                        pool: enrollment.pool.clone(),
-                        certificate_fingerprint: fingerprint,
-                    },
-                )
-                .is_some()
-            {
-                return Err(ServerError::Configuration(
-                    "one certificate is enrolled to more than one worker".into(),
-                ));
-            }
-            if workers.insert(enrollment.worker_id, fingerprint).is_some() {
-                return Err(ServerError::Configuration(format!(
-                    "worker {} has more than one V1 certificate",
-                    enrollment.worker_id
-                )));
-            }
-        }
-        Ok(result.into_values().collect())
     }
 }
 
@@ -999,7 +883,6 @@ fn enrollment_rejection(error: &EnrollmentError) -> (EnrollmentRejectCode, &'sta
         | EnrollmentError::WorkerNotDisabled
         | EnrollmentError::WorkerPoolUnchanged
         | EnrollmentError::EnrollmentAlreadyIssued
-        | EnrollmentError::StaticImportConflict(_)
         | EnrollmentError::CommandConflict
         | EnrollmentError::Issuance(_) => (
             EnrollmentRejectCode::ControllerUnavailable,
@@ -1730,7 +1613,7 @@ mod tests {
             .expect("controller object")
             .remove("scheduler");
         let omitted: ServerConfig =
-            serde_json::from_value(documented).expect("pre-scheduler configuration");
+            serde_json::from_value(documented).expect("omitted scheduler configuration");
         assert!(omitted.scheduler.is_none());
 
         let mut invalid: serde_json::Value =
@@ -1741,45 +1624,13 @@ mod tests {
     }
 
     #[test]
-    fn historical_scheduler_policy_is_rejected_during_startup_validation() {
-        let historical = include_str!("../../../config/controller.example.json")
-            .replace("stable-worker-id-quantitative-v2", "stable-worker-id-v1");
-        let config: ServerConfig =
-            serde_json::from_str(&historical).expect("historical policy remains decodable");
-
-        let error = config
-            .validate()
-            .expect_err("historical policy must fail before serving traffic");
-        assert!(
-            error
-                .to_string()
-                .contains("stable-worker-id-quantitative-v2")
-        );
-    }
-
-    #[test]
-    fn ordinary_startup_requires_v3_with_no_static_authority() {
+    fn only_schema_version_one_is_accepted() {
         let documented = include_str!("../../../config/controller.example.json");
-        let legacy: ServerConfig = serde_json::from_str(
-            &documented.replace("\"schema_version\": 3", "\"schema_version\": 2"),
+        let unsupported: ServerConfig = serde_json::from_str(
+            &documented.replace("\"schema_version\": 1", "\"schema_version\": 99"),
         )
-        .expect("legacy migration input remains decodable");
-        assert!(legacy.validate_schema().is_err());
-
-        let mut static_v3: serde_json::Value =
-            serde_json::from_str(documented).expect("documented JSON");
-        static_v3["enrollment"] = serde_json::json!([{
-            "certificate": "pki/worker.pem",
-            "credential_id": "credential:019c0000-0000-7000-8000-000000000002",
-            "pool": "default",
-            "worker_id": "worker:019c0000-0000-7000-8000-000000000001"
-        }]);
-        let static_v3: ServerConfig =
-            serde_json::from_value(static_v3).expect("static V3 remains structurally decodable");
-        let error = static_v3
-            .validate()
-            .expect_err("runtime static authority must be rejected");
-        assert!(error.to_string().contains("import legacy static bindings"));
+        .expect("schema field remains structurally decodable");
+        assert!(unsupported.validate_schema().is_err());
     }
 
     #[test]
@@ -1801,11 +1652,11 @@ mod tests {
     }
 
     #[test]
-    fn missing_rotation_overlap_preserves_pre_rotation_configuration() {
+    fn missing_optional_rotation_overlap_disables_retirement() {
         let documented = include_str!("../../../config/controller.example.json");
-        let legacy = documented.replace("    \"rotation_overlap_ms\": 300000,\n", "");
+        let omitted = documented.replace("    \"rotation_overlap_ms\": 300000,\n", "");
         let config: ServerConfig =
-            serde_json::from_str(&legacy).expect("pre-rotation controller configuration");
+            serde_json::from_str(&omitted).expect("omitted optional rotation overlap");
         assert!(
             config
                 .enrollment_service

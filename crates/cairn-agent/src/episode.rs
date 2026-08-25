@@ -2625,15 +2625,20 @@ mod tests {
             }
         ));
         assert!(EpisodeStepLimit::new(0).is_err());
-        let legacy_budget: EpisodeBudget = serde_json::from_value(serde_json::json!({
+        let partially_disabled_budget: EpisodeBudget = serde_json::from_value(serde_json::json!({
             "step_limit": 2,
             "deadline_unix_ms": null
         }))
-        .expect("legacy budget");
-        assert_eq!(legacy_budget.step_limit.map(EpisodeStepLimit::get), Some(2));
-        assert_eq!(legacy_budget.tool_operation_limit, None);
-        assert_eq!(legacy_budget.provider_token_limit, None);
-        assert_eq!(legacy_budget.external_meter_limits, None);
+        .expect("partially disabled budget");
+        assert_eq!(
+            partially_disabled_budget
+                .step_limit
+                .map(EpisodeStepLimit::get),
+            Some(2)
+        );
+        assert_eq!(partially_disabled_budget.tool_operation_limit, None);
+        assert_eq!(partially_disabled_budget.provider_token_limit, None);
+        assert_eq!(partially_disabled_budget.external_meter_limits, None);
         assert!(EpisodeProviderTokenLimit::new(0).is_err());
     }
 

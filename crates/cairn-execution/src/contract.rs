@@ -389,7 +389,7 @@ pub enum ContractValueError {
     /// Persisted observations must retain constructor ordering.
     #[error("trusted execution observations are not in canonical order")]
     NonCanonicalObservations,
-    /// V3 contracts use a fixed schema version.
+    /// Contracts use the current fixed schema version.
     #[error("job contract schema version is unsupported")]
     UnsupportedSchema,
 }
@@ -986,7 +986,7 @@ pub struct JobContract {
 }
 
 impl JobContract {
-    /// Creates a V3 opaque job contract with explicit placement selectors and quantitative needs.
+    /// Creates an opaque job contract with explicit placement selectors and quantitative needs.
     #[expect(
         clippy::too_many_arguments,
         reason = "every immutable execution dimension remains explicit at construction"
@@ -1003,7 +1003,7 @@ impl JobContract {
         capture: CapturePolicy,
     ) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 1,
             job_id,
             input_bundle_id,
             environment_id,
@@ -1016,7 +1016,7 @@ impl JobContract {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ContractValueError> {
-        if self.schema_version != 3 {
+        if self.schema_version != 1 {
             return Err(ContractValueError::UnsupportedSchema);
         }
         self.resources.validate()?;
@@ -1244,7 +1244,7 @@ macro_rules! content_type {
 
 content_type!(InputBundleArtifact, "execution.input-bundle.v1");
 content_type!(ExecutionEnvironmentArtifact, "execution.environment.v1");
-content_type!(JobContractArtifact, "execution.job-contract.v3");
+content_type!(JobContractArtifact, "execution.job-contract.v1");
 content_type!(ExecutionStdoutArtifact, "execution.stdout-untrusted.v1");
 content_type!(ExecutionStderrArtifact, "execution.stderr-untrusted.v1");
 content_type!(
@@ -1266,7 +1266,7 @@ mod tests {
     #[test]
     fn persisted_contract_cannot_bypass_canonical_collection_invariants() {
         let contract = JobContract {
-            schema_version: 3,
+            schema_version: 1,
             job_id: JobId::new(),
             input_bundle_id: ContentId::derive(b"input").expect("input identity"),
             environment_id: ContentId::derive(b"environment").expect("environment identity"),

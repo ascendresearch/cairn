@@ -30,7 +30,6 @@ use crate::{EnrolledWorker, EnrollmentServiceConfig};
 const OFFER_CREATED: &str = "execution.worker-enrollment-offered";
 const CREDENTIAL_ISSUED: &str = "execution.worker-credential-issued";
 const CREDENTIAL_REVOKED: &str = "execution.worker-credential-revoked";
-const STATIC_CREDENTIALS_IMPORTED: &str = "execution.worker-static-credentials-imported";
 const WORKER_DISABLED: &str = "execution.worker-disabled";
 const WORKER_ENABLED: &str = "execution.worker-enabled";
 const WORKER_POOL_ASSIGNED: &str = "execution.worker-registry-pool-assigned";
@@ -64,49 +63,6 @@ struct CredentialIssuedPayload {
 #[serde(deny_unknown_fields)]
 struct CredentialRevokedPayload {
     credential_id: CredentialId,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct StaticCredentialImport {
-    pub(crate) worker_id: WorkerId,
-    pub(crate) credential_id: CredentialId,
-    pub(crate) pool: WorkerPoolName,
-    pub(crate) certificate_fingerprint: CertificateFingerprint,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct StaticCredentialsImportedPayload {
-    credentials: Vec<StaticCredentialImport>,
-}
-
-/// Durable result of importing one canonical legacy static-credential batch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StaticEnrollmentImportOutcome {
-    imported_credentials: usize,
-    event_id: EventId,
-    was_replay: bool,
-}
-
-impl StaticEnrollmentImportOutcome {
-    /// Returns the number of credential bindings frozen by the import fact.
-    #[must_use]
-    pub const fn imported_credentials(self) -> usize {
-        self.imported_credentials
-    }
-
-    /// Returns the exact registry fact retaining import provenance.
-    #[must_use]
-    pub const fn event_id(self) -> EventId {
-        self.event_id
-    }
-
-    /// Returns whether the same explicit command had already committed this exact batch.
-    #[must_use]
-    pub const fn was_replay(self) -> bool {
-        self.was_replay
-    }
 }
 
 /// Durable result of one explicit registry lifecycle mutation.
@@ -171,8 +127,6 @@ pub enum RegistryCredentialStatus {
 pub enum RegistryCredentialProvenance {
     /// Credential was issued through a one-shot enrollment authority.
     Issued { enrollment_id: EnrollmentId },
-    /// Credential entered through the explicit legacy migration boundary.
-    ImportedStatic { import_revision: EventId },
 }
 
 /// Operator-facing projection of one stable logical worker.
@@ -479,7 +433,6 @@ struct WorkerPoolAssignment {
 #[derive(Clone, Copy)]
 enum CredentialProvenance {
     Issued { enrollment_id: EnrollmentId },
-    ImportedStatic { event_id: EventId },
 }
 
 pub(crate) struct EnrollmentRegistry {
@@ -536,8 +489,6 @@ pub(crate) enum EnrollmentError {
     WorkerPoolUnchanged,
     #[error("issued enrollment authority cannot be revoked")]
     EnrollmentAlreadyIssued,
-    #[error("static credential import conflicts with registry authority: {0}")]
-    StaticImportConflict(String),
     #[error("registry command identity was already used for another operation")]
     CommandConflict,
     #[error("credential issuance failed: {0}")]
@@ -686,7 +637,7 @@ pub(crate) fn create_offer(
         events,
         &registry,
         OFFER_CREATED,
-        2,
+        1,
         &payload,
         CommandId::new(),
         now,
@@ -695,7 +646,7 @@ pub(crate) fn create_offer(
         .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
     let control_endpoint = bundle_control_endpoint(config)?;
     Ok(EnrollmentBundle {
-        schema_version: if control_endpoint.is_some() { 3 } else { 2 },
+        schema_version: 1,
         enrollment_id,
         purpose: EnrollmentPurpose::Bootstrap,
         secret,
@@ -755,7 +706,7 @@ pub(crate) fn create_rotation_offer(
         events,
         &registry,
         OFFER_CREATED,
-        2,
+        1,
         &OfferCreatedPayload {
             enrollment_id,
             token_digest: digest_wire(secret.expose()),
@@ -771,7 +722,7 @@ pub(crate) fn create_rotation_offer(
         .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?;
     let control_endpoint = bundle_control_endpoint(config)?;
     Ok(EnrollmentBundle {
-        schema_version: if control_endpoint.is_some() { 3 } else { 2 },
+        schema_version: 1,
         enrollment_id,
         purpose,
         secret,
@@ -790,20 +741,14 @@ pub(crate) fn create_rotation_offer(
 
 fn bundle_control_endpoint(
     config: &EnrollmentServiceConfig,
-) -> Result<Option<WorkerControlEndpoint>, EnrollmentError> {
-    config
-        .control_endpoint
-        .as_ref()
-        .map(|endpoint| {
-            Ok(WorkerControlEndpoint {
-                tcp_address: endpoint.tcp_address.clone(),
-                websocket_uri: endpoint.websocket_uri.clone(),
-                server_name: endpoint.server_name.clone(),
-                server_ca_pem: fs::read_to_string(&endpoint.server_ca)
-                    .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?,
-            })
-        })
-        .transpose()
+) -> Result<WorkerControlEndpoint, EnrollmentError> {
+    Ok(WorkerControlEndpoint {
+        tcp_address: config.control_endpoint.tcp_address.clone(),
+        websocket_uri: config.control_endpoint.websocket_uri.clone(),
+        server_name: config.control_endpoint.server_name.clone(),
+        server_ca_pem: fs::read_to_string(&config.control_endpoint.server_ca)
+            .map_err(|error| EnrollmentError::InvalidRequest(error.to_string()))?,
+    })
 }
 
 #[expect(
@@ -892,7 +837,7 @@ pub(crate) fn redeem(
     let certificate_fingerprint = CertificateFingerprint::from_pem(&certificate_chain_pem)
         .map_err(|error| EnrollmentError::Issuance(error.to_string()))?;
     let credential = IssuedWorkerCredential {
-        schema_version: 2,
+        schema_version: 1,
         worker_id,
         credential_id,
         pool: offer.pool.clone(),
@@ -911,133 +856,12 @@ pub(crate) fn redeem(
         events,
         &registry,
         CREDENTIAL_ISSUED,
-        2,
+        1,
         &payload,
         CommandId::new(),
         now,
     )?;
     Ok(credential)
-}
-
-/// Imports one canonical batch of legacy static certificate bindings into managed history.
-///
-/// The exact `CommandId` is part of the operator request. Repeating it with the same canonical
-/// batch returns the original fact even when wall-clock time or registry head has advanced.
-///
-/// # Errors
-///
-/// Rejects an empty batch, command reuse for different input, or any credential, certificate, or
-/// worker ownership collision.
-pub(crate) fn import_static_credentials(
-    events: &mut impl EventStore,
-    mut credentials: Vec<StaticCredentialImport>,
-    command_id: &CommandId,
-    now: ObservedAtUnixMillis,
-) -> Result<StaticEnrollmentImportOutcome, EnrollmentError> {
-    credentials.sort_by_key(|credential| credential.credential_id);
-    if credentials.is_empty() {
-        return Err(EnrollmentError::StaticImportConflict(
-            "import batch is empty".into(),
-        ));
-    }
-    if credentials
-        .windows(2)
-        .any(|pair| pair[0].credential_id == pair[1].credential_id)
-    {
-        return Err(EnrollmentError::StaticImportConflict(
-            "batch repeats a credential identity".into(),
-        ));
-    }
-    let payload = StaticCredentialsImportedPayload { credentials };
-    let history = events
-        .read_stream(&stream()?, None)
-        .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
-    let registry = project_history(&history, now)?;
-    if let Some(prior) = history.iter().find(|event| event.command_id == *command_id) {
-        if prior.schema_name.as_str() != STATIC_CREDENTIALS_IMPORTED
-            || prior.schema_version.get() != 1
-            || decode::<StaticCredentialsImportedPayload>(&prior.payload)? != payload
-        {
-            return Err(EnrollmentError::CommandConflict);
-        }
-        return Ok(StaticEnrollmentImportOutcome {
-            imported_credentials: payload.credentials.len(),
-            event_id: prior.event_id,
-            was_replay: true,
-        });
-    }
-    validate_static_import(&registry, &payload.credentials)?;
-    let event = NewEvent {
-        schema_name: SchemaName::new(STATIC_CREDENTIALS_IMPORTED)
-            .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(1)
-            .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
-        parent_event_id: registry.last_event_id,
-        observed_at_unix_ms: now.get(),
-        payload: cairn_codec::to_vec(&payload)
-            .map_err(|error| EnrollmentError::InvalidHistory(error.to_string()))?,
-    };
-    let outcome = events
-        .append(
-            &stream()?,
-            registry
-                .revision
-                .map_or(ExpectedRevision::NoStream, ExpectedRevision::Exact),
-            command_id,
-            &[event],
-        )
-        .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
-    let event_id = outcome.event_ids.first().copied().ok_or_else(|| {
-        EnrollmentError::Storage("static import append returned no event identity".into())
-    })?;
-    Ok(StaticEnrollmentImportOutcome {
-        imported_credentials: payload.credentials.len(),
-        event_id,
-        was_replay: outcome.was_replay,
-    })
-}
-
-fn validate_static_import(
-    registry: &EnrollmentRegistry,
-    credentials: &[StaticCredentialImport],
-) -> Result<(), EnrollmentError> {
-    let mut workers = BTreeSet::new();
-    let mut fingerprints = BTreeSet::new();
-    for credential in credentials {
-        if !workers.insert(credential.worker_id) {
-            return Err(EnrollmentError::StaticImportConflict(
-                "batch assigns more than one credential to a worker".into(),
-            ));
-        }
-        if !fingerprints.insert(credential.certificate_fingerprint) {
-            return Err(EnrollmentError::StaticImportConflict(
-                "batch repeats a certificate fingerprint".into(),
-            ));
-        }
-        if registry.credentials.contains_key(&credential.credential_id) {
-            return Err(EnrollmentError::StaticImportConflict(format!(
-                "credential {} already exists",
-                credential.credential_id
-            )));
-        }
-        if registry
-            .credentials
-            .values()
-            .any(|record| record.fingerprint == credential.certificate_fingerprint)
-        {
-            return Err(EnrollmentError::StaticImportConflict(format!(
-                "certificate {} already exists",
-                credential.certificate_fingerprint
-            )));
-        }
-        if registry.worker_pools.contains_key(&credential.worker_id) {
-            return Err(EnrollmentError::StaticImportConflict(format!(
-                "worker {} already has registry ownership",
-                credential.worker_id
-            )));
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn revoke_credential(
@@ -1247,11 +1071,6 @@ pub(crate) fn inspect_registry(
                 CredentialProvenance::Issued { enrollment_id } => {
                     RegistryCredentialProvenance::Issued { enrollment_id }
                 }
-                CredentialProvenance::ImportedStatic { event_id } => {
-                    RegistryCredentialProvenance::ImportedStatic {
-                        import_revision: event_id,
-                    }
-                }
             },
             predecessor_credential_id: record.predecessor,
             successor_credential_id: record.superseded_by,
@@ -1429,20 +1248,12 @@ fn project_history(
         }
         match event.schema_name.as_str() {
             OFFER_CREATED => {
-                if !matches!(event.schema_version.get(), 1 | 2) {
+                if event.schema_version.get() != 1 {
                     return Err(EnrollmentError::InvalidHistory(
                         "offer schema version is unsupported".into(),
                     ));
                 }
                 let payload: OfferCreatedPayload = decode(&event.payload)?;
-                if event.schema_version.get() == 1
-                    && (payload.purpose != EnrollmentPurpose::Bootstrap
-                        || payload.rotation_overlap_ms.is_some())
-                {
-                    return Err(EnrollmentError::InvalidHistory(
-                        "V1 offer contains rotation state".into(),
-                    ));
-                }
                 match &payload.purpose {
                     EnrollmentPurpose::Bootstrap if payload.rotation_overlap_ms.is_some() => {
                         return Err(EnrollmentError::InvalidHistory(
@@ -1499,7 +1310,7 @@ fn project_history(
                 }
             }
             CREDENTIAL_ISSUED => {
-                if !matches!(event.schema_version.get(), 1 | 2) {
+                if event.schema_version.get() != 1 {
                     return Err(EnrollmentError::InvalidHistory(
                         "credential issuance schema version is unsupported".into(),
                     ));
@@ -1519,14 +1330,9 @@ fn project_history(
                         "credential duplicates or changes the authorized pool".into(),
                     ));
                 }
-                if event.schema_version.get() == 1
-                    && (payload.credential.schema_version != 1
-                        || payload.credential.predecessor_credential_id.is_some()
-                        || payload.credential.predecessor_retire_at.is_some()
-                        || offer.purpose != EnrollmentPurpose::Bootstrap)
-                {
+                if payload.credential.schema_version != 1 {
                     return Err(EnrollmentError::InvalidHistory(
-                        "V1 issuance contains rotation state".into(),
+                        "credential schema version is unsupported".into(),
                     ));
                 }
                 let rotation_predecessor = match &offer.purpose {
@@ -1544,8 +1350,7 @@ fn project_history(
                         worker_id,
                         predecessor_credential_id,
                     } => {
-                        if payload.credential.schema_version != 2
-                            || payload.credential.worker_id != *worker_id
+                        if payload.credential.worker_id != *worker_id
                             || payload.credential.predecessor_credential_id
                                 != Some(*predecessor_credential_id)
                             || offer.rotation_overlap_ms.is_some()
@@ -1695,57 +1500,6 @@ fn project_history(
                     credential: payload.credential,
                 });
             }
-            STATIC_CREDENTIALS_IMPORTED => {
-                if event.schema_version.get() != 1 {
-                    return Err(EnrollmentError::InvalidHistory(
-                        "static credential import schema version is unsupported".into(),
-                    ));
-                }
-                let payload: StaticCredentialsImportedPayload = decode(&event.payload)?;
-                if payload.credentials.is_empty()
-                    || payload
-                        .credentials
-                        .windows(2)
-                        .any(|pair| pair[0].credential_id >= pair[1].credential_id)
-                {
-                    return Err(EnrollmentError::InvalidHistory(
-                        "static credential import batch is not canonical".into(),
-                    ));
-                }
-                validate_static_import(&registry, &payload.credentials).map_err(|error| {
-                    EnrollmentError::InvalidHistory(format!(
-                        "contradictory static credential import: {error}"
-                    ))
-                })?;
-                for credential in payload.credentials {
-                    registry.worker_pools.insert(
-                        credential.worker_id,
-                        WorkerPoolAssignment {
-                            pool: credential.pool.clone(),
-                            authority_revision: event.event_id,
-                        },
-                    );
-                    registry.credentials.insert(
-                        credential.credential_id,
-                        CredentialRecord {
-                            fingerprint: credential.certificate_fingerprint,
-                            enrolled: EnrolledWorker {
-                                worker_id: credential.worker_id,
-                                credential_id: credential.credential_id,
-                                pool: credential.pool,
-                                pool_assignment_revision: event.event_id,
-                            },
-                            provenance: CredentialProvenance::ImportedStatic {
-                                event_id: event.event_id,
-                            },
-                            revoked: false,
-                            superseded_by: None,
-                            retire_at: None,
-                            predecessor: None,
-                        },
-                    );
-                }
-            }
             CREDENTIAL_REVOKED => {
                 if event.schema_version.get() != 1 {
                     return Err(EnrollmentError::InvalidHistory(
@@ -1892,16 +1646,6 @@ fn project_history(
                     ));
                 }
             }
-            CredentialProvenance::ImportedStatic { event_id } => {
-                if !history.iter().any(|event| {
-                    event.event_id == event_id
-                        && event.schema_name.as_str() == STATIC_CREDENTIALS_IMPORTED
-                }) {
-                    return Err(EnrollmentError::InvalidHistory(
-                        "static credential lost its import provenance".into(),
-                    ));
-                }
-            }
         }
         let assignment = registry
             .worker_pools
@@ -2028,349 +1772,4 @@ fn certificate_public_key(pem: &str) -> Result<Vec<u8>, EnrollmentError> {
     let (_, parsed) = x509_parser::parse_x509_certificate(certificate.as_ref())
         .map_err(|error| EnrollmentError::Issuance(error.to_string()))?;
     Ok(parsed.public_key().raw.to_vec())
-}
-
-#[cfg(test)]
-mod tests {
-    use cairn_store_sqlite::SqliteEventStore;
-
-    use super::*;
-
-    fn imported(
-        worker_id: WorkerId,
-        credential_id: CredentialId,
-        fingerprint_seed: &[u8],
-    ) -> StaticCredentialImport {
-        StaticCredentialImport {
-            worker_id,
-            credential_id,
-            pool: WorkerPoolName::new("imported-pool").expect("pool"),
-            certificate_fingerprint: CertificateFingerprint::from_der(fingerprint_seed),
-        }
-    }
-
-    #[test]
-    fn static_import_is_explicitly_idempotent_and_rejects_every_ownership_collision() {
-        let mut events = SqliteEventStore::in_memory().expect("events");
-        let worker_id = WorkerId::new();
-        let credential_id = CredentialId::new();
-        let import = imported(worker_id, credential_id, b"certificate-a");
-        let command_id = CommandId::new();
-        let first = import_static_credentials(
-            &mut events,
-            vec![import.clone()],
-            &command_id,
-            ObservedAtUnixMillis::new(1),
-        )
-        .expect("first import");
-        assert!(!first.was_replay());
-        let replay = import_static_credentials(
-            &mut events,
-            vec![import.clone()],
-            &command_id,
-            ObservedAtUnixMillis::new(2),
-        )
-        .expect("exact replay");
-        assert!(replay.was_replay());
-        assert_eq!(replay.event_id(), first.event_id());
-
-        assert!(matches!(
-            import_static_credentials(
-                &mut events,
-                vec![imported(worker_id, credential_id, b"different-input")],
-                &command_id,
-                ObservedAtUnixMillis::new(3),
-            ),
-            Err(EnrollmentError::CommandConflict)
-        ));
-        assert!(matches!(
-            import_static_credentials(
-                &mut events,
-                vec![import.clone()],
-                &CommandId::new(),
-                ObservedAtUnixMillis::new(3),
-            ),
-            Err(EnrollmentError::StaticImportConflict(_))
-        ));
-        assert!(matches!(
-            import_static_credentials(
-                &mut events,
-                vec![imported(worker_id, CredentialId::new(), b"certificate-b")],
-                &CommandId::new(),
-                ObservedAtUnixMillis::new(3),
-            ),
-            Err(EnrollmentError::StaticImportConflict(_))
-        ));
-        let fingerprint_collision = StaticCredentialImport {
-            worker_id: WorkerId::new(),
-            credential_id: CredentialId::new(),
-            pool: WorkerPoolName::new("another-pool").expect("pool"),
-            certificate_fingerprint: import.certificate_fingerprint,
-        };
-        assert!(matches!(
-            import_static_credentials(
-                &mut events,
-                vec![fingerprint_collision],
-                &CommandId::new(),
-                ObservedAtUnixMillis::new(3),
-            ),
-            Err(EnrollmentError::StaticImportConflict(_))
-        ));
-
-        let registry = project(&events, ObservedAtUnixMillis::new(4)).expect("registry replay");
-        assert!(registry.credential_is_authorized(credential_id, worker_id));
-    }
-
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one lifecycle proof covers command replay, conflicts, projection, and forged history"
-    )]
-    fn worker_lifecycle_is_explicit_idempotent_and_pool_authority_survives_replay() {
-        let mut events = SqliteEventStore::in_memory().expect("events");
-        let worker_id = WorkerId::new();
-        let credential_id = CredentialId::new();
-        let imported = imported(worker_id, credential_id, b"lifecycle-certificate");
-        let fingerprint = imported.certificate_fingerprint;
-        import_static_credentials(
-            &mut events,
-            vec![imported],
-            &CommandId::new(),
-            ObservedAtUnixMillis::new(1),
-        )
-        .expect("import");
-
-        assert!(matches!(
-            assign_worker_pool(
-                &mut events,
-                worker_id,
-                WorkerPoolName::new("moved-pool").expect("pool"),
-                &CommandId::new(),
-                ObservedAtUnixMillis::new(2),
-            ),
-            Err(EnrollmentError::WorkerNotDisabled)
-        ));
-
-        let disable_command = CommandId::new();
-        let disabled = disable_worker(
-            &mut events,
-            worker_id,
-            &disable_command,
-            ObservedAtUnixMillis::new(3),
-        )
-        .expect("disable");
-        let disable_replay = disable_worker(
-            &mut events,
-            worker_id,
-            &disable_command,
-            ObservedAtUnixMillis::new(4),
-        )
-        .expect("disable replay");
-        assert!(disable_replay.was_replay());
-        assert_eq!(disable_replay.event_id(), disabled.event_id());
-        assert!(matches!(
-            enable_worker(
-                &mut events,
-                worker_id,
-                &disable_command,
-                ObservedAtUnixMillis::new(4),
-            ),
-            Err(EnrollmentError::CommandConflict)
-        ));
-        let disabled_inspection =
-            inspect_registry(&events, ObservedAtUnixMillis::new(4)).expect("disabled inspection");
-        assert!(
-            disabled_inspection
-                .worker(worker_id)
-                .expect("disabled worker")
-                .is_disabled()
-        );
-        assert_eq!(
-            disabled_inspection
-                .credential(credential_id)
-                .expect("disabled credential")
-                .status(),
-            RegistryCredentialStatus::WorkerDisabled
-        );
-
-        let pool = WorkerPoolName::new("moved-pool").expect("pool");
-        let pool_command = CommandId::new();
-        let assigned = assign_worker_pool(
-            &mut events,
-            worker_id,
-            pool.clone(),
-            &pool_command,
-            ObservedAtUnixMillis::new(5),
-        )
-        .expect("assign pool");
-        let assignment_replay = assign_worker_pool(
-            &mut events,
-            worker_id,
-            pool.clone(),
-            &pool_command,
-            ObservedAtUnixMillis::new(6),
-        )
-        .expect("assignment replay");
-        assert!(assignment_replay.was_replay());
-        assert_eq!(assignment_replay.event_id(), assigned.event_id());
-        assert!(matches!(
-            assign_worker_pool(
-                &mut events,
-                worker_id,
-                pool.clone(),
-                &CommandId::new(),
-                ObservedAtUnixMillis::new(6),
-            ),
-            Err(EnrollmentError::WorkerPoolUnchanged)
-        ));
-
-        let enable_command = CommandId::new();
-        let enabled = enable_worker(
-            &mut events,
-            worker_id,
-            &enable_command,
-            ObservedAtUnixMillis::new(7),
-        )
-        .expect("enable");
-        let enable_replay = enable_worker(
-            &mut events,
-            worker_id,
-            &enable_command,
-            ObservedAtUnixMillis::new(8),
-        )
-        .expect("enable replay");
-        assert!(enable_replay.was_replay());
-        assert_eq!(enable_replay.event_id(), enabled.event_id());
-
-        let registry = project(&events, ObservedAtUnixMillis::new(9)).expect("registry replay");
-        assert!(registry.credential_is_authorized(credential_id, worker_id));
-        let enrolled = registry
-            .enrolled()
-            .get(&fingerprint)
-            .expect("active worker");
-        assert_eq!(enrolled.pool, pool);
-        assert_eq!(enrolled.pool_assignment_revision, assigned.event_id());
-
-        let inspection =
-            inspect_registry(&events, ObservedAtUnixMillis::new(9)).expect("operator inspection");
-        let worker = inspection.worker(worker_id).expect("inspected worker");
-        assert_eq!(worker.pool(), &pool);
-        assert!(!worker.is_disabled());
-        assert_eq!(worker.credential_ids(), &[credential_id]);
-        let credential = inspection
-            .credential(credential_id)
-            .expect("inspected credential");
-        assert_eq!(credential.worker_id(), worker_id);
-        assert_eq!(credential.status(), RegistryCredentialStatus::Active);
-        assert!(matches!(
-            credential.provenance(),
-            RegistryCredentialProvenance::ImportedStatic { .. }
-        ));
-        let inspection_bytes = cairn_codec::to_vec(&inspection).expect("inspection JSON");
-        assert_eq!(
-            cairn_codec::from_slice::<WorkerRegistryInspection>(&inspection_bytes)
-                .expect("strict inspection round trip"),
-            inspection
-        );
-        let mut invalid_version = serde_json::to_value(&inspection).expect("inspection value");
-        invalid_version["schema_version"] = 2.into();
-        assert!(serde_json::from_value::<WorkerRegistryInspection>(invalid_version).is_err());
-        let mut unknown_field = serde_json::to_value(&inspection).expect("inspection value");
-        unknown_field["unknown"] = true.into();
-        assert!(serde_json::from_value::<WorkerRegistryInspection>(unknown_field).is_err());
-        let audit = audit_registry(&events, ObservedAtUnixMillis::new(9)).expect("registry audit");
-        assert_eq!(audit.event_count(), 4);
-        assert_eq!(audit.worker_count(), 1);
-        assert_eq!(audit.credential_count(), 1);
-        assert_eq!(audit.authorized_credential_count(), 1);
-
-        revoke_credential(
-            &mut events,
-            credential_id,
-            &CommandId::new(),
-            ObservedAtUnixMillis::new(10),
-        )
-        .expect("revoke credential");
-        let revoked_inspection =
-            inspect_registry(&events, ObservedAtUnixMillis::new(11)).expect("revoked inspection");
-        assert_eq!(
-            revoked_inspection
-                .credential(credential_id)
-                .expect("retained revoked credential")
-                .status(),
-            RegistryCredentialStatus::Revoked
-        );
-        let registry = project(&events, ObservedAtUnixMillis::new(11)).expect("registry head");
-
-        events
-            .append(
-                &stream().expect("stream"),
-                ExpectedRevision::Exact(registry.revision.expect("registry revision")),
-                &CommandId::new(),
-                &[NewEvent {
-                    schema_name: SchemaName::new(WORKER_POOL_ASSIGNED).expect("schema"),
-                    schema_version: SchemaVersion::new(1).expect("version"),
-                    parent_event_id: registry.last_event_id,
-                    observed_at_unix_ms: 12,
-                    payload: cairn_codec::to_vec(&WorkerPoolAssignedPayload {
-                        worker_id,
-                        previous_pool: WorkerPoolName::new("moved-pool").expect("pool"),
-                        pool: WorkerPoolName::new("forged-pool").expect("pool"),
-                    })
-                    .expect("payload"),
-                }],
-            )
-            .expect("append forged lifecycle fact");
-        assert!(matches!(
-            project(&events, ObservedAtUnixMillis::new(13)),
-            Err(EnrollmentError::InvalidHistory(_))
-        ));
-    }
-
-    #[test]
-    fn contradictory_import_fact_fails_closed_during_projection() {
-        let mut events = SqliteEventStore::in_memory().expect("events");
-        let worker_id = WorkerId::new();
-        let credential_id = CredentialId::new();
-        let import_command = CommandId::new();
-        import_static_credentials(
-            &mut events,
-            vec![imported(worker_id, credential_id, b"certificate-a")],
-            &import_command,
-            ObservedAtUnixMillis::new(1),
-        )
-        .expect("first import");
-        let registry = project(&events, ObservedAtUnixMillis::new(2)).expect("registry");
-        let payload = StaticCredentialsImportedPayload {
-            credentials: vec![imported(worker_id, CredentialId::new(), b"certificate-b")],
-        };
-        events
-            .append(
-                &stream().expect("stream"),
-                ExpectedRevision::Exact(registry.revision.expect("revision")),
-                &CommandId::new(),
-                &[NewEvent {
-                    schema_name: SchemaName::new(STATIC_CREDENTIALS_IMPORTED).expect("schema"),
-                    schema_version: SchemaVersion::new(1).expect("version"),
-                    parent_event_id: registry.last_event_id,
-                    observed_at_unix_ms: 2,
-                    payload: cairn_codec::to_vec(&payload).expect("payload"),
-                }],
-            )
-            .expect("forge structurally valid fact");
-
-        assert!(matches!(
-            project(&events, ObservedAtUnixMillis::new(3)),
-            Err(EnrollmentError::InvalidHistory(_))
-        ));
-        assert!(matches!(
-            import_static_credentials(
-                &mut events,
-                vec![imported(worker_id, credential_id, b"certificate-a")],
-                &import_command,
-                ObservedAtUnixMillis::new(3),
-            ),
-            Err(EnrollmentError::InvalidHistory(_))
-        ));
-    }
 }

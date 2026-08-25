@@ -80,41 +80,19 @@ async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
     enrollment_service
         .server_ca
         .clone_from(&enrollment_server_ca);
-    enrollment_service.server_tls = Some(cairn_server::EnrollmentServerTlsFiles {
+    enrollment_service.server_tls = cairn_server::EnrollmentServerTlsFiles {
         certificate: enrollment_server_certificate,
         private_key: enrollment_server_key,
-    });
+    };
     let bundle = create_enrollment_bundle(
         &config,
         WorkerPoolName::new("join-lab")?,
         NonZeroU64::new(60_000).expect("TTL"),
     )?;
-    assert_eq!(bundle.schema_version, 3);
+    assert_eq!(bundle.schema_version, 1);
     assert_ne!(
         bundle.endpoint.server_ca_pem,
-        bundle
-            .control_endpoint
-            .as_ref()
-            .expect("control endpoint")
-            .server_ca_pem
-    );
-    let mut legacy_bundle = bundle.clone();
-    legacy_bundle.schema_version = 2;
-    legacy_bundle.control_endpoint = None;
-    let legacy_bundle_path = directory.path().join("legacy-bundle.json");
-    fs::write(
-        &legacy_bundle_path,
-        serde_json::to_vec_pretty(&legacy_bundle)?,
-    )?;
-    assert!(
-        Box::pin(join_from_bundle(
-            &legacy_bundle_path,
-            &directory.path().join("legacy-join-state")
-        ))
-        .await
-        .expect_err("legacy bundles cannot define a one-command join")
-        .to_string()
-        .contains("V3 bootstrap bundle")
+        bundle.control_endpoint.server_ca_pem
     );
     let bundle_path = directory.path().join("join-bundle.json");
     fs::write(&bundle_path, serde_json::to_vec_pretty(&bundle)?)?;
@@ -515,6 +493,23 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
             .contains("IdentityMismatch")
     );
 
+    let registration_count_before_revocation = events
+        .read_stream(
+            &StreamId {
+                kind: AggregateKind::new("execution-worker")?,
+                id: AggregateId::new(identity.worker_id.to_string())?,
+            },
+            None,
+        )?
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.schema_name.as_str(),
+                "execution.worker-registered" | "execution.worker-replaced-after-expiry"
+            )
+        })
+        .count();
+
     // Revocation is a durable authority fact. The running controller observes it, terminates the
     // live session, and rejects the worker's automatic reconnect before a new registration fact.
     revoke_worker_credential(
@@ -563,7 +558,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
                 )
             })
             .count(),
-        2,
+        registration_count_before_revocation,
         "revoked automatic reconnect must not append another registration"
     );
 
@@ -592,27 +587,29 @@ fn server_config(
     content_directory: &Path,
 ) -> Result<ServerConfig, Box<dyn Error + Send + Sync>> {
     Ok(ServerConfig {
-        schema_version: 3,
+        schema_version: 1,
         listen,
         tls: ServerTlsFiles {
             certificate: server_certificate.to_path_buf(),
             private_key: server_key.to_path_buf(),
             client_ca: ca.to_path_buf(),
         },
-        enrollment: Vec::new(),
         enrollment_service: Some(EnrollmentServiceConfig {
             listen: enrollment_listen,
             public_tcp_address: enrollment_listen.to_string(),
             websocket_uri: format!("wss://localhost:{}/enrollment", enrollment_listen.port()),
             server_name: "localhost".into(),
             server_ca: ca.to_path_buf(),
-            server_tls: None,
-            control_endpoint: Some(cairn_server::PublicWorkerControlEndpointConfig {
+            server_tls: cairn_server::EnrollmentServerTlsFiles {
+                certificate: server_certificate.to_path_buf(),
+                private_key: server_key.to_path_buf(),
+            },
+            control_endpoint: cairn_server::PublicWorkerControlEndpointConfig {
                 tcp_address: listen.to_string(),
                 websocket_uri: format!("wss://localhost:{}/control", listen.port()),
                 server_name: "localhost".into(),
                 server_ca: ca.to_path_buf(),
-            }),
+            },
             issuer_certificate: ca.to_path_buf(),
             issuer_private_key: ca_key.to_path_buf(),
             credential_validity_ms: NonZeroU64::new(3_600_000).expect("validity"),
@@ -626,7 +623,7 @@ fn server_config(
             content_database: content_database.to_path_buf(),
             content_directory: content_directory.to_path_buf(),
         },
-        protocol_version: WorkerProtocolVersion::new(2)?,
+        protocol_version: WorkerProtocolVersion::new(1)?,
         session_timeout_ms: WorkerSessionTimeoutMillis::new(10_000)?,
         scheduler: None,
         handshake_timeout_ms: NonZeroU64::new(2_000),
@@ -644,7 +641,7 @@ fn worker_config(
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     let journal_database = state_directory.join("worker-journal.sqlite3");
     Ok(WorkerConfig {
-        schema_version: 7,
+        schema_version: 1,
         controller: ControllerEndpoint {
             tcp_address: control.to_string(),
             websocket_uri: format!("wss://localhost:{}/control", control.port()),
@@ -653,10 +650,10 @@ fn worker_config(
             state_directory: state_directory.to_path_buf(),
         },
         profile: WorkerProfileConfig {
-            schema_version: 2,
-            protocol_version: WorkerProtocolVersion::new(2)?,
+            schema_version: 1,
+            protocol_version: WorkerProtocolVersion::new(1)?,
             binary_identity: WorkerBinaryIdentity::new("sha256:enrollment-test")?,
-            backends: vec![ExecutionBackend::new("transport-test")?],
+            backends: vec![ExecutionBackend::new("transport-only")?],
             capabilities: Vec::new(),
             max_concurrency: WorkerSlotCount::new(1)?,
         },

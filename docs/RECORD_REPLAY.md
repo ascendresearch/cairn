@@ -92,13 +92,12 @@ retry; `AttemptId` changes. Evidence from failed or ambiguous attempts remains l
 It is not a semantic artifact identity and does not enter product APIs in place of `ContentId<T>`.
 Two semantic types may have different content identities while sharing one physical blob.
 
-### 3.7 Algorithm migration
+### 3.7 Pre-release algorithm changes
 
-Identity algorithms are tagged but V1 implements only SHA-256. A future upgrade is a controlled,
-checkpointed migration that verifies old objects, writes new identities plus an immutable mapping
-manifest, rebuilds mutable projections/indexes, and atomically cuts over the writer. Historical
-events remain byte-identical. Legacy resolution uses the manifest at import/read boundaries rather
-than adding general alias handling to every product path.
+Identity algorithms are tagged but V1 implements only SHA-256. Before the first public
+compatibility baseline, an algorithm or frame change replaces V1 and requires explicit
+development-state rebuild. Runtime readers contain no old-format resolution or alias path. A
+post-release upgrade policy requires a separate decision.
 
 ## 4. Event envelope and append contract
 
@@ -325,10 +324,9 @@ frames wholesale:
 - `control.worker-delivery-recorded` and `control.worker-acknowledged` preserve terminal replay until
   controller domain processing succeeds.
 
-Control protocol V2 changes the durable offer and admission payload shapes, so the complete
-controller-outbox/worker-journal fact family uses event schema V2. A V1 control stream fails closed
-and requires the controlled development-state migration/rebuild gate; it is never decoded as V2.
-Registry, scheduler, execution, agent, and content histories retain their independent versions.
+Control protocol, durable offer/admission payloads, and the complete controller-outbox/
+worker-journal fact family use schema V1. Registry, scheduler, execution, agent, and content
+histories also use their current V1 definition. Non-V1 input fails closed and is never converted.
 
 The durable offer freezes exact typed input-bundle and execution-environment identities, lengths,
 and chunk policy. Bounded range request/responses do not enter the event stream. An unacknowledged
@@ -342,7 +340,7 @@ than being silently reconstructed from an admission fact.
 `ControlMessageId` is stable across reconnect, while `ControlConnectionId` and `ControlSequence`
 name only a delivery attempt. Rebuilding either side checks causal event chains, exact assignment
 bindings, non-regressing/in-bounds cumulative acknowledgements, and delivery mappings. Canonical
-JSON is an isolated V2 frame codec. A recorded delivery may intentionally have no logical message
+JSON is an isolated V1 frame codec. A recorded delivery may intentionally have no logical message
 when it is an acknowledgement-only frame; such a frame advances connection sequence but never
 creates domain truth or a replay obligation. Replay authority comes from the storage-domain facts
 above, not from treating decoded transport envelopes as execution truth.

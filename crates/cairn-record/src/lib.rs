@@ -374,7 +374,7 @@ mod tests {
         );
 
         let mut changed_schema = event(&base.payload);
-        changed_schema.schema_version = SchemaVersion::new(2).expect("version");
+        changed_schema.schema_version = SchemaVersion::new(99).expect("unsupported version");
         assert_ne!(
             base_id,
             derive_event_id(&stream, sequence, &command, &changed_schema).expect("schema id")
