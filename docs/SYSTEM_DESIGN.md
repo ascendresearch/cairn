@@ -339,7 +339,66 @@ Initial seams:
 
 Recorded providers are ordinary providers, not replay flags in the loop.
 
-### 9.2 Durable versus live events
+### 9.2 Model provider stack
+
+Cairn does not define a universal provider message format. A provider-neutral semantic turn is useful
+for tool validation, the agent loop, replay, and inspection, but it cannot losslessly represent every
+protocol's continuation requirements. The model boundary therefore has two coordinated products:
+
+- a durable semantic turn consumed by domain-neutral runtime logic; and
+- a protocol-native continuation containing the exact ordered items, messages, blocks, and
+  correlation identities needed to materialize the next request.
+
+Model selection is resolved through independent layers:
+
+| Layer | Owns | Must not decide |
+|---|---|---|
+| runtime alias | operator-facing choice of wire model, deployment, profile, and generation policy | wire encoding or credentials |
+| model profile | context/output bounds, tools, reasoning, parallel-call, and schema capabilities | endpoint ownership |
+| deployment | provider label, protocol, HTTPS endpoint, credential reference, transport bounds, and data boundary | agent-loop behavior |
+| protocol codec | request encoding, response decoding, usage extraction, and native continuation | HTTP, retries, tools, or vendor routing |
+| transport | one bounded HTTP exchange and byte limits | response semantics or tool execution |
+| credential resolver | dispatch-time header value from an external reference | durable model configuration |
+
+The provider label is attribution, not dispatch logic. A deployment's `protocol` selects one of the
+initial codecs:
+
+| Protocol | Native continuation that must be preserved | Tool-result correlation |
+|---|---|---|
+| OpenAI Responses | typed output items, including reasoning and function-call items | function `call_id` |
+| OpenAI Chat Completions | ordered messages and the exact assistant tool-call message, including compatible reasoning extensions | `tool_call_id` |
+| Anthropic Messages | ordered content blocks, including `thinking`, `redacted_thinking`, and `tool_use` where returned | `tool_use_id` |
+
+The codec must retain unrecognized but policy-allowed native blocks in the archived continuation or
+fail explicitly; it must not silently coerce them into text. Tool arguments remain untrusted bytes
+until Cairn's schema validator accepts them. The SDK/transport performs one provider turn only. Tool
+execution, retry authority, budgets, and episode termination remain in the generic runtime.
+
+V1 uses locally reconstructable continuation. OpenAI Responses deployments therefore set
+`store=false`; Chat Completions and Anthropic Messages replay their recorded native history. A future
+hosted continuation ID may be recorded as external evidence, but it cannot be the sole reconstruction
+authority. Changing model, deployment, protocol, or codec version creates a new episode or explicit
+counterfactual branch rather than mutating an episode's frozen selection.
+
+The initial example configuration selects `deepseek-v4-pro` through DeepSeek's Anthropic-compatible
+deployment and provides a Chat Completions alternative. DeepSeek's current Responses compatibility
+does not declare `deepseek-v4-pro`, so Cairn does not advertise that combination. Responses remains
+an independent protocol family for OpenAI and other deployments that explicitly support it. These
+are configuration capabilities, not vendor branches. Credentials are file references only and their
+bytes are read at dispatch, never copied into the resolved snapshot or record.
+
+Authentication shape is also deployment configuration rather than a protocol inference: official
+OpenAI commonly uses Bearer and official Anthropic uses `x-api-key`, but a compatible gateway may
+make a different choice. Cairn validates that only an external secret reference is present; a live
+deployment check determines whether its configured endpoint accepts that authentication shape.
+
+**Implemented:** `cairn-agent` now has the strict runtime model catalog, strongly typed quantities,
+three protocol discriminants, capability and credential-reference validation, and a
+content-addressable frozen resolution. `config/runtime-models.example.json` supplies the initial
+DeepSeek default. Protocol codecs, native-continuation artifacts, HTTP transport, and live
+conformance remain the next slices.
+
+### 9.3 Durable versus live events
 
 The runtime distinguishes:
 
@@ -351,7 +410,7 @@ The runtime distinguishes:
 
 An interception point cannot be the only location of verdict-relevant or model-visible information.
 
-### 9.3 Step transaction boundary
+### 9.4 Step transaction boundary
 
 Before provider dispatch, Cairn appends a `ModelRequestPrepared` event citing the canonical request
 bytes and all input decision identities. Dispatch authority follows only after that append commits.
@@ -367,7 +426,7 @@ After provider response:
 A crash may produce an ambiguous provider attempt. Cairn records ambiguity; it does not invent a
 response or automatically bill a duplicate request without policy authority.
 
-### 9.4 Role scopes
+### 9.5 Role scopes
 
 Each episode receives a typed capability set:
 

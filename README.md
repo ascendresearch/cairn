@@ -45,10 +45,16 @@ value enables a dimension and `null` or an omitted field disables it. External a
 own `MeteredActionId` and a durable reserve/start/receipt saga. Reservation commits before execution;
 recovery distinguishes denied, ready, in-doubt, and receipted actions and re-evaluates ledger facts
 against the budget frozen in `EpisodeOpened`. This is the capability boundary for future live
-integrations; it is not yet wired into a concrete external-service adapter. Later configuration
-changes affect new episodes, not historical meaning. The remaining architecture in the normative
-documents is still target design. The old repositories are evidence and compatibility references,
-not source trees to copy mechanically.
+integrations; it is not yet wired into a concrete external-service adapter. A strict runtime-model
+catalog now independently resolves alias, wire model, deployment, protocol, capability profile,
+generation settings, transport bounds, and external credential reference into a typed secret-free
+snapshot. The initial example chooses `deepseek-v4-pro` over an Anthropic-compatible deployment and
+provides a Chat Completions alternative. The catalog also models OpenAI Responses as an independent
+protocol family for deployments that actually support the selected model; codec selection never
+uses provider-name branches. Protocol codecs and live HTTP are the next implementation slice. Later
+configuration changes affect new episodes, not historical meaning. The remaining architecture in
+the normative documents is still target design. The old repositories are evidence and compatibility
+references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

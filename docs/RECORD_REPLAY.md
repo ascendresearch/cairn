@@ -340,7 +340,18 @@ visible request. The audit states which representation was used.
 
 ### 8.3 Provider continuation state
 
-Provider-native continuation identifiers or opaque state are external facts. Cairn records:
+The provider record has two related representations. The semantic turn is the domain-neutral,
+derived view used by the agent loop. The native continuation is the lossless, protocol-versioned
+material used to construct a later request. Neither representation is silently synthesized from the
+other when information is absent.
+
+For OpenAI Responses, native continuation preserves typed output items and function `call_id`
+relationships. For OpenAI Chat Completions, it preserves the exact assistant message and
+`tool_call_id` relationships. For Anthropic Messages, it preserves ordered content blocks and
+`tool_use_id` relationships, including policy-allowed thinking or redacted blocks. Unknown native
+items are retained opaquely or rejected explicitly; flattening them to text is a recording gap.
+
+Provider-native continuation identifiers or hosted opaque state are external facts. Cairn records:
 
 - the continuation identity returned;
 - provider/model/deployment;
@@ -348,9 +359,11 @@ Provider-native continuation identifiers or opaque state are external facts. Cai
 - request/response relationship;
 - whether the state can be resumed, replayed only through recorded bytes, or not recovered.
 
-Live continuation from a historical prefix must seed provider state from an authorized archived
-continuation or rebuild a full request. Cairn verifies that the resulting request represents the
-same recorded boundary before calling it a control.
+V1 reconstructs locally and does not depend on hosted state. Live continuation from a historical
+prefix must use an authorized archived native continuation or rebuild a full request. Cairn verifies
+that the resulting request represents the same recorded boundary before calling it a control.
+Provider-hosted continuation may later be an optimization or an additional observation, but never
+the only authority for reconstruction.
 
 ## 9. Completeness audit
 

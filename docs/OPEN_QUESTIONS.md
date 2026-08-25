@@ -127,23 +127,6 @@ designed before the network transport is frozen.
 Baseline: implement typed in-process channels and stdio first; use generated schemas; delay a public
 network compatibility promise until reconnect/backpressure behavior is measured.
 
-## OQ-012 — Provider-native continuation
-
-- Priority: P1
-- Affects: exact request reconstruction and counterfactual cutover
-
-Provider APIs differ between stateless full-history requests and stateful continuation IDs. Determine
-the common record contract for:
-
-- archived semantic history;
-- raw request bytes;
-- provider response/continuation IDs;
-- resuming an old continuation;
-- rebuilding equivalent input when provider state expires.
-
-Controls must include the historical case where reconstructed input matched token count but produced
-a different tool argument.
-
 ## OQ-014 — External extension packaging
 
 - Priority: P3

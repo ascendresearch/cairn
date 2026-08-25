@@ -229,3 +229,30 @@ Historical event bytes and verdict meaning are not rewritten. Legacy lookup cons
 manifest at import/resolution boundaries; ordinary new business logic does not carry a permanent
 general alias graph. A failed migration resumes from verified checkpoints and cannot partially
 authorize the new writer.
+
+## D-008 — Semantic turns plus protocol-native continuation
+
+- Resolves: OQ-012
+- Decision: accepted
+
+Cairn uses a hybrid record for model interaction. A provider-neutral semantic turn is the derived
+contract consumed by the agent loop, tool validation, inspection, and semantic replay. Alongside it,
+the selected protocol codec archives a lossless, versioned native continuation containing the
+ordered protocol items and correlation identities required to materialize the next request.
+
+There is deliberately no universal lossy `Message` type standing in for all protocols. OpenAI
+Responses retains typed response items and function `call_id` relationships; OpenAI Chat
+Completions retains the exact assistant message and `tool_call_id` relationships; Anthropic
+Messages retains ordered content blocks and `tool_use_id` relationships. Reasoning, redacted, and
+unknown policy-allowed native items are preserved without granting them semantic authority.
+
+V1 reconstructs continuation locally from archived material. Responses uses full input with hosted
+storage disabled; Chat Completions and Anthropic Messages rebuild their full native message/block
+history. Provider response IDs and hosted continuation state may be recorded as external facts, but
+are neither required for reconstruction nor treated as durable authority. A later hosted-state
+optimization must retain a local fallback and prove the represented history boundary.
+
+A catalog alias resolves model, deployment, protocol, profile, settings, transport bounds, and a
+credential reference into a frozen secret-free snapshot. Protocol—not provider or model name—selects
+the codec. Switching model, deployment, protocol, or codec version creates a new episode or an
+explicit counterfactual branch.

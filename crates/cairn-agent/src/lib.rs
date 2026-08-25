@@ -11,6 +11,7 @@ mod dispatch;
 mod episode;
 mod metering;
 mod operation;
+mod provider_catalog;
 mod semantic;
 mod step;
 mod step_operation;
@@ -45,6 +46,14 @@ pub use operation::{
     reconcile_tool_operation_not_occurred, recover_tool_operation,
     recover_tool_operation_authority,
 };
+pub use provider_catalog::{
+    CredentialSource, ModelCatalogError, ModelContextTokenLimit, ModelDataBoundary,
+    ModelGenerationSettings, ModelOutputTokenLimit, ModelProfileConfig, ModelProtocolConfig,
+    ModelProtocolKind, ModelReasoningEffort, ModelReasoningMode, ModelReasoningSettings,
+    ModelTransportConfig, ProviderConfigValueError, ProviderEndpoint, ResolvedRuntimeModel,
+    RuntimeModelCatalog, RuntimeModelConfig, SamplingTemperatureMillis, SecretFilePath,
+    ToolSchemaDialect, TransportByteLimit, TransportTimeoutMillis,
+};
 pub use semantic::{
     AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,
     ModelAdapterError, OutputOrdinal, RecordedAdapterExchange, RecordedModelAdapter,
@@ -63,7 +72,7 @@ pub use step_operation::{
 macro_rules! label_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+        #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
 
@@ -83,6 +92,18 @@ macro_rules! label_type {
                     return Err(InputTypeError);
                 }
                 Ok(Self(value))
+            }
+
+            /// Returns the validated label.
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
             }
         }
 
@@ -109,10 +130,14 @@ pub struct InputTypeError;
 
 label_type!(/// Model-provider identity.
 ProviderName);
+label_type!(/// Operator-facing alias resolved through the runtime model catalog.
+RuntimeModelAlias);
 label_type!(/// Provider model identity.
 ModelName);
 label_type!(/// Provider deployment identity.
 DeploymentName);
+label_type!(/// Capability profile selected independently from a deployment.
+ModelProfileName);
 label_type!(/// Semantic adapter version.
 AdapterVersion);
 label_type!(/// Registered tool identity.
@@ -154,6 +179,10 @@ content_type!(ModelResponseArtifact, "agent.model-response.v1");
 content_type!(ToolArguments, "agent.tool-arguments.v1");
 content_type!(SemanticModelTurnArtifact, "agent.semantic-model-turn.v1");
 content_type!(ToolCallIdentity, "agent.tool-call-identity.v1");
+content_type!(
+    ResolvedRuntimeModelArtifact,
+    "agent.resolved-runtime-model.v1"
+);
 
 /// Pinned provider/model/adapter selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
