@@ -658,7 +658,12 @@ Logical tool-operation budget is reserved before a proposed tool call becomes an
 binding. The durable admission records ordered operation identities and trusted registration
 metadata; an over-limit proposal terminates at that boundary without producing tool authority.
 Invocation retries retain the logical operation identity and consume a separate attempt or metered
-budget when those ledgers are available.
+budget. The implemented external-meter ledger uses independent named unit ceilings and a distinct
+`MeteredActionId`. It durably reserves the worst-case charge before granting one-shot start
+authority, then records a bounded provider receipt. Reserved capacity is intentionally not refunded:
+this keeps crash recovery conservative when the provider outcome is unknown. A durable start
+recovers as in-doubt and permits receipt reconciliation, never blind re-execution. Live provider and
+service adapters are still target work at this seam.
 
 Provider input/output-token usage is accepted only as a receipt returned with the model response
 and is committed with that response fact. An episode may configure an observed token threshold;
@@ -777,11 +782,11 @@ fully resolved configuration bytes or a reconstructable, secret-free form are ar
 task/episode.
 
 Every episode budget dimension is independently optional in configuration. In the serialized
-`EpisodeBudget`, a typed numeric value enables its check and `null` or omission disables it. This
-applies uniformly to model-step count, logical tool-operation count, observed provider-token usage,
-and absolute deadline; future metered dimensions must use the same explicit enable/disable rule.
-The resolved budget is copied into `EpisodeOpened`, so a configuration reload changes only episodes
-opened afterward.
+`EpisodeBudget`, a typed value enables its check and `null` or omission disables it. This applies to
+model-step count, logical tool-operation count, observed provider-token usage, absolute deadline,
+and named external meters. External meters use an optional list of `{meter, units}` limits: an empty
+enabled list rejects every meter, and an unlisted meter fails closed. The resolved budget is copied
+into `EpisodeOpened`, so a configuration reload changes only episodes opened afterward.
 
 ## 19. Verification strategy for Cairn itself
 

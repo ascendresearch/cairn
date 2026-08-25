@@ -229,6 +229,8 @@ Examples:
 - `ModelResponseDecoded`
 - `ToolCallProposed`
 - `EpisodeOperationsAdmitted`
+- `EpisodeMeterReserved` / `EpisodeMeterDenied`
+- `MeteredActionStarted` / `MeteredActionReceipted`
 - operation lifecycle events
 - `EpisodeCompleted`
 
@@ -268,6 +270,21 @@ attempt lacks usage at a continuable boundary,
 `EpisodeCompleted(ProviderUsageUnavailable)` cites that attempt and fails closed. A model that has
 already yielded still completes as `Yielded`, because no further authority exists to block.
 Episodes without a configured token threshold may use providers that omit usage.
+
+Named external meters use a separate durable ledger and `MeteredActionId`; they are not aliases for
+logical tool operations or invocation attempts. `external_meter_limits: null` or omission disables
+enforcement while still recording reservations. A configured list enables enforcement: an empty
+list rejects every meter, an unlisted meter fails closed, and each listed meter has an independent
+typed unit ceiling. Duplicate meter names invalidate the episode configuration.
+
+The ledger commits `EpisodeMeterReserved` or `EpisodeMeterDenied` before an external service can
+receive authority. Reserved units, rather than eventual charged units, consume the ceiling, so a
+crash or missing receipt cannot silently release spend. Recovery recomputes every historical
+decision in order against the policy frozen in `EpisodeOpened`; it does not trust a stored allow or
+deny bit by itself. A reservation authority can commit `MeteredActionStarted` exactly once. After
+that fact the action is `InDoubt` until a same-meter receipt no larger than the reservation is
+recorded; recovery may reconstruct receipt authority but never execution authority. Concrete live
+service adapters have not yet been connected to this capability seam.
 
 ### 7.3 Execution facts
 

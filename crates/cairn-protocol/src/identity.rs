@@ -625,6 +625,8 @@ lifecycle_id!(/// One externally dispatched model-attempt identity.
 ModelAttemptId, "model-attempt");
 lifecycle_id!(/// One model request and its resulting tool-operation boundary.
 StepId, "step");
+lifecycle_id!(/// One externally metered action reservation and receipt lifecycle.
+MeteredActionId, "metered-action");
 
 #[cfg(test)]
 mod tests {

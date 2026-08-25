@@ -175,7 +175,7 @@ impl EpisodeDeadlineUnixMillis {
 }
 
 /// V1 episode budgets enforce only dimensions currently derived from trusted durable facts.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EpisodeBudget {
     /// Optional maximum number of model steps that may start; `None` disables the dimension.
@@ -190,6 +190,11 @@ pub struct EpisodeBudget {
     /// Optional absolute deadline; `None` disables wall-clock budget checks.
     #[serde(default)]
     pub deadline_unix_ms: Option<EpisodeDeadlineUnixMillis>,
+    /// Optional per-meter reservation ceilings; `None` disables external-meter enforcement.
+    ///
+    /// An enabled empty list rejects every external meter. Each meter may appear at most once.
+    #[serde(default)]
+    pub external_meter_limits: Option<Vec<crate::EpisodeExternalMeterLimit>>,
 }
 
 /// Durable episode aggregate boundary.
@@ -472,6 +477,26 @@ struct EpisodeProjection {
     completion: Option<CompletedPayload>,
 }
 
+pub(crate) struct EpisodeBudgetSnapshot {
+    pub(crate) budget: EpisodeBudget,
+    pub(crate) completed: bool,
+}
+
+pub(crate) fn recover_budget_snapshot<E: EventStore>(
+    events: &E,
+    episode: &AgentEpisode,
+) -> Result<EpisodeBudgetSnapshot, EpisodeCoordinatorError> {
+    let history = events.read_stream(episode.stream_id(), None)?;
+    if history.is_empty() {
+        return invalid_episode("metering episode does not exist");
+    }
+    let projection = project_episode(&history, episode.episode_id())?;
+    Ok(EpisodeBudgetSnapshot {
+        budget: projection.opened.budget,
+        completed: projection.completion.is_some(),
+    })
+}
+
 #[derive(Clone, Copy)]
 enum CompletionEvidence {
     None,
@@ -503,6 +528,8 @@ pub fn open_agent_episode<E: EventStore>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<EpisodeStepAuthority, EpisodeCoordinatorError> {
+    crate::metering::validate_external_meter_limits(budget.external_meter_limits.as_deref())
+        .map_err(|error| EpisodeCoordinatorError::InvalidEpisode(error.to_string()))?;
     if budget
         .deadline_unix_ms
         .is_some_and(|deadline| deadline.is_reached(observed_at))
@@ -1152,6 +1179,8 @@ fn project_episode(
     if opened.episode_id != episode_id {
         return invalid_episode("opened fact cites another episode");
     }
+    crate::metering::validate_external_meter_limits(opened.budget.external_meter_limits.as_deref())
+        .map_err(|error| EpisodeCoordinatorError::InvalidEpisode(error.to_string()))?;
     let mut steps = vec![StepEntry {
         step_id: opened.first_step_id,
         model_attempt_id: opened.first_model_attempt_id,
@@ -1979,7 +2008,7 @@ mod tests {
             &episode,
             task_id,
             role.clone(),
-            budget,
+            budget.clone(),
             step_id,
             attempt_id,
             &command,
@@ -1991,7 +2020,7 @@ mod tests {
             &episode,
             task_id,
             role.clone(),
-            budget,
+            budget.clone(),
             step_id,
             attempt_id,
             &command,
@@ -2049,6 +2078,7 @@ mod tests {
             provider_token_limit: provider_token_limit
                 .map(|limit| EpisodeProviderTokenLimit::new(limit).expect("provider token limit")),
             deadline_unix_ms: deadline.map(EpisodeDeadlineUnixMillis::new),
+            external_meter_limits: None,
         })
     }
 
@@ -2264,6 +2294,7 @@ mod tests {
         assert_eq!(legacy_budget.step_limit.map(EpisodeStepLimit::get), Some(2));
         assert_eq!(legacy_budget.tool_operation_limit, None);
         assert_eq!(legacy_budget.provider_token_limit, None);
+        assert_eq!(legacy_budget.external_meter_limits, None);
         assert!(EpisodeProviderTokenLimit::new(0).is_err());
     }
 
@@ -2273,7 +2304,8 @@ mod tests {
             "step_limit": null,
             "tool_operation_limit": null,
             "provider_token_limit": null,
-            "deadline_unix_ms": null
+            "deadline_unix_ms": null,
+            "external_meter_limits": null
         }))
         .expect("disabled budget config");
         assert_eq!(
@@ -2283,6 +2315,7 @@ mod tests {
                 tool_operation_limit: None,
                 provider_token_limit: None,
                 deadline_unix_ms: None,
+                external_meter_limits: None,
             }
         );
         let omitted: EpisodeBudget =
@@ -2292,7 +2325,8 @@ mod tests {
             "step_limit": 4,
             "tool_operation_limit": 7,
             "provider_token_limit": 1000,
-            "deadline_unix_ms": 2000
+            "deadline_unix_ms": 2000,
+            "external_meter_limits": [{"meter": "usd-micros", "units": 2500}]
         }))
         .expect("enabled budget config");
         assert_eq!(enabled.step_limit.map(EpisodeStepLimit::get), Some(4));
@@ -2312,6 +2346,16 @@ mod tests {
             enabled.deadline_unix_ms.map(EpisodeDeadlineUnixMillis::get),
             Some(2000)
         );
+        let limits = enabled
+            .external_meter_limits
+            .as_deref()
+            .expect("meter limits");
+        assert_eq!(limits.len(), 1);
+        assert_eq!(
+            limits[0].meter(),
+            &crate::ExternalMeterName::new("usd-micros").unwrap()
+        );
+        assert_eq!(limits[0].units().get(), 2500);
         let (mut fixture, step, attempt_id, dispatch) = prepared_episode_with_budget(budget);
         let results = complete_tool_step(
             &mut fixture.events,

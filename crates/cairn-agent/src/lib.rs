@@ -9,6 +9,7 @@ use thiserror::Error;
 
 mod dispatch;
 mod episode;
+mod metering;
 mod operation;
 mod semantic;
 mod step;
@@ -27,6 +28,12 @@ pub use episode::{
     EpisodeStepAuthority, EpisodeStepLimit, EpisodeToolOperationLimit, EpisodeValueError,
     admit_episode_operations, advance_agent_episode, open_agent_episode, prepare_episode_step,
     recover_agent_episode,
+};
+pub use metering::{
+    EpisodeExternalMeterLimit, ExternalMeteredUnits, ExternalMeteringReceipt, MeterReservation,
+    MeterReservationOutcome, MeteredActionAuthority, MeteredActionState, MeteringCoordinatorError,
+    StartedMeteredAction, begin_metered_action, record_metering_receipt, recover_metered_action,
+    reserve_metered_action,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -116,6 +123,10 @@ label_type!(/// Provider-native tool-call correlation identity.
 ProviderToolCallId);
 label_type!(/// Server-enforced role scope selected for one agent episode.
 AgentRoleName);
+label_type!(/// Unit namespace for an externally metered capability.
+ExternalMeterName);
+label_type!(/// Provider-native correlation reference for an external metering receipt.
+ExternalReceiptReference);
 
 macro_rules! content_type {
     ($name:ident, $domain:literal) => {
