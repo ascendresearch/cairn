@@ -1,6 +1,7 @@
 //! Domain-neutral opaque execution contracts, durable attempts, and trusted evidence capture.
 
 mod assignment;
+mod container;
 mod contract;
 mod control;
 mod coordinator;
@@ -15,6 +16,11 @@ pub use assignment::{
     AssignmentLeasePolicy, AssignmentLeaseRecord, ExecutionAssignmentState, ExpiredLeaseClass,
     LeasedExecutionAssignment, accept_assignment, grant_assignment_lease, reap_expired_assignment,
     recover_execution_assignment, renew_assignment_lease, start_accepted_assignment,
+};
+pub use container::{
+    ContainerBinding, ContainerContractError, ContainerInspection, ContainerMountRole,
+    ContainerName, ContainerPhase, ContainerRuntime, ContainerRuntimeError, ContainerSandboxPolicy,
+    OCI_CONTAINER_BACKEND, OciExecutionEnvironmentV1, OciImageDigest, RuntimeContainerId,
 };
 pub use contract::{
     AcceleratorDeviceCount, AcceleratorResourceRequest, ArchitectureName, ArchivedOutput,

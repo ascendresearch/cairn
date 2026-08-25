@@ -543,7 +543,13 @@ lineage against the frozen contract. Recorded and scripted executors provide det
 `local-process-v1` now provides an explicitly activated controlled-host adapter with versioned
 material, create-only workspace expansion, Linux user/network namespace preflight, process-group
 supervision, and bounded capture. It is not classified as hostile-code filesystem isolation;
-hardened container and richer remote-worker adapters remain target work.
+hardened container execution and richer remote-worker adapters remain target work. F2d-a now freezes
+the first hardened backend's provider-neutral contract: immutable OCI image digests, deterministic
+attempt-owned names, full runtime IDs, typed lifecycle phases/mount roles, exact identity bindings,
+a code-owned CPU sandbox policy, strict canonical OCI environment bytes, and a narrow read-only
+runtime resolution/inspection port. No worker advertises this backend yet, and no runtime mutation
+or isolation claim exists until the fixed launch plan and recoverable supervisor land. See
+[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md).
 
 ### 10.2 Worker protocol
 
@@ -1168,6 +1174,12 @@ It excludes:
 Untrusted code receives only declared input mounts, a writable temporary workspace, bounded
 CPU/memory/time/process count, and explicitly authorized devices. Network is denied by default.
 Worker evidence storage and credentials are not mounted into the sandbox.
+
+The initial `oci-container-v1` target is deliberately CPU-only and denies every device rather than
+interpreting “no device request” as ambient host access. Its code-owned policy, threat model,
+identity binding, and implementation status are defined in
+[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md). OCI containment trusts the host kernel and
+runtime; it is not a defense against either component being compromised.
 
 ### 16.3 Data policy
 

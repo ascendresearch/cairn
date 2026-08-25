@@ -259,6 +259,21 @@ F2d acceptance requires:
 - the security documentation continues to classify `local-process-v1` as controlled-host only and
   does not claim that OCI alone protects against a hostile kernel or runtime.
 
+**F2d-a implemented (2026-08-25).** The threat model is frozen in
+[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md). `cairn-execution` now exposes strong
+immutable image digest, attempt-derived name, full runtime ID, phase, mount-role, code-owned policy,
+identity-binding, and impossible-state-free inspection types. `OciExecutionEnvironmentV1` is strict
+canonical JSON and rejects tags and non-V1 input. The initial `ContainerRuntime` port permits only
+typed image resolution and inspection; it deliberately grants no lifecycle mutation yet. Worker
+configuration still cannot advertise or activate the backend.
+
+### Next implementation slice: F2d-b fixed CPU-only isolation plan
+
+Implement step 2 above as one canonical `ContainerLaunchPlan` derived from the existing job,
+verified local materials, and backend-owned state roots. Add offline golden argv and policy-downgrade
+tests before extending `ContainerRuntime` with create/start authority. This slice must not invoke a
+real runtime or add worker activation; lifecycle mutation and recovery remain F2d-c.
+
 Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They will add explicit
 device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on
 top of F2d rather than weakening the CPU container policy.

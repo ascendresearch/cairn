@@ -35,7 +35,7 @@ Activation is one deliberate `worker.json` edit. These fields must change togeth
   "profile": {
     "backends": ["local-process-v1"]
   },
-  "schema_version": 8
+  "schema_version": 1
 }
 ```
 
@@ -101,3 +101,11 @@ delivery/acknowledgement facts and serially appends the terminal result. This av
 journal writers without freezing worker liveness during a long command. The observation channel is
 owned by the worker process rather than one WebSocket session, so a reconnect or credential cutover
 does not discard a still-running supervisor's terminal observation.
+
+## OCI container status
+
+The F2d-a typed contract and threat model are now implemented, but the container launcher is not.
+Workers therefore still reject configuration/profile combinations that advertise
+`oci-container-v1`. See [`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md) for the frozen
+CPU-only boundary, exact image/name/runtime/binding types, recovery rules, and remaining acceptance
+gates. No current configuration edit can turn these types into execution authority.
