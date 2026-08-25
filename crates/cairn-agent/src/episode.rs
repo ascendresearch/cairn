@@ -13,9 +13,10 @@ use thiserror::Error;
 use crate::dispatch::recover_turn_input_decision;
 use crate::{
     AgentRoleName, AgentStep, AgentStepState, BoundStepOperations, DispatchAuthority,
-    OperationResult, PreparedToolOperation, StepCoordinatorError, ToolCallProposal,
-    ToolEffectClass, ToolImplementationVersion, ToolName, ToolOperationAssignment,
-    TurnInputDecision, bind_step_operations, prepare_agent_step, recover_agent_step,
+    ModelAttemptState, OperationResult, PreparedToolOperation, StepCoordinatorError,
+    ToolCallProposal, ToolEffectClass, ToolImplementationVersion, ToolName,
+    ToolOperationAssignment, TurnInputDecision, bind_step_operations, prepare_agent_step,
+    recover_agent_step, recover_model_attempt,
 };
 
 const EPISODE_OPENED: &str = "agent.episode-opened";
@@ -102,6 +103,54 @@ impl From<EpisodeToolOperationLimit> for u32 {
     }
 }
 
+/// Invalid observed provider-token limit.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("episode provider-token limit must be greater than zero")]
+pub struct EpisodeProviderTokenLimitError;
+
+/// Positive observed provider-token threshold that blocks the next model step.
+///
+/// A response may cross this threshold because its usage is unknowable before dispatch. Once the
+/// cumulative provider receipt reaches it, Cairn grants no further model authority.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct EpisodeProviderTokenLimit(u64);
+
+impl EpisodeProviderTokenLimit {
+    /// Creates a positive observed token threshold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EpisodeProviderTokenLimitError`] when `value` is zero.
+    pub const fn new(value: u64) -> Result<Self, EpisodeProviderTokenLimitError> {
+        if value == 0 {
+            Err(EpisodeProviderTokenLimitError)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    /// Returns the configured threshold.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for EpisodeProviderTokenLimit {
+    type Error = EpisodeProviderTokenLimitError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<EpisodeProviderTokenLimit> for u64 {
+    fn from(value: EpisodeProviderTokenLimit) -> Self {
+        value.0
+    }
+}
+
 /// Absolute wall-clock safe-point deadline for an episode.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -134,6 +183,9 @@ pub struct EpisodeBudget {
     /// Maximum number of logical operations admitted before any tool authority can exist.
     #[serde(default = "unlimited_tool_operation_limit")]
     pub tool_operation_limit: EpisodeToolOperationLimit,
+    /// Optional observed provider-token threshold. Missing receipts fail closed when configured.
+    #[serde(default)]
+    pub provider_token_limit: Option<EpisodeProviderTokenLimit>,
     /// Optional absolute deadline checked at safe step boundaries.
     pub deadline_unix_ms: Option<EpisodeDeadlineUnixMillis>,
 }
@@ -190,6 +242,10 @@ pub enum EpisodeCompletionReason {
     DeadlineReached,
     /// The current proposals would exceed the logical tool-operation limit.
     ToolOperationLimitReached,
+    /// Reported provider tokens reached the threshold for granting another model step.
+    ProviderTokenLimitReached,
+    /// A configured provider-token budget could not be enforced because a receipt was absent.
+    ProviderUsageUnavailable,
 }
 
 /// Budget-backed permit containing the durable tool bindings for the current episode step.
@@ -379,6 +435,10 @@ struct CompletedPayload {
     steps_started: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     requested_tool_operations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observed_provider_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    missing_provider_usage_attempt_id: Option<ModelAttemptId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -412,6 +472,20 @@ struct EpisodeProjection {
     opened: OpenedPayload,
     steps: Vec<StepEntry>,
     completion: Option<CompletedPayload>,
+}
+
+#[derive(Clone, Copy)]
+enum CompletionEvidence {
+    None,
+    ToolOperationsRequested(u32),
+    ProviderTokensObserved(u64),
+    ProviderUsageMissing(ModelAttemptId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EpisodeProviderUsage {
+    total_tokens: u64,
+    missing_attempt_id: Option<ModelAttemptId>,
 }
 
 /// Opens an episode and grants authority for its first step.
@@ -566,12 +640,14 @@ pub fn admit_episode_operations<E: EventStore, C: cairn_record::ContentStore>(
     validate_step_admission(&step_state, current)?;
     let steps_started = u32::try_from(projection.steps.len())
         .map_err(|_| EpisodeCoordinatorError::InvalidEpisode("too many episode steps".into()))?;
-    if let Some(completion) = projection.completion {
+    if let Some(ref completion) = projection.completion {
+        let provider_usage = recover_episode_provider_usage(events, &projection)?;
         validate_completion(
             &projection.opened,
             &projection.steps,
-            &completion,
+            completion,
             &step_state,
+            provider_usage,
         )?;
         return Ok(EpisodeOperationAdmissionOutcome::Completed {
             reason: completion.reason,
@@ -618,7 +694,7 @@ pub fn admit_episode_operations<E: EventStore, C: cairn_record::ContentStore>(
                 current.step_id,
                 EpisodeCompletionReason::ToolOperationLimitReached,
                 steps_started,
-                Some(requested_count),
+                CompletionEvidence::ToolOperationsRequested(requested_count),
                 admission_command_id,
                 observed_at,
             )?;
@@ -707,12 +783,14 @@ pub fn recover_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
         )?;
     }
     validate_step_admission(&step_state, current)?;
-    if let Some(completion) = projection.completion {
+    if let Some(ref completion) = projection.completion {
+        let provider_usage = recover_episode_provider_usage(events, &projection)?;
         validate_completion(
             &projection.opened,
             &projection.steps,
-            &completion,
+            completion,
             &step_state,
+            provider_usage,
         )?;
         return Ok(AgentEpisodeState::Completed {
             reason: completion.reason,
@@ -778,12 +856,14 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
     validate_step_admission(&step_state, current)?;
     let steps_started = u32::try_from(projection.steps.len())
         .map_err(|_| EpisodeCoordinatorError::InvalidEpisode("too many episode steps".into()))?;
-    if let Some(completion) = projection.completion {
+    if let Some(ref completion) = projection.completion {
+        let provider_usage = recover_episode_provider_usage(events, &projection)?;
         validate_completion(
             &projection.opened,
             &projection.steps,
-            &completion,
+            completion,
             &step_state,
+            provider_usage,
         )?;
         return Ok(EpisodeAdvance::Completed {
             reason: completion.reason,
@@ -819,7 +899,7 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             current.step_id,
             EpisodeCompletionReason::Yielded,
             steps_started,
-            None,
+            CompletionEvidence::None,
             command_id,
             observed_at,
         );
@@ -830,6 +910,35 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
     else {
         return invalid_episode("current step is not at a continuable safe boundary");
     };
+    if let Some(limit) = projection.opened.budget.provider_token_limit {
+        let usage = recover_episode_provider_usage(events, &projection)?;
+        if let Some(missing_attempt_id) = usage.missing_attempt_id {
+            return complete_episode(
+                events,
+                episode,
+                &history,
+                current.step_id,
+                EpisodeCompletionReason::ProviderUsageUnavailable,
+                steps_started,
+                CompletionEvidence::ProviderUsageMissing(missing_attempt_id),
+                command_id,
+                observed_at,
+            );
+        }
+        if usage.total_tokens >= limit.get() {
+            return complete_episode(
+                events,
+                episode,
+                &history,
+                current.step_id,
+                EpisodeCompletionReason::ProviderTokenLimitReached,
+                steps_started,
+                CompletionEvidence::ProviderTokensObserved(usage.total_tokens),
+                command_id,
+                observed_at,
+            );
+        }
+    }
     let reason = if projection
         .opened
         .budget
@@ -850,7 +959,7 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             current.step_id,
             reason,
             steps_started,
-            None,
+            CompletionEvidence::None,
             command_id,
             observed_at,
         );
@@ -957,19 +1066,28 @@ fn complete_episode<E: EventStore>(
     last_step_id: StepId,
     reason: EpisodeCompletionReason,
     steps_started: u32,
-    requested_tool_operations: Option<u32>,
+    evidence: CompletionEvidence,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<EpisodeAdvance, EpisodeCoordinatorError> {
     let last = history
         .last()
         .ok_or_else(|| EpisodeCoordinatorError::InvalidEpisode("episode is empty".into()))?;
+    let (requested_tool_operations, observed_provider_tokens, missing_provider_usage_attempt_id) =
+        match evidence {
+            CompletionEvidence::None => (None, None, None),
+            CompletionEvidence::ToolOperationsRequested(requested) => (Some(requested), None, None),
+            CompletionEvidence::ProviderTokensObserved(observed) => (None, Some(observed), None),
+            CompletionEvidence::ProviderUsageMissing(attempt_id) => (None, None, Some(attempt_id)),
+        };
     let payload = CompletedPayload {
         episode_id: episode.episode_id,
         last_step_id,
         reason,
         steps_started,
         requested_tool_operations,
+        observed_provider_tokens,
+        missing_provider_usage_attempt_id,
     };
     let event = episode_fact(
         EPISODE_COMPLETED,
@@ -1112,15 +1230,19 @@ fn project_episode(
                     return invalid_episode("completion fact breaks episode step lineage");
                 }
                 let admitted = admitted_operation_count(&steps)?;
+                let has_non_tool_evidence = payload.observed_provider_tokens.is_some()
+                    || payload.missing_provider_usage_attempt_id.is_some();
                 match payload.reason {
                     EpisodeCompletionReason::StepLimitReached
                         if payload.requested_tool_operations.is_some()
+                            || has_non_tool_evidence
                             || expected_steps < opened.budget.step_limit.get() =>
                     {
                         return invalid_episode("episode completed before reaching its step limit");
                     }
                     EpisodeCompletionReason::DeadlineReached
                         if payload.requested_tool_operations.is_some()
+                            || has_non_tool_evidence
                             || opened.budget.deadline_unix_ms.is_none_or(|deadline| {
                                 !deadline.is_reached(ObservedAtUnixMillis::new(
                                     event.observed_at_unix_ms,
@@ -1130,9 +1252,11 @@ fn project_episode(
                         return invalid_episode("episode completed before its deadline");
                     }
                     EpisodeCompletionReason::Yielded
-                        if payload.requested_tool_operations.is_some() =>
+                        if payload.requested_tool_operations.is_some() || has_non_tool_evidence =>
                     {
-                        return invalid_episode("yield completion carries tool budget evidence");
+                        return invalid_episode(
+                            "yield completion carries unexpected budget evidence",
+                        );
                     }
                     EpisodeCompletionReason::ToolOperationLimitReached => {
                         let requested = payload.requested_tool_operations.ok_or_else(|| {
@@ -1140,7 +1264,8 @@ fn project_episode(
                                 "tool-budget completion lacks requested operation count".into(),
                             )
                         })?;
-                        if requested == 0
+                        if has_non_tool_evidence
+                            || requested == 0
                             || current.admitted_operations.is_some()
                             || admitted.checked_add(requested).is_some_and(|total| {
                                 total <= opened.budget.tool_operation_limit.get()
@@ -1148,6 +1273,41 @@ fn project_episode(
                         {
                             return invalid_episode(
                                 "tool-budget completion does not prove a budget overrun",
+                            );
+                        }
+                    }
+                    EpisodeCompletionReason::ProviderTokenLimitReached => {
+                        let observed = payload.observed_provider_tokens.ok_or_else(|| {
+                            EpisodeCoordinatorError::InvalidEpisode(
+                                "provider-token completion lacks observed usage".into(),
+                            )
+                        })?;
+                        if payload.requested_tool_operations.is_some()
+                            || payload.missing_provider_usage_attempt_id.is_some()
+                            || opened
+                                .budget
+                                .provider_token_limit
+                                .is_none_or(|limit| observed < limit.get())
+                        {
+                            return invalid_episode(
+                                "provider-token completion does not prove budget exhaustion",
+                            );
+                        }
+                    }
+                    EpisodeCompletionReason::ProviderUsageUnavailable => {
+                        let missing =
+                            payload.missing_provider_usage_attempt_id.ok_or_else(|| {
+                                EpisodeCoordinatorError::InvalidEpisode(
+                                    "missing-usage completion lacks model-attempt identity".into(),
+                                )
+                            })?;
+                        if payload.requested_tool_operations.is_some()
+                            || payload.observed_provider_tokens.is_some()
+                            || opened.budget.provider_token_limit.is_none()
+                            || !steps.iter().any(|step| step.model_attempt_id == missing)
+                        {
+                            return invalid_episode(
+                                "missing-usage completion does not cite a budgeted episode attempt",
                             );
                         }
                     }
@@ -1227,6 +1387,43 @@ fn admitted_operation_count(steps: &[StepEntry]) -> Result<u32, EpisodeCoordinat
         total.checked_add(count).ok_or_else(|| {
             EpisodeCoordinatorError::InvalidEpisode("admitted operation count overflow".into())
         })
+    })
+}
+
+fn recover_episode_provider_usage<E: EventStore>(
+    events: &E,
+    projection: &EpisodeProjection,
+) -> Result<EpisodeProviderUsage, EpisodeCoordinatorError> {
+    let mut total_tokens = 0_u64;
+    let mut missing_attempt_id = None;
+    for step in &projection.steps {
+        let aggregate = AgentStep::new(step.step_id)?;
+        let history = events.read_stream(aggregate.stream_id(), None)?;
+        if let ModelAttemptState::Completed { usage, .. } =
+            recover_model_attempt(&history, step.model_attempt_id)
+                .map_err(StepCoordinatorError::from)?
+        {
+            match usage {
+                Some(usage) => {
+                    total_tokens =
+                        total_tokens
+                            .checked_add(usage.total_tokens())
+                            .ok_or_else(|| {
+                                EpisodeCoordinatorError::InvalidEpisode(
+                                    "episode provider-token total overflow".into(),
+                                )
+                            })?;
+                }
+                None if missing_attempt_id.is_none() => {
+                    missing_attempt_id = Some(step.model_attempt_id);
+                }
+                None => {}
+            }
+        }
+    }
+    Ok(EpisodeProviderUsage {
+        total_tokens,
+        missing_attempt_id,
     })
 }
 
@@ -1360,6 +1557,7 @@ fn validate_completion(
     steps: &[StepEntry],
     completion: &CompletedPayload,
     step_state: &AgentStepState,
+    provider_usage: EpisodeProviderUsage,
 ) -> Result<(), EpisodeCoordinatorError> {
     match completion.reason {
         EpisodeCompletionReason::Yielded
@@ -1402,6 +1600,42 @@ fn validate_completion(
                 Ok(())
             } else {
                 invalid_episode("tool-budget completion carries false overrun evidence")
+            }
+        }
+        EpisodeCompletionReason::ProviderTokenLimitReached => {
+            let observed = completion.observed_provider_tokens.ok_or_else(|| {
+                EpisodeCoordinatorError::InvalidEpisode(
+                    "provider-token completion lacks observed usage".into(),
+                )
+            })?;
+            if matches!(step_state, AgentStepState::ReadyForNextStep { .. })
+                && provider_usage.missing_attempt_id.is_none()
+                && observed == provider_usage.total_tokens
+                && opened
+                    .budget
+                    .provider_token_limit
+                    .is_some_and(|limit| observed >= limit.get())
+            {
+                Ok(())
+            } else {
+                invalid_episode("provider-token completion contradicts durable usage receipts")
+            }
+        }
+        EpisodeCompletionReason::ProviderUsageUnavailable => {
+            let missing = completion
+                .missing_provider_usage_attempt_id
+                .ok_or_else(|| {
+                    EpisodeCoordinatorError::InvalidEpisode(
+                        "missing-usage completion lacks model-attempt identity".into(),
+                    )
+                })?;
+            if matches!(step_state, AgentStepState::ReadyForNextStep { .. })
+                && opened.budget.provider_token_limit.is_some()
+                && provider_usage.missing_attempt_id == Some(missing)
+            {
+                Ok(())
+            } else {
+                invalid_episode("missing-usage completion contradicts durable provider receipt")
             }
         }
         _ => invalid_episode("episode completion reason contradicts its final step"),
@@ -1462,22 +1696,23 @@ mod tests {
     use super::{
         AdvancedPayload, AgentEpisode, AgentEpisodeState, EpisodeAdvance, EpisodeBudget,
         EpisodeCompletionReason, EpisodeDeadlineUnixMillis, EpisodeOperationAdmissionOutcome,
-        EpisodeStepLimit, EpisodeToolOperationLimit, OperationsAdmittedPayload,
-        admission_payload_from_assignments, admit_episode_operations, advance_agent_episode,
-        append_operation_admission, open_agent_episode, prepare_episode_step, project_episode,
-        recover_agent_episode, validate_previous_steps,
+        EpisodeProviderTokenLimit, EpisodeStepLimit, EpisodeToolOperationLimit,
+        OperationsAdmittedPayload, admission_payload_from_assignments, admit_episode_operations,
+        advance_agent_episode, append_operation_admission, open_agent_episode,
+        prepare_episode_step, project_episode, recover_agent_episode, validate_previous_steps,
     };
     use crate::{
         AdapterModelTurn, AdapterOutputItem, AdapterVersion, AgentRoleName, AgentStep,
         CanonicalToolResult, ContextBlock, DeploymentName, DispatchAuthority, DispatchCompletion,
-        HistoryItem, InstructionBlock, ModelName, ModelSelection, OperationResult, PolicyDocument,
-        PreparedModelRequest, ProviderName, ProviderToolCallId, RecordedAdapterExchange,
-        RecordedModelAdapter, RecordedToolExchange, RecordedToolGateway, ScriptedModelTransport,
-        SettledAgentStep, StepOperationSettlement, ToolCatalog, ToolEffectClass,
-        ToolImplementationVersion, ToolName, ToolOperationAssignment, ToolRegistration,
-        TransportError, TurnInputDecision, authorize_tool_operation, begin_model_dispatch,
-        begin_tool_operation, bind_step_operations, decode_model_response, execute_model_dispatch,
-        execute_tool_operation, prepare_agent_step, settle_decoded_step, settle_step_operations,
+        HistoryItem, InstructionBlock, ModelName, ModelSelection, ModelTransportResponse,
+        OperationResult, PolicyDocument, PreparedModelRequest, ProviderName, ProviderTokenCount,
+        ProviderTokenUsage, ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter,
+        RecordedToolExchange, RecordedToolGateway, ScriptedModelTransport, SettledAgentStep,
+        StepOperationSettlement, ToolCatalog, ToolEffectClass, ToolImplementationVersion, ToolName,
+        ToolOperationAssignment, ToolRegistration, TransportError, TurnInputDecision,
+        authorize_tool_operation, begin_model_dispatch, begin_tool_operation, bind_step_operations,
+        decode_model_response, execute_model_dispatch, execute_tool_operation, prepare_agent_step,
+        settle_decoded_step, settle_step_operations,
     };
 
     struct ReadyEpisode {
@@ -1530,13 +1765,14 @@ mod tests {
         }
     }
 
-    fn settle_model_turn(
+    fn settle_model_turn_with_usage(
         events: &mut SqliteEventStore,
         content: &mut SqliteContentStore,
         step: &AgentStep,
         attempt_id: ModelAttemptId,
         authority: DispatchAuthority,
         items: Vec<AdapterOutputItem>,
+        usage: Option<ProviderTokenUsage>,
     ) -> SettledAgentStep {
         let started = begin_model_dispatch(
             events,
@@ -1545,8 +1781,8 @@ mod tests {
             cairn_protocol::ObservedAtUnixMillis::new(3),
         )
         .expect("begin model");
-        let mut transport = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"raw-response".to_vec())
+        let mut transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
+            Ok::<_, TransportError>(ModelTransportResponse::new(b"raw-response".to_vec(), usage))
         });
         let DispatchCompletion::Response(received) = execute_model_dispatch(
             events,
@@ -1588,15 +1824,27 @@ mod tests {
         .expect("settle turn")
     }
 
-    fn complete_tool_step(
+    fn settle_model_turn(
+        events: &mut SqliteEventStore,
+        content: &mut SqliteContentStore,
+        step: &AgentStep,
+        attempt_id: ModelAttemptId,
+        authority: DispatchAuthority,
+        items: Vec<AdapterOutputItem>,
+    ) -> SettledAgentStep {
+        settle_model_turn_with_usage(events, content, step, attempt_id, authority, items, None)
+    }
+
+    fn complete_tool_step_with_usage(
         events: &mut SqliteEventStore,
         content: &mut SqliteContentStore,
         episode: &AgentEpisode,
         step: &AgentStep,
         attempt_id: ModelAttemptId,
         authority: DispatchAuthority,
+        usage: Option<ProviderTokenUsage>,
     ) -> Vec<ContentId<OperationResult>> {
-        let settled = settle_model_turn(
+        let settled = settle_model_turn_with_usage(
             events,
             content,
             step,
@@ -1607,6 +1855,7 @@ mod tests {
                 tool: ToolName::new("read_source").expect("tool"),
                 arguments: serde_json::json!({"path":"src/lib.rs"}),
             }],
+            usage,
         );
         assert!(matches!(
             settled,
@@ -1679,9 +1928,21 @@ mod tests {
         pending_results
     }
 
-    fn prepared_episode(
+    fn complete_tool_step(
+        events: &mut SqliteEventStore,
+        content: &mut SqliteContentStore,
+        episode: &AgentEpisode,
+        step: &AgentStep,
+        attempt_id: ModelAttemptId,
+        authority: DispatchAuthority,
+    ) -> Vec<ContentId<OperationResult>> {
+        complete_tool_step_with_usage(events, content, episode, step, attempt_id, authority, None)
+    }
+
+    fn prepared_episode_with_token_limit(
         step_limit: u32,
         tool_operation_limit: u32,
+        provider_token_limit: Option<u64>,
         deadline: Option<i64>,
     ) -> (ReadyEpisode, AgentStep, ModelAttemptId, DispatchAuthority) {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -1699,6 +1960,8 @@ mod tests {
         let budget = EpisodeBudget {
             step_limit: EpisodeStepLimit::new(step_limit).expect("limit"),
             tool_operation_limit: EpisodeToolOperationLimit::new(tool_operation_limit),
+            provider_token_limit: provider_token_limit
+                .map(|limit| EpisodeProviderTokenLimit::new(limit).expect("provider token limit")),
             deadline_unix_ms: deadline.map(EpisodeDeadlineUnixMillis::new),
         };
         let role = AgentRoleName::new("candidate-author").expect("role");
@@ -1763,6 +2026,14 @@ mod tests {
             attempt_id,
             dispatch,
         )
+    }
+
+    fn prepared_episode(
+        step_limit: u32,
+        tool_operation_limit: u32,
+        deadline: Option<i64>,
+    ) -> (ReadyEpisode, AgentStep, ModelAttemptId, DispatchAuthority) {
+        prepared_episode_with_token_limit(step_limit, tool_operation_limit, None, deadline)
     }
 
     fn ready_episode(
@@ -1967,6 +2238,138 @@ mod tests {
         }))
         .expect("legacy budget");
         assert_eq!(legacy_budget.tool_operation_limit.get(), u32::MAX);
+        assert_eq!(legacy_budget.provider_token_limit, None);
+        assert!(EpisodeProviderTokenLimit::new(0).is_err());
+    }
+
+    #[test]
+    fn provider_token_receipts_accumulate_before_next_model_authority() {
+        let (mut fixture, first_step, first_attempt, first_dispatch) =
+            prepared_episode_with_token_limit(3, 3, Some(15), None);
+        let first_usage =
+            ProviderTokenUsage::new(ProviderTokenCount::new(7), ProviderTokenCount::new(3))
+                .expect("first usage");
+        let first_results = complete_tool_step_with_usage(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            &first_step,
+            first_attempt,
+            first_dispatch,
+            Some(first_usage),
+        );
+        let second_step_id = StepId::new();
+        let second_attempt_id = ModelAttemptId::new();
+        let EpisodeAdvance::NextStep(authority) = advance_agent_episode(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            second_step_id,
+            second_attempt_id,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(12),
+        )
+        .expect("usage below limit") else {
+            panic!("second step authority");
+        };
+        let second_input = decision(&mut fixture.content, first_results);
+        let second_dispatch = prepare_episode_step(
+            &mut fixture.events,
+            &mut fixture.content,
+            authority,
+            &second_input,
+            &CommandId::new(),
+            cairn_protocol::ObservedAtUnixMillis::new(13),
+        )
+        .expect("prepare second step");
+        let second_step = AgentStep::new(second_step_id).expect("second step");
+        let second_usage =
+            ProviderTokenUsage::new(ProviderTokenCount::new(4), ProviderTokenCount::new(1))
+                .expect("second usage");
+        complete_tool_step_with_usage(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            &second_step,
+            second_attempt_id,
+            second_dispatch,
+            Some(second_usage),
+        );
+        let unused_step_id = StepId::new();
+        assert!(matches!(
+            advance_agent_episode(
+                &mut fixture.events,
+                &mut fixture.content,
+                &fixture.episode,
+                unused_step_id,
+                ModelAttemptId::new(),
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(14),
+            )
+            .expect("token limit"),
+            EpisodeAdvance::Completed {
+                reason: EpisodeCompletionReason::ProviderTokenLimitReached,
+                steps_started: 2,
+            }
+        ));
+        assert!(
+            fixture
+                .events
+                .read_stream(
+                    AgentStep::new(unused_step_id)
+                        .expect("unused step")
+                        .stream_id(),
+                    None,
+                )
+                .expect("unused history")
+                .is_empty()
+        );
+        assert!(matches!(
+            recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode)
+                .expect("recover token completion"),
+            AgentEpisodeState::Completed {
+                reason: EpisodeCompletionReason::ProviderTokenLimitReached,
+                steps_started: 2,
+            }
+        ));
+    }
+
+    #[test]
+    fn configured_provider_token_budget_fails_closed_without_usage() {
+        let (mut fixture, step, attempt_id, dispatch) =
+            prepared_episode_with_token_limit(3, 1, Some(100), None);
+        complete_tool_step(
+            &mut fixture.events,
+            &mut fixture.content,
+            &fixture.episode,
+            &step,
+            attempt_id,
+            dispatch,
+        );
+        assert!(matches!(
+            advance_agent_episode(
+                &mut fixture.events,
+                &mut fixture.content,
+                &fixture.episode,
+                StepId::new(),
+                ModelAttemptId::new(),
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(12),
+            )
+            .expect("missing usage"),
+            EpisodeAdvance::Completed {
+                reason: EpisodeCompletionReason::ProviderUsageUnavailable,
+                steps_started: 1,
+            }
+        ));
+        assert!(matches!(
+            recover_agent_episode(&fixture.events, &mut fixture.content, &fixture.episode)
+                .expect("recover missing usage"),
+            AgentEpisodeState::Completed {
+                reason: EpisodeCompletionReason::ProviderUsageUnavailable,
+                steps_started: 1,
+            }
+        ));
     }
 
     #[test]

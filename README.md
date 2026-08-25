@@ -35,9 +35,12 @@ step authority, verifies cross-step `pending_results` lineage, survives lost ope
 acknowledgements, and terminates at yielded, step-limit, deadline, or tool-operation-budget safe
 points. Logical tool-operation budget is reserved by an episode admission fact before step binding;
 recovery verifies the exact operation IDs and trusted registrations across both streams, and no tool
-authority is produced when admission would exceed the limit. The remaining architecture in the
-normative documents is still target design. The old repositories are evidence and compatibility
-references, not source trees to copy mechanically.
+authority is produced when admission would exceed the limit. Model transports can attach validated
+provider input/output-token receipts to the same durable response fact as the archived bytes. An
+optional episode token threshold accumulates only those receipts: reaching it blocks the next model
+step, while a missing receipt fails closed instead of being treated as zero. The remaining
+architecture in the normative documents is still target design. The old repositories are evidence
+and compatibility references, not source trees to copy mechanically.
 
 ## Authoritative documents
 

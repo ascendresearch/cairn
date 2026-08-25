@@ -23,9 +23,10 @@ pub use dispatch::{
 pub use episode::{
     AgentEpisode, AgentEpisodeState, EpisodeAdvance, EpisodeBudget, EpisodeCompletionReason,
     EpisodeCoordinatorError, EpisodeDeadlineUnixMillis, EpisodeOperationAdmission,
-    EpisodeOperationAdmissionOutcome, EpisodeStepAuthority, EpisodeStepLimit,
-    EpisodeToolOperationLimit, EpisodeValueError, admit_episode_operations, advance_agent_episode,
-    open_agent_episode, prepare_episode_step, recover_agent_episode,
+    EpisodeOperationAdmissionOutcome, EpisodeProviderTokenLimit, EpisodeProviderTokenLimitError,
+    EpisodeStepAuthority, EpisodeStepLimit, EpisodeToolOperationLimit, EpisodeValueError,
+    admit_episode_operations, advance_agent_episode, open_agent_episode, prepare_episode_step,
+    recover_agent_episode,
 };
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
@@ -447,6 +448,164 @@ pub enum TransportFailureClass {
     Ambiguous,
 }
 
+/// Provider-reported token count for one metering dimension.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ProviderTokenCount(u64);
+
+impl ProviderTokenCount {
+    /// Creates a provider-reported count. Zero is valid.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the reported count.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Invalid or unrepresentable provider usage receipt.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("provider input and output token counts overflow their total")]
+pub struct ProviderUsageError;
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderTokenUsageWire {
+    input_tokens: ProviderTokenCount,
+    output_tokens: ProviderTokenCount,
+}
+
+/// Provider-reported token usage for one completed model attempt.
+///
+/// Cairn treats this as metering evidence supplied by the transport capability. It never derives
+/// these values from response byte length or local tokenization guesses.
+///
+/// ```compile_fail
+/// use cairn_agent::{ProviderTokenCount, ProviderTokenUsage};
+///
+/// let forged = ProviderTokenUsage {
+///     input_tokens: ProviderTokenCount::new(1),
+///     output_tokens: ProviderTokenCount::new(1),
+/// };
+/// ```
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "ProviderTokenUsageWire", into = "ProviderTokenUsageWire")]
+pub struct ProviderTokenUsage {
+    input_tokens: ProviderTokenCount,
+    output_tokens: ProviderTokenCount,
+}
+
+impl ProviderTokenUsage {
+    /// Creates a validated usage receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderUsageError`] if the total cannot be represented by `u64`.
+    pub const fn new(
+        input_tokens: ProviderTokenCount,
+        output_tokens: ProviderTokenCount,
+    ) -> Result<Self, ProviderUsageError> {
+        if input_tokens
+            .get()
+            .checked_add(output_tokens.get())
+            .is_none()
+        {
+            Err(ProviderUsageError)
+        } else {
+            Ok(Self {
+                input_tokens,
+                output_tokens,
+            })
+        }
+    }
+
+    /// Returns provider-reported input tokens.
+    #[must_use]
+    pub const fn input_tokens(self) -> ProviderTokenCount {
+        self.input_tokens
+    }
+
+    /// Returns provider-reported output tokens.
+    #[must_use]
+    pub const fn output_tokens(self) -> ProviderTokenCount {
+        self.output_tokens
+    }
+
+    /// Returns the validated sum of input and output tokens.
+    #[must_use]
+    pub const fn total_tokens(self) -> u64 {
+        match self
+            .input_tokens
+            .get()
+            .checked_add(self.output_tokens.get())
+        {
+            Some(total) => total,
+            None => unreachable!(),
+        }
+    }
+}
+
+impl TryFrom<ProviderTokenUsageWire> for ProviderTokenUsage {
+    type Error = ProviderUsageError;
+
+    fn try_from(value: ProviderTokenUsageWire) -> Result<Self, Self::Error> {
+        Self::new(value.input_tokens, value.output_tokens)
+    }
+}
+
+impl From<ProviderTokenUsage> for ProviderTokenUsageWire {
+    fn from(value: ProviderTokenUsage) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+        }
+    }
+}
+
+/// Successful provider transport output before durable archival.
+#[derive(Debug)]
+pub struct ModelTransportResponse {
+    response_bytes: Vec<u8>,
+    usage: Option<ProviderTokenUsage>,
+}
+
+impl ModelTransportResponse {
+    /// Creates a response with an optional provider usage receipt.
+    #[must_use]
+    pub const fn new(response_bytes: Vec<u8>, usage: Option<ProviderTokenUsage>) -> Self {
+        Self {
+            response_bytes,
+            usage,
+        }
+    }
+
+    /// Creates an explicitly unmetered response.
+    #[must_use]
+    pub const fn without_usage(response_bytes: Vec<u8>) -> Self {
+        Self::new(response_bytes, None)
+    }
+
+    /// Borrows exact provider-native response bytes.
+    #[must_use]
+    pub fn response_bytes(&self) -> &[u8] {
+        &self.response_bytes
+    }
+
+    /// Returns provider-reported usage when available.
+    #[must_use]
+    pub const fn usage(&self) -> Option<ProviderTokenUsage> {
+        self.usage
+    }
+
+    fn into_parts(self) -> (Vec<u8>, Option<ProviderTokenUsage>) {
+        (self.response_bytes, self.usage)
+    }
+}
+
 impl TransportError {
     /// Classifies the external effect independently from diagnostic text.
     #[must_use]
@@ -468,7 +627,10 @@ pub trait ModelTransport {
     /// # Errors
     ///
     /// Returns [`TransportError`] for provider or fixture failure.
-    fn dispatch(&mut self, request: &PreparedModelRequest) -> Result<Vec<u8>, TransportError>;
+    fn dispatch(
+        &mut self,
+        request: &PreparedModelRequest,
+    ) -> Result<ModelTransportResponse, TransportError>;
 }
 
 /// One exact request/response exchange used for deterministic byte replay.
@@ -477,6 +639,8 @@ pub struct RecordedExchange {
     pub request_id: ContentId<MaterializedRequestArtifact>,
     /// Archived provider response bytes.
     pub response_bytes: Vec<u8>,
+    /// Provider usage receipt captured with this exchange, when available.
+    pub usage: Option<ProviderTokenUsage>,
 }
 
 /// FIFO recorded provider; no replay flag is needed in an agent loop.
@@ -495,7 +659,10 @@ impl RecordedModelTransport {
 }
 
 impl ModelTransport for RecordedModelTransport {
-    fn dispatch(&mut self, request: &PreparedModelRequest) -> Result<Vec<u8>, TransportError> {
+    fn dispatch(
+        &mut self,
+        request: &PreparedModelRequest,
+    ) -> Result<ModelTransportResponse, TransportError> {
         let exchange = self
             .exchanges
             .pop_front()
@@ -503,7 +670,10 @@ impl ModelTransport for RecordedModelTransport {
         if exchange.request_id != request.request_id {
             return Err(TransportError::RequestMismatch);
         }
-        Ok(exchange.response_bytes)
+        Ok(ModelTransportResponse::new(
+            exchange.response_bytes,
+            exchange.usage,
+        ))
     }
 }
 
@@ -519,9 +689,12 @@ impl<F> ScriptedModelTransport<F> {
 
 impl<F> ModelTransport for ScriptedModelTransport<F>
 where
-    F: FnMut(&PreparedModelRequest) -> Result<Vec<u8>, TransportError>,
+    F: FnMut(&PreparedModelRequest) -> Result<ModelTransportResponse, TransportError>,
 {
-    fn dispatch(&mut self, request: &PreparedModelRequest) -> Result<Vec<u8>, TransportError> {
+    fn dispatch(
+        &mut self,
+        request: &PreparedModelRequest,
+    ) -> Result<ModelTransportResponse, TransportError> {
         (self.0)(request)
     }
 }
@@ -536,8 +709,9 @@ mod tests {
 
     use super::{
         AdapterVersion, ContextBlock, DeploymentName, HistoryItem, InputGapKind, InstructionBlock,
-        MaterializedRequestArtifact, ModelName, ModelSelection, ModelTransport, OperationResult,
-        PolicyDocument, PreparedModelRequest, ProviderName, RecordedExchange,
+        MaterializedRequestArtifact, ModelName, ModelSelection, ModelTransport,
+        ModelTransportResponse, OperationResult, PolicyDocument, PreparedModelRequest,
+        ProviderName, ProviderTokenCount, ProviderTokenUsage, RecordedExchange,
         RecordedModelTransport, ScriptedModelTransport, ToolCatalog, TransportError,
         TurnInputDecision, prepare_model_request,
     };
@@ -632,21 +806,30 @@ mod tests {
             adapter_version: AdapterVersion::new("v1").expect("adapter"),
             request_bytes: b"{}".to_vec(),
         };
+        let usage = ProviderTokenUsage::new(ProviderTokenCount::new(8), ProviderTokenCount::new(2))
+            .expect("usage");
         let mut recorded = RecordedModelTransport::new([RecordedExchange {
             request_id,
             response_bytes: b"recorded".to_vec(),
+            usage: Some(usage),
         }]);
-        assert_eq!(recorded.dispatch(&request).expect("recorded"), b"recorded");
+        let recorded_response = recorded.dispatch(&request).expect("recorded");
+        assert_eq!(recorded_response.response_bytes(), b"recorded");
+        assert_eq!(recorded_response.usage(), Some(usage));
 
         let mut first = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"first-live-result".to_vec())
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                b"first-live-result".to_vec(),
+            ))
         });
         let mut second = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"different-live-result".to_vec())
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                b"different-live-result".to_vec(),
+            ))
         });
         assert_ne!(
-            first.dispatch(&request).expect("first"),
-            second.dispatch(&request).expect("second")
+            first.dispatch(&request).expect("first").response_bytes(),
+            second.dispatch(&request).expect("second").response_bytes()
         );
     }
 

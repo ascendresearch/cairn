@@ -784,15 +784,15 @@ mod tests {
     use crate::{
         AdapterModelTurn, AdapterOutputItem, AdapterVersion, AgentStep, AgentStepState,
         CanonicalToolResult, ContextBlock, DeploymentName, DispatchCompletion, HistoryItem,
-        InstructionBlock, ModelName, ModelSelection, OperationReconciliationEvidence,
-        OperationResult, PolicyDocument, PreparedModelRequest, PreparedToolOperation, ProviderName,
-        ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter, RecordedToolExchange,
-        RecordedToolGateway, ScriptedModelTransport, ScriptedToolGateway, SettledAgentStep,
-        ToolCatalog, ToolEffectClass, ToolGatewayError, ToolImplementationVersion, ToolName,
-        TransportError, TurnInputDecision, authorize_tool_operation, begin_model_dispatch,
-        begin_tool_operation, decode_model_response, execute_model_dispatch,
-        execute_tool_operation, prepare_agent_step, reconcile_tool_operation_completed,
-        recover_agent_step, settle_decoded_step,
+        InstructionBlock, ModelName, ModelSelection, ModelTransportResponse,
+        OperationReconciliationEvidence, OperationResult, PolicyDocument, PreparedModelRequest,
+        PreparedToolOperation, ProviderName, ProviderToolCallId, RecordedAdapterExchange,
+        RecordedModelAdapter, RecordedToolExchange, RecordedToolGateway, ScriptedModelTransport,
+        ScriptedToolGateway, SettledAgentStep, ToolCatalog, ToolEffectClass, ToolGatewayError,
+        ToolImplementationVersion, ToolName, TransportError, TurnInputDecision,
+        authorize_tool_operation, begin_model_dispatch, begin_tool_operation,
+        decode_model_response, execute_model_dispatch, execute_tool_operation, prepare_agent_step,
+        reconcile_tool_operation_completed, recover_agent_step, settle_decoded_step,
     };
 
     struct AwaitingFixture {
@@ -872,7 +872,7 @@ mod tests {
         )
         .expect("begin model");
         let mut transport = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"raw".to_vec())
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(b"raw".to_vec()))
         });
         let DispatchCompletion::Response(received) = execute_model_dispatch(
             &mut events,

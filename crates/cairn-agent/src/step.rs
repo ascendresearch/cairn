@@ -434,10 +434,11 @@ mod tests {
     use crate::{
         AdapterModelTurn, AdapterOutputItem, AdapterVersion, ContextBlock, DeploymentName,
         DispatchCompletion, HistoryItem, InstructionBlock, ModelName, ModelSelection,
-        OperationResult, PolicyDocument, PreparedModelRequest, ProviderName, ProviderToolCallId,
-        RecordedAdapterExchange, RecordedModelAdapter, ScriptedModelTransport, ToolCatalog,
-        ToolName, TransportError, TurnInputDecision, begin_model_dispatch, decode_model_response,
-        execute_model_dispatch, recover_decoded_model_turn,
+        ModelTransportResponse, OperationResult, PolicyDocument, PreparedModelRequest,
+        ProviderName, ProviderToolCallId, RecordedAdapterExchange, RecordedModelAdapter,
+        ScriptedModelTransport, ToolCatalog, ToolName, TransportError, TurnInputDecision,
+        begin_model_dispatch, decode_model_response, execute_model_dispatch,
+        recover_decoded_model_turn,
     };
 
     fn put_json<T: ContentType>(
@@ -520,7 +521,9 @@ mod tests {
         ));
 
         let mut transport = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"raw-response".to_vec())
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                b"raw-response".to_vec(),
+            ))
         });
         let completion = execute_model_dispatch(
             &mut events,
@@ -661,7 +664,7 @@ mod tests {
         )
         .expect("begin");
         let mut transport = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"raw".to_vec())
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(b"raw".to_vec()))
         });
         let DispatchCompletion::Response(received) = execute_model_dispatch(
             &mut events,

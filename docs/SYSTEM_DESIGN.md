@@ -660,6 +660,14 @@ metadata; an over-limit proposal terminates at that boundary without producing t
 Invocation retries retain the logical operation identity and consume a separate attempt or metered
 budget when those ledgers are available.
 
+Provider input/output-token usage is accepted only as a receipt returned with the model response
+and is committed with that response fact. An episode may configure an observed token threshold;
+the cumulative receipts are checked before granting another model step. The response that reaches
+or crosses the threshold remains valid because its usage was not knowable before dispatch. Missing
+usage fails closed before a continuable next step for a budgeted episode and remains explicitly
+unmetered for an episode with no token threshold. A step that already yielded requires no additional
+budget stop because it grants no further model authority.
+
 Scheduling decisions and skipped checks are durable facts.
 
 ## 16. Trust and security boundaries

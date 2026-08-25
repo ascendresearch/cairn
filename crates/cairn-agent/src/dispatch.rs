@@ -13,8 +13,8 @@ use thiserror::Error;
 
 use crate::{
     AdapterVersion, InputAuditError, MaterializedRequestArtifact, ModelResponseArtifact,
-    ModelTransport, PreparedModelRequest, TransportFailureClass, TurnInputDecision,
-    TurnInputDecisionArtifact, prepare_model_request,
+    ModelTransport, PreparedModelRequest, ProviderTokenUsage, TransportFailureClass,
+    TurnInputDecision, TurnInputDecisionArtifact, prepare_model_request,
 };
 
 const PREPARED: &str = "agent.model-request-prepared";
@@ -57,6 +57,8 @@ pub enum DispatchCoordinatorError {
         attempt_id: ModelAttemptId,
         /// Recoverable response artifact identity.
         response_id: ContentId<ModelResponseArtifact>,
+        /// Provider usage returned with the orphaned response, when supplied.
+        usage: Option<ProviderTokenUsage>,
         /// Record failure diagnostic.
         record: String,
     },
@@ -93,6 +95,7 @@ pub struct ReceivedModelResponse {
     pub(crate) response_event_id: EventId,
     pub(crate) response_id: ContentId<ModelResponseArtifact>,
     pub(crate) adapter_version: AdapterVersion,
+    pub(crate) usage: Option<ProviderTokenUsage>,
 }
 
 impl ReceivedModelResponse {
@@ -112,6 +115,12 @@ impl ReceivedModelResponse {
     #[must_use]
     pub fn adapter_version(&self) -> &AdapterVersion {
         &self.adapter_version
+    }
+
+    /// Returns provider-reported token usage when supplied with the response.
+    #[must_use]
+    pub const fn usage(&self) -> Option<ProviderTokenUsage> {
+        self.usage
     }
 }
 
@@ -169,6 +178,8 @@ struct OutcomePayload {
     attempt_id: ModelAttemptId,
     response_id: Option<ContentId<ModelResponseArtifact>>,
     diagnostic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<ProviderTokenUsage>,
 }
 
 struct Fact<'a, P> {
@@ -317,13 +328,15 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
         started_event_id,
     };
     match transport.dispatch(&request) {
-        Ok(response_bytes) => {
+        Ok(response) => {
+            let (response_bytes, usage) = response.into_parts();
             let descriptor =
                 content.put::<ModelResponseArtifact>(&mut Cursor::new(response_bytes))?;
             let payload = OutcomePayload {
                 attempt_id,
                 response_id: Some(descriptor.content_id),
                 diagnostic: None,
+                usage,
             };
             let outcome = append_terminal(
                 events,
@@ -336,6 +349,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
             .map_err(|record| DispatchCoordinatorError::UnrecordedResponse {
                 attempt_id,
                 response_id: descriptor.content_id,
+                usage,
                 record: record.to_string(),
             })?;
             Ok(DispatchCompletion::Response(ReceivedModelResponse {
@@ -345,6 +359,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 response_event_id: outcome.event_ids[0],
                 response_id: descriptor.content_id,
                 adapter_version: request.adapter_version,
+                usage,
             }))
         }
         Err(error) => {
@@ -358,6 +373,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 attempt_id,
                 response_id: None,
                 diagnostic: Some(error.to_string()),
+                usage: None,
             };
             append_terminal(
                 events,
@@ -444,6 +460,8 @@ pub enum ModelAttemptState {
     /// Response bytes were archived and cited.
     Completed {
         response_id: ContentId<ModelResponseArtifact>,
+        /// Provider-reported token usage, absent only when the provider omitted it.
+        usage: Option<ProviderTokenUsage>,
     },
     /// Transport proved no request was sent.
     NotSent,
@@ -514,8 +532,11 @@ pub fn recover_model_attempt(
                             "response event lacks response identity".to_owned(),
                         )
                     })?,
+                    usage: payload.usage,
                 },
-                NOT_SENT | REJECTED | AMBIGUOUS if payload.response_id.is_some() => {
+                NOT_SENT | REJECTED | AMBIGUOUS
+                    if payload.response_id.is_some() || payload.usage.is_some() =>
+                {
                     return invalid_history("failure event unexpectedly cites a response");
                 }
                 NOT_SENT | REJECTED | AMBIGUOUS if payload.diagnostic.is_none() => {
@@ -540,7 +561,8 @@ pub fn recover_received_model_response(
     events: &[EventEnvelope],
     attempt_id: ModelAttemptId,
 ) -> Result<Option<ReceivedModelResponse>, DispatchCoordinatorError> {
-    let ModelAttemptState::Completed { response_id } = recover_model_attempt(events, attempt_id)?
+    let ModelAttemptState::Completed { response_id, usage } =
+        recover_model_attempt(events, attempt_id)?
     else {
         return Ok(None);
     };
@@ -561,6 +583,7 @@ pub fn recover_received_model_response(
                 response_event_id: event.event_id,
                 response_id,
                 adapter_version,
+                usage,
             }));
         }
     }
@@ -693,10 +716,11 @@ mod tests {
 
     use super::{
         DispatchCompletion, ModelAttemptState, authorize_model_request, begin_model_dispatch,
-        execute_model_dispatch, recover_model_attempt,
+        execute_model_dispatch, recover_model_attempt, recover_received_model_response,
     };
     use crate::{
-        MaterializedRequestArtifact, PreparedModelRequest, ScriptedModelTransport, TransportError,
+        MaterializedRequestArtifact, ModelTransportResponse, PreparedModelRequest,
+        ProviderTokenCount, ProviderTokenUsage, ScriptedModelTransport, TransportError,
         TurnInputDecisionArtifact,
     };
 
@@ -781,8 +805,14 @@ mod tests {
             cairn_protocol::ObservedAtUnixMillis::new(2),
         )
         .expect("begin");
-        let mut transport = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"provider response".to_vec())
+        let usage =
+            ProviderTokenUsage::new(ProviderTokenCount::new(11), ProviderTokenCount::new(4))
+                .expect("usage");
+        let mut transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
+            Ok::<_, TransportError>(ModelTransportResponse::new(
+                b"provider response".to_vec(),
+                Some(usage),
+            ))
         });
         let completion = execute_model_dispatch(
             &mut events,
@@ -797,6 +827,7 @@ mod tests {
             panic!("expected response completion");
         };
         let response_id = received.response_id();
+        assert_eq!(received.usage(), Some(usage));
         let mut archived = Vec::new();
         content
             .write_to(&response_id, &mut archived)
@@ -806,8 +837,29 @@ mod tests {
         let history = events.read_stream(&stream, None).expect("read completed");
         assert_eq!(
             recover_model_attempt(&history, attempt).expect("recover completed"),
-            ModelAttemptState::Completed { response_id }
+            ModelAttemptState::Completed {
+                response_id,
+                usage: Some(usage),
+            }
         );
+        assert_eq!(
+            recover_received_model_response(&history, attempt)
+                .expect("recover response")
+                .expect("received response")
+                .usage(),
+            Some(usage)
+        );
+
+        let mut corrupted = history;
+        let response = corrupted.last_mut().expect("response event");
+        let mut payload: serde_json::Value =
+            cairn_codec::from_slice(&response.payload).expect("response payload");
+        payload["usage"] = serde_json::json!({
+            "input_tokens": u64::MAX,
+            "output_tokens": 1
+        });
+        response.payload = cairn_codec::to_vec(&payload).expect("corrupt usage");
+        assert!(recover_model_attempt(&corrupted, attempt).is_err());
     }
 
     #[test]

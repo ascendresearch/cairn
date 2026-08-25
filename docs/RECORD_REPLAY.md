@@ -240,6 +240,12 @@ must consume exactly those results. Step-limit and deadline completion are recor
 step boundary; authority lost before step preparation can be reconstructed but cannot be replayed
 after the step has consumed it.
 
+`ModelResponseReceived` may carry a validated provider usage receipt containing input and output
+token counts. The receipt and raw response identity commit atomically. Cairn does not infer provider
+tokens from byte length, a local tokenizer, or a later adapter pass. Recorded transports replay the
+captured receipt through the same transport seam as live providers; recovery rejects an
+unrepresentable total or a usage field attached to a failure outcome.
+
 `EpisodeOperationsAdmitted` is the pre-authority budget reservation for an ordered, non-empty set
 of logical tool operations. It records each stable `OperationId` plus the trusted tool name,
 implementation version, and effect class. The episode fact commits before step binding. A restart in
@@ -249,6 +255,17 @@ episode limit, `EpisodeCompleted(ToolOperationLimitReached)` records the request
 step remains at `AwaitingOperations`; no binding or operation authority may be created. Retries use
 fresh `AttemptId` values under an already admitted logical operation and are not counted as new
 logical operations; attempt and externally metered budgets remain separate dimensions.
+
+When `EpisodeOpened` configures an observed provider-token threshold, recovery sums receipts from
+the episode's completed `ModelAttemptId` values in step order. A total below the threshold may grant
+the next step. A total equal to or above it records
+`EpisodeCompleted(ProviderTokenLimitReached)` with the exact observed total and grants no next model
+authority. Because response usage is unknowable before dispatch, the final response may cross the
+threshold; this is an observed-usage stopping rule, not a predictive hard cap. If any completed
+attempt lacks usage at a continuable boundary,
+`EpisodeCompleted(ProviderUsageUnavailable)` cites that attempt and fails closed. A model that has
+already yielded still completes as `Yielded`, because no further authority exists to block.
+Episodes without a configured token threshold may use providers that omit usage.
 
 ### 7.3 Execution facts
 

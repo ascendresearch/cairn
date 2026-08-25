@@ -411,6 +411,7 @@ pub fn decode_model_response<E: EventStore, C: ContentStore, A: ModelAdapter>(
         response_event_id,
         response_id,
         adapter_version: expected_adapter_version,
+        usage: _,
     } = received;
     let actual_adapter_version = adapter.adapter_version().clone();
     if actual_adapter_version != expected_adapter_version {
@@ -806,10 +807,11 @@ mod tests {
     };
     use crate::{
         AdapterVersion, DispatchCompletion, MaterializedRequestArtifact, ModelResponseArtifact,
-        PreparedModelRequest, ProviderToolCallId, ScriptedModelTransport, ToolEffectClass,
-        ToolImplementationVersion, ToolName, TransportError, TurnInputDecisionArtifact,
-        authorize_model_request, authorize_tool_operation, begin_model_dispatch,
-        execute_model_dispatch, recover_received_model_response, recover_tool_operation,
+        ModelTransportResponse, PreparedModelRequest, ProviderToolCallId, ScriptedModelTransport,
+        ToolEffectClass, ToolImplementationVersion, ToolName, TransportError,
+        TurnInputDecisionArtifact, authorize_model_request, authorize_tool_operation,
+        begin_model_dispatch, execute_model_dispatch, recover_received_model_response,
+        recover_tool_operation,
     };
 
     struct ReceivedFixture {
@@ -860,7 +862,9 @@ mod tests {
         )
         .expect("begin");
         let mut transport = ScriptedModelTransport::new(|_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(b"provider-native-response".to_vec())
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                b"provider-native-response".to_vec(),
+            ))
         });
         let completion = execute_model_dispatch(
             &mut events,
