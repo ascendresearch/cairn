@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use thiserror::Error;
 
-const CURRENT_VERSION: i64 = 1;
+const CURRENT_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub(crate) enum SchemaError {
@@ -20,13 +20,10 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), SchemaError> {
             supported: CURRENT_VERSION,
         });
     }
-    if version == CURRENT_VERSION {
-        return Ok(());
-    }
-
-    let transaction = connection.transaction()?;
-    transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS streams (
+    if version < 1 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS streams (
             aggregate_kind TEXT NOT NULL,
             aggregate_id   TEXT NOT NULL,
             revision       INTEGER NOT NULL CHECK (revision > 0),
@@ -76,9 +73,21 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), SchemaError> {
 
          CREATE INDEX IF NOT EXISTS content_objects_by_blob ON content_objects(blob_digest);
 
-         PRAGMA user_version = 1;",
-    )?;
-    transaction.commit()?;
+             PRAGMA user_version = 1;",
+        )?;
+        transaction.commit()?;
+    }
+
+    // WAL lets the long-running controller continue reading while a separate administrative
+    // command appends an authority fact. Journal mode is persistent and must be changed outside a
+    // transaction; FULL synchronization preserves the durable-fact contract.
+    if version < 2 {
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = FULL;
+             PRAGMA user_version = 2;",
+        )?;
+    }
     Ok(())
 }
 
@@ -97,6 +106,32 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("version");
         assert_eq!(version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn v1_file_store_migrates_to_wal_for_concurrent_controller_and_admin_access() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("events.sqlite3");
+        let mut connection = Connection::open(&path).expect("open V1 fixture");
+        connection
+            .execute_batch("PRAGMA user_version = 1;")
+            .expect("mark V1 fixture");
+
+        migrate(&mut connection).expect("migrate V1 fixture");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("journal mode");
+        assert_eq!(version, CURRENT_VERSION);
+        assert_eq!(journal_mode, "wal");
+
+        let reopened = Connection::open(path).expect("reopen migrated fixture");
+        let persisted_mode: String = reopened
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("persisted journal mode");
+        assert_eq!(persisted_mode, "wal");
     }
 
     #[test]

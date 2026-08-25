@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, io::Cursor};
 
 use cairn_protocol::{
-    AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, EventId,
-    ObservedAtUnixMillis, SchemaName, SchemaVersion, StreamRevision, WorkerId, WorkerIncarnationId,
+    AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, CredentialId,
+    EventId, ObservedAtUnixMillis, SchemaName, SchemaVersion, StreamRevision, WorkerId,
+    WorkerIncarnationId,
 };
 use cairn_record::{
     ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError, ExpectedRevision,
@@ -453,20 +454,35 @@ pub struct WorkerAuthenticationError(pub String);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedWorkerIdentity {
     subject: WorkerAuthenticationSubject,
+    credential_id: CredentialId,
     pool: WorkerPoolName,
 }
 
 impl AuthenticatedWorkerIdentity {
     /// Binds an authenticated principal to an operator-owned scheduling pool.
     #[must_use]
-    pub const fn new(subject: WorkerAuthenticationSubject, pool: WorkerPoolName) -> Self {
-        Self { subject, pool }
+    pub const fn new(
+        subject: WorkerAuthenticationSubject,
+        credential_id: CredentialId,
+        pool: WorkerPoolName,
+    ) -> Self {
+        Self {
+            subject,
+            credential_id,
+            pool,
+        }
     }
 
     /// Returns the authenticated principal.
     #[must_use]
     pub const fn subject(&self) -> &WorkerAuthenticationSubject {
         &self.subject
+    }
+
+    /// Returns the exact credential that authenticated this session.
+    #[must_use]
+    pub const fn credential_id(&self) -> CredentialId {
+        self.credential_id
     }
 
     /// Returns the authenticated, controller-authorized worker pool.
@@ -620,6 +636,7 @@ pub struct RegisteredWorkerSession {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
+    credential_id: CredentialId,
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     profile: WorkerProfile,
@@ -645,6 +662,12 @@ impl RegisteredWorkerSession {
     #[must_use]
     pub const fn authentication_subject(&self) -> &WorkerAuthenticationSubject {
         &self.authentication_subject
+    }
+
+    /// Returns the exact credential bound to this incarnation.
+    #[must_use]
+    pub const fn credential_id(&self) -> CredentialId {
+        self.credential_id
     }
 
     /// Returns the controller-authorized worker pool.
@@ -757,6 +780,9 @@ pub enum WorkerControlError {
     /// Stable identity is already owned by a different authenticated principal.
     #[error("worker identity is bound to another authentication subject")]
     AuthenticationSubjectChanged,
+    /// One live incarnation cannot silently switch credentials mid-session.
+    #[error("worker incarnation changed its authentication credential")]
+    IncarnationCredentialChanged,
     /// Pool membership cannot change implicitly with a reconnect or process restart.
     #[error("worker pool changed without explicit reassignment")]
     WorkerPoolChanged,
@@ -791,6 +817,7 @@ struct RegistrationPayload {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
+    credential_id: CredentialId,
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     replaced_incarnation_id: Option<WorkerIncarnationId>,
@@ -819,6 +846,7 @@ struct DisconnectedPayload {
 struct WorkerProjection {
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
+    credential_id: CredentialId,
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
@@ -886,6 +914,9 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
                 if projection.profile_id != profile_id {
                     return Err(WorkerControlError::IncarnationProfileChanged);
                 }
+                if projection.credential_id != authenticated.credential_id() {
+                    return Err(WorkerControlError::IncarnationCredentialChanged);
+                }
                 return materialize_session(content, hello.worker_id, projection);
             }
             if projection.disconnected {
@@ -908,13 +939,14 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         };
     let event = fact(
         schema,
-        2,
+        3,
         parent,
         observed_at,
         &RegistrationPayload {
             worker_id: hello.worker_id,
             incarnation_id: hello.incarnation_id,
             authentication_subject: authenticated.subject().clone(),
+            credential_id: authenticated.credential_id(),
             pool: authenticated.pool().clone(),
             profile_id,
             replaced_incarnation_id,
@@ -927,6 +959,7 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         worker_id: hello.worker_id,
         incarnation_id: hello.incarnation_id,
         authentication_subject: authenticated.subject,
+        credential_id: authenticated.credential_id,
         pool: authenticated.pool,
         profile_id,
         profile: hello.profile.clone(),
@@ -989,6 +1022,7 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         worker_id: session.worker_id,
         incarnation_id: session.incarnation_id,
         authentication_subject: session.authentication_subject.clone(),
+        credential_id: session.credential_id,
         pool: session.pool.clone(),
         profile_id: session.profile_id,
         profile: session.profile.clone(),
@@ -1015,6 +1049,7 @@ pub fn disconnect_worker<E: EventStore>(
     let projection = project_worker(&history, session.worker_id)?;
     if projection.incarnation_id != session.incarnation_id
         || projection.authentication_subject != session.authentication_subject
+        || projection.credential_id != session.credential_id
         || projection.pool != session.pool
         || projection.profile_id != session.profile_id
     {
@@ -1174,6 +1209,7 @@ fn materialize_session<C: ContentStore>(
         worker_id,
         incarnation_id: projection.incarnation_id,
         authentication_subject: projection.authentication_subject,
+        credential_id: projection.credential_id,
         pool: projection.pool,
         profile_id: projection.profile_id,
         profile,
@@ -1201,7 +1237,7 @@ fn project_worker(
         }
         match event.schema_name.as_str() {
             WORKER_REGISTERED | WORKER_REPLACED => {
-                if event.schema_version.get() != 2 {
+                if event.schema_version.get() != 3 {
                     return invalid_history("worker registration schema version is unsupported");
                 }
                 let payload: RegistrationPayload = decode(event)?;
@@ -1253,6 +1289,7 @@ fn project_worker(
                 projection = Some(WorkerProjection {
                     incarnation_id: payload.incarnation_id,
                     authentication_subject: payload.authentication_subject,
+                    credential_id: payload.credential_id,
                     pool: payload.pool,
                     profile_id: payload.profile_id,
                     availability_id: None,
@@ -1315,6 +1352,7 @@ fn ensure_current(
 ) -> Result<(), WorkerControlError> {
     if projection.incarnation_id != session.incarnation_id
         || projection.authentication_subject != session.authentication_subject
+        || projection.credential_id != session.credential_id
         || projection.pool != session.pool
         || projection.profile_id != session.profile_id
         || projection.disconnected
@@ -1540,10 +1578,19 @@ mod tests {
     }
 
     fn authenticator(worker_id: WorkerId, subject: &str) -> RecordedWorkerAuthenticator {
+        authenticator_with_credential(worker_id, subject, CredentialId::new())
+    }
+
+    fn authenticator_with_credential(
+        worker_id: WorkerId,
+        subject: &str,
+        credential_id: CredentialId,
+    ) -> RecordedWorkerAuthenticator {
         RecordedWorkerAuthenticator::new([(
             worker_id,
             AuthenticatedWorkerIdentity::new(
                 WorkerAuthenticationSubject::new(subject).expect("subject"),
+                credential_id,
                 WorkerPoolName::new("fixture").expect("pool"),
             ),
         )])
@@ -1697,6 +1744,81 @@ mod tests {
     }
 
     #[test]
+    fn credential_rotation_requires_a_new_incarnation_and_survives_replay() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let first_credential = CredentialId::new();
+        let next_credential = CredentialId::new();
+        let first_hello =
+            WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"));
+        let mut first_auth =
+            authenticator_with_credential(worker_id, "worker-principal:fixture", first_credential);
+        let first = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut first_auth,
+            &first_hello,
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(0),
+        )
+        .expect("first registration");
+        assert_eq!(first.credential_id(), first_credential);
+
+        let mut rotated_auth =
+            authenticator_with_credential(worker_id, "worker-principal:fixture", next_credential);
+        assert!(matches!(
+            register_worker(
+                &mut fixture.events,
+                &mut fixture.content,
+                &mut rotated_auth,
+                &first_hello,
+                WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(1),
+            ),
+            Err(WorkerControlError::IncarnationCredentialChanged)
+        ));
+
+        disconnect_worker(
+            &mut fixture.events,
+            &first,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(2),
+        )
+        .expect("disconnect first credential");
+        let rotated = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut rotated_auth,
+            &WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64")),
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(3),
+        )
+        .expect("rotated registration");
+        assert_eq!(rotated.worker_id(), worker_id);
+        assert_eq!(rotated.credential_id(), next_credential);
+
+        fixture.reopen();
+        let WorkerSessionState::Live(recovered) = recover_worker_session(
+            &fixture.events,
+            &fixture.content,
+            worker_id,
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            ObservedAtUnixMillis::new(4),
+        )
+        .expect("recover rotated session") else {
+            panic!("rotated session should be live");
+        };
+        assert_eq!(recovered.credential_id(), next_credential);
+        assert_eq!(
+            recovered.authentication_subject().as_str(),
+            "worker-principal:fixture"
+        );
+    }
+
+    #[test]
     fn stable_worker_identity_cannot_change_authentication_subject() {
         let mut fixture = Fixture::new();
         let worker_id = WorkerId::new();
@@ -1749,6 +1871,7 @@ mod tests {
             worker_id,
             AuthenticatedWorkerIdentity::new(
                 WorkerAuthenticationSubject::new("spiffe://cairn/worker/one").expect("subject"),
+                CredentialId::new(),
                 WorkerPoolName::new("another-pool").expect("pool"),
             ),
         )]);

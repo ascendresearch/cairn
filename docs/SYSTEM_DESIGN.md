@@ -547,9 +547,10 @@ capabilities; real local-process and remote-worker adapters remain target work.
 **Implemented durable control kernel (2026-08-24).** The domain layer now distinguishes stable
 `WorkerId`, process/boot `WorkerIncarnationId`, logical `AssignmentId`, bounded `LeaseId`, durable
 `ControlMessageId`, short-lived `ControlConnectionId`, and connection-local `ControlSequence`.
-Authentication is a replaceable trusted capability that resolves a transport hello to a stable
-principal and an operator-authorized worker pool; the controller permanently binds both to the
-logical worker identity. Static protocol, binary, observed platform, backend, capability,
+Authentication is a replaceable trusted capability that resolves transport evidence to a stable
+principal, exact `CredentialId`, and operator-authorized worker pool; the controller permanently
+binds subject and pool to the logical worker while binding the credential to one incarnation.
+Static protocol, binary, observed platform, backend, capability,
 provenance, and concurrency data is a canonical content-addressed profile.
 Dynamic health, drain state, available slots, and the worker's advisory active-attempt set are a
 separate content-addressed heartbeat snapshot.
@@ -572,8 +573,9 @@ backend/capability claims. It cannot label its own bytes `ControllerVerified` or
 `ExternalAttestation`; those assurance levels require a later trusted controller challenge or
 attestation adapter and a separate authoritative fact.
 
-This is a pre-public compatibility change: V1 job-contract/profile artifacts and V1 worker
-registration payloads are rejected rather than assigned invented pool or platform provenance. A
+This is a pre-public compatibility change: V1 job-contract/profile artifacts and pre-V3 worker
+registration payloads are rejected rather than assigned invented pool, platform provenance, or
+credential identity. A
 deployment retaining development-era state needs the controlled migration/rebuild path before
 upgrade; the first public compatibility baseline will include that migration gate.
 
@@ -654,9 +656,25 @@ worker verifies the returned leaf binds its staged key before committing public 
 The append-only singleton registry stores offer and issuance events but never the bearer secret.
 An issuance records the CSR digest, certificate result, fingerprint, stable worker, credential, and
 pool. After a lost response, the same secret plus exact staged CSR returns the persisted result even
-after token expiry; another CSR is rejected. A fresh controller rebuilds fingerprint-to-worker/pool
-authentication from that stream. Static certificate bindings remain a transition/external-issuer
-input. Rotation, revocation, offline exchange, and external issuer adapters remain target work.
+after token expiry; another CSR is rejected. A fresh controller rebuilds
+fingerprint-to-credential/worker/pool authentication from that stream. Static certificate bindings
+remain a transition/external-issuer input.
+
+**Implemented credential-authority foundation (2026-08-25).** Registration V3 records the exact
+`CredentialId` independently of stable subject, `WorkerId`, pool, and incarnation. The controller
+uses the managed certificate fingerprint only to find the credential record, then derives the
+stable principal from controller-owned worker identity. A live incarnation cannot switch
+credentials; after explicit disconnect or expiry, a replacement incarnation may use another
+credential while subject and pool remain fixed.
+
+The enrollment registry now projects independent append-only facts for credential revocation,
+logical-worker disablement, and unused-enrollment revocation. Inactive authority is checked before
+registration and on each active control-loop iteration, so an observed managed session is closed
+and its reconnect is rejected. This application check remains authoritative even when certificate
+chain validation succeeds. SQLite schema V2 uses WAL plus immediate writer transactions so a
+separate administrative command and the running controller serialize authority facts without a
+deferred read-to-write deadlock. Safe issuance/cutover of a replacement credential, re-enable, and
+static-registry import remain subsequent lifecycle work.
 
 After a worker heartbeat is durably accepted, the controller returns an ephemeral
 `HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence
@@ -676,7 +694,7 @@ polling, reconnect, and diagnostic bounds are configured; `null` disables an opt
 This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
 It can close the control protocol without claiming an external workload ran. Scheduler-wide slot
 reservation across different attempts, cancellation delivery, artifact transfer, local
-process/container supervision, certificate rotation/revocation storage, and production service
+process/container supervision, safe credential rotation, and production service
 deployment remain application/adapter slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,

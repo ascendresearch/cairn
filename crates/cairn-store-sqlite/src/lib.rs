@@ -15,7 +15,7 @@ use cairn_record::{
     AppendOutcome, EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent,
     StreamId, derive_event_id,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 /// `SQLite` implementation of the append-only [`EventStore`] contract.
 pub struct SqliteEventStore {
@@ -62,7 +62,14 @@ impl EventStore for SqliteEventStore {
             return Err(EventStoreError::EmptyBatch);
         }
 
-        let transaction = self.connection.transaction().map_err(storage_error)?;
+        // Acquire the single SQLite writer slot before reading the expected revision. A deferred
+        // transaction can deadlock during read-to-write upgrade when an administrative process
+        // appends authority facts while the controller is active; IMMEDIATE makes busy_timeout
+        // serialize those writers instead.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
         if let Some(outcome) = replay_outcome(&transaction, stream, expected, command_id, events)? {
             transaction.commit().map_err(storage_error)?;
             return Ok(outcome);

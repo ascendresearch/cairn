@@ -1233,6 +1233,7 @@ mod tests {
                 AuthenticatedWorkerIdentity::new(
                     WorkerAuthenticationSubject::new("spiffe://cairn/worker/fixture")
                         .expect("subject"),
+                    cairn_protocol::CredentialId::new(),
                     WorkerPoolName::new("fixture").expect("pool"),
                 ),
             )]);

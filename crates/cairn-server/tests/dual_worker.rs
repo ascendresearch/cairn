@@ -44,7 +44,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     let protocol = WorkerProtocolVersion::new(1)?;
     let session_timeout = WorkerSessionTimeoutMillis::new(10_000)?;
     let server = tokio::spawn(cairn_server::run(ServerConfig {
-        schema_version: 1,
+        schema_version: 2,
         listen,
         tls: ServerTlsFiles {
             certificate: server_certificate,
@@ -54,11 +54,13 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         enrollment: vec![
             WorkerEnrollment {
                 worker_id: worker_a_id,
+                credential_id: cairn_protocol::CredentialId::new(),
                 pool: WorkerPoolName::new("fixture").expect("pool"),
                 certificate: worker_a.0.clone(),
             },
             WorkerEnrollment {
                 worker_id: worker_b_id,
+                credential_id: cairn_protocol::CredentialId::new(),
                 pool: WorkerPoolName::new("fixture").expect("pool"),
                 certificate: worker_b.0.clone(),
             },
@@ -74,6 +76,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: NonZeroU64::new(200),
         outbox_poll_interval_ms: NonZeroU64::new(25),
+        authority_poll_interval_ms: NonZeroU64::new(25).expect("authority poll"),
         transport: TransportPolicy::default(),
         diagnostic_byte_limit: NonZeroU64::new(256),
     }));

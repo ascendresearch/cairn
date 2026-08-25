@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, io::BufReader, num::NonZeroU64};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::BufReader,
+    num::NonZeroU64,
+};
 
 use cairn_control_transport::{
     CertificateFingerprint, EnrollmentBundle, EnrollmentEndpoint, EnrollmentRequest,
@@ -24,6 +29,9 @@ use crate::{EnrolledWorker, EnrollmentServiceConfig};
 
 const OFFER_CREATED: &str = "execution.worker-enrollment-offered";
 const CREDENTIAL_ISSUED: &str = "execution.worker-credential-issued";
+const CREDENTIAL_REVOKED: &str = "execution.worker-credential-revoked";
+const WORKER_DISABLED: &str = "execution.worker-disabled";
+const ENROLLMENT_REVOKED: &str = "execution.worker-enrollment-revoked";
 const MAX_CSR_PEM_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -45,12 +53,31 @@ struct CredentialIssuedPayload {
     issued_at: ObservedAtUnixMillis,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialRevokedPayload {
+    credential_id: CredentialId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerDisabledPayload {
+    worker_id: WorkerId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollmentRevokedPayload {
+    enrollment_id: EnrollmentId,
+}
+
 #[derive(Clone)]
 struct Offer {
     token_digest: [u8; 32],
     pool: WorkerPoolName,
     expires_at: ObservedAtUnixMillis,
     issued: Option<Issued>,
+    revoked: bool,
 }
 
 #[derive(Clone)]
@@ -59,8 +86,17 @@ struct Issued {
     credential: IssuedWorkerCredential,
 }
 
+#[derive(Clone)]
+struct CredentialRecord {
+    fingerprint: CertificateFingerprint,
+    enrolled: EnrolledWorker,
+    revoked: bool,
+}
+
 pub(crate) struct EnrollmentRegistry {
     offers: BTreeMap<EnrollmentId, Offer>,
+    credentials: BTreeMap<CredentialId, CredentialRecord>,
+    disabled_workers: BTreeSet<WorkerId>,
     enrolled: BTreeMap<CertificateFingerprint, EnrolledWorker>,
     revision: Option<StreamRevision>,
     last_event_id: Option<EventId>,
@@ -97,6 +133,14 @@ pub(crate) enum EnrollmentError {
     Expired,
     #[error("enrollment authority was already used by another key")]
     AlreadyUsed,
+    #[error("enrollment authority was revoked")]
+    Revoked,
+    #[error("credential is unknown or already revoked")]
+    CredentialNotActive,
+    #[error("worker is unknown or already disabled")]
+    WorkerNotActive,
+    #[error("issued enrollment authority cannot be revoked")]
+    EnrollmentAlreadyIssued,
     #[error("credential issuance failed: {0}")]
     Issuance(String),
 }
@@ -108,6 +152,22 @@ impl EnrollmentRegistry {
 
     pub(crate) fn enrolled(&self) -> &BTreeMap<CertificateFingerprint, EnrolledWorker> {
         &self.enrolled
+    }
+
+    pub(crate) fn credential_is_authorized(
+        &self,
+        credential_id: CredentialId,
+        worker_id: WorkerId,
+    ) -> bool {
+        self.credentials.get(&credential_id).is_some_and(|record| {
+            !record.revoked
+                && record.enrolled.worker_id == worker_id
+                && !self.disabled_workers.contains(&worker_id)
+        })
+    }
+
+    pub(crate) fn credential_is_known(&self, credential_id: CredentialId) -> bool {
+        self.credentials.contains_key(&credential_id)
     }
 }
 
@@ -259,6 +319,9 @@ pub(crate) fn redeem(
             Err(EnrollmentError::AlreadyUsed)
         };
     }
+    if offer.revoked {
+        return Err(EnrollmentError::Revoked);
+    }
     if now > offer.expires_at {
         return Err(EnrollmentError::Expired);
     }
@@ -292,12 +355,91 @@ pub(crate) fn redeem(
     Ok(credential)
 }
 
+pub(crate) fn revoke_credential(
+    events: &mut impl EventStore,
+    credential_id: CredentialId,
+    now: ObservedAtUnixMillis,
+) -> Result<(), EnrollmentError> {
+    let registry = project(events)?;
+    if registry
+        .credentials
+        .get(&credential_id)
+        .is_none_or(|record| record.revoked)
+    {
+        return Err(EnrollmentError::CredentialNotActive);
+    }
+    append(
+        events,
+        &registry,
+        CREDENTIAL_REVOKED,
+        &CredentialRevokedPayload { credential_id },
+        CommandId::new(),
+        now,
+    )
+}
+
+pub(crate) fn disable_worker(
+    events: &mut impl EventStore,
+    worker_id: WorkerId,
+    now: ObservedAtUnixMillis,
+) -> Result<(), EnrollmentError> {
+    let registry = project(events)?;
+    if registry.disabled_workers.contains(&worker_id)
+        || !registry
+            .credentials
+            .values()
+            .any(|record| record.enrolled.worker_id == worker_id)
+    {
+        return Err(EnrollmentError::WorkerNotActive);
+    }
+    append(
+        events,
+        &registry,
+        WORKER_DISABLED,
+        &WorkerDisabledPayload { worker_id },
+        CommandId::new(),
+        now,
+    )
+}
+
+pub(crate) fn revoke_enrollment(
+    events: &mut impl EventStore,
+    enrollment_id: EnrollmentId,
+    now: ObservedAtUnixMillis,
+) -> Result<(), EnrollmentError> {
+    let registry = project(events)?;
+    let offer = registry
+        .offers
+        .get(&enrollment_id)
+        .ok_or(EnrollmentError::InvalidAuthority)?;
+    if offer.issued.is_some() {
+        return Err(EnrollmentError::EnrollmentAlreadyIssued);
+    }
+    if offer.revoked {
+        return Err(EnrollmentError::Revoked);
+    }
+    append(
+        events,
+        &registry,
+        ENROLLMENT_REVOKED,
+        &EnrollmentRevokedPayload { enrollment_id },
+        CommandId::new(),
+        now,
+    )
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the authority projector validates every lifecycle event and cross-event invariant linearly"
+)]
 fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentError> {
     let history = events
         .read_stream(&stream()?, None)
         .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
     let mut registry = EnrollmentRegistry {
         offers: BTreeMap::new(),
+        credentials: BTreeMap::new(),
+        disabled_workers: BTreeSet::new(),
         enrolled: BTreeMap::new(),
         revision: None,
         last_event_id: None,
@@ -321,6 +463,7 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                             pool: payload.pool,
                             expires_at: payload.expires_at,
                             issued: None,
+                            revoked: false,
                         },
                     )
                     .is_some()
@@ -339,15 +482,33 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                     .ok_or_else(|| {
                         EnrollmentError::InvalidHistory("credential precedes its offer".into())
                     })?;
-                if offer.issued.is_some() || offer.pool != payload.credential.pool {
+                if offer.issued.is_some() || offer.revoked || offer.pool != payload.credential.pool
+                {
                     return Err(EnrollmentError::InvalidHistory(
                         "credential duplicates or changes the authorized pool".into(),
                     ));
                 }
                 let enrolled = EnrolledWorker {
                     worker_id: payload.credential.worker_id,
+                    credential_id: payload.credential.credential_id,
                     pool: payload.credential.pool.clone(),
                 };
+                if registry
+                    .credentials
+                    .insert(
+                        payload.credential.credential_id,
+                        CredentialRecord {
+                            fingerprint: payload.certificate_fingerprint,
+                            enrolled: enrolled.clone(),
+                            revoked: false,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "credential identity was issued twice".into(),
+                    ));
+                }
                 if registry
                     .enrolled
                     .insert(payload.certificate_fingerprint, enrolled)
@@ -361,6 +522,53 @@ fn project(events: &impl EventStore) -> Result<EnrollmentRegistry, EnrollmentErr
                     csr_digest,
                     credential: payload.credential,
                 });
+            }
+            CREDENTIAL_REVOKED => {
+                let payload: CredentialRevokedPayload = decode(&event.payload)?;
+                let record = registry
+                    .credentials
+                    .get_mut(&payload.credential_id)
+                    .ok_or_else(|| {
+                        EnrollmentError::InvalidHistory("unknown credential was revoked".into())
+                    })?;
+                if record.revoked {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "credential was revoked twice".into(),
+                    ));
+                }
+                record.revoked = true;
+                registry.enrolled.remove(&record.fingerprint);
+            }
+            WORKER_DISABLED => {
+                let payload: WorkerDisabledPayload = decode(&event.payload)?;
+                if !registry
+                    .credentials
+                    .values()
+                    .any(|record| record.enrolled.worker_id == payload.worker_id)
+                    || !registry.disabled_workers.insert(payload.worker_id)
+                {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "unknown or disabled worker was disabled".into(),
+                    ));
+                }
+                registry
+                    .enrolled
+                    .retain(|_, worker| worker.worker_id != payload.worker_id);
+            }
+            ENROLLMENT_REVOKED => {
+                let payload: EnrollmentRevokedPayload = decode(&event.payload)?;
+                let offer = registry
+                    .offers
+                    .get_mut(&payload.enrollment_id)
+                    .ok_or_else(|| {
+                        EnrollmentError::InvalidHistory("unknown enrollment was revoked".into())
+                    })?;
+                if offer.revoked || offer.issued.is_some() {
+                    return Err(EnrollmentError::InvalidHistory(
+                        "used or revoked enrollment was revoked".into(),
+                    ));
+                }
+                offer.revoked = true;
             }
             other => {
                 return Err(EnrollmentError::InvalidHistory(format!(

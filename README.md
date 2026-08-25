@@ -96,13 +96,18 @@ of overriding detection. Controller-authorized worker pools and domain-neutral p
 let future `cairn-migration` stages ask for resources without assigning business roles to workers.
 Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
 retains its own private key. Exact-CSR replay closes a lost-response window, and a fresh controller
-recovers certificate-to-`WorkerId`/pool authority from the append-only registry. See
+recovers certificate-to-`CredentialId`/`WorkerId`/pool authority from the append-only registry.
+Stable worker principal, rotatable credential, and process incarnation are now distinct in durable
+registration facts. Separate append-only actions revoke an unused enrollment, revoke one managed
+credential, or disable a logical worker; inactive authority is rejected before registration and is
+rechecked for live sessions. See
 [`docs/ENROLLMENT.md`](docs/ENROLLMENT.md) for the operator flow. Reproducible release tooling
 cross-links controller and worker
 bundles for x86-64 and AArch64 against a pinned GLIBC baseline and verifies their ELF contracts
 before deployment. The current worker executor deliberately returns `NotStarted`; real
-local/container backends, artifact transfer, credential rotation/revocation, and real-host job
-execution remain subsequent slices.
+local/container backends, safe credential issuance/cutover, global scheduling, richer resource
+probing, static-registry import, and real-host job execution remain subsequent slices. The active
+dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 The remaining architecture in the normative documents is still target design. The old repositories
 are evidence and compatibility references, not source trees to copy mechanically.
@@ -123,6 +128,8 @@ Start with [`docs/README.md`](docs/README.md). The normative baseline is:
 - [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) — decisions deliberately left unresolved.
 - [`docs/RELEASE.md`](docs/RELEASE.md) — pinned cross-link toolchain, reproducible bundles, and the
   real-host deployment gate.
+- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — the integrated authority,
+  scheduling, probing, registry, and onboarding delivery plan.
 
 ## Project principle
 

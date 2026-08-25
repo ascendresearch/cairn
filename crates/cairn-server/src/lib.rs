@@ -30,7 +30,8 @@ use cairn_execution::{
     register_worker,
 };
 use cairn_protocol::{
-    CommandId, ControlConnectionId, ControlSequence, ObservedAtUnixMillis, WorkerId,
+    CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId,
+    ObservedAtUnixMillis, WorkerId,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ use tokio::{
 };
 
 use enrollment::{EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, redeem};
+use enrollment::{disable_worker, revoke_credential, revoke_enrollment};
 
 /// Strict controller process configuration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -58,6 +60,7 @@ pub struct ServerConfig {
     pub handshake_timeout_ms: Option<NonZeroU64>,
     pub idle_timeout_ms: Option<NonZeroU64>,
     pub outbox_poll_interval_ms: Option<NonZeroU64>,
+    pub authority_poll_interval_ms: NonZeroU64,
     #[serde(default)]
     pub transport: TransportPolicy,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
@@ -81,11 +84,12 @@ pub struct EnrollmentServiceConfig {
     pub transport: TransportPolicy,
 }
 
-/// Static V1 binding from a logical worker ID to one exact leaf certificate.
+/// Static binding from a logical worker ID and credential ID to one exact leaf certificate.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerEnrollment {
     pub worker_id: WorkerId,
+    pub credential_id: CredentialId,
     pub pool: WorkerPoolName,
     pub certificate: PathBuf,
 }
@@ -93,6 +97,7 @@ pub struct WorkerEnrollment {
 #[derive(Clone)]
 pub(crate) struct EnrolledWorker {
     pub(crate) worker_id: WorkerId,
+    pub(crate) credential_id: CredentialId,
     pub(crate) pool: WorkerPoolName,
 }
 
@@ -109,7 +114,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json>"
+        "usage: cairn-server <config.json> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> | cairn-server credential revoke <config.json> <credential-id> | cairn-server worker disable <config.json> <worker-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -138,10 +143,17 @@ pub async fn run_from_arguments(
     let first = arguments.next().ok_or(ServerError::Usage)?;
     if first == "enrollment" {
         let action = arguments.next().ok_or(ServerError::Usage)?;
+        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        if action == "revoke" {
+            let enrollment_id = parse_argument::<EnrollmentId>(arguments.next())?;
+            if arguments.next().is_some() {
+                return Err(ServerError::Usage);
+            }
+            return revoke_enrollment_authority(&load_config(&config_path)?, enrollment_id);
+        }
         if action != "create" {
             return Err(ServerError::Usage);
         }
-        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
         let pool = WorkerPoolName::new(
             arguments
                 .next()
@@ -171,11 +183,39 @@ pub async fn run_from_arguments(
         eprintln!("wrote enrollment bundle to {}", output_path.display());
         return Ok(());
     }
+    if first == "credential" || first == "worker" {
+        let action = arguments.next().ok_or(ServerError::Usage)?;
+        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let identity = arguments.next();
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let config = load_config(&config_path)?;
+        if first == "credential" && action == "revoke" {
+            return revoke_worker_credential(&config, parse_argument::<CredentialId>(identity)?);
+        }
+        if first == "worker" && action == "disable" {
+            return disable_enrolled_worker(&config, parse_argument::<WorkerId>(identity)?);
+        }
+        return Err(ServerError::Usage);
+    }
     let config_path = PathBuf::from(first);
     if arguments.next().is_some() {
         return Err(ServerError::Usage);
     }
     run(load_config(&config_path)?).await
+}
+
+fn parse_argument<T>(value: Option<OsString>) -> Result<T, ServerError>
+where
+    T: std::str::FromStr,
+{
+    value
+        .ok_or(ServerError::Usage)?
+        .into_string()
+        .map_err(|_| ServerError::Usage)?
+        .parse()
+        .map_err(|_| ServerError::Usage)
 }
 
 fn write_new_secret_file(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
@@ -226,6 +266,54 @@ pub fn create_enrollment_bundle(
         .map_err(|error| ServerError::Startup(error.to_string()))
 }
 
+/// Permanently revokes one issued managed credential.
+///
+/// # Errors
+///
+/// Returns an error if the credential is unknown, already revoked, or storage fails.
+pub fn revoke_worker_credential(
+    config: &ServerConfig,
+    credential_id: CredentialId,
+) -> Result<(), ServerError> {
+    config.validate_schema()?;
+    let mut events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    revoke_credential(&mut events, credential_id, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
+/// Disables one managed logical worker independently of all of its credentials.
+///
+/// # Errors
+///
+/// Returns an error if the worker is unknown, already disabled, or storage fails.
+pub fn disable_enrolled_worker(
+    config: &ServerConfig,
+    worker_id: WorkerId,
+) -> Result<(), ServerError> {
+    config.validate_schema()?;
+    let mut events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    disable_worker(&mut events, worker_id, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
+/// Permanently invalidates an unused one-shot enrollment authority.
+///
+/// # Errors
+///
+/// Returns an error if the authority is unknown, used, already revoked, or storage fails.
+pub fn revoke_enrollment_authority(
+    config: &ServerConfig,
+    enrollment_id: EnrollmentId,
+) -> Result<(), ServerError> {
+    config.validate_schema()?;
+    let mut events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    revoke_enrollment(&mut events, enrollment_id, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
 /// Runs the authenticated controller listener.
 ///
 /// # Errors
@@ -242,6 +330,14 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     let registry = EnrollmentRegistry::load(&events)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     let mut enrolled = config.enrollments()?;
+    if enrolled
+        .values()
+        .any(|worker| registry.credential_is_known(worker.credential_id))
+    {
+        return Err(ServerError::Startup(
+            "static and managed enrollments contain the same credential identity".into(),
+        ));
+    }
     for (fingerprint, worker) in registry.enrolled() {
         if enrolled.insert(*fingerprint, worker.clone()).is_some() {
             return Err(ServerError::Startup(
@@ -323,12 +419,17 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
 }
 
 impl ServerConfig {
-    fn validate(&self) -> Result<(), ServerError> {
-        if self.schema_version != 1 {
+    fn validate_schema(&self) -> Result<(), ServerError> {
+        if self.schema_version != 2 {
             return Err(ServerError::Configuration(
-                "only server schema_version 1 is supported".into(),
+                "only server schema_version 2 is supported".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), ServerError> {
+        self.validate_schema()?;
         if self.enrollment.is_empty() && self.enrollment_service.is_none() {
             return Err(ServerError::Configuration(
                 "at least one static enrollment or enrollment_service is required".into(),
@@ -387,6 +488,7 @@ impl ServerConfig {
                     fingerprint,
                     EnrolledWorker {
                         worker_id: enrollment.worker_id,
+                        credential_id: enrollment.credential_id,
                         pool: enrollment.pool.clone(),
                     },
                 )
@@ -503,6 +605,7 @@ async fn handle_enrollment_connection(
         .map_err(|error| ServerError::Session(error.to_string()))?;
     let enrolled = EnrolledWorker {
         worker_id: credential.worker_id,
+        credential_id: credential.credential_id,
         pool: credential.pool.clone(),
     };
     {
@@ -538,12 +641,19 @@ fn enrollment_rejection(error: &EnrollmentError) -> (EnrollmentRejectCode, &'sta
             EnrollmentRejectCode::AlreadyUsed,
             "enrollment authority was already used",
         ),
+        EnrollmentError::Revoked => (
+            EnrollmentRejectCode::InvalidAuthority,
+            "enrollment authority was revoked",
+        ),
         EnrollmentError::InvalidRequest(_) => (
             EnrollmentRejectCode::InvalidRequest,
             "enrollment request is invalid",
         ),
         EnrollmentError::Storage(_)
         | EnrollmentError::InvalidHistory(_)
+        | EnrollmentError::CredentialNotActive
+        | EnrollmentError::WorkerNotActive
+        | EnrollmentError::EnrollmentAlreadyIssued
         | EnrollmentError::Issuance(_) => (
             EnrollmentRejectCode::ControllerUnavailable,
             "controller could not durably issue a credential",
@@ -631,6 +741,19 @@ async fn handle_connection(
             "certificate and worker identity differ".into(),
         ));
     }
+    if !credential_is_authorized(&state, &enrolled_worker).await? {
+        reject(
+            &mut socket,
+            config.transport,
+            ControllerRejectCode::IdentityMismatch,
+            "worker credential is revoked or worker is disabled",
+            config.diagnostic_byte_limit,
+        )
+        .await;
+        return Err(ServerError::Session(
+            "worker credential is revoked or worker is disabled".into(),
+        ));
+    }
     if hello.profile().protocol_version() != config.protocol_version {
         reject(
             &mut socket,
@@ -664,14 +787,18 @@ async fn handle_connection(
     }
     let now = observed_now()?;
     let connection_id = ControlConnectionId::new();
-    let subject = WorkerAuthenticationSubject::new(fingerprint.to_string())
+    let subject = WorkerAuthenticationSubject::new(enrolled_worker.worker_id.to_string())
         .map_err(|error| ServerError::Session(error.to_string()))?;
     let mut session = {
         let mut locked = state.lock().await;
         let ControllerState { events, content } = &mut *locked;
         let mut authenticator = RecordedWorkerAuthenticator::new([(
             hello.worker_id(),
-            AuthenticatedWorkerIdentity::new(subject, enrolled_worker.pool.clone()),
+            AuthenticatedWorkerIdentity::new(
+                subject,
+                enrolled_worker.credential_id,
+                enrolled_worker.pool.clone(),
+            ),
         )]);
         let registered = register_worker(
             events,
@@ -749,6 +876,11 @@ async fn controller_session_loop(
         .idle_timeout_ms
         .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
     loop {
+        if !session_credential_is_authorized(state, session).await? {
+            return Err(ServerError::Session(
+                "worker credential was revoked or worker was disabled".into(),
+            ));
+        }
         flush_controller(
             socket,
             state,
@@ -764,13 +896,14 @@ async fn controller_session_loop(
             idle_deadline,
             read_wire_message::<_, WorkerWireMessage>(socket, config.transport),
         );
-        let incoming = if let Some(poll) = config.outbox_poll_interval_ms {
-            tokio::select! {
-                message = read => Some(message),
-                () = tokio::time::sleep(Duration::from_millis(poll.get())) => None,
-            }
-        } else {
-            Some(read.await)
+        let poll_ms = config
+            .outbox_poll_interval_ms
+            .map_or(config.authority_poll_interval_ms.get(), |outbox| {
+                outbox.get().min(config.authority_poll_interval_ms.get())
+            });
+        let incoming = tokio::select! {
+            message = read => Some(message),
+            () = tokio::time::sleep(Duration::from_millis(poll_ms)) => None,
         };
         let Some(message) = incoming else { continue };
         let message = message
@@ -825,6 +958,28 @@ async fn controller_session_loop(
             }
         }
     }
+}
+
+async fn credential_is_authorized(
+    state: &Arc<Mutex<ControllerState>>,
+    worker: &EnrolledWorker,
+) -> Result<bool, ServerError> {
+    let locked = state.lock().await;
+    let registry = EnrollmentRegistry::load(&locked.events)
+        .map_err(|error| ServerError::Session(error.to_string()))?;
+    Ok(!registry.credential_is_known(worker.credential_id)
+        || registry.credential_is_authorized(worker.credential_id, worker.worker_id))
+}
+
+async fn session_credential_is_authorized(
+    state: &Arc<Mutex<ControllerState>>,
+    session: &RegisteredWorkerSession,
+) -> Result<bool, ServerError> {
+    let locked = state.lock().await;
+    let registry = EnrollmentRegistry::load(&locked.events)
+        .map_err(|error| ServerError::Session(error.to_string()))?;
+    Ok(!registry.credential_is_known(session.credential_id())
+        || registry.credential_is_authorized(session.credential_id(), session.worker_id()))
 }
 
 async fn process_worker_frame(

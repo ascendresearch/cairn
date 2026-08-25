@@ -1723,6 +1723,7 @@ mod tests {
                 self.worker_id,
                 AuthenticatedWorkerIdentity::new(
                     subject,
+                    cairn_protocol::CredentialId::new(),
                     WorkerPoolName::new("fixture").expect("pool"),
                 ),
             )]);

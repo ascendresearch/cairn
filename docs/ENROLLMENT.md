@@ -11,6 +11,11 @@ trusted by the control listener's `tls.client_ca`, and `issuer_private_key` must
 certificate. Bootstrap handshake, diagnostic, wire-message, token TTL, and issued-credential
 validity values are explicit configuration or command inputs.
 
+Controller configuration schema V2 also gives every transitional static enrollment an explicit
+strong `credential_id`; it must not be generated afresh at each startup. Pre-V2 development
+configuration must be upgraded deliberately. Existing pre-V3 worker-registration facts require
+the controlled development-state migration/rebuild gate described in the implementation plan.
+
 The reference adapter currently reads an issuer certificate/key from files. The issuance boundary
 is deliberately separate from the registry so an enterprise CA, offline signer, or SPIFFE adapter
 can replace it without changing `EnrollmentId`, `WorkerId`, pool, or credential history semantics.
@@ -75,5 +80,25 @@ delete the staged CSR: it is non-secret recovery evidence bound to the local pri
 - Static file enrollment remains available for externally provisioned identities during the
   transition, but managed enrollment is the normal open-source path.
 
-Credential rotation, revocation, offline CSR exchange, and external issuer adapters are later
-lifecycle slices. They will reuse the same stable worker and credential identity separation.
+## Revoke authority
+
+The current managed registry supports three deliberately separate emergency actions:
+
+```bash
+cairn-server enrollment revoke controller.json enrollment:...
+cairn-server credential revoke controller.json credential:...
+cairn-server worker disable controller.json worker:...
+```
+
+Enrollment revocation invalidates only an unused bootstrap authority. Credential revocation
+invalidates one issued credential. Worker disablement invalidates every managed credential for the
+logical worker. These commands append facts; they do not edit or delete issuance history. A running
+controller observes the shared SQLite authority safely and rejects reconnect before registration;
+an observed live session is closed no later than the configured positive
+`authority_poll_interval_ms` (or an earlier control message/outbox poll).
+
+Application authorization is authoritative even when TLS accepts a certificate chain, so the
+baseline does not require CRL or OCSP. Static file enrollments are not revocable through this
+managed registry until the planned `import-static` transition. Worker re-enable and safe credential
+rotation are subsequent phases; disablement and revocation should currently be treated as
+one-directional emergency actions. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).

@@ -21,6 +21,7 @@ document is complete.
 | [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) | What has not been decided? | Explicitly non-normative decision backlog |
 | [`RELEASE.md`](RELEASE.md) | How are x86-64/AArch64 artifacts cross-linked, inspected, and promoted? | Normative release procedure |
 | [`ENROLLMENT.md`](ENROLLMENT.md) | How does a worker bootstrap a local managed identity without copied private keys? | Operator procedure and implemented trust boundary |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | In what dependency order do worker authority, scheduling, probing, registry migration, and onboarding close? | Active delivery plan and acceptance gates |
 
 ## Reading order
 

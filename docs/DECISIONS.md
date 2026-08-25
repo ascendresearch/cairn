@@ -317,5 +317,20 @@ grant permission to conflate a certificate fingerprint with permanent worker ide
 The implemented reference path uses a separate server-authenticated TLS listener, a controller
 file-backed issuer adapter, and one append-only registry stream. Only a token digest is durable. A
 committed issuance retains the exact CSR digest and public credential result, so a lost response is
-recoverable only with the original staged worker key/CSR. Credential rotation, revocation, offline
-exchange, and non-file-backed issuers remain later slices.
+recoverable only with the original staged worker key/CSR. Offline exchange and non-file-backed
+issuers remain later slices.
+
+## D-012 — Application credential authority precedes scheduler authority
+
+- Decision: accepted; revocation foundation implemented
+
+The certificate fingerprint is credential evidence, not the permanent principal. Authentication
+maps an accepted managed certificate to a stable subject derived from the controller-owned
+`WorkerId`, an exact rotatable `CredentialId`, and an authorized pool. Registration permanently
+binds subject and pool but binds the credential only to the current incarnation.
+
+Credential revocation, logical-worker disablement, and unused-enrollment revocation are separate
+append-only facts. TLS chain acceptance does not override these application facts. The baseline
+does not require CRL or OCSP; external issuer adapters may add them without changing Cairn's domain
+lifecycle. Scheduler work follows this foundation so a placement snapshot can exclude inactive
+authority without guessing from certificate expiry or connection state.
