@@ -29,16 +29,18 @@ pub use contract::{
     ScratchByteCount, TargetEnvironmentName, TrustedExecutionEvidence, WorkerPoolName,
 };
 pub use control::{
-    ControlEnqueueOutcome, ControlFrame, ControlFrameByteLimit, ControlFramePolicy,
-    ControlProtocolError, ControllerControlMessage, DurableControlMessage, InboundControlSession,
+    AssignmentMaterialByteLimit, AssignmentMaterials, ControlEnqueueOutcome, ControlFrame,
+    ControlFrameByteLimit, ControlFramePolicy, ControlProtocolError, ControllerControlMessage,
+    DurableControlMessage, InboundControlSession, VerifiedAssignmentMaterials,
     WorkerAdmissionOutcome, WorkerControlMessage, WorkerExecutionAuthority,
     WorkerResultReconciliation, accept_worker_assignment, acknowledge_controller_messages,
     acknowledge_worker_messages, active_worker_attempts, admit_worker_assignment,
     assignment_offer_message, decode_control_frame, deliver_controller_acknowledgement,
     deliver_controller_messages, deliver_worker_acknowledgement, deliver_worker_messages,
     encode_control_frame, enqueue_controller_message, execute_worker_attempt,
-    execution_start_message, pending_controller_messages, pending_worker_messages,
-    reconcile_worker_result, record_worker_execution_start,
+    execution_start_message, load_assignment_materials, pending_controller_messages,
+    pending_worker_messages, persist_assignment_materials, reconcile_worker_result,
+    record_worker_execution_start,
 };
 pub use coordinator::{
     ExecutionAttemptAuthority, ExecutionCompletion, ExecutionCoordinatorError, ExecutionJob,

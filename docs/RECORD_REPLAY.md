@@ -325,6 +325,13 @@ frames wholesale:
 - `control.worker-delivery-recorded` and `control.worker-acknowledged` preserve terminal replay until
   controller domain processing succeeds.
 
+The durable offer freezes exact typed input-bundle and execution-environment bytes. Before
+`control.worker-assignment-admitted`, the worker verifies their `ContentId<T>` values and stores
+them in its independent CAS. Before `control.worker-execution-started`, it reads and verifies those
+local objects again. The event stream remains assignment authority while CAS is material
+availability/integrity evidence: missing local bytes after restart prevent start rather than being
+silently reconstructed from an admission fact.
+
 `ControlMessageId` is stable across reconnect, while `ControlConnectionId` and `ControlSequence`
 name only a delivery attempt. Rebuilding either side checks causal event chains, exact assignment
 bindings, non-regressing/in-bounds cumulative acknowledgements, and delivery mappings. Canonical

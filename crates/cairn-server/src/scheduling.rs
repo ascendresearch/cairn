@@ -2,13 +2,14 @@ use std::path::PathBuf;
 
 use cairn_execution::{
     AssignmentBinding, AssignmentControlMessageIds, AssignmentLeaseDurationMillis,
-    AssignmentLeaseGrant, AssignmentLeasePolicy, ControlEnqueueOutcome, ExecutionAssignmentState,
-    JobContract, PlacementAuthorityError, PlacementAuthorityObservation, PlacementOutcome,
-    PlacementRecord, ReservationClaimTimeoutMillis, ReservationReleaseReason, SchedulerPolicy,
+    AssignmentLeaseGrant, AssignmentLeasePolicy, AssignmentMaterialByteLimit,
+    ControlEnqueueOutcome, ExecutionAssignmentState, JobContract, PlacementAuthorityError,
+    PlacementAuthorityObservation, PlacementOutcome, PlacementRecord,
+    ReservationClaimTimeoutMillis, ReservationReleaseReason, SchedulerPolicy,
     SchedulerPolicyVersion, WorkerPlacementAuthority, assignment_offer_message,
     authorize_execution_attempt, enqueue_controller_message, grant_reserved_assignment,
-    prepare_execution_job, recover_execution_assignment, release_scheduler_reservation,
-    reserve_worker_placement,
+    load_assignment_materials, prepare_execution_job, recover_execution_assignment,
+    release_scheduler_reservation, reserve_worker_placement,
 };
 use cairn_protocol::{
     AssignmentId, AttemptId, CommandId, ControlMessageId, CredentialId, LeaseId,
@@ -26,6 +27,8 @@ pub struct SchedulerServiceConfig {
     pub policy_version: SchedulerPolicyVersion,
     pub reservation_claim_timeout_ms: ReservationClaimTimeoutMillis,
     pub assignment_lease_duration_ms: AssignmentLeaseDurationMillis,
+    /// Aggregate input-bundle plus environment bytes copied into one offer; `null` disables it.
+    pub assignment_material_byte_limit: Option<AssignmentMaterialByteLimit>,
 }
 
 /// Stable command identities for each independently committed scheduling boundary.
@@ -216,7 +219,13 @@ pub fn schedule_execution_contract_at(
                 observed_at,
             )
             .map_err(|error| ServerError::Scheduling(error.to_string()))?;
-            let offer = assignment_offer_message(leased.lease(), leased.contract());
+            let materials = load_assignment_materials(
+                &content,
+                leased.contract(),
+                scheduler.assignment_material_byte_limit,
+            )
+            .map_err(|error| ServerError::Scheduling(error.to_string()))?;
+            let offer = assignment_offer_message(leased.lease(), leased.contract(), materials);
             (
                 leased.lease().binding().clone(),
                 ScheduledAssignmentPhase::OfferPending,
@@ -224,7 +233,13 @@ pub fn schedule_execution_contract_at(
             )
         }
         ExecutionAssignmentState::Leased(leased) => {
-            let offer = assignment_offer_message(leased.lease(), leased.contract());
+            let materials = load_assignment_materials(
+                &content,
+                leased.contract(),
+                scheduler.assignment_material_byte_limit,
+            )
+            .map_err(|error| ServerError::Scheduling(error.to_string()))?;
+            let offer = assignment_offer_message(leased.lease(), leased.contract(), materials);
             (
                 leased.lease().binding().clone(),
                 ScheduledAssignmentPhase::OfferPending,

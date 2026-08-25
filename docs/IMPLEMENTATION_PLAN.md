@@ -161,8 +161,9 @@ Acceptance gate:
 
 ## Phase F — one-command open-source worker join
 
-Status: F1 join/bootstrap composition implemented; activation, service-unit output, generic
-assignment, restart, and real x86-64/AArch64 host gates remain.
+Status: F1 join/bootstrap composition and F2a typed assignment-material replication implemented;
+backend activation, sandbox materialization, chunked large-artifact transfer, service-unit output,
+and real x86-64/AArch64 execution gates remain.
 
 Implement `cairn-worker join` as a composition of enrollment, built-in probe, validated local
 profile creation, control-endpoint configuration, fixed state-directory layout, and optional
@@ -181,10 +182,20 @@ Acceptance gate:
 F1 makes the V3 enrollment bundle self-contained by embedding the independently routable normal
 control endpoint and its pinned CA/name. `cairn-worker join <bundle> <state-dir>` creates a fixed
 identity/scratch/journal/config tree, hashes the running worker binary, runs the built-in host
-probe, and persists a strict V5 worker configuration. Its initial availability is deliberately
+probe, and persists a strict V6 worker configuration. Its initial availability is deliberately
 unavailable and draining because the current executor is still `NotStarted`; F2 must provide an
 explicit backend/activation transition rather than making bootstrap authority imply execution
 readiness. Re-running F1 validates and reuses the tree without overwriting operator edits.
+
+F2a makes an assignment offer carry the exact typed input-bundle and execution-environment bytes
+loaded from controller CAS. The worker verifies both content identities, commits them to an
+independent local SQLite/CAS before admission, and reopens and verifies that local CAS again before
+recording execution start. Aggregate raw material limits are independently optional on controller
+and worker; the transport's encoded-frame limit remains a separate optional control. The current
+canonical unpadded-base64, single-offer representation is intentionally bounded and suitable for
+small artifacts. F2b must introduce bounded chunking/resume before claiming large-artifact support,
+then materialize a create-only sandbox tree; F2c composes a real supervised executor and explicit
+availability activation.
 
 ## Cross-cutting gates
 

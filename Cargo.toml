@@ -20,6 +20,7 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
+base64 = "0.22.1"
 cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }

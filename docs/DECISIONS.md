@@ -409,3 +409,21 @@ regenerate it, so binary upgrades or operator tuning do not become destructive b
 Enrollment authority establishes identity and pool membership, not backend correctness or
 readiness. The generated worker therefore fails closed as unavailable/draining until a separate
 explicit activation path configures a real executor.
+
+## D-017 — Worker-local typed material is a prerequisite for execution authority
+
+- Decision: accepted; F2a implemented
+
+An assignment identity alone does not prove that a worker can execute its frozen contract. The
+controller therefore loads the exact typed input bundle and execution environment from authoritative
+CAS and places their bytes in the durable offer. The worker must derive the expected type-tagged
+identities and commit both objects to its independent local CAS before it may persist assignment
+admission. It must read and verify them again from local CAS before it may persist execution start.
+An in-memory acknowledgement or controller-side content binding cannot substitute for that local
+proof.
+
+The first transport representation is a bounded monolithic canonical-JSON payload using unpadded
+base64. Controller raw-material budget, worker raw-material budget, and encoded transport-frame
+budget remain separate optional controls. This is a deliberate small-artifact baseline, not a
+large-artifact protocol; chunking, resumability, and sandbox expansion may replace the transfer
+adapter without changing `ContentId<T>`, admission, or start-authority semantics.

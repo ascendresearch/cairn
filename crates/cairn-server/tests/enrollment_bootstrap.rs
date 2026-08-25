@@ -138,6 +138,8 @@ async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
     assert!(state.join("identity/worker-key.pem").is_file());
     assert!(state.join("identity/identity.json").is_file());
     assert!(state.join("scratch").is_dir());
+    assert!(state.join("content.sqlite3").is_file());
+    assert!(state.join("content").is_dir());
     assert_eq!(fs::read(&receipt.config_path)?, operator_config);
 
     let worker = tokio::spawn(cairn_worker::run_from_arguments([
@@ -342,13 +344,13 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         disabled_identity.worker_id,
         &CommandId::new(),
     )?;
-    let mut disabled_worker_config = worker_config(control_b, disabled_state)?;
+    let mut disabled_worker_config = worker_config(control_b, &disabled_state)?;
     disabled_worker_config.reconnect_delay_ms = None;
     let disabled_worker = tokio::spawn(cairn_worker::run(disabled_worker_config));
-    let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, state.clone())?));
+    let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, &state)?));
     let reassigned_worker = tokio::spawn(cairn_worker::run(worker_config(
         control_b,
-        reassigned_state,
+        &reassigned_state,
     )?));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -491,7 +493,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
             .to_string()
             .contains("overlap has elapsed")
     );
-    let mut retired_config = worker_config(control_b, state.clone())?;
+    let mut retired_config = worker_config(control_b, &state)?;
     retired_config.identity = WorkerIdentityConfig::External {
         worker_id: identity.worker_id,
         tls: ClientTlsFiles {
@@ -636,16 +638,18 @@ fn server_config(
 
 fn worker_config(
     control: std::net::SocketAddr,
-    state_directory: std::path::PathBuf,
+    state_directory: &std::path::Path,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     let journal_database = state_directory.join("worker-journal.sqlite3");
     Ok(WorkerConfig {
-        schema_version: 5,
+        schema_version: 6,
         controller: ControllerEndpoint {
             tcp_address: control.to_string(),
             websocket_uri: format!("wss://localhost:{}/control", control.port()),
         },
-        identity: WorkerIdentityConfig::Managed { state_directory },
+        identity: WorkerIdentityConfig::Managed {
+            state_directory: state_directory.to_path_buf(),
+        },
         profile: WorkerProfileConfig {
             schema_version: 2,
             protocol_version: WorkerProtocolVersion::new(1)?,
@@ -667,6 +671,11 @@ fn worker_config(
         },
         availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())?,
         journal_database,
+        content: cairn_worker::WorkerContentConfig {
+            database: state_directory.join("content.sqlite3"),
+            directory: state_directory.join("content"),
+            assignment_material_byte_limit: None,
+        },
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         heartbeat_interval_ms: NonZeroU64::new(50),

@@ -18,19 +18,20 @@ use cairn_control_transport::{
     connect_worker_socket, read_wire_message, write_wire_message,
 };
 use cairn_execution::{
-    CapabilityRequirement, ControlFrame, ControllerControlMessage, ExecutionBackend,
-    ExecutionCapture, ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor,
-    ExecutorError, InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth,
-    WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
-    WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages,
-    active_worker_attempts, admit_worker_assignment, deliver_worker_acknowledgement,
-    deliver_worker_messages, execute_worker_attempt, record_worker_execution_start,
+    AssignmentMaterialByteLimit, CapabilityRequirement, ControlFrame, ControllerControlMessage,
+    ExecutionBackend, ExecutionCapture, ExecutionInput, ExecutionPlatform,
+    ExecutionPlatformRequirement, Executor, ExecutorError, InboundControlSession,
+    WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName,
+    WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
+    WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages, active_worker_attempts,
+    admit_worker_assignment, deliver_worker_acknowledgement, deliver_worker_messages,
+    execute_worker_attempt, persist_assignment_materials, record_worker_execution_start,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlMessageId, ControlSequence, CredentialId, EnrollmentId,
     ObservedAtUnixMillis, WorkerId, WorkerIncarnationId,
 };
-use cairn_store_sqlite::SqliteEventStore;
+use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyPair,
     KeyUsagePurpose, PublicKeyData,
@@ -57,6 +58,7 @@ pub struct WorkerConfig {
     pub resource_probe: ResourceProbeConfig,
     pub availability: WorkerAvailability,
     pub journal_database: PathBuf,
+    pub content: WorkerContentConfig,
     pub handshake_timeout_ms: Option<NonZeroU64>,
     pub idle_timeout_ms: Option<NonZeroU64>,
     pub heartbeat_interval_ms: Option<NonZeroU64>,
@@ -64,6 +66,16 @@ pub struct WorkerConfig {
     pub reconnect_delay_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
+}
+
+/// Worker-local verified assignment-content storage and ingress budget.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerContentConfig {
+    pub database: PathBuf,
+    pub directory: PathBuf,
+    /// Aggregate input-bundle plus environment bytes; `null` disables this budget.
+    pub assignment_material_byte_limit: Option<AssignmentMaterialByteLimit>,
 }
 
 /// Selects either explicitly provisioned files or one controller-issued managed state directory.
@@ -235,6 +247,8 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     let mut bound_credential = None;
     let mut journal = SqliteEventStore::open(&config.journal_database)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let mut content = SqliteContentStore::open(&config.content.database, &config.content.directory)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     loop {
         let identity = config.resolve_identity()?;
         if bound_credential.is_some() && bound_credential != identity.credential_id {
@@ -247,6 +261,7 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
             &profile,
             &incarnation_id,
             &mut journal,
+            &mut content,
         ));
         let outcome = if let Some(credential_id) = identity.credential_id {
             tokio::select! {
@@ -321,9 +336,9 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 5 {
+        if self.schema_version != 6 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 5 is supported".into(),
+                "only worker schema_version 6 is supported".into(),
             ));
         }
         if self.profile.schema_version != 2 {
@@ -425,6 +440,8 @@ impl WorkerConfig {
             WorkerIdentityConfig::Managed { state_directory } => resolve(state_directory, base),
         }
         resolve(&mut self.journal_database, base);
+        resolve(&mut self.content.database, base);
+        resolve(&mut self.content.directory, base);
         resolve(&mut self.resource_probe.scratch_path, base);
         if let Some(path) = &mut self.resource_probe.accelerator_sysfs {
             resolve(path, base);
@@ -460,6 +477,7 @@ async fn run_session(
     profile: &WorkerProfile,
     incarnation_id: &WorkerIncarnationId,
     journal: &mut SqliteEventStore,
+    content: &mut SqliteContentStore,
 ) -> Result<(), WorkerError> {
     let connecting = connect_worker_socket(
         config.controller.tcp_address.as_str(),
@@ -584,6 +602,8 @@ async fn run_session(
                             .map_err(|error| WorkerError::Session(error.to_string()))?;
                         process_controller_frame(
                             journal,
+                            content,
+                            config.content.assignment_material_byte_limit,
                             identity.worker_id,
                             &connection_id,
                             &frame,
@@ -607,6 +627,8 @@ async fn run_session(
 
 fn process_controller_frame(
     journal: &mut SqliteEventStore,
+    content: &mut SqliteContentStore,
+    material_limit: Option<AssignmentMaterialByteLimit>,
     worker_id: WorkerId,
     connection_id: &ControlConnectionId,
     frame: &ControlFrame<ControllerControlMessage>,
@@ -627,11 +649,19 @@ fn process_controller_frame(
         return Ok(());
     };
     match &message.payload {
-        ControllerControlMessage::AssignmentOffer { .. } => {
+        ControllerControlMessage::AssignmentOffer {
+            contract,
+            materials,
+            ..
+        } => {
+            let verified =
+                persist_assignment_materials(content, contract, materials, material_limit)
+                    .map_err(|error| WorkerError::Session(error.to_string()))?;
             admit_worker_assignment(
                 journal,
                 worker_id,
                 message,
+                &verified,
                 ControlMessageId::new(),
                 &command("admit"),
                 now,
@@ -639,9 +669,16 @@ fn process_controller_frame(
             .map_err(|error| WorkerError::Session(error.to_string()))?;
         }
         ControllerControlMessage::StartExecution { .. } => {
-            if let Some(authority) =
-                record_worker_execution_start(journal, worker_id, message, &command("start"), now)
-                    .map_err(|error| WorkerError::Session(error.to_string()))?
+            if let Some(authority) = record_worker_execution_start(
+                journal,
+                content,
+                worker_id,
+                message,
+                material_limit,
+                &command("start"),
+                now,
+            )
+            .map_err(|error| WorkerError::Session(error.to_string()))?
             {
                 let mut executor = NotStartedExecutor;
                 execute_worker_attempt(
@@ -799,6 +836,8 @@ pub async fn join_from_bundle(
     validate_join_configuration(&resolved, &identity_directory, &control)?;
     let profile = resolved.runtime_profile()?;
     resolved.validate(&profile)?;
+    SqliteContentStore::open(&resolved.content.database, &resolved.content.directory)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     let bytes = serde_json::to_vec_pretty(&config)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     persist_exact(&config_path, &bytes, false)?;
@@ -814,7 +853,7 @@ fn generated_join_configuration(
     control: &cairn_control_transport::WorkerControlEndpoint,
 ) -> Result<WorkerConfig, WorkerError> {
     Ok(WorkerConfig {
-        schema_version: 5,
+        schema_version: 6,
         controller: ControllerEndpoint {
             tcp_address: control.tcp_address.clone(),
             websocket_uri: control.websocket_uri.clone(),
@@ -846,6 +885,13 @@ fn generated_join_configuration(
         availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())
             .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         journal_database: PathBuf::from("worker.sqlite3"),
+        content: WorkerContentConfig {
+            database: PathBuf::from("content.sqlite3"),
+            directory: PathBuf::from("content"),
+            assignment_material_byte_limit: AssignmentMaterialByteLimit::new(512 * 1024)
+                .map(Some)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+        },
         handshake_timeout_ms: NonZeroU64::new(10_000),
         idle_timeout_ms: NonZeroU64::new(120_000),
         heartbeat_interval_ms: NonZeroU64::new(30_000),

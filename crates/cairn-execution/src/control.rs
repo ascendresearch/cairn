@@ -4,7 +4,12 @@
 //! sides record a delivery mapping before returning a frame to a transport adapter, then compact
 //! logical messages only after a bounded, non-regressing cumulative acknowledgement.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Cursor,
+};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ControlConnectionId,
@@ -12,18 +17,22 @@ use cairn_protocol::{
     StreamRevision, WorkerId,
 };
 use cairn_record::{
-    ContentStore, EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId,
+    ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError, ExpectedRevision,
+    NewEvent, StreamId,
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{DeserializeOwned, Error as _},
+};
 use thiserror::Error;
 
 use crate::{
     AcceptedExecutionAssignment, AssignmentBinding, AssignmentControlError, AssignmentLeaseRecord,
-    ExecutionAssignmentState, ExecutionCompletion, ExecutionCoordinatorError, ExecutionInput,
-    ExecutionJob, Executor, ExecutorFailureClass, JobContract, JobContractArtifact,
-    LeasedExecutionAssignment, ReconciledExecutionResult, RegisteredWorkerSession,
-    WorkerSessionTimeoutMillis, accept_assignment, reconcile_execution_result,
-    recover_execution_assignment,
+    ExecutionAssignmentState, ExecutionCompletion, ExecutionCoordinatorError,
+    ExecutionEnvironmentArtifact, ExecutionInput, ExecutionJob, Executor, ExecutorFailureClass,
+    InputBundleArtifact, JobContract, JobContractArtifact, LeasedExecutionAssignment,
+    ReconciledExecutionResult, RegisteredWorkerSession, WorkerSessionTimeoutMillis,
+    accept_assignment, reconcile_execution_result, recover_execution_assignment,
 };
 
 const CONTROLLER_ENQUEUED: &str = "control.controller-message-enqueued";
@@ -83,6 +92,108 @@ pub struct ControlFramePolicy {
     pub byte_limit: Option<ControlFrameByteLimit>,
 }
 
+/// Positive bound over the two immutable artifacts replicated with an assignment offer.
+/// `None` in controller/worker configuration explicitly disables this budget.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct AssignmentMaterialByteLimit(u64);
+
+impl AssignmentMaterialByteLimit {
+    /// Creates an enabled aggregate byte bound.
+    ///
+    /// # Errors
+    ///
+    /// Zero is rejected because disabling is represented by `None`.
+    pub fn new(value: u64) -> Result<Self, ControlProtocolError> {
+        if value == 0 {
+            Err(ControlProtocolError::ZeroMaterialLimit)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for AssignmentMaterialByteLimit {
+    type Error = ControlProtocolError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<AssignmentMaterialByteLimit> for u64 {
+    fn from(value: AssignmentMaterialByteLimit) -> Self {
+        value.0
+    }
+}
+
+/// Exact input and environment bytes carried by one durable offer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentMaterials {
+    #[serde(with = "canonical_base64")]
+    input_bundle: Vec<u8>,
+    #[serde(with = "canonical_base64")]
+    environment: Vec<u8>,
+}
+
+impl AssignmentMaterials {
+    #[must_use]
+    pub fn new(input_bundle: Vec<u8>, environment: Vec<u8>) -> Self {
+        Self {
+            input_bundle,
+            environment,
+        }
+    }
+
+    #[must_use]
+    pub fn input_bundle(&self) -> &[u8] {
+        &self.input_bundle
+    }
+
+    #[must_use]
+    pub fn environment(&self) -> &[u8] {
+        &self.environment
+    }
+}
+
+/// Proof that exact assignment content exists in one verified content-store adapter.
+#[derive(Debug)]
+pub struct VerifiedAssignmentMaterials {
+    input_bundle_id: ContentId<InputBundleArtifact>,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+}
+
+mod canonical_base64 {
+    use super::*;
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&STANDARD_NO_PAD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = String::deserialize(deserializer)?;
+        let bytes = STANDARD_NO_PAD.decode(&wire).map_err(D::Error::custom)?;
+        if STANDARD_NO_PAD.encode(&bytes) != wire {
+            return Err(D::Error::custom(
+                "assignment material base64 is not canonical",
+            ));
+        }
+        Ok(bytes)
+    }
+}
+
 /// Durable controller-to-worker payload.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "message")]
@@ -92,6 +203,7 @@ pub enum ControllerControlMessage {
         binding: AssignmentBinding,
         lease_expires_at: ObservedAtUnixMillis,
         contract: Box<JobContract>,
+        materials: AssignmentMaterials,
     },
     /// Grants execution only after the controller has committed the attempt-start fact.
     StartExecution { binding: AssignmentBinding },
@@ -264,6 +376,9 @@ pub enum ControlProtocolError {
     /// Event persistence failed.
     #[error(transparent)]
     Event(#[from] EventStoreError),
+    /// Immutable content persistence or verification failed.
+    #[error(transparent)]
+    Content(#[from] ContentStoreError),
     /// Assignment projection/reconciliation failed.
     #[error(transparent)]
     Assignment(#[from] AssignmentControlError),
@@ -276,6 +391,15 @@ pub enum ControlProtocolError {
     /// Enabled frame bounds must be positive.
     #[error("worker-control frame byte limit must be positive or disabled")]
     ZeroFrameLimit,
+    /// Enabled assignment-material bounds must be positive.
+    #[error("assignment material byte limit must be positive or disabled")]
+    ZeroMaterialLimit,
+    /// Input plus environment bytes exceeded the configured replication budget.
+    #[error("assignment materials are {observed} bytes, exceeding configured limit {limit}")]
+    MaterialsTooLarge { observed: u64, limit: u64 },
+    /// Offered or locally persisted bytes do not derive the contract's typed identities.
+    #[error("assignment material bytes do not match the immutable job contract")]
+    MaterialIdentityMismatch,
     /// A frame exceeded the configured budget.
     #[error("worker-control frame is {observed} bytes, exceeding configured limit {limit}")]
     FrameTooLarge { observed: u64, limit: u64 },
@@ -449,6 +573,7 @@ pub fn decode_control_frame<T: DeserializeOwned>(
 pub fn assignment_offer_message(
     lease: &AssignmentLeaseRecord,
     contract: &JobContract,
+    materials: AssignmentMaterials,
 ) -> DurableControlMessage<ControllerControlMessage> {
     DurableControlMessage {
         message_id: lease.binding().offer_message_id(),
@@ -456,8 +581,103 @@ pub fn assignment_offer_message(
             binding: lease.binding().clone(),
             lease_expires_at: lease.expires_at(),
             contract: Box::new(contract.clone()),
+            materials,
         },
     }
+}
+
+/// Loads and verifies exact assignment material from an authoritative content store.
+///
+/// # Errors
+///
+/// Returns an error for missing/corrupt content or an enabled aggregate byte budget.
+pub fn load_assignment_materials<C: ContentStore>(
+    content: &C,
+    contract: &JobContract,
+    limit: Option<AssignmentMaterialByteLimit>,
+) -> Result<AssignmentMaterials, ControlProtocolError> {
+    if limit.is_some() {
+        let input = content.write_to(&contract.input_bundle_id(), &mut std::io::sink())?;
+        let environment = content.write_to(&contract.environment_id(), &mut std::io::sink())?;
+        check_material_byte_lengths(input.byte_len, environment.byte_len, limit)?;
+    }
+    let mut input_bundle = Vec::new();
+    content.write_to(&contract.input_bundle_id(), &mut input_bundle)?;
+    let mut environment = Vec::new();
+    content.write_to(&contract.environment_id(), &mut environment)?;
+    check_material_limit(input_bundle.len(), environment.len(), limit)?;
+    Ok(AssignmentMaterials::new(input_bundle, environment))
+}
+
+/// Verifies offered identities and durably replicates exact bytes into a worker-local content
+/// store before assignment admission.
+///
+/// # Errors
+///
+/// Returns an error for a bound violation, identity mismatch, or local content-store failure.
+pub fn persist_assignment_materials<C: ContentStore>(
+    content: &mut C,
+    contract: &JobContract,
+    materials: &AssignmentMaterials,
+    limit: Option<AssignmentMaterialByteLimit>,
+) -> Result<VerifiedAssignmentMaterials, ControlProtocolError> {
+    check_material_limit(
+        materials.input_bundle.len(),
+        materials.environment.len(),
+        limit,
+    )?;
+    let input_bundle =
+        content.put::<InputBundleArtifact>(&mut Cursor::new(&materials.input_bundle))?;
+    let environment =
+        content.put::<ExecutionEnvironmentArtifact>(&mut Cursor::new(&materials.environment))?;
+    if input_bundle.content_id != contract.input_bundle_id()
+        || environment.content_id != contract.environment_id()
+    {
+        return Err(ControlProtocolError::MaterialIdentityMismatch);
+    }
+    Ok(VerifiedAssignmentMaterials {
+        input_bundle_id: input_bundle.content_id,
+        environment_id: environment.content_id,
+    })
+}
+
+fn check_material_limit(
+    input_len: usize,
+    environment_len: usize,
+    limit: Option<AssignmentMaterialByteLimit>,
+) -> Result<(), ControlProtocolError> {
+    let input_len =
+        u64::try_from(input_len).map_err(|_| ControlProtocolError::MaterialsTooLarge {
+            observed: u64::MAX,
+            limit: limit.map_or(u64::MAX, AssignmentMaterialByteLimit::get),
+        })?;
+    let environment_len =
+        u64::try_from(environment_len).map_err(|_| ControlProtocolError::MaterialsTooLarge {
+            observed: u64::MAX,
+            limit: limit.map_or(u64::MAX, AssignmentMaterialByteLimit::get),
+        })?;
+    check_material_byte_lengths(input_len, environment_len, limit)
+}
+
+fn check_material_byte_lengths(
+    input_len: u64,
+    environment_len: u64,
+    limit: Option<AssignmentMaterialByteLimit>,
+) -> Result<(), ControlProtocolError> {
+    let observed =
+        input_len
+            .checked_add(environment_len)
+            .ok_or(ControlProtocolError::MaterialsTooLarge {
+                observed: u64::MAX,
+                limit: limit.map_or(u64::MAX, AssignmentMaterialByteLimit::get),
+            })?;
+    if let Some(limit) = limit.filter(|limit| observed > limit.get()) {
+        return Err(ControlProtocolError::MaterialsTooLarge {
+            observed,
+            limit: limit.get(),
+        });
+    }
+    Ok(())
 }
 
 /// Builds the stable start payload. It may be re-created after a controller restart because its
@@ -725,6 +945,7 @@ pub fn admit_worker_assignment<E: EventStore>(
     events: &mut E,
     worker_id: WorkerId,
     offer: &DurableControlMessage<ControllerControlMessage>,
+    materials: &VerifiedAssignmentMaterials,
     response_message_id: ControlMessageId,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
@@ -734,11 +955,13 @@ pub fn admit_worker_assignment<E: EventStore>(
         binding,
         lease_expires_at,
         contract,
+        materials: _,
     } = &offer.payload
     else {
         return Err(ControlProtocolError::InvalidTransition);
     };
     validate_contract_binding(binding, contract)?;
+    validate_material_proof(contract, materials)?;
     let stream = worker_stream(worker_id)?;
     let projection = project_worker(&events.read_stream(&stream, None)?, worker_id)?;
     if let Some(existing) = projection.attempts.get(&binding.attempt_id()) {
@@ -781,10 +1004,12 @@ pub fn admit_worker_assignment<E: EventStore>(
 /// # Errors
 ///
 /// Returns an error for an unknown/mismatched attempt, an in-doubt prior start, or journal failure.
-pub fn record_worker_execution_start<E: EventStore>(
+pub fn record_worker_execution_start<E: EventStore, C: ContentStore>(
     events: &mut E,
+    content: &C,
     worker_id: WorkerId,
     start: &DurableControlMessage<ControllerControlMessage>,
+    material_limit: Option<AssignmentMaterialByteLimit>,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<Option<WorkerExecutionAuthority>, ControlProtocolError> {
@@ -806,6 +1031,8 @@ pub fn record_worker_execution_start<E: EventStore>(
         LocalPhase::Started => return Err(ControlProtocolError::WorkerExecutionInDoubt),
         LocalPhase::Admitted => {}
     }
+    let stored = load_assignment_materials(content, &attempt.contract, material_limit)?;
+    validate_material_identities(&attempt.contract, &stored)?;
     let event = fact(
         WORKER_STARTED,
         projection.last_event_id,
@@ -1141,6 +1368,42 @@ fn validate_controller_message(
     };
     if message.message_id != expected {
         return Err(ControlProtocolError::BindingMismatch);
+    }
+    if let ControllerControlMessage::AssignmentOffer {
+        binding,
+        contract,
+        materials,
+        ..
+    } = &message.payload
+    {
+        validate_contract_binding(binding, contract)?;
+        validate_material_identities(contract, materials)?;
+    }
+    Ok(())
+}
+
+fn validate_material_identities(
+    contract: &JobContract,
+    materials: &AssignmentMaterials,
+) -> Result<(), ControlProtocolError> {
+    let input_bundle = ContentId::<InputBundleArtifact>::derive(&materials.input_bundle)
+        .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?;
+    let environment = ContentId::<ExecutionEnvironmentArtifact>::derive(&materials.environment)
+        .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?;
+    if input_bundle != contract.input_bundle_id() || environment != contract.environment_id() {
+        return Err(ControlProtocolError::MaterialIdentityMismatch);
+    }
+    Ok(())
+}
+
+fn validate_material_proof(
+    contract: &JobContract,
+    materials: &VerifiedAssignmentMaterials,
+) -> Result<(), ControlProtocolError> {
+    if materials.input_bundle_id != contract.input_bundle_id()
+        || materials.environment_id != contract.environment_id()
+    {
+        return Err(ControlProtocolError::MaterialIdentityMismatch);
     }
     Ok(())
 }
@@ -1600,14 +1863,17 @@ mod tests {
     };
 
     struct Fixture {
-        _directory: tempfile::TempDir,
+        directory: tempfile::TempDir,
         controller_event_path: std::path::PathBuf,
         worker_event_path: std::path::PathBuf,
         content_path: std::path::PathBuf,
         cas_path: std::path::PathBuf,
+        worker_content_path: std::path::PathBuf,
+        worker_cas_path: std::path::PathBuf,
         controller_events: SqliteEventStore,
         worker_events: SqliteEventStore,
         content: SqliteContentStore,
+        worker_content: SqliteContentStore,
         contract: JobContract,
         environment_id: ContentId<ExecutionEnvironmentArtifact>,
         worker_id: WorkerId,
@@ -1620,10 +1886,14 @@ mod tests {
             let worker_event_path = directory.path().join("worker-events.db");
             let content_path = directory.path().join("content.db");
             let cas_path = directory.path().join("cas");
+            let worker_content_path = directory.path().join("worker-content.db");
+            let worker_cas_path = directory.path().join("worker-cas");
             let controller_events =
                 SqliteEventStore::open(&controller_event_path).expect("controller events");
             let worker_events = SqliteEventStore::open(&worker_event_path).expect("worker events");
             let mut content = SqliteContentStore::open(&content_path, &cas_path).expect("content");
+            let worker_content = SqliteContentStore::open(&worker_content_path, &worker_cas_path)
+                .expect("worker content");
             let input = put::<InputBundleArtifact>(&mut content, b"remote-input");
             let environment_id = put::<ExecutionEnvironmentArtifact>(
                 &mut content,
@@ -1668,14 +1938,17 @@ mod tests {
                 .expect("capture"),
             );
             Self {
-                _directory: directory,
+                directory,
                 controller_event_path,
                 worker_event_path,
                 content_path,
                 cas_path,
+                worker_content_path,
+                worker_cas_path,
                 controller_events,
                 worker_events,
                 content,
+                worker_content,
                 contract,
                 environment_id,
                 worker_id: WorkerId::new(),
@@ -1692,6 +1965,9 @@ mod tests {
         fn reopen_worker(&mut self) {
             self.worker_events =
                 SqliteEventStore::open(&self.worker_event_path).expect("reopen worker");
+            self.worker_content =
+                SqliteContentStore::open(&self.worker_content_path, &self.worker_cas_path)
+                    .expect("reopen worker content");
         }
 
         fn register_worker(&mut self) -> crate::RegisteredWorkerSession {
@@ -1795,6 +2071,56 @@ mod tests {
     }
 
     #[test]
+    fn assignment_material_replication_is_bounded_typed_and_restart_safe() {
+        let mut fixture = Fixture::new();
+        assert!(AssignmentMaterialByteLimit::new(0).is_err());
+        assert_eq!(
+            cairn_codec::from_slice::<Option<AssignmentMaterialByteLimit>>(b"null")
+                .expect("explicitly disabled material limit"),
+            None
+        );
+        assert!(matches!(
+            load_assignment_materials(
+                &fixture.content,
+                &fixture.contract,
+                Some(AssignmentMaterialByteLimit::new(1).expect("limit")),
+            ),
+            Err(ControlProtocolError::MaterialsTooLarge { .. })
+        ));
+        let materials = load_assignment_materials(&fixture.content, &fixture.contract, None)
+            .expect("load controller materials");
+        let wrong =
+            AssignmentMaterials::new(b"different-input".to_vec(), materials.environment.clone());
+        assert!(matches!(
+            persist_assignment_materials(
+                &mut fixture.worker_content,
+                &fixture.contract,
+                &wrong,
+                None,
+            )
+            .expect_err("changed bytes cannot satisfy typed content identity"),
+            ControlProtocolError::MaterialIdentityMismatch
+        ));
+        persist_assignment_materials(
+            &mut fixture.worker_content,
+            &fixture.contract,
+            &materials,
+            None,
+        )
+        .expect("persist exact materials");
+        fixture.reopen_worker();
+        let recovered = load_assignment_materials(&fixture.worker_content, &fixture.contract, None)
+            .expect("recover worker materials");
+        assert_eq!(recovered, materials);
+        assert!(
+            cairn_codec::from_slice::<AssignmentMaterials>(
+                br#"{"environment":"","input_bundle":"YQ=="}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "the process/reconnect test keeps the complete distributed transition visible"
@@ -1830,7 +2156,16 @@ mod tests {
         )
         .expect("lease");
         let binding = leased.lease().binding().clone();
-        let offer = assignment_offer_message(leased.lease(), leased.contract());
+        let materials = load_assignment_materials(&fixture.content, leased.contract(), None)
+            .expect("load assignment materials");
+        let verified = persist_assignment_materials(
+            &mut fixture.worker_content,
+            leased.contract(),
+            &materials,
+            None,
+        )
+        .expect("persist assignment materials");
+        let offer = assignment_offer_message(leased.lease(), leased.contract(), materials);
         enqueue_controller_message(
             &mut fixture.controller_events,
             fixture.worker_id,
@@ -1859,6 +2194,7 @@ mod tests {
                 .message
                 .as_ref()
                 .expect("offer message"),
+            &verified,
             ControlMessageId::new(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
@@ -1898,6 +2234,7 @@ mod tests {
                 &mut fixture.worker_events,
                 fixture.worker_id,
                 replayed_offer[0].message.as_ref().expect("replayed offer"),
+                &verified,
                 ControlMessageId::new(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(5),
@@ -2054,10 +2391,31 @@ mod tests {
         )
         .expect("decode frame");
         assert_eq!(decoded, start_frames[0]);
+        let missing_content = SqliteContentStore::open(
+            fixture.directory.path().join("missing-worker-content.db"),
+            fixture.directory.path().join("missing-worker-cas"),
+        )
+        .expect("empty worker content");
+        assert!(matches!(
+            record_worker_execution_start(
+                &mut fixture.worker_events,
+                &missing_content,
+                fixture.worker_id,
+                decoded.message.as_ref().expect("start message"),
+                None,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(7),
+            ),
+            Err(ControlProtocolError::Content(
+                ContentStoreError::NotFound { .. }
+            ))
+        ));
         let worker_authority = record_worker_execution_start(
             &mut fixture.worker_events,
+            &fixture.worker_content,
             fixture.worker_id,
             decoded.message.as_ref().expect("start message"),
+            None,
             &CommandId::new(),
             ObservedAtUnixMillis::new(7),
         )
@@ -2204,13 +2562,19 @@ mod tests {
             ObservedAtUnixMillis::new(3),
         )
         .expect("lease");
+        let materials = load_assignment_materials(&fixture.content, leased.contract(), None)
+            .expect("load assignment materials");
         let connection_id = ControlConnectionId::new();
         let frame = ControlFrame {
             protocol_version: protocol_version(),
             connection_id,
             sequence: ControlSequence::new(1).expect("sequence"),
             acknowledges_peer_through: Some(ControlSequence::new(1).expect("ack")),
-            message: Some(assignment_offer_message(leased.lease(), leased.contract())),
+            message: Some(assignment_offer_message(
+                leased.lease(),
+                leased.contract(),
+                materials,
+            )),
         };
         assert!(matches!(
             encode_control_frame(&frame, tiny),

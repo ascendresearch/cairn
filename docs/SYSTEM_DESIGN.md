@@ -660,6 +660,16 @@ lease expiry only as reconciliation state, reruns all capture/receipt validation
 terminal execution fact. Duplicate delivery after publication is recognized without overwriting the
 receipt.
 
+Assignment material is also a separate readiness boundary. The controller reads the contract's
+typed `InputBundleArtifact` and `ExecutionEnvironmentArtifact` from its CAS and freezes their exact
+bytes in the durable offer. The worker derives both typed identities before committing the bytes to
+its own SQLite/CAS; only that persistence result can authorize admission. Start processing does not
+trust an earlier in-memory proof: it reopens both objects from worker-local CAS and verifies them
+again before appending the local start fact. Thus a restart or local loss fails before executor
+authority. F2a encodes small material inline as canonical unpadded base64 with independently
+optional raw-material and encoded-frame limits. Chunked/resumable large-artifact transfer and
+create-only sandbox-tree expansion remain later adapter work.
+
 V1 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
 is a typed configuration value with `None` as its disabled state. Logical outboxes and admissions
 persist storage-domain payloads rather than treating a network frame as a domain fact. A test uses
@@ -842,9 +852,10 @@ both live sessions through independent SQLite readers. All wire-size, handshake,
 polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
 
 This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
-It can close the control protocol without claiming an external workload ran. Scheduler composition,
-cancellation delivery, artifact transfer, local process/container supervision, registry lifecycle
-administration, and production service deployment remain application/adapter slices.
+It can close the control protocol without claiming an external workload ran. Small typed artifact
+replication is implemented; chunked transfer, sandbox materialization, cancellation delivery, local
+process/container supervision, and production service deployment remain application/adapter
+slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point

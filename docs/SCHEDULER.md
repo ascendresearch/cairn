@@ -78,6 +78,14 @@ recovered from running state and reuses the frozen start-message identity. The l
 control carries one assignment through offer, acceptance, start, the worker's conservative
 `NotStarted` result, terminal reconciliation, exact scheduling retry, and reservation release.
 
+Before offer enqueue, the controller loads the contract's exact typed input and environment from
+controller CAS. These bytes are part of the durable logical offer, so retry/reconnect cannot select
+different material. The selected worker verifies and persists both into its independent local CAS
+before acceptance and verifies them again before local start. `assignment_material_byte_limit`
+independently bounds aggregate raw bytes on both scheduler and worker and may be `null`; the
+transport frame limit separately bounds canonical JSON after base64 expansion. This F2a form is a
+small-artifact baseline pending chunked/resumable transfer.
+
 The candidate universe comes exclusively from persistent registry worker identities. Every
 credential observation reopens and projects the SQLite enrollment stream, then cites its latest
 `EventId`. Consequently the assignment-grant recheck cannot reuse the placement-time registry view:
@@ -87,9 +95,10 @@ gate before either authentication or scheduling can use them.
 
 `scheduler` is an optional controller configuration object. Omitting it or setting it to `null`
 disables new placement without disabling worker control or reconciliation. When enabled, the policy
-version, reservation-claim timeout, and assignment-lease duration are explicit; session liveness
-uses the independently configured controller session timeout. All enabled durations are positive
-strong types and zero is rejected during configuration decoding.
+version, reservation-claim timeout, assignment-lease duration, and assignment-material limit are
+explicit; session liveness uses the independently configured controller session timeout. Enabled
+durations and byte limits are positive strong types and zero is rejected during configuration
+decoding.
 
 ## Migration translation boundary
 

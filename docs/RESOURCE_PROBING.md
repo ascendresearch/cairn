@@ -53,7 +53,7 @@ future/expired timestamps, and configured expectation mismatch fail closed.
 
 ## Configuration contract
 
-`config/worker.example.json` is the strict schema V5 example. `resource_probe` contains:
+`config/worker.example.json` is the strict schema V6 example. `resource_probe` contains:
 
 - `scratch_path`: required path whose available filesystem bytes are observed;
 - `accelerator_sysfs`: path to inspect, or `null` to disable discovery explicitly;

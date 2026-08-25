@@ -77,6 +77,7 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
             policy_version: SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
             reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(20)?,
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(40)?,
+            assignment_material_byte_limit: None,
         }),
         handshake_timeout_ms: None,
         idle_timeout_ms: None,

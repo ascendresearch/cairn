@@ -36,6 +36,7 @@
   "schema_version": 3,
   "scheduler": {
     "assignment_lease_duration_ms": 120000,
+    "assignment_material_byte_limit": 524288,
     "policy_version": "stable-worker-id-quantitative-v2",
     "reservation_claim_timeout_ms": 30000
   },

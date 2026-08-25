@@ -98,6 +98,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
             policy_version: SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
             reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(2_000)?,
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(2_000)?,
+            assignment_material_byte_limit: None,
         }),
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: NonZeroU64::new(500),
@@ -307,6 +308,28 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     };
     assert_eq!(recovered_binding, binding);
     assert_eq!(recovered_phase, ScheduledAssignmentPhase::Terminal);
+    let selected_worker_suffix = if binding.worker_id() == worker_a_id {
+        "a"
+    } else {
+        assert_eq!(binding.worker_id(), worker_b_id);
+        "b"
+    };
+    let selected_worker_content = SqliteContentStore::open(
+        directory
+            .path()
+            .join(format!("worker-{selected_worker_suffix}-content.sqlite3")),
+        directory
+            .path()
+            .join(format!("worker-{selected_worker_suffix}-content")),
+    )?;
+    assert_eq!(
+        read::<InputBundleArtifact>(&selected_worker_content, &contract.input_bundle_id())?,
+        b"dual-worker-input"
+    );
+    assert_eq!(
+        read::<ExecutionEnvironmentArtifact>(&selected_worker_content, &contract.environment_id(),)?,
+        b"dual-worker-env"
+    );
     assert_eq!(
         release_execution_reservation_at(
             &scheduling_config,
@@ -333,7 +356,7 @@ fn worker_config(
     protocol: WorkerProtocolVersion,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     Ok(WorkerConfig {
-        schema_version: 5,
+        schema_version: 6,
         controller,
         identity: WorkerIdentityConfig::External {
             worker_id,
@@ -362,6 +385,11 @@ fn worker_config(
         },
         availability: WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())?,
         journal_database: directory.join(format!("worker-{suffix}.sqlite3")),
+        content: cairn_worker::WorkerContentConfig {
+            database: directory.join(format!("worker-{suffix}-content.sqlite3")),
+            directory: directory.join(format!("worker-{suffix}-content")),
+            assignment_material_byte_limit: None,
+        },
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         // Keep several heartbeats inside the idle window while leaving scheduling a meaningful
@@ -397,6 +425,15 @@ fn put<T: ContentType>(
     bytes: &[u8],
 ) -> Result<cairn_protocol::ContentId<T>, Box<dyn Error + Send + Sync>> {
     Ok(content.put::<T>(&mut Cursor::new(bytes))?.content_id)
+}
+
+fn read<T: ContentType>(
+    content: &SqliteContentStore,
+    content_id: &cairn_protocol::ContentId<T>,
+) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    let mut bytes = Vec::new();
+    content.write_to(content_id, &mut bytes)?;
+    Ok(bytes)
 }
 
 fn chrono_free_unix_millis() -> Result<i64, Box<dyn Error + Send + Sync>> {

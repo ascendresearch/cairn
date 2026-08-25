@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
 cairn-codec.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true

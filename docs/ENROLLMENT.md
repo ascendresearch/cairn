@@ -70,10 +70,12 @@ The preferred new-machine path is one command:
 cairn-worker join worker.enrollment.json /var/lib/cairn/worker
 ```
 
-It creates a fixed tree containing `identity/`, `scratch/`, `worker.sqlite3` when first run, and a
-strict `worker.json`. Platform and quantitative host resources are observed locally; the running
+It creates a fixed tree containing `identity/`, `scratch/`, `content/`, `worker.sqlite3`, and
+`content.sqlite3` when first run, plus a strict schema V6 `worker.json`. Platform and quantitative
+host resources are observed locally; the running
 executable is identified by its SHA-256 digest. Timeouts, heartbeat, reconnect, resource freshness,
-expectations, availability, and message-size limits remain explicit editable configuration fields.
+expectations, availability, message-size limits, and assignment-material limits remain explicit
+editable configuration fields. The last two limits are independent and either may be `null`.
 The initial worker is unavailable and draining until a real execution backend is configured and
 activated. Repeating join with the same bundle validates and reuses an existing tree; it never
 replaces a differing file or discards operator changes. Start it with:
@@ -121,7 +123,7 @@ Worker configuration selects the state directory rather than repeating identity 
 After bootstrap, delete the transferred bundle according to local secret-handling policy. Do not
 delete the staged CSR: it is non-secret recovery evidence bound to the local private key.
 
-Worker configuration schema V5 has mandatory positive `identity_poll_interval_ms`. A running
+Worker configuration schema V6 has mandatory positive `identity_poll_interval_ms`. A running
 managed worker checks the atomic identity manifest at this interval. When rotation changes the
 credential, it closes the old connection and reconnects with a fresh `WorkerIncarnationId`.
 

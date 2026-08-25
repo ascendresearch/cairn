@@ -111,7 +111,8 @@ retains its own private key. Exact-CSR replay closes a lost-response window, and
 recovers certificate-to-`CredentialId`/`WorkerId`/pool authority from the append-only registry.
 Bundle V3 separately pins bootstrap and ordinary-control endpoints, allowing different listeners,
 TLS names, and CAs. `cairn-worker join <bundle> <state-dir>` now composes enrollment, local
-binary/resource observation, a fixed state tree, and strict editable worker configuration without
+binary/resource observation, a fixed state tree with independent local content storage, and strict
+editable worker configuration without
 out-of-band endpoint input or destructive reruns; it remains unavailable/draining until a real
 executor is explicitly activated.
 Stable worker principal, rotatable credential, and process incarnation are now distinct in durable
@@ -139,7 +140,12 @@ it to generic platform/pool/backend/capability/resource constraints; its fixture
 worker without leaking migration roles into execution types. Scheduler enablement, policy, session
 time, claim time, and lease time are configuration rather than constants. See
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
-executor deliberately returns `NotStarted`; real local/container backends, concrete resource
+now receives exact typed input/environment bytes from controller CAS, verifies and commits them to
+its independent local CAS before accepting the assignment, and reloads them before recording local
+start. Controller and worker material limits are independently configurable or disableable, with a
+separate encoded-frame bound; the current inline representation intentionally targets small
+artifacts until chunked transfer is implemented. The executor deliberately returns `NotStarted`;
+real local/container backends, concrete resource
 challenge/attestation adapters, and real-host job
 execution remain subsequent slices. Legacy static credentials now enter the persistent registry
 through an atomic, explicitly idempotent V2-to-V3 import gate; ordinary startup accepts only V3
