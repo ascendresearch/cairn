@@ -182,10 +182,10 @@ Acceptance gate:
 F1 makes the V3 enrollment bundle self-contained by embedding the independently routable normal
 control endpoint and its pinned CA/name. `cairn-worker join <bundle> <state-dir>` creates a fixed
 identity/scratch/journal/config tree, hashes the running worker binary, runs the built-in host
-probe, and persists a strict V7 worker configuration. Its initial availability is deliberately
-unavailable and draining because the current executor is still `NotStarted`; F2 must provide an
-explicit backend/activation transition rather than making bootstrap authority imply execution
-readiness. Re-running F1 validates and reuses the tree without overwriting operator edits.
+probe, and originally persisted a strict V7 worker configuration. F2c advances newly generated
+configuration to V8 so execution mode is explicit. Its initial availability remains deliberately
+unavailable and draining with `execution.mode=disabled`; enrollment never implies execution
+readiness. Re-running join validates and reuses the tree without overwriting operator edits.
 
 F2a established worker-local typed CAS as a prerequisite for admission and start. F2b replaces
 inline offer bytes with an immutable manifest of typed identities, exact lengths, and configured
@@ -206,6 +206,68 @@ new process group, enforces timeout/stream/output bounds, and captures executabl
 evidence. It is intentionally classified as a controlled-host utility backend rather than
 oracle-grade hostile-code filesystem isolation. The next F2 slice must add a hardened container or
 equivalent launcher while reusing these material and executor contracts.
+
+### Next slice: F2d hardened OCI container backend
+
+F2d will implement `oci-container-v1` as the first backend allowed to run untrusted CPU-only
+candidate/oracle processes. The first runtime adapter will use a configured Docker-compatible CLI,
+but product code will depend on a narrow `ContainerRuntime` port rather than Docker command output
+or lifecycle vocabulary. Runtime path, state roots, timeouts, limits, and activation remain
+operator configuration; isolation capabilities and fixed security arguments belong to the backend
+template and cannot be weakened field-by-field in `worker.json`.
+
+The slice is divided into the following implementation steps:
+
+1. **Threat model and typed runtime contract.** Freeze which host resources are invisible to the
+   subject and introduce strong image digest, deterministic container name, runtime container ID,
+   container phase, mount role, and sandbox-policy types. Add a strict backend-specific OCI
+   environment format that pins an immutable image digest rather than a mutable tag. Preserve the
+   existing `JobContract`, `AttemptId`, material CAS, executor authority, and receipt lineage.
+2. **Fixed CPU-only isolation plan.** Generate argv without a shell for a read-only root filesystem,
+   non-root subject, `--network none`, dropped capabilities, `no-new-privileges`, independent PID,
+   mount, IPC, user, and network namespaces, bounded PIDs/CPU/memory, and size-bounded writable
+   work/output/tmpfs mounts. Input material is mounted read-only. Worker identity, credentials,
+   journal, CAS, runtime socket, and host paths are never mounted. V1 rejects device requests and
+   all GPU/NPU exposure rather than silently broadening privilege.
+3. **Recoverable container supervisor.** Derive one deterministic container identity from the exact
+   `AttemptId` and bind job/contract/input/environment identities as immutable labels. Reconcile
+   `Absent → Created → Running → Exited` through inspect/create/start/wait operations. Restart may
+   reattach to the exact labeled container or collect an exited result, but must never start a
+   second subject. A same-name container with conflicting labels fails closed and is not deleted or
+   reused.
+4. **Bounded capture and trusted evidence.** Drain stdout/stderr independently under contract bounds,
+   enforce timeout/output exhaustion by stopping the same identified container, ingest only
+   declared regular output files, and record resolved local image ID, runtime identity, fixed policy
+   version, container ID, timing, and exit state outside candidate-writable mounts. Cleanup occurs
+   only after the terminal worker result is durable; cleanup failure retains evidence and cannot
+   turn into re-execution.
+5. **Activation and open-source operations.** Extend V8 execution configuration with explicit
+   `oci_container` activation and derive the exact `oci-container-v1` worker claim from it. Startup
+   preflight verifies CLI/runtime reachability, immutable-image resolution, required isolation
+   features, disjoint absolute state roots, and configured optional limits. Join remains disabled.
+   Document rootful/rootless prerequisites, diagnostics, state recovery, and an operator smoke
+   command without embedding deployment-specific paths.
+
+F2d acceptance requires:
+
+- an escape fixture cannot read worker credentials, SQLite/CAS, runtime socket, or unrelated host
+  files, cannot write the input mount/root filesystem, and cannot obtain network connectivity;
+- timeout, fork/PID pressure, memory exhaustion, stdout/stderr exhaustion, missing/oversized output,
+  nonzero exit, and successful output produce distinct bounded terminal evidence;
+- runtime absence or failed preflight is `NotStarted`; uncertainty after create/start is
+  `Ambiguous` until exact-container reconciliation proves a terminal state;
+- worker/control reconnect and worker/runtime restart recover the same container without a second
+  start, including a result completed while the WebSocket is disconnected;
+- conflicting names/labels, mutable image tags, extra mounts/capabilities/devices, symlink outputs,
+  and policy downgrade attempts fail closed;
+- offline fake-runtime contract tests pass in ordinary CI, while opt-in Docker-compatible real-host
+  gates pass on both x86-64 and AArch64 and publish inspectable evidence;
+- the security documentation continues to classify `local-process-v1` as controlled-host only and
+  does not claim that OCI alone protects against a hostile kernel or runtime.
+
+Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They will add explicit
+device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on
+top of F2d rather than weakening the CPU container policy.
 
 Because F2b changes both durable offer and worker-admission payloads, worker-control protocol V2
 uses event schema V2 for its controller-outbox and worker-journal streams. Existing V1 control
