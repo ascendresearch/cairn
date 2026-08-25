@@ -1,0 +1,28 @@
+[package]
+name = "cairn-control-transport"
+description = "Outbound mutually authenticated WebSocket adapter for Cairn worker control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-codec.workspace = true
+cairn-execution.workspace = true
+cairn-protocol.workspace = true
+futures-util.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13.2"
+tempfile.workspace = true
+
+[lints]
+workspace = true

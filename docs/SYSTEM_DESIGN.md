@@ -602,11 +602,28 @@ independent controller and worker SQLite event stores, drops both directions' ac
 reopens both stores, replays on fresh connections, executes once, reconciles the result, and proves
 both outboxes empty after another reopen.
 
-An authenticated long-lived socket/HTTP transport adapter, hello/welcome negotiation on that
-transport, scheduler-wide slot reservation across different attempts, cancellation delivery,
-artifact transfer, local process/container supervision, and the runnable `cairn-worker` binary
-remain application/adapter slices. Consequently the durable protocol is closed at the storage and
-state-machine boundary but is not yet a deployable remote worker service.
+**Implemented outbound transport slice (2026-08-25).** `cairn-control-transport` now carries only
+binary canonical JSON over WebSocket on a mutually authenticated TLS stream. The worker verifies
+the controller certificate and DNS name; the controller verifies the client chain, hashes the
+verified leaf DER, and admits a hello only when that fingerprint is statically enrolled to the
+exact strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId` and negotiated protocol
+version before either side accepts control frames. TLS/WebSocket bytes never become execution
+facts by themselves.
+
+Runnable `cairn-server` and `cairn-worker` composition roots now connect this adapter to separate
+SQLite authorities. The server durably registers and heartbeats workers, validates inbound
+sequence/acknowledgement cursors, drains its durable outbox, and reconciles worker messages. The
+worker derives active-attempt heartbeats from its journal, durably admits offers, records start
+before executor authority, drains its result outbox, and supervises outbound reconnects. A
+two-worker integration control uses distinct client certificates and journals, then reconstructs
+both live sessions through independent SQLite readers. All wire-size, handshake, idle, heartbeat,
+polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
+
+This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
+It can close the control protocol without claiming an external workload ran. Scheduler-wide slot
+reservation across different attempts, cancellation delivery, artifact transfer, local
+process/container supervision, certificate rotation/revocation storage, and real-host deployment
+remain application/adapter slices.
 
 Workers dial the controller. A connection establishes:
 

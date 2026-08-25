@@ -297,7 +297,8 @@ impl WorkerProfile {
 }
 
 /// Worker hello authenticated before durable registration.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkerHello {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,

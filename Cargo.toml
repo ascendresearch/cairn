@@ -2,10 +2,13 @@
 members = [
     "crates/cairn-agent",
     "crates/cairn-codec",
+    "crates/cairn-control-transport",
     "crates/cairn-execution",
     "crates/cairn-protocol",
     "crates/cairn-record",
+    "crates/cairn-server",
     "crates/cairn-store-sqlite",
+    "crates/cairn-worker",
 ]
 resolver = "3"
 
@@ -19,15 +22,23 @@ license = "MIT"
 cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }
+cairn-control-transport = { path = "crates/cairn-control-transport" }
 cairn-protocol = { path = "crates/cairn-protocol" }
 cairn-record = { path = "crates/cairn-record" }
+cairn-store-sqlite = { path = "crates/cairn-store-sqlite" }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls"] }
+futures-util = "0.3.31"
+rustls = "0.23.37"
+rustls-pemfile = "2.2.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
+tokio = { version = "1.49.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = "0.26.4"
+tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
 uuid = { version = "1", features = ["serde", "v7"] }
 
 [workspace.lints.rust]

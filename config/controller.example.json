@@ -1,0 +1,29 @@
+{
+  "diagnostic_byte_limit": 1024,
+  "enrollment": [
+    {
+      "certificate": "pki/worker.pem",
+      "worker_id": "worker:019c0000-0000-7000-8000-000000000001"
+    }
+  ],
+  "handshake_timeout_ms": 10000,
+  "idle_timeout_ms": 120000,
+  "listen": "0.0.0.0:7443",
+  "outbox_poll_interval_ms": 100,
+  "protocol_version": 1,
+  "schema_version": 1,
+  "session_timeout_ms": 180000,
+  "storage": {
+    "content_database": "state/content.sqlite3",
+    "content_directory": "state/content",
+    "event_database": "state/events.sqlite3"
+  },
+  "tls": {
+    "certificate": "pki/controller.pem",
+    "client_ca": "pki/ca.pem",
+    "private_key": "pki/controller-key.pem"
+  },
+  "transport": {
+    "message_byte_limit": 1048576
+  }
+}

@@ -1054,6 +1054,29 @@ pub fn pending_worker_messages<E: EventStore>(
         .collect())
 }
 
+/// Returns the canonical set of locally admitted or started attempts for heartbeat reconciliation.
+/// Terminal attempts are excluded.
+///
+/// # Errors
+///
+/// Returns an error when the worker journal cannot be read or validated.
+pub fn active_worker_attempts<E: EventStore>(
+    events: &E,
+    worker_id: WorkerId,
+) -> Result<Vec<AttemptId>, ControlProtocolError> {
+    let projection = project_worker(
+        &events.read_stream(&worker_stream(worker_id)?, None)?,
+        worker_id,
+    )?;
+    Ok(projection
+        .attempts
+        .into_iter()
+        .filter_map(|(attempt_id, attempt)| {
+            (attempt.phase != LocalPhase::Terminal).then_some(attempt_id)
+        })
+        .collect())
+}
+
 /// Validates the exact assignment/worker incarnation and publishes a remote terminal result. Late
 /// results for an expired post-start lease remain eligible reconciliation evidence; an old binding
 /// from a pre-start replacement is rejected.

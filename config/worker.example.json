@@ -1,0 +1,38 @@
+{
+  "availability": {
+    "active_attempts": [],
+    "available_slots": 0,
+    "draining": true,
+    "health": "unavailable"
+  },
+  "controller": {
+    "tcp_address": "controller.example.test:7443",
+    "websocket_uri": "wss://controller.example.test:7443/control"
+  },
+  "handshake_timeout_ms": 10000,
+  "heartbeat_interval_ms": 30000,
+  "idle_timeout_ms": 120000,
+  "journal_database": "state/worker.sqlite3",
+  "profile": {
+    "backends": [
+      "transport-only"
+    ],
+    "binary_identity": "sha256:replace-with-release-digest",
+    "capabilities": [],
+    "max_concurrency": 1,
+    "protocol_version": 1,
+    "schema_version": 1
+  },
+  "reconnect_delay_ms": 1000,
+  "schema_version": 1,
+  "tls": {
+    "certificate": "pki/worker.pem",
+    "private_key": "pki/worker-key.pem",
+    "server_ca": "pki/ca.pem",
+    "server_name": "controller.example.test"
+  },
+  "transport": {
+    "message_byte_limit": 1048576
+  },
+  "worker_id": "worker:019c0000-0000-7000-8000-000000000001"
+}

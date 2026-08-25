@@ -1,0 +1,23 @@
+[package]
+name = "cairn-worker"
+description = "Outbound Cairn execution worker process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-control-transport.workspace = true
+cairn-execution.workspace = true
+cairn-protocol.workspace = true
+cairn-store-sqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -82,8 +82,15 @@ a durably checkable predecessor-expiry boundary. Every execution `AttemptId` own
 stream, preventing parallel leases after restart. A worker must durably accept a lease and still be
 the current live incarnation before the controller commits `AttemptStarted`. Pre-start expiry may be
 re-placed under fresh `AssignmentId`/`LeaseId` values; post-start expiry yields reconciliation, never
-a retry signal. Network streaming, durable worker-local inbox/outbox, and remote receipt ingestion
-remain future adapters over these controller capabilities.
+a retry signal. The control plane is now runnable: workers establish outbound mutually authenticated
+TLS WebSockets, exchange strict binary canonical-JSON hello/welcome/heartbeat/control messages, and
+bind the verified leaf-certificate fingerprint to an enrolled strong `WorkerId`. Controller and
+worker use independent SQLite authorities for durable delivery and recovery; configurable wire,
+timeout, heartbeat, polling, reconnect, and diagnostic controls can each be explicitly disabled
+where optional. A two-worker integration test proves that distinct certificates and journals become
+two recoverable live sessions. The current worker executor deliberately returns `NotStarted`; real
+local/container backends, artifact transfer, certificate lifecycle management, and real-host
+deployment remain subsequent slices.
 
 The remaining architecture in the normative documents is still target design. The old repositories
 are evidence and compatibility references, not source trees to copy mechanically.

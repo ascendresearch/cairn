@@ -29,12 +29,12 @@ pub use control::{
     ControlProtocolError, ControllerControlMessage, DurableControlMessage, InboundControlSession,
     WorkerAdmissionOutcome, WorkerControlMessage, WorkerExecutionAuthority,
     WorkerResultReconciliation, accept_worker_assignment, acknowledge_controller_messages,
-    acknowledge_worker_messages, admit_worker_assignment, assignment_offer_message,
-    decode_control_frame, deliver_controller_acknowledgement, deliver_controller_messages,
-    deliver_worker_acknowledgement, deliver_worker_messages, encode_control_frame,
-    enqueue_controller_message, execute_worker_attempt, execution_start_message,
-    pending_controller_messages, pending_worker_messages, reconcile_worker_result,
-    record_worker_execution_start,
+    acknowledge_worker_messages, active_worker_attempts, admit_worker_assignment,
+    assignment_offer_message, decode_control_frame, deliver_controller_acknowledgement,
+    deliver_controller_messages, deliver_worker_acknowledgement, deliver_worker_messages,
+    encode_control_frame, enqueue_controller_message, execute_worker_attempt,
+    execution_start_message, pending_controller_messages, pending_worker_messages,
+    reconcile_worker_result, record_worker_execution_start,
 };
 pub use coordinator::{
     ExecutionAttemptAuthority, ExecutionCompletion, ExecutionCoordinatorError, ExecutionJob,
