@@ -5,6 +5,7 @@ mod contract;
 mod control;
 mod coordinator;
 mod executor;
+mod scheduler;
 mod worker;
 
 pub use assignment::{
@@ -48,13 +49,20 @@ pub use executor::{
     CapturedOutput, ExecutionCapture, ExecutionInput, Executor, ExecutorError,
     ExecutorFailureClass, RecordedExecution, RecordedExecutor, ScriptedExecutor,
 };
+pub use scheduler::{
+    CandidateDisposition, PlacementAuthorityError, PlacementAuthorityObservation,
+    PlacementCandidateRejection, PlacementCandidateSnapshot, PlacementOutcome, PlacementRecord,
+    PlacementSnapshot, PlacementSnapshotArtifact, ReservationReleaseReason, SchedulerError,
+    SchedulerPolicy, SchedulerPolicyVersion, WorkerPlacementAuthority, grant_reserved_assignment,
+    recover_scheduler_placement, release_scheduler_reservation, reserve_worker_placement,
+};
 pub use worker::{
     AssignmentLeaseDurationMillis, AuthenticatedWorkerIdentity, RecordedWorkerAuthenticator,
-    RegisteredWorkerSession, WorkerAuthenticationError, WorkerAuthenticationSubject,
-    WorkerAuthenticator, WorkerAvailability, WorkerAvailabilityArtifact, WorkerBinaryIdentity,
-    WorkerControlError, WorkerHealth, WorkerHello, WorkerMatchFailure, WorkerProfile,
-    WorkerProfileArtifact, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
-    WorkerResourceSource, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
-    WorkerValueError, disconnect_worker, match_worker, record_worker_heartbeat,
-    recover_worker_session, register_worker,
+    RegisteredWorkerSession, ReservationClaimTimeoutMillis, WorkerAuthenticationError,
+    WorkerAuthenticationSubject, WorkerAuthenticator, WorkerAvailability,
+    WorkerAvailabilityArtifact, WorkerBinaryIdentity, WorkerControlError, WorkerHealth,
+    WorkerHello, WorkerMatchFailure, WorkerProfile, WorkerProfileArtifact, WorkerProtocolVersion,
+    WorkerResourceClaim, WorkerResourceInventory, WorkerResourceSource, WorkerSessionState,
+    WorkerSessionTimeoutMillis, WorkerSlotCount, WorkerValueError, disconnect_worker, match_worker,
+    record_worker_heartbeat, recover_worker_session, register_worker,
 };

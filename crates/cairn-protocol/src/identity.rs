@@ -634,6 +634,19 @@ lifecycle_id!(/// One rotatable worker credential issued to a stable worker iden
 CredentialId, "credential");
 lifecycle_id!(/// One process/boot incarnation of a remote worker.
 WorkerIncarnationId, "worker-incarnation");
+lifecycle_id!(/// One immutable scheduler evaluation and choice attempt.
+///
+/// Placement and capacity authority remain distinct even when created together:
+///
+/// ```compile_fail
+/// use cairn_protocol::{PlacementId, ReservationId};
+///
+/// let placement = PlacementId::new();
+/// let _reservation: ReservationId = placement;
+/// ```
+PlacementId, "placement");
+lifecycle_id!(/// One durable worker-capacity reservation.
+ReservationId, "reservation");
 lifecycle_id!(/// One controller-to-worker assignment identity.
 AssignmentId, "assignment");
 lifecycle_id!(/// One bounded assignment-lease identity.

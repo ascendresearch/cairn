@@ -350,3 +350,23 @@ Worker material is immutable under a per-rotation directory. Cutover is one atom
 old connection, reloads the successor, and creates a new incarnation. Revoking a bad successor
 inside its overlap atomically cancels predecessor retirement in the registry, after which the local
 manifest may be rolled back. Once the frozen deadline passes, rollback cannot resurrect authority.
+
+## D-014 — Scheduling choice and capacity authority are separate durable identities
+
+- Decision: accepted; C1 kernel implemented
+
+One `PlacementId` identifies an immutable evaluation over a frozen, content-addressed candidate
+snapshot. One `ReservationId` is the separate authority that consumes a worker slot before the
+downstream `AssignmentId`/`LeaseId` can be created. A snapshot records the exact incarnation,
+credential, profile, availability, last heartbeat, controller-authority revision when available,
+configured policy, every rejection, and the deterministic stable-`WorkerId` choice.
+
+The V1 scheduler uses one append-only global reservation ledger. This intentionally pays a
+serialization cost to make concurrent capacity admission unambiguous with the current event-store
+port; optimistic revision conflict cannot turn into double reservation. A reservation is not freed
+merely because a clock elapsed: it remains authoritative for live or in-doubt execution. Release
+requires durable terminal/pre-start-expiry evidence, or proof that no assignment claimed it before
+the separately configured positive claim deadline. Heartbeats prevent double subtraction by naming
+active attempts, while pending/unreflected reservations still reduce reported availability. One
+attempt cannot hold parallel active reservations. Future sharding must preserve these identities and
+proof obligations.

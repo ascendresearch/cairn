@@ -164,6 +164,12 @@ positive_worker_quantity!(
     u64,
     ZeroLeaseDuration
 );
+positive_worker_quantity!(
+    /// Configurable deadline for claiming a scheduler capacity reservation.
+    ReservationClaimTimeoutMillis,
+    u64,
+    ZeroReservationClaimTimeout
+);
 
 /// Invalid worker-control value.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -186,6 +192,9 @@ pub enum WorkerValueError {
     /// Assignment lease duration must be explicitly positive.
     #[error("assignment lease duration must be greater than zero")]
     ZeroLeaseDuration,
+    /// Scheduler reservation claim timeout must be explicitly positive.
+    #[error("scheduler reservation claim timeout must be greater than zero")]
+    ZeroReservationClaimTimeout,
     /// Resource claims must retain one canonical entry for each backend/capability.
     #[error("worker resource claims must be unique and in canonical order")]
     NonCanonicalResourceClaims,
@@ -728,7 +737,8 @@ pub enum WorkerSessionState {
 }
 
 /// Capability or availability reason that prevents placement.
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Error, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind", content = "detail")]
 pub enum WorkerMatchFailure {
     /// No heartbeat has established dynamic availability.
     #[error("worker has no durable availability heartbeat")]

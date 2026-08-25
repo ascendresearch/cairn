@@ -697,6 +697,30 @@ deadline passes, both authority projection and local rollback fail closed. The m
 test exercises failed-successor rollback, another rotation, live-process cutover, exact issuance
 recovery, old-certificate rejection after overlap, and final successor revocation.
 
+**Implemented scheduler reservation kernel C1 (2026-08-25).** The execution layer now separates an
+immutable `PlacementId`, capacity-bearing `ReservationId`, downstream `AssignmentId`, and bounded
+`LeaseId`. A placement freezes a content-addressed snapshot of the canonical worker candidate set.
+Each entry cites exact incarnation, credential, profile, availability and heartbeat evidence,
+captures the controller-owned authority revision when the adapter has one, and records the first
+stable rejection reason or its capacity inputs. Policy `stable-worker-id-v1` filters first and then
+chooses the lowest eligible stable `WorkerId`; selection is therefore replayable rather than a
+function of map iteration or connection arrival order.
+
+The reference C1 capacity authority is a singleton append-only scheduler ledger. Before assignment
+grant it commits one reservation against registered concurrency and current reported availability.
+Independent SQLite writers race through expected revision, so one physical slot cannot produce two
+successful reservations. Assignment grant then reloads the exact worker snapshot and rechecks
+current application credential authority; changed heartbeat/profile/incarnation/credential or
+revocation fails closed.
+
+Reservations are conservative. They are released only when assignment recovery proves terminal
+execution or expiry before start. A reservation never becomes reusable for an in-doubt started
+attempt. If a crash occurs after reservation but before assignment, a separately configured
+positive claim deadline permits release only while the assignment stream remains absent. The
+singleton ledger is an initial correctness boundary, not a permanent scale claim; it can be sharded
+later while retaining placement/snapshot/reservation identities. Controller composition and the
+`cairn-migration` translation fixture remain C2.
+
 After a worker heartbeat is durably accepted, the controller returns an ephemeral
 `HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence
 deadline without entering either durable control outbox. It conveys connection liveness only: it
@@ -713,10 +737,9 @@ both live sessions through independent SQLite readers. All wire-size, handshake,
 polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
 
 This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
-It can close the control protocol without claiming an external workload ran. Scheduler-wide slot
-reservation across different attempts, cancellation delivery, artifact transfer, local
-process/container supervision, registry lifecycle administration, and production service
-deployment remain application/adapter slices.
+It can close the control protocol without claiming an external workload ran. Scheduler composition,
+cancellation delivery, artifact transfer, local process/container supervision, registry lifecycle
+administration, and production service deployment remain application/adapter slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point

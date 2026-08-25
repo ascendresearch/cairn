@@ -130,6 +130,24 @@ impl AssignmentLeaseGrant {
             policy,
         }
     }
+
+    /// Returns the fresh logical assignment identity.
+    #[must_use]
+    pub const fn assignment_id(self) -> AssignmentId {
+        self.assignment_id
+    }
+
+    /// Returns the fresh bounded lease identity.
+    #[must_use]
+    pub const fn lease_id(self) -> LeaseId {
+        self.lease_id
+    }
+
+    /// Returns the frozen assignment liveness policy.
+    #[must_use]
+    pub const fn policy(self) -> AssignmentLeasePolicy {
+        self.policy
+    }
 }
 
 impl AssignmentBinding {

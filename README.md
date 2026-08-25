@@ -108,9 +108,13 @@ restore a predecessor when a failed successor is revoked before retirement. See
 [`docs/ENROLLMENT.md`](docs/ENROLLMENT.md) for the operator flow. Reproducible release tooling
 cross-links controller and worker
 bundles for x86-64 and AArch64 against a pinned GLIBC baseline and verifies their ELF contracts
-before deployment. The current worker executor deliberately returns `NotStarted`; real
-local/container backends, global scheduling, richer resource probing, static-registry import, and
-real-host job execution remain subsequent slices. The active
+before deployment. A generic scheduler kernel now freezes explainable candidate snapshots, applies
+a versioned deterministic policy, and commits a distinct capacity reservation before assignment;
+independent SQLite writers cannot reserve one slot twice, and stale worker/credential evidence is
+rechecked before lease grant. See [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and
+recovery contract. The current worker executor deliberately returns `NotStarted`; real
+local/container backends, controller/migration scheduler composition, richer resource probing,
+static-registry import, and real-host job execution remain subsequent slices. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 The remaining architecture in the normative documents is still target design. The old repositories

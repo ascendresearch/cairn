@@ -53,20 +53,34 @@ Acceptance gate:
 - no CRL/OCSP dependency is required for Cairn's baseline, while an external issuer adapter may add
   either later.
 
-## Phase C — scheduler L2 closure
+## Phase C1 — scheduler reservation kernel (implemented 2026-08-25)
 
 Introduce the generic scheduler between migration requests and worker assignment. It consumes a
 frozen `PlacementRequest` plus a consistent candidate snapshot, filters by pool/platform/backend/
 capability/authority/liveness/capacity, applies a deterministic versioned policy, and durably
-reserves capacity before granting a lease. `cairn-migration` owns translation from migration-stage
-needs to domain-neutral placement; workers never receive business roles.
+reserves capacity before granting a lease. The V1 global ledger deliberately serializes placement
+reservation facts through SQLite optimistic concurrency: this is a correctness baseline that may
+later be sharded without changing `PlacementId`, `ReservationId`, or snapshot semantics.
 
 Acceptance gate:
 
 - multiple candidates produce one deterministic, explainable choice;
 - concurrent placement cannot overcommit slots;
 - stale snapshots and authority changes fail closed;
-- replay reconstructs the candidate set, policy version, rejection reasons, reservation, and choice;
+- replay reconstructs the candidate set, policy version, rejection reasons, reservation, and choice.
+
+## Phase C2 — scheduler composition and migration translation
+
+Compose the scheduler authority seam with the managed enrollment registry and the controller's
+assignment/outbox path. `cairn-migration` owns translation from migration-stage needs to the frozen
+domain-neutral request; workers never receive business roles. Configuration selects the supported
+policy version and supplies positive session, reservation-claim, and lease timing values.
+
+Acceptance gate:
+
+- a registry revision is cited in every managed candidate authority observation;
+- a revocation between snapshot and assignment grant fails closed in the composed controller;
+- reservation release follows pre-start expiry or terminal execution but never an in-doubt start;
 - one migration fixture reaches an assigned worker without product vocabulary in execution types.
 
 ## Phase D — resource probe V2
