@@ -4,7 +4,11 @@
   "wire_model": "deepseek-v4-pro",
   "protocols": [
     {
-      "protocol": {"kind": "openai_responses", "store": false},
+      "protocol": {
+        "kind": "openai_responses",
+        "store": false,
+        "reasoning_replay": "preserve_output_items"
+      },
       "capabilities": {
         "supports_tools": true,
         "supports_parallel_tool_calls": true,
@@ -22,7 +26,11 @@
       }
     },
     {
-      "protocol": {"kind": "openai_chat_completions", "thinking_parameter": true},
+      "protocol": {
+        "kind": "openai_chat_completions",
+        "thinking_parameter": true,
+        "reasoning_replay": "required_with_tool_calls"
+      },
       "capabilities": {
         "supports_tools": true,
         "supports_parallel_tool_calls": true,

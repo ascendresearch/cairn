@@ -351,6 +351,14 @@ relationships. For OpenAI Chat Completions, it preserves the exact assistant mes
 `tool_use_id` relationships, including policy-allowed thinking or redacted blocks. Unknown native
 items are retained opaquely or rejected explicitly; flattening them to text is a recording gap.
 
+Thinking state has asymmetric provider rules. Stateless OpenAI Responses replays every output item;
+an OpenAI profile configured for opaque reasoning also requests and replays
+`reasoning.encrypted_content`. DeepSeek Chat requires `reasoning_content` on tool-calling assistant
+messages and Cairn's DeepSeek template enforces that condition. Anthropic requires thinking and
+redacted-thinking blocks to remain ordered and unmodified, including signatures and opaque data,
+through the associated tool-use turn. All are sensitive native state and are excluded from ordinary
+diagnostic rendering.
+
 Provider-native continuation identifiers or hosted opaque state are external facts. Cairn records:
 
 - the continuation identity returned;
@@ -364,6 +372,13 @@ prefix must use an authorized archived native continuation or rebuild a full req
 that the resulting request represents the same recorded boundary before calling it a control.
 Provider-hosted continuation may later be an optimization or an additional observation, but never
 the only authority for reconstruction.
+
+The raw response is decoded into a versioned native artifact before semantic projection. The event
+`agent.native-continuation-recorded` cites the response, protocol, and artifact identity. A recovery
+walk starts from the model attempt, verifies the response parent and raw-response CAS object,
+rehydrates the cited continuation, appends durably recorded tool results, and materializes the next
+request. Repeating this process before and after closing SQLite/CAS must produce identical request
+bytes. A new live response to those bytes remains a counterfactual observation and may differ.
 
 ## 9. Completeness audit
 

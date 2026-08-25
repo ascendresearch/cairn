@@ -246,6 +246,12 @@ Completions retains the exact assistant message and `tool_call_id` relationships
 Messages retains ordered content blocks and `tool_use_id` relationships. Reasoning, redacted, and
 unknown policy-allowed native items are preserved without granting them semantic authority.
 
+Reasoning replay behavior is a model-template characteristic. Responses profiles either preserve
+all returned output items or additionally request OpenAI encrypted reasoning for stateless replay;
+DeepSeek Chat profiles require `reasoning_content` whenever an assistant message contains tool
+calls; Anthropic Messages preserves signed/redacted thinking blocks in their original order. A
+missing required field is a completeness error before dispatch, never a reason to synthesize state.
+
 V1 reconstructs continuation locally from archived material. Responses uses full input with hosted
 storage disabled; Chat Completions and Anthropic Messages rebuild their full native message/block
 history. Provider response IDs and hosted continuation state may be recorded as external facts, but

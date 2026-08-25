@@ -369,6 +369,20 @@ initial codecs:
 | OpenAI Chat Completions | ordered messages and the exact assistant tool-call message, including compatible reasoning extensions | `tool_call_id` |
 | Anthropic Messages | ordered content blocks, including `thinking`, `redacted_thinking`, and `tool_use` where returned | `tool_use_id` |
 
+Reasoning replay is protocol-native state, not normalized assistant text:
+
+| Family/profile | Local retention and resend rule |
+|---|---|
+| OpenAI Responses, stateless | Preserve every ordered output item. Profiles using OpenAI opaque reasoning add `include: ["reasoning.encrypted_content"]`, then retain and resend the returned encrypted field. |
+| DeepSeek Chat | Preserve the exact assistant message. When it contains tool calls, the DeepSeek template requires `reasoning_content`; Cairn refuses to prepare a continuation if it is absent. |
+| Anthropic Messages | Preserve ordered `thinking`, `redacted_thinking`, and `tool_use` blocks. Thinking text/signature and redacted data are returned without modification during the tool-use turn. |
+
+These artifacts use the content domain `agent.native-model-continuation-sensitive.v1`. Raw responses
+already contain the same material, so native continuations inherit the raw-response sensitivity
+classification: ordinary logs and default exports must cite identities, not print thinking content.
+Encryption at rest remains a deployment/storage responsibility until Cairn has an explicit encrypted
+CAS capability.
+
 The codec must retain unrecognized but policy-allowed native blocks in the archived continuation or
 fail explicitly; it must not silently coerce them into text. Tool arguments remain untrusted bytes
 until Cairn's schema validator accepts them. The SDK/transport performs one provider turn only. Tool
@@ -408,8 +422,26 @@ deployment check determines whether its configured endpoint accepts that authent
 the separate `ModelTemplateRegistry`, three protocol-specific template sections, bounded preference
 overrides, capability and credential-reference validation, and a content-addressable frozen
 resolution. `model-templates/deepseek/deepseek-v4-pro.json` supplies model characteristics while
-`config/runtime-models.example.json` contains only the enabled Responses deployment. Protocol codecs,
-native-continuation artifacts, HTTP transport, and live conformance remain the next slices.
+`config/runtime-models.example.json` contains only the enabled Responses deployment. The native
+protocol slice now provides closed per-protocol history variants, typed tool-call correlations,
+model-template replay policies, CAS archival, an `agent.native-continuation-recorded` event, and
+SQLite/CAS close/reopen tests. Those tests define stability as an identical history boundary and
+byte-identical next request; they do not claim that a fresh live model output is deterministic.
+HTTP transport and live provider conformance remain later slices.
+
+The wire rules are based on the provider documentation current at implementation time:
+
+- [OpenAI Responses create reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+  requires reasoning items in manually managed context and documents encrypted reasoning for
+  stateless/ZDR operation.
+- [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/) requires
+  `reasoning_content` to be returned with tool-calling assistant messages, while ordinary completed
+  turns may omit it; [DeepSeek multi-round chat](https://api-docs.deepseek.com/guides/multi_round_chat/)
+  makes client-side history reconstruction explicit. Its
+  [Responses reference](https://api-docs.deepseek.com/api/create-response/) likewise describes the
+  endpoint as stateless and requires the client to supply complete input history.
+- [Anthropic extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+  requires thinking blocks in a tool-use turn to be returned complete and unmodified.
 
 ### 9.3 Durable versus live events
 

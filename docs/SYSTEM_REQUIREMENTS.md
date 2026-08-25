@@ -182,6 +182,8 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-AGENT-013 | Provider SDK/HTTP integration MUST perform exactly one bounded provider turn and MUST NOT execute client tools or own the agent loop. | Architecture boundary test and scripted transport conformance. |
 | FR-AGENT-014 | Credentials MUST be resolved only at dispatch from an external typed reference. Credential bytes MUST NOT appear in model catalogs, resolved snapshots, request artifacts, events, logs, or exports. | Unknown-field rejection, dispatch injection, and repository/record secret scanning. |
 | FR-AGENT-015 | A model template MUST be versioned and MAY define different capabilities, defaults, and protocol-specific request settings for each supported protocol family. User overrides MUST remain within the selected template section's declared bounds. | Three-protocol template fixture plus unsupported protocol, output ceiling, reasoning effort, and duplicate-section controls. |
+| FR-AGENT-016 | Stateless OpenAI Responses continuation MUST replay every prior response output item in order. A model profile using OpenAI encrypted reasoning MUST request, archive, and resend `reasoning.encrypted_content`; absence is a pre-dispatch completeness failure. | Encrypted-reasoning positive and missing-state fixtures. |
+| FR-AGENT-017 | A DeepSeek Chat tool-calling assistant message MUST retain and resend `reasoning_content` when its model template declares it required. Anthropic `thinking`, `redacted_thinking`, signatures, block order, and tool-use correlations MUST be replayed without mutation. | DeepSeek and Anthropic positive, mutation, omission, and restart fixtures. |
 
 ### 5.5 Execution substrate
 
@@ -224,6 +226,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-REC-011 | Event identity MUST be derived by trusted record code after aggregate sequence allocation and MUST cover the canonical envelope excluding only its own identity field. Callers MUST NOT author an `EventId` for append. | Envelope-field mutation suite and concurrent append control. |
 | FR-REC-012 | Physical `BlobDigest` and semantic `ContentId<T>` MUST remain distinct. Identical bytes MAY share physical storage without making semantic identities interchangeable. | Same-bytes/different-domain fixture and deduplication contract test. |
 | FR-REC-013 | An identity-algorithm upgrade MUST run as a restartable verified migration with an immutable mapping manifest, projection/index rebuild, and atomic writer cutover. It MUST NOT rewrite historical event bytes or verdict meaning. | Interrupted-migration recovery, old export resolution, and partial-cutover rejection tests. |
+| FR-REC-014 | The event stream MUST cite the typed native-continuation artifact produced from an archived raw response. After SQLite/CAS restart, Cairn MUST discover that artifact from attempt history and materialize the same next-request bytes without an out-of-band continuation identifier. | Close/reopen event-store and content-store integration test with byte equality. |
 
 Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md).
 

@@ -254,6 +254,28 @@ pub enum ModelProtocolKind {
     AnthropicMessages,
 }
 
+/// How a Responses-compatible deployment exposes reasoning needed by stateless continuation.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesReasoningReplay {
+    /// Preserve every returned output item, including any reasoning fields the provider returns.
+    #[default]
+    PreserveOutputItems,
+    /// Also request `OpenAI`'s opaque `reasoning.encrypted_content` continuation material.
+    RequestEncryptedContent,
+}
+
+/// Compatibility rule for replaying Chat Completions reasoning extensions.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatReasoningReplay {
+    /// Preserve `reasoning_content` when returned, without requiring the extension.
+    #[default]
+    PreserveIfPresent,
+    /// A tool-calling assistant message is invalid unless it carries `reasoning_content`.
+    RequiredWithToolCalls,
+}
+
 /// Protocol-specific model behavior supplied by a built-in template.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
@@ -264,6 +286,9 @@ pub enum ModelProtocolConfig {
         /// Server-side response storage. V1 templates require `false` for local reconstruction.
         #[serde(default)]
         store: bool,
+        /// Stateless reasoning continuation behavior for this model endpoint.
+        #[serde(default)]
+        reasoning_replay: ResponsesReasoningReplay,
     },
     /// Stateless Chat Completions messages.
     #[serde(rename = "openai_chat_completions")]
@@ -271,6 +296,9 @@ pub enum ModelProtocolConfig {
         /// Emit the optional `thinking.type` extension for compatible deployments.
         #[serde(default)]
         thinking_parameter: bool,
+        /// Model-specific reasoning-extension replay requirement.
+        #[serde(default)]
+        reasoning_replay: ChatReasoningReplay,
     },
     /// Anthropic Messages with a model-compatible default header value.
     #[serde(rename = "anthropic_messages")]
@@ -288,6 +316,28 @@ impl ModelProtocolConfig {
             Self::OpenAiResponses { .. } => ModelProtocolKind::OpenAiResponses,
             Self::OpenAiChatCompletions { .. } => ModelProtocolKind::OpenAiChatCompletions,
             Self::AnthropicMessages { .. } => ModelProtocolKind::AnthropicMessages,
+        }
+    }
+
+    /// Returns the Responses reasoning replay rule when this is a Responses profile.
+    #[must_use]
+    pub const fn responses_reasoning_replay(&self) -> Option<ResponsesReasoningReplay> {
+        match self {
+            Self::OpenAiResponses {
+                reasoning_replay, ..
+            } => Some(*reasoning_replay),
+            _ => None,
+        }
+    }
+
+    /// Returns the Chat reasoning replay rule when this is a Chat profile.
+    #[must_use]
+    pub const fn chat_reasoning_replay(&self) -> Option<ChatReasoningReplay> {
+        match self {
+            Self::OpenAiChatCompletions {
+                reasoning_replay, ..
+            } => Some(*reasoning_replay),
+            _ => None,
         }
     }
 }
@@ -928,7 +978,7 @@ fn validate_protocol_config(
 ) -> Result<(), ModelCatalogError> {
     if matches!(
         protocol,
-        ModelProtocolConfig::OpenAiResponses { store: true }
+        ModelProtocolConfig::OpenAiResponses { store: true, .. }
     ) {
         return Err(ModelCatalogError::HostedStateUnsupported(owner.to_owned()));
     }

@@ -10,6 +10,7 @@ use thiserror::Error;
 mod dispatch;
 mod episode;
 mod metering;
+mod native_protocol;
 mod operation;
 mod provider_catalog;
 mod semantic;
@@ -36,6 +37,10 @@ pub use metering::{
     StartedMeteredAction, begin_metered_action, record_metering_receipt, recover_metered_action,
     reserve_metered_action,
 };
+pub use native_protocol::{
+    NativeCodecError, NativeContinuation, NativeProtocolCodec, NativeRequestSpec,
+    NativeToolDefinition, NativeToolResult, PreparedNativeRequest, RecordedNativeResponse,
+};
 pub use operation::{
     CanonicalToolResult, OperationCoordinatorError, OperationRecovery, PreparedToolOperation,
     RecordedToolExchange, RecordedToolGateway, ScriptedToolGateway, StartedToolOperation,
@@ -47,13 +52,14 @@ pub use operation::{
     recover_tool_operation_authority,
 };
 pub use provider_catalog::{
-    CredentialSource, ModelCatalogError, ModelContextTokenLimit, ModelDataBoundary,
-    ModelGenerationOverrides, ModelGenerationSettings, ModelOutputTokenLimit,
+    ChatReasoningReplay, CredentialSource, ModelCatalogError, ModelContextTokenLimit,
+    ModelDataBoundary, ModelGenerationOverrides, ModelGenerationSettings, ModelOutputTokenLimit,
     ModelProtocolCapabilities, ModelProtocolConfig, ModelProtocolKind, ModelProtocolTemplate,
     ModelReasoningEffort, ModelReasoningMode, ModelReasoningSettings, ModelTemplate,
     ModelTemplateRegistry, ModelTransportConfig, ProviderConfigValueError, ProviderEndpoint,
-    ResolvedRuntimeModel, RuntimeModelCatalog, RuntimeModelConfig, SamplingTemperatureMillis,
-    SecretFilePath, ToolSchemaDialect, TransportByteLimit, TransportTimeoutMillis,
+    ResolvedRuntimeModel, ResponsesReasoningReplay, RuntimeModelCatalog, RuntimeModelConfig,
+    SamplingTemperatureMillis, SecretFilePath, ToolSchemaDialect, TransportByteLimit,
+    TransportTimeoutMillis,
 };
 pub use semantic::{
     AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,
@@ -177,6 +183,10 @@ content_type!(PolicyDocument, "agent.policy-document.v1");
 content_type!(TurnInputDecisionArtifact, "agent.turn-input-decision.v1");
 content_type!(MaterializedRequestArtifact, "agent.materialized-request.v1");
 content_type!(ModelResponseArtifact, "agent.model-response.v1");
+content_type!(
+    NativeContinuationArtifact,
+    "agent.native-model-continuation-sensitive.v1"
+);
 content_type!(ToolArguments, "agent.tool-arguments.v1");
 content_type!(SemanticModelTurnArtifact, "agent.semantic-model-turn.v1");
 content_type!(ToolCallIdentity, "agent.tool-call-identity.v1");
