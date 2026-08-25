@@ -539,8 +539,11 @@ The executor port receives authority only after `Started` commits. A recovered `
 reconstruct start authority, but a recovered `Started` fact cannot reconstruct execution authority.
 Completed recovery reloads every cited CAS artifact and revalidates outcome/exit semantics, byte
 bounds, output completeness, observed backend/environment, canonical output ordering, and receipt
-lineage against the frozen contract. Recorded and scripted executors are the current deterministic
-capabilities; real local-process and remote-worker adapters remain target work.
+lineage against the frozen contract. Recorded and scripted executors provide deterministic seams.
+`local-process-v1` now provides an explicitly activated controlled-host adapter with versioned
+material, create-only workspace expansion, Linux user/network namespace preflight, process-group
+supervision, and bounded capture. It is not classified as hostile-code filesystem isolation;
+hardened container and richer remote-worker adapters remain target work.
 
 ### 10.2 Worker protocol
 
@@ -854,11 +857,12 @@ two-worker integration control uses distinct client certificates and journals, t
 both live sessions through independent SQLite readers. All wire-size, handshake, idle, heartbeat,
 polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
 
-This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
-It can close the control protocol without claiming an external workload ran. Small typed artifact
-replication and resumable chunk transfer are implemented; sandbox materialization, cancellation
-delivery, local process/container supervision, and production service deployment remain
-application/adapter slices.
+Bootstrap intentionally composes a `NotStarted` executor and unavailable/draining availability.
+Schema-V8 configuration may explicitly activate `local-process-v1` only by changing execution mode,
+the exact advertised backend, and ready availability coherently. Small typed artifact replication,
+resumable chunk transfer, create-only materialization, process-group timeout/stream supervision, and
+terminal evidence capture are implemented. Cancellation delivery, hardened container isolation,
+and production service deployment remain application/adapter slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point

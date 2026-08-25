@@ -5,6 +5,7 @@ mod contract;
 mod control;
 mod coordinator;
 mod executor;
+mod material;
 mod scheduler;
 mod worker;
 
@@ -34,14 +35,15 @@ pub use control::{
     ControlEnqueueOutcome, ControlFrame, ControlFrameByteLimit, ControlFramePolicy,
     ControlProtocolError, ControllerControlMessage, DurableControlMessage, InboundControlSession,
     VerifiedAssignmentMaterials, WorkerAdmissionOutcome, WorkerControlMessage,
-    WorkerExecutionAuthority, WorkerResultReconciliation, accept_worker_assignment,
-    acknowledge_controller_messages, acknowledge_worker_messages, active_worker_attempts,
-    admit_worker_assignment, assignment_offer_message, decode_control_frame,
-    deliver_controller_acknowledgement, deliver_controller_messages,
+    WorkerExecutionAuthority, WorkerExecutionObservation, WorkerResultReconciliation,
+    accept_worker_assignment, acknowledge_controller_messages, acknowledge_worker_messages,
+    active_worker_attempts, admit_worker_assignment, assignment_offer_message,
+    decode_control_frame, deliver_controller_acknowledgement, deliver_controller_messages,
     deliver_worker_acknowledgement, deliver_worker_messages, encode_control_frame,
     enqueue_controller_message, execute_worker_attempt, execution_start_message,
-    load_assignment_material_manifest, pending_controller_messages, pending_worker_messages,
-    read_assignment_material_chunk, reconcile_worker_result, record_worker_execution_start,
+    invoke_worker_executor, load_assignment_material_manifest, pending_controller_messages,
+    pending_worker_messages, read_assignment_material_chunk, reconcile_worker_result,
+    record_worker_execution_observation, record_worker_execution_start,
     validate_assignment_material_manifest, verify_persisted_assignment_materials,
 };
 pub use coordinator::{
@@ -53,6 +55,10 @@ pub use coordinator::{
 pub use executor::{
     CapturedOutput, ExecutionCapture, ExecutionInput, Executor, ExecutorError,
     ExecutorFailureClass, RecordedExecution, RecordedExecutor, ScriptedExecutor,
+};
+pub use material::{
+    EnvironmentVariable, EnvironmentVariableName, ExecutionEnvironmentV1, InputBundleEntry,
+    InputBundleV1, InputFileMode, MaterialFormatError,
 };
 pub use scheduler::{
     CandidateDisposition, PlacementAuthorityError, PlacementAuthorityObservation,

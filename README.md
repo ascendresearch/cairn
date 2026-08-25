@@ -145,10 +145,15 @@ syncs and resumes private per-offer staging after reconnect, and commits fully v
 independent worker CAS before accepting the assignment. Start reloads those local objects.
 Controller and worker aggregate limits are independently configurable or disableable; positive
 chunk sizes are configurable and prevalidated against the separate optional encoded-message bound.
-The executor deliberately returns `NotStarted`;
-real local/container backends, concrete resource
-challenge/attestation adapters, and real-host job
-execution remain subsequent slices. Legacy static credentials now enter the persistent registry
+Worker execution now has strict canonical `InputBundleV1` and `ExecutionEnvironmentV1` material,
+create-only per-attempt expansion, and an explicitly activated `local-process-v1` adapter. The
+adapter clears ambient environment, enters a configured Linux user/network namespace, supervises a
+new process group, enforces contract timeout/capture bounds, and records executable/environment
+evidence. Join still defaults to a `NotStarted`, unavailable, draining worker; activation requires
+the execution mode, exact backend claim, and ready availability to change coherently. This host
+adapter is for controlled utilities and is not presented as hostile-code filesystem isolation; see
+[`docs/WORKER_EXECUTION.md`](docs/WORKER_EXECUTION.md). Hardened container backends, concrete resource
+challenge/attestation adapters, and oracle-grade real-host jobs remain subsequent slices. Legacy static credentials now enter the persistent registry
 through an atomic, explicitly idempotent V2-to-V3 import gate; ordinary startup accepts only V3
 configuration with an empty static enrollment list. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).

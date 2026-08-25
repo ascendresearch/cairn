@@ -442,3 +442,29 @@ O(n²) rescans, while the worker's final full `ContentId<T>` derivation detects 
 corruption. Aggregate controller/worker limits remain independently optional. Positive controller
 and worker chunk sizes are explicit, and exact base64 envelope expansion must fit any enabled
 transport bound before startup.
+
+## D-019 — Execution material is versioned before adapters interpret it
+
+- Decision: accepted; F2c controlled-host slice implemented
+
+A typed content ID prevents cross-domain substitution but does not by itself define how an executor
+must interpret the bytes. `InputBundleV1` therefore admits only canonical sorted explicit
+directories and regular files under strong `SandboxPath` values. `ExecutionEnvironmentV1` contains
+only canonical portable environment variables. The local adapter expands a fresh private
+`AttemptId` tree with create-only operations and never repairs, cleans, or overwrites an existing
+tree. Restart safety continues to come from one-shot durable start authority rather than directory
+existence heuristics.
+
+Execution activation is one fail-closed configuration invariant: disabled mode advertises only
+`transport-only` and must remain unavailable/draining with zero slots; `local_process` advertises
+only `local-process-v1` and must be ready, non-draining, with concurrency and availability both one.
+The adapter accepts only
+network-disabled contracts, invokes an operator-trusted util-linux-compatible binary with fixed
+user/network namespace arguments, and preflights it at startup and per attempt. Timeout/overflow
+terminates a new process group, while deterministic pre-spawn failures remain `NotStarted` and
+post-spawn uncertainty remains `Ambiguous`.
+
+This does not establish oracle-grade filesystem isolation. The host workspace cannot hide the rest
+of the worker filesystem, so `local-process-v1` is restricted by backend placement to controlled
+utilities. A future container/hardened launcher must reuse the versioned material and authority
+boundary while adding the missing hostile-code isolation rather than relabeling this adapter.

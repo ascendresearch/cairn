@@ -19,7 +19,8 @@ use cairn_server::{
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
     ControllerEndpoint, ExpectedResourceConstraints, ResourceProbeConfig, WorkerConfig,
-    WorkerIdentityConfig, WorkerProfileConfig, enroll, join_from_bundle, rollback_rotation, rotate,
+    WorkerExecutionConfig, WorkerIdentityConfig, WorkerProfileConfig, enroll, join_from_bundle,
+    rollback_rotation, rotate,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -681,6 +682,7 @@ fn worker_config(
                 16 * 1024,
             )?,
         },
+        execution: WorkerExecutionConfig::Disabled,
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         heartbeat_interval_ms: NonZeroU64::new(50),

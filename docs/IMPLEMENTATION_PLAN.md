@@ -161,9 +161,9 @@ Acceptance gate:
 
 ## Phase F — one-command open-source worker join
 
-Status: F1 join/bootstrap composition plus F2a/F2b typed, resumable assignment-material
-replication implemented; backend activation, sandbox materialization, service-unit output, and real
-x86-64/AArch64 execution gates remain.
+Status: F1 join/bootstrap composition, F2a/F2b typed resumable assignment-material replication, and
+F2c controlled local-process activation/create-only materialization implemented. Service-unit
+output, hardened hostile-code sandboxing, and real x86-64/AArch64 execution gates remain.
 
 Implement `cairn-worker join` as a composition of enrollment, built-in probe, validated local
 profile creation, control-endpoint configuration, fixed state-directory layout, and optional
@@ -197,8 +197,15 @@ CAS is fully verified when creating the manifest, an isolated range-source port 
 linear, and destination verification closes the range-read trust boundary. Aggregate raw-material
 limits remain independently optional on controller and worker. Chunk sizes are positive explicit
 configuration, and their exact base64-expanded envelope is checked against the separately optional
-transport limit before startup. F2c must materialize a create-only sandbox tree, compose a real
-supervised executor, and make availability activation explicit.
+transport limit before startup. F2c now defines canonical versioned input/environment material,
+materializes only directories and regular files into a private create-only per-attempt tree, and
+composes an explicitly activated `local-process-v1` supervisor. Activation is a fail-closed
+invariant across mode, exact backend claim, and ready availability; join remains disabled. The
+adapter clears ambient environment, requires fixed Linux user/network namespace preflight, starts a
+new process group, enforces timeout/stream/output bounds, and captures executable/environment
+evidence. It is intentionally classified as a controlled-host utility backend rather than
+oracle-grade hostile-code filesystem isolation. The next F2 slice must add a hardened container or
+equivalent launcher while reusing these material and executor contracts.
 
 Because F2b changes both durable offer and worker-admission payloads, worker-control protocol V2
 uses event schema V2 for its controller-outbox and worker-journal streams. Existing V1 control

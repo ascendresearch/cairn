@@ -29,7 +29,7 @@ use cairn_server::{
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
     ControllerEndpoint, ExpectedResourceConstraints, ResourceProbeConfig, WorkerConfig,
-    WorkerIdentityConfig, WorkerProfileConfig,
+    WorkerExecutionConfig, WorkerIdentityConfig, WorkerProfileConfig,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -418,6 +418,7 @@ fn worker_config(
                 8 * 1024,
             )?,
         },
+        execution: WorkerExecutionConfig::Disabled,
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         // Keep several heartbeats inside the idle window while leaving scheduling a meaningful

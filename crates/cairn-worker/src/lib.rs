@@ -1,5 +1,6 @@
 //! Runnable outbound Cairn worker composition root.
 
+mod local_process;
 mod probe;
 
 use std::{
@@ -23,11 +24,12 @@ use cairn_execution::{
     AssignmentMaterialKind, AssignmentMaterialManifest, CapabilityRequirement, ControlFrame,
     ControllerControlMessage, DurableControlMessage, ExecutionBackend, ExecutionCapture,
     ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor, ExecutorError,
-    InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello,
-    WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
-    WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages,
-    active_worker_attempts, admit_worker_assignment, deliver_worker_acknowledgement,
-    deliver_worker_messages, execute_worker_attempt, record_worker_execution_start,
+    InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerExecutionAuthority,
+    WorkerExecutionObservation, WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile,
+    WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory, WorkerResourceSource,
+    WorkerSlotCount, acknowledge_worker_messages, active_worker_attempts, admit_worker_assignment,
+    deliver_worker_acknowledgement, deliver_worker_messages, invoke_worker_executor,
+    record_worker_execution_observation, record_worker_execution_start,
     validate_assignment_material_manifest, verify_persisted_assignment_materials,
 };
 use cairn_protocol::{
@@ -44,6 +46,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::time::{Instant, Interval};
+
+use local_process::LocalProcessExecutor;
+pub use local_process::{LinuxNamespaceConfig, WorkerExecutionConfig};
 
 pub use probe::{
     ExpectedResourceConstraints, HostResourceProbe, ResourceProbeConfig, ResourceProbeError,
@@ -63,6 +68,8 @@ pub struct WorkerConfig {
     pub availability: WorkerAvailability,
     pub journal_database: PathBuf,
     pub content: WorkerContentConfig,
+    #[serde(default)]
+    pub execution: WorkerExecutionConfig,
     pub handshake_timeout_ms: Option<NonZeroU64>,
     pub idle_timeout_ms: Option<NonZeroU64>,
     pub heartbeat_interval_ms: Option<NonZeroU64>,
@@ -167,15 +174,47 @@ enum Wake<T> {
     Message(T),
     Heartbeat,
     ResourceRefresh,
+    ExecutionFinished(Box<WorkerExecutionObservation>),
 }
 
-struct NotStartedExecutor;
+struct ExecutionTasks {
+    sender: tokio::sync::mpsc::UnboundedSender<Box<WorkerExecutionObservation>>,
+    receiver: tokio::sync::mpsc::UnboundedReceiver<Box<WorkerExecutionObservation>>,
+    pending: usize,
+}
+
+impl ExecutionTasks {
+    fn new() -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            sender,
+            receiver,
+            pending: 0,
+        }
+    }
+}
+
+struct NotStartedExecutor {
+    diagnostic: String,
+}
+
+impl NotStartedExecutor {
+    fn disabled() -> Self {
+        Self {
+            diagnostic: "no execution backend is configured".into(),
+        }
+    }
+
+    fn configuration(diagnostic: impl Into<String>) -> Self {
+        Self {
+            diagnostic: diagnostic.into(),
+        }
+    }
+}
 
 impl Executor for NotStartedExecutor {
     fn execute(&mut self, _input: &ExecutionInput<'_>) -> Result<ExecutionCapture, ExecutorError> {
-        Err(ExecutorError::NotStarted(
-            "no execution backend is configured in this transport slice".into(),
-        ))
+        Err(ExecutorError::NotStarted(self.diagnostic.clone()))
     }
 }
 
@@ -257,6 +296,16 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     let mut content = SqliteContentStore::open(&config.content.database, &config.content.directory)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     prepare_state_directory(&config.content.transfer_directory)?;
+    if let WorkerExecutionConfig::LocalProcess {
+        sandbox_directory, ..
+    } = &config.execution
+    {
+        prepare_state_directory(sandbox_directory)?;
+        LocalProcessExecutor::from_config(&content, &config.execution)
+            .and_then(|executor| executor.preflight())
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    }
+    let mut execution_tasks = ExecutionTasks::new();
     loop {
         let identity = config.resolve_identity()?;
         if bound_credential.is_some() && bound_credential != identity.credential_id {
@@ -270,6 +319,7 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
             &incarnation_id,
             &mut journal,
             &mut content,
+            &mut execution_tasks,
         ));
         let outcome = if let Some(credential_id) = identity.credential_id {
             tokio::select! {
@@ -289,9 +339,17 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
             eprintln!("cairn-worker session: {error}");
         }
         let Some(delay) = config.reconnect_delay_ms else {
+            while execution_tasks.pending != 0 {
+                receive_and_record_execution(&mut journal, &mut execution_tasks).await?;
+            }
             return outcome;
         };
-        tokio::time::sleep(Duration::from_millis(delay.get())).await;
+        await_with_execution(
+            tokio::time::sleep(Duration::from_millis(delay.get())),
+            &mut journal,
+            &mut execution_tasks,
+        )
+        .await?;
     }
 }
 
@@ -344,9 +402,14 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 7 {
+        if !matches!(self.schema_version, 7 | 8) {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 7 is supported".into(),
+                "only worker schema_version 7 or 8 is supported".into(),
+            ));
+        }
+        if self.schema_version == 7 && !matches!(self.execution, WorkerExecutionConfig::Disabled) {
+            return Err(WorkerError::Configuration(
+                "worker schema_version 7 can only use execution mode disabled".into(),
             ));
         }
         if self.profile.schema_version != 2 {
@@ -435,6 +498,44 @@ impl WorkerConfig {
                 "availability exceeds profile max_concurrency".into(),
             ));
         }
+        let declared_backends = self.profile.backends.as_slice();
+        match self
+            .execution
+            .backend()
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+        {
+            None => {
+                let invalid_v8_disabled = if self.schema_version == 8 {
+                    let transport_only = ExecutionBackend::new("transport-only")
+                        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+                    declared_backends != [transport_only]
+                        || self.availability.health() != WorkerHealth::Unavailable
+                        || !self.availability.draining()
+                        || self.availability.available_slots() != 0
+                } else {
+                    false
+                };
+                if invalid_v8_disabled {
+                    return Err(WorkerError::Configuration(
+                        "disabled execution requires exactly backend transport-only and unavailable, draining, zero-slot availability"
+                            .into(),
+                    ));
+                }
+            }
+            Some(backend) => {
+                if declared_backends != [backend]
+                    || self.availability.health() != WorkerHealth::Ready
+                    || self.availability.draining()
+                    || self.availability.available_slots() != 1
+                    || profile.max_concurrency().get() != 1
+                {
+                    return Err(WorkerError::Configuration(
+                        "local_process activation requires exactly backend local-process-v1, concurrency one, and ready, non-draining, one-slot availability"
+                            .into(),
+                    ));
+                }
+            }
+        }
         validate_material_chunk_wire_size(
             self.transport,
             self.content.assignment_material_chunk_size,
@@ -456,6 +557,7 @@ impl WorkerConfig {
         resolve(&mut self.content.database, base);
         resolve(&mut self.content.directory, base);
         resolve(&mut self.content.transfer_directory, base);
+        self.execution.resolve_paths(base);
         resolve(&mut self.resource_probe.scratch_path, base);
         if let Some(path) = &mut self.resource_probe.accelerator_sysfs {
             resolve(path, base);
@@ -492,6 +594,7 @@ async fn run_session(
     incarnation_id: &WorkerIncarnationId,
     journal: &mut SqliteEventStore,
     content: &mut SqliteContentStore,
+    execution_tasks: &mut ExecutionTasks,
 ) -> Result<(), WorkerError> {
     let connecting = connect_worker_socket(
         config.controller.tcp_address.as_str(),
@@ -499,9 +602,13 @@ async fn run_session(
         &identity.tls,
         config.transport,
     );
-    let mut socket = timeout_optional(config.handshake_timeout_ms, connecting)
-        .await?
-        .map_err(|error| WorkerError::Session(error.to_string()))?;
+    let mut socket = Box::pin(await_with_execution(
+        timeout_optional(config.handshake_timeout_ms, connecting),
+        journal,
+        execution_tasks,
+    ))
+    .await??
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
     let protocol_version = profile.protocol_version();
     let hello_observed_at = observed_now()?;
     let hello_resources = HostResourceProbe::probe(&config.resource_probe, hello_observed_at)
@@ -521,11 +628,15 @@ async fn run_session(
     )
     .await
     .map_err(|error| WorkerError::Session(error.to_string()))?;
-    let welcome = timeout_optional(
-        config.handshake_timeout_ms,
-        read_wire_message::<_, ControllerWireMessage>(&mut socket, config.transport),
-    )
-    .await?
+    let welcome = Box::pin(await_with_execution(
+        timeout_optional(
+            config.handshake_timeout_ms,
+            read_wire_message::<_, ControllerWireMessage>(&mut socket, config.transport),
+        ),
+        journal,
+        execution_tasks,
+    ))
+    .await??
     .map_err(|error| WorkerError::Session(error.to_string()))?;
     let ControllerWireMessage::Welcome {
         connection_id,
@@ -575,8 +686,12 @@ async fn run_session(
             message = read => Wake::Message(message),
             () = tick_optional(&mut heartbeat_interval) => Wake::Heartbeat,
             () = tick_optional(&mut resource_refresh_interval) => Wake::ResourceRefresh,
+            Some(observation) = execution_tasks.receiver.recv() => Wake::ExecutionFinished(observation),
         };
         match wake {
+            Wake::ExecutionFinished(observation) => {
+                record_execution_observation(journal, execution_tasks, *observation)?;
+            }
             Wake::Heartbeat => {
                 write_wire_message(
                     &mut socket,
@@ -614,7 +729,7 @@ async fn run_session(
                         inbound
                             .accept(&frame, highest_sent)
                             .map_err(|error| WorkerError::Session(error.to_string()))?;
-                        process_controller_frame(
+                        if let Some(authority) = process_controller_frame(
                             &mut socket,
                             journal,
                             content,
@@ -623,7 +738,18 @@ async fn run_session(
                             &connection_id,
                             &frame,
                         )
-                        .await?;
+                        .await?
+                        {
+                            execution_tasks.pending =
+                                execution_tasks.pending.checked_add(1).ok_or_else(|| {
+                                    WorkerError::Session("execution task count overflow".into())
+                                })?;
+                            spawn_worker_execution(
+                                config,
+                                authority,
+                                execution_tasks.sender.clone(),
+                            );
+                        }
                     }
                     ControllerWireMessage::MaterialChunk { .. } => {
                         return Err(WorkerError::Session(
@@ -646,6 +772,57 @@ async fn run_session(
     }
 }
 
+async fn await_with_execution<F, T>(
+    future: F,
+    journal: &mut SqliteEventStore,
+    execution_tasks: &mut ExecutionTasks,
+) -> Result<T, WorkerError>
+where
+    F: Future<Output = T>,
+{
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            output = &mut future => return Ok(output),
+            Some(observation) = execution_tasks.receiver.recv() => {
+                record_execution_observation(journal, execution_tasks, *observation)?;
+            }
+        }
+    }
+}
+
+async fn receive_and_record_execution(
+    journal: &mut SqliteEventStore,
+    execution_tasks: &mut ExecutionTasks,
+) -> Result<(), WorkerError> {
+    let observation = execution_tasks
+        .receiver
+        .recv()
+        .await
+        .ok_or_else(|| WorkerError::Session("execution observation channel closed".into()))?;
+    record_execution_observation(journal, execution_tasks, *observation)
+}
+
+fn record_execution_observation(
+    journal: &mut SqliteEventStore,
+    execution_tasks: &mut ExecutionTasks,
+    observation: WorkerExecutionObservation,
+) -> Result<(), WorkerError> {
+    execution_tasks.pending = execution_tasks
+        .pending
+        .checked_sub(1)
+        .ok_or_else(|| WorkerError::Session("unexpected execution observation".into()))?;
+    record_worker_execution_observation(
+        journal,
+        observation,
+        ControlMessageId::new(),
+        &command("execute"),
+        observed_now()?,
+    )
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    Ok(())
+}
+
 async fn process_controller_frame(
     socket: &mut cairn_control_transport::ClientWebSocket,
     journal: &mut SqliteEventStore,
@@ -654,7 +831,7 @@ async fn process_controller_frame(
     worker_id: WorkerId,
     connection_id: &ControlConnectionId,
     frame: &ControlFrame<ControllerControlMessage>,
-) -> Result<(), WorkerError> {
+) -> Result<Option<WorkerExecutionAuthority>, WorkerError> {
     let now = observed_now()?;
     if let Some(acknowledged) = frame.acknowledges_peer_through {
         acknowledge_worker_messages(
@@ -668,7 +845,7 @@ async fn process_controller_frame(
         .map_err(|error| WorkerError::Session(error.to_string()))?;
     }
     let Some(message) = &frame.message else {
-        return Ok(());
+        return Ok(None);
     };
     match &message.payload {
         ControllerControlMessage::AssignmentOffer {
@@ -689,9 +866,10 @@ async fn process_controller_frame(
                 now,
             )
             .map_err(|error| WorkerError::Session(error.to_string()))?;
+            Ok(None)
         }
         ControllerControlMessage::StartExecution { .. } => {
-            if let Some(authority) = record_worker_execution_start(
+            let authority = record_worker_execution_start(
                 journal,
                 content,
                 worker_id,
@@ -700,22 +878,47 @@ async fn process_controller_frame(
                 &command("start"),
                 now,
             )
-            .map_err(|error| WorkerError::Session(error.to_string()))?
-            {
-                let mut executor = NotStartedExecutor;
-                execute_worker_attempt(
-                    journal,
-                    &mut executor,
-                    authority,
-                    ControlMessageId::new(),
-                    &command("execute"),
-                    observed_now()?,
-                )
-                .map_err(|error| WorkerError::Session(error.to_string()))?;
-            }
+            .map_err(|error| WorkerError::Session(error.to_string()))?;
+            Ok(authority)
         }
     }
-    Ok(())
+}
+
+fn spawn_worker_execution(
+    config: &WorkerConfig,
+    authority: WorkerExecutionAuthority,
+    sender: tokio::sync::mpsc::UnboundedSender<Box<WorkerExecutionObservation>>,
+) {
+    let content_config = config.content.clone();
+    let execution_config = config.execution.clone();
+    tokio::task::spawn_blocking(move || {
+        let observation = match &execution_config {
+            WorkerExecutionConfig::Disabled => {
+                invoke_worker_executor(&mut NotStartedExecutor::disabled(), authority)
+            }
+            WorkerExecutionConfig::LocalProcess { .. } => {
+                match SqliteContentStore::open(&content_config.database, &content_config.directory)
+                {
+                    Ok(content) => {
+                        match LocalProcessExecutor::from_config(&content, &execution_config) {
+                            Ok(mut executor) => invoke_worker_executor(&mut executor, authority),
+                            Err(error) => invoke_worker_executor(
+                                &mut NotStartedExecutor::configuration(error.to_string()),
+                                authority,
+                            ),
+                        }
+                    }
+                    Err(error) => invoke_worker_executor(
+                        &mut NotStartedExecutor::configuration(format!(
+                            "worker content reopen failed before workload start: {error}"
+                        )),
+                        authority,
+                    ),
+                }
+            }
+        };
+        let _ = sender.send(Box::new(observation));
+    });
 }
 
 async fn materialize_assignment_offer(
@@ -1077,7 +1280,7 @@ fn generated_join_configuration(
     control: &cairn_control_transport::WorkerControlEndpoint,
 ) -> Result<WorkerConfig, WorkerError> {
     Ok(WorkerConfig {
-        schema_version: 7,
+        schema_version: 8,
         controller: ControllerEndpoint {
             tcp_address: control.tcp_address.clone(),
             websocket_uri: control.websocket_uri.clone(),
@@ -1119,6 +1322,7 @@ fn generated_join_configuration(
             assignment_material_chunk_size: AssignmentMaterialChunkSize::new(256 * 1024)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         },
+        execution: WorkerExecutionConfig::Disabled,
         handshake_timeout_ms: NonZeroU64::new(10_000),
         idle_timeout_ms: NonZeroU64::new(120_000),
         heartbeat_interval_ms: NonZeroU64::new(30_000),
@@ -1776,9 +1980,14 @@ fn resolve(path: &mut PathBuf, base: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use cairn_execution::{ArchitectureName, ExecutionPlatformRequirement, WorkerResourceSource};
+    use std::{num::NonZeroU64, path::PathBuf};
 
-    use super::WorkerConfig;
+    use cairn_execution::{
+        ArchitectureName, ExecutionBackend, ExecutionPlatformRequirement, WorkerAvailability,
+        WorkerHealth, WorkerResourceSource,
+    };
+
+    use super::{LinuxNamespaceConfig, WorkerConfig, WorkerExecutionConfig};
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
@@ -1810,5 +2019,31 @@ mod tests {
             None,
         );
         assert!(config.runtime_profile().is_err());
+    }
+
+    #[test]
+    fn local_process_activation_is_one_coherent_invariant() {
+        let mut config: WorkerConfig =
+            serde_json::from_str(include_str!("../../../config/worker.example.json"))
+                .expect("documented worker configuration");
+        config.execution = WorkerExecutionConfig::LocalProcess {
+            sandbox_directory: PathBuf::from("state/sandboxes"),
+            namespace: LinuxNamespaceConfig {
+                command: PathBuf::from("/usr/bin/unshare"),
+                preflight_timeout_ms: NonZeroU64::new(1_000),
+            },
+            supervisor_poll_interval_ms: NonZeroU64::new(10).expect("poll interval"),
+            materialized_file_byte_limit: None,
+        };
+        config.profile.backends = vec![ExecutionBackend::new("local-process-v1").expect("backend")];
+        config.availability = WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+            .expect("availability");
+        let profile = config.runtime_profile().expect("runtime profile");
+        config.validate(&profile).expect("coherent activation");
+
+        config.availability =
+            WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())
+                .expect("availability");
+        assert!(config.validate(&profile).is_err());
     }
 }

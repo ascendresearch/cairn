@@ -446,10 +446,17 @@ pub enum WorkerResultReconciliation {
 /// One-shot worker-local authority created only after a start command is durably journaled.
 pub struct WorkerExecutionAuthority {
     stream: StreamId,
-    revision: StreamRevision,
-    last_event_id: EventId,
     binding: AssignmentBinding,
     contract: JobContract,
+}
+
+/// Completed executor invocation awaiting serialized worker-journal publication.
+///
+/// The value retains the consumed one-shot authority, so blocking supervision and journal append
+/// may occur on different tasks without granting a second invocation.
+pub struct WorkerExecutionObservation {
+    authority: WorkerExecutionAuthority,
+    result: ReconciledExecutionResult,
 }
 
 /// Worker-control and journal failure.
@@ -1229,11 +1236,9 @@ pub fn record_worker_execution_start<E: EventStore, C: ContentStore>(
             binding: binding.clone(),
         },
     )?;
-    let outcome = events.append(&stream, expected(projection.revision), command_id, &[event])?;
+    events.append(&stream, expected(projection.revision), command_id, &[event])?;
     Ok(Some(WorkerExecutionAuthority {
         stream,
-        revision: revision(outcome.last_sequence)?,
-        last_event_id: only_event_id(&outcome.event_ids)?,
         binding: binding.clone(),
         contract: attempt.contract.clone(),
     }))
@@ -1253,6 +1258,23 @@ pub fn execute_worker_attempt<E: EventStore, X: Executor>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ReconciledExecutionResult, ControlProtocolError> {
+    let observation = invoke_worker_executor(executor, authority);
+    record_worker_execution_observation(
+        events,
+        observation,
+        result_message_id,
+        command_id,
+        observed_at,
+    )
+}
+
+/// Consumes the only execution token and invokes a possibly blocking executor without writing the
+/// worker journal. The returned observation still owns the token and can be published only once.
+#[must_use]
+pub fn invoke_worker_executor<X: Executor>(
+    executor: &mut X,
+    authority: WorkerExecutionAuthority,
+) -> WorkerExecutionObservation {
     let input = ExecutionInput {
         job_id: authority.binding.job_id(),
         attempt_id: authority.binding.attempt_id(),
@@ -1276,6 +1298,34 @@ pub fn execute_worker_attempt<E: EventStore, X: Executor>(
             }
         }
     };
+    WorkerExecutionObservation { authority, result }
+}
+
+/// Appends one observed executor result after reloading any intervening delivery/acknowledgement
+/// facts. This lets the async worker keep one serialized journal writer while supervision blocks.
+///
+/// # Errors
+///
+/// Returns an error if the attempt is no longer exactly started or publication cannot commit.
+pub fn record_worker_execution_observation<E: EventStore>(
+    events: &mut E,
+    observation: WorkerExecutionObservation,
+    result_message_id: ControlMessageId,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ReconciledExecutionResult, ControlProtocolError> {
+    let WorkerExecutionObservation { authority, result } = observation;
+    let projection = project_worker(
+        &events.read_stream(&authority.stream, None)?,
+        authority.binding.worker_id(),
+    )?;
+    let attempt = projection
+        .attempts
+        .get(&authority.binding.attempt_id())
+        .ok_or(ControlProtocolError::InvalidTransition)?;
+    if attempt.binding != authority.binding || attempt.phase != LocalPhase::Started {
+        return Err(ControlProtocolError::InvalidTransition);
+    }
     let response = DurableControlMessage {
         message_id: result_message_id,
         payload: WorkerControlMessage::ExecutionResult {
@@ -1285,7 +1335,7 @@ pub fn execute_worker_attempt<E: EventStore, X: Executor>(
     };
     let event = fact(
         WORKER_RESULT,
-        Some(authority.last_event_id),
+        projection.last_event_id,
         observed_at,
         &WorkerResultPayload {
             worker_id: authority.binding.worker_id(),
@@ -1295,7 +1345,7 @@ pub fn execute_worker_attempt<E: EventStore, X: Executor>(
     )?;
     events.append(
         &authority.stream,
-        ExpectedRevision::Exact(authority.revision),
+        expected(projection.revision),
         command_id,
         &[event],
     )?;
@@ -1995,13 +2045,6 @@ fn revision(
 
 fn expected(revision: Option<StreamRevision>) -> ExpectedRevision {
     revision.map_or(ExpectedRevision::NoStream, ExpectedRevision::Exact)
-}
-
-fn only_event_id(event_ids: &[EventId]) -> Result<EventId, ControlProtocolError> {
-    match event_ids {
-        [event_id] => Ok(*event_id),
-        _ => invalid("single-event append returned an invalid identity count"),
-    }
 }
 
 fn invalid<T>(message: &str) -> Result<T, ControlProtocolError> {
@@ -2707,10 +2750,20 @@ mod tests {
             contract_id,
             capture,
         }]);
-        execute_worker_attempt(
+        let observation = invoke_worker_executor(&mut executor, worker_authority);
+        deliver_worker_acknowledgement(
             &mut fixture.worker_events,
-            &mut executor,
-            worker_authority,
+            fixture.worker_id,
+            protocol_version(),
+            third_connection,
+            ControlSequence::new(1).expect("start acknowledgement"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(8),
+        )
+        .expect("heartbeat-capable intervening acknowledgement");
+        record_worker_execution_observation(
+            &mut fixture.worker_events,
+            observation,
             ControlMessageId::new(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(8),
@@ -2755,7 +2808,7 @@ mod tests {
             fixture.worker_id,
             protocol_version(),
             third_connection,
-            ControlSequence::new(1).expect("result through"),
+            result_frames[0].sequence,
             &CommandId::new(),
             ObservedAtUnixMillis::new(9),
         )
