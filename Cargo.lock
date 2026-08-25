@@ -66,6 +66,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-execution"
+version = "0.1.0"
+dependencies = [
+ "cairn-codec",
+ "cairn-protocol",
+ "cairn-record",
+ "cairn-store-sqlite",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "cairn-protocol"
 version = "0.1.0"
 dependencies = [

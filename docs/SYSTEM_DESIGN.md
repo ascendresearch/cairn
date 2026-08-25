@@ -519,7 +519,34 @@ A job contains:
 
 Product task kind is metadata owned by the workflow, not an execution enum variant.
 
+**Implemented controller kernel (2026-08-24).** `cairn-execution` archives the canonical V1 job
+contract only after verifying its typed input-bundle and environment references. Its current
+identity covers logical job, input, environment, backend, command, resources/capabilities, network,
+and configurable stdout, stderr, diagnostic, trusted-evidence, and declared-output bounds. Mount
+and richer sandbox/effect policy remain part of the target contract above. The command is an exact
+sandbox-relative program plus argv; there is no shell-string or host-path form in the contract.
+
+Attempt authority is linear and durable:
+
+```text
+Authorized → Started → Completed(receipt)
+                     ↘ NotStarted → fresh AttemptId may be authorized
+                     ↘ Ambiguous  → reconciliation required
+restart after Started without a terminal fact → InDoubt
+```
+
+The executor port receives authority only after `Started` commits. A recovered `Authorized` fact can
+reconstruct start authority, but a recovered `Started` fact cannot reconstruct execution authority.
+Completed recovery reloads every cited CAS artifact and revalidates outcome/exit semantics, byte
+bounds, output completeness, observed backend/environment, canonical output ordering, and receipt
+lineage against the frozen contract. Recorded and scripted executors are the current deterministic
+capabilities; real local-process and remote-worker adapters remain target work.
+
 ### 10.2 Worker protocol
+
+This subsection is the next execution slice, not an implementation claim. Worker identity,
+incarnation, authentication, capability matching, leases, heartbeat, expiry, and reconciliation are
+deliberately built on the controller attempt kernel above.
 
 Workers dial the controller. A connection establishes:
 

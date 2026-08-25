@@ -2,6 +2,7 @@
 members = [
     "crates/cairn-agent",
     "crates/cairn-codec",
+    "crates/cairn-execution",
     "crates/cairn-protocol",
     "crates/cairn-record",
     "crates/cairn-store-sqlite",
@@ -17,6 +18,7 @@ license = "MIT"
 [workspace.dependencies]
 cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
+cairn-execution = { path = "crates/cairn-execution" }
 cairn-protocol = { path = "crates/cairn-protocol" }
 cairn-record = { path = "crates/cairn-record" }
 rusqlite = { version = "0.37.0", features = ["bundled"] }

@@ -288,6 +288,21 @@ service adapters have not yet been connected to this capability seam.
 
 ### 7.3 Execution facts
 
+The implemented controller-side subset uses these stable V1 schema names:
+
+- `execution.attempt-authorized` cites one logical job, fresh attempt, and immutable contract;
+- `execution.attempt-started` commits before executor authority is invoked;
+- `execution.attempt-completed` cites a canonical receipt and its complete CAS closure;
+- `execution.attempt-not-started` proves retry can use a fresh attempt identity;
+- `execution.attempt-ambiguous` denies blind retry and requires reconciliation.
+
+Their causal parent chain, contract identity, and attempt uniqueness are rechecked during every
+projection. Receipt recovery walks and semantically revalidates stdout, stderr, declared outputs,
+trusted evidence, and the receipt itself. CAS objects archived before a failed terminal-event append
+remain inert evidence; they do not create a completion fact.
+
+The remaining remote-worker/lease vocabulary is target design:
+
 - `JobDeclared`
 - `AssignmentLeased`
 - `AttemptStarted`

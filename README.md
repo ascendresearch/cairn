@@ -63,6 +63,15 @@ extracts provider usage receipts, and retains ambiguous-effect semantics. The op
 Responses check has also completed a real tool-call continuation across a SQLite/CAS close-reopen
 boundary without printing thinking or answer content. Later configuration changes affect new
 episodes, not historical meaning.
+The first execution-control slice is now implemented in `cairn-execution`: opaque versioned job
+contracts have typed input/environment/backend/argv/resource/policy/output dimensions, configurable
+capture bounds, and content identities that change when any immutable dimension changes. One-shot
+attempt authority commits before an executor can run. SQLite/CAS recovery reconstructs authorized
+work, treats a started attempt with no terminal fact as in-doubt, allows retry only under a fresh
+attempt identity after a proven-not-started or completed terminal state, and revalidates complete
+receipts against their frozen contract. Recorded/scripted executors exercise the seam without local
+process authority. Candidate-writable stdout, stderr, and declared outputs occupy separate
+untrusted content domains from canonical trusted supervisor evidence.
 The remaining architecture in the normative documents is still target design. The old repositories
 are evidence and compatibility references, not source trees to copy mechanically.
 
