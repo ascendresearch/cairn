@@ -79,7 +79,7 @@ impl TransportPolicy {
 pub enum WorkerWireMessage {
     /// First message after mTLS and WebSocket handshake.
     Hello {
-        hello: WorkerHello,
+        hello: Box<WorkerHello>,
         availability: WorkerAvailability,
     },
     /// Ephemeral liveness/capacity observation.

@@ -380,16 +380,18 @@ mod tests {
 
     use cairn_control_transport::{EnrollmentRequest, EnrollmentSecret, TransportPolicy};
     use cairn_execution::{
-        ArchitectureName, CapturePolicy, CommandContract, DiagnosticByteLimit, EvidenceByteLimit,
-        ExecutionBackend, ExecutionEnvironmentArtifact, ExecutionPlatform,
-        ExecutionPlatformRequirement, ExecutionTimeoutMillis, InputBundleArtifact, NetworkPolicy,
-        OperatingSystemName, OutputByteLimit, PlacementRequest, PlacementSnapshot,
-        RecordedWorkerAuthenticator, ResourceRequest, SandboxPath, TargetEnvironmentName,
-        WorkerAuthenticationSubject, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth,
-        WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
-        WorkerResourceInventory, WorkerResourceSource, WorkerSessionTimeoutMillis, WorkerSlotCount,
-        authorize_execution_attempt, prepare_execution_job, record_worker_heartbeat,
-        register_worker,
+        AcceleratorDiscoveryCompleteness, ArchitectureName, CapturePolicy, CommandContract,
+        DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionEnvironmentArtifact,
+        ExecutionPlatform, ExecutionPlatformRequirement, ExecutionTimeoutMillis,
+        InputBundleArtifact, LogicalCpuCount, MemoryByteCount, NetworkPolicy, OperatingSystemName,
+        OutputByteLimit, PlacementRequest, PlacementSnapshot, RecordedWorkerAuthenticator,
+        ResourceProbeVersion, ResourceRequest, SandboxPath, ScratchByteCount,
+        TargetEnvironmentName, WorkerAuthenticationSubject, WorkerAvailability,
+        WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile,
+        WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
+        WorkerResourceObservation, WorkerResourceSource, WorkerSessionTimeoutMillis,
+        WorkerSlotCount, authorize_execution_attempt, prepare_execution_job,
+        record_worker_heartbeat, register_worker,
     };
     use cairn_protocol::{ContentType, JobId, WorkerIncarnationId};
     use cairn_record::ContentStore;
@@ -484,6 +486,18 @@ mod tests {
                     WorkerResourceSource::OperatorDeclared,
                 )],
                 Vec::new(),
+                WorkerResourceObservation::new(
+                    WorkerResourceSource::BuiltinProbe,
+                    ResourceProbeVersion::new("fixture-probe-v1").expect("probe version"),
+                    ObservedAtUnixMillis::new(2),
+                    None,
+                    LogicalCpuCount::new(8).expect("logical CPUs"),
+                    MemoryByteCount::new(16 * 1024 * 1024 * 1024).expect("memory"),
+                    ScratchByteCount::new(64 * 1024 * 1024 * 1024).expect("scratch"),
+                    AcceleratorDiscoveryCompleteness::Complete,
+                    Vec::new(),
+                )
+                .expect("resource observation"),
                 WorkerSlotCount::new(1).expect("slots"),
             )
             .expect("resources"),

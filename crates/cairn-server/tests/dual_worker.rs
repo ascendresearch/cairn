@@ -24,7 +24,10 @@ use cairn_server::{
     WorkerEnrollment, release_execution_reservation_at, schedule_execution_contract_at,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-use cairn_worker::{ControllerEndpoint, WorkerConfig, WorkerIdentityConfig, WorkerProfileConfig};
+use cairn_worker::{
+    ControllerEndpoint, ExpectedResourceConstraints, ResourceProbeConfig, WorkerConfig,
+    WorkerIdentityConfig, WorkerProfileConfig,
+};
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose,
@@ -281,7 +284,7 @@ fn worker_config(
     protocol: WorkerProtocolVersion,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     Ok(WorkerConfig {
-        schema_version: 3,
+        schema_version: 4,
         controller,
         identity: WorkerIdentityConfig::External {
             worker_id,
@@ -293,7 +296,7 @@ fn worker_config(
             },
         },
         profile: WorkerProfileConfig {
-            schema_version: 1,
+            schema_version: 2,
             protocol_version: protocol,
             binary_identity: WorkerBinaryIdentity::new("sha256:transport-test")?,
             backends: vec![ExecutionBackend::new("transport-test")?],
@@ -301,6 +304,12 @@ fn worker_config(
             max_concurrency: WorkerSlotCount::new(1)?,
         },
         expected_platform: ExecutionPlatformRequirement::default(),
+        resource_probe: ResourceProbeConfig {
+            scratch_path: directory.to_path_buf(),
+            accelerator_sysfs: None,
+            freshness_ms: None,
+            expected: ExpectedResourceConstraints::default(),
+        },
         availability: WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())?,
         journal_database: directory.join(format!("worker-{suffix}.sqlite3")),
         handshake_timeout_ms: NonZeroU64::new(2_000),

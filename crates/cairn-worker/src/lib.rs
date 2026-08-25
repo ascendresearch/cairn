@@ -1,5 +1,7 @@
 //! Runnable outbound Cairn worker composition root.
 
+mod probe;
+
 use std::{
     ffi::OsString,
     fs,
@@ -37,6 +39,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::time::Instant;
 
+pub use probe::{
+    ExpectedResourceConstraints, HostResourceProbe, ResourceProbeConfig, ResourceProbeError,
+};
+
 /// Strict worker process configuration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +53,7 @@ pub struct WorkerConfig {
     pub profile: WorkerProfileConfig,
     #[serde(default)]
     pub expected_platform: ExecutionPlatformRequirement,
+    pub resource_probe: ResourceProbeConfig,
     pub availability: WorkerAvailability,
     pub journal_database: PathBuf,
     pub handshake_timeout_ms: Option<NonZeroU64>,
@@ -294,14 +301,14 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 3 {
+        if self.schema_version != 4 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 3 is supported".into(),
+                "only worker schema_version 4 is supported".into(),
             ));
         }
-        if self.profile.schema_version != 1 {
+        if self.profile.schema_version != 2 {
             return Err(WorkerError::Configuration(
-                "only worker profile configuration schema_version 1 is supported".into(),
+                "only worker profile configuration schema_version 2 is supported".into(),
             ));
         }
         let platform = ExecutionPlatform::detect_host()
@@ -327,6 +334,11 @@ impl WorkerConfig {
             )));
         }
         let declared = WorkerResourceSource::OperatorDeclared;
+        let quantitative = HostResourceProbe::probe(
+            &self.resource_probe,
+            observed_now().map_err(|error| WorkerError::Configuration(error.to_string()))?,
+        )
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
         let resources = WorkerResourceInventory::new(
             WorkerResourceClaim::new(platform, WorkerResourceSource::BuiltinProbe),
             self.profile
@@ -341,6 +353,7 @@ impl WorkerConfig {
                 .cloned()
                 .map(|value| WorkerResourceClaim::new(value, declared))
                 .collect(),
+            quantitative,
             self.profile.max_concurrency,
         )
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
@@ -392,6 +405,10 @@ impl WorkerConfig {
             WorkerIdentityConfig::Managed { state_directory } => resolve(state_directory, base),
         }
         resolve(&mut self.journal_database, base);
+        resolve(&mut self.resource_probe.scratch_path, base);
+        if let Some(path) = &mut self.resource_probe.accelerator_sysfs {
+            resolve(path, base);
+        }
     }
 
     fn availability(
@@ -437,7 +454,11 @@ async fn run_session(
     write_wire_message(
         &mut socket,
         &WorkerWireMessage::Hello {
-            hello: WorkerHello::new(identity.worker_id, *incarnation_id, profile.clone()),
+            hello: Box::new(WorkerHello::new(
+                identity.worker_id,
+                *incarnation_id,
+                profile.clone(),
+            )),
             availability: config.availability(journal, identity.worker_id)?,
         },
         config.transport,

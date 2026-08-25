@@ -1712,6 +1712,7 @@ mod tests {
                         WorkerResourceSource::OperatorDeclared,
                     )],
                     Vec::new(),
+                    crate::worker::test_resource_observation(0),
                     WorkerSlotCount::new(1).expect("slots"),
                 )
                 .expect("resources"),

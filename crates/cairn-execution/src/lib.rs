@@ -16,16 +16,17 @@ pub use assignment::{
     recover_execution_assignment, renew_assignment_lease, start_accepted_assignment,
 };
 pub use contract::{
-    ArchitectureName, ArchivedOutput, CapabilityName, CapabilityRequirement, CapabilityValue,
-    CapturePolicy, CommandArgument, CommandContract, ContractValueError, DeclaredOutputArtifact,
-    DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionElapsedMillis,
-    ExecutionEnvironmentArtifact, ExecutionEvidenceArtifact, ExecutionObservation,
-    ExecutionOutcome, ExecutionPlatform, ExecutionPlatformRequirement, ExecutionReceipt,
-    ExecutionReceiptArtifact, ExecutionStderrArtifact, ExecutionStdoutArtifact,
-    ExecutionTimeoutMillis, ExpectedOutput, InputBundleArtifact, JobContract, JobContractArtifact,
+    AcceleratorDeviceCount, AcceleratorResourceRequest, ArchitectureName, ArchivedOutput,
+    CapabilityName, CapabilityRequirement, CapabilityValue, CapturePolicy, CommandArgument,
+    CommandContract, ContractValueError, DeclaredOutputArtifact, DiagnosticByteLimit,
+    EvidenceByteLimit, ExecutionBackend, ExecutionElapsedMillis, ExecutionEnvironmentArtifact,
+    ExecutionEvidenceArtifact, ExecutionObservation, ExecutionOutcome, ExecutionPlatform,
+    ExecutionPlatformRequirement, ExecutionReceipt, ExecutionReceiptArtifact,
+    ExecutionStderrArtifact, ExecutionStdoutArtifact, ExecutionTimeoutMillis, ExpectedOutput,
+    InputBundleArtifact, JobContract, JobContractArtifact, LogicalCpuCount, MemoryByteCount,
     NetworkPolicy, OperatingSystemName, OutputByteLimit, OutputName, PlacementRequest,
-    ResolvedProgramIdentity, ResourceRequest, SandboxPath, TargetEnvironmentName,
-    TrustedExecutionEvidence, WorkerPoolName,
+    QuantitativeResourceRequest, ResolvedProgramIdentity, ResourceRequest, SandboxPath,
+    ScratchByteCount, TargetEnvironmentName, TrustedExecutionEvidence, WorkerPoolName,
 };
 pub use control::{
     ControlEnqueueOutcome, ControlFrame, ControlFrameByteLimit, ControlFramePolicy,
@@ -57,12 +58,14 @@ pub use scheduler::{
     recover_scheduler_placement, release_scheduler_reservation, reserve_worker_placement,
 };
 pub use worker::{
+    AcceleratorDevice, AcceleratorDeviceId, AcceleratorDiscoveryCompleteness,
     AssignmentLeaseDurationMillis, AuthenticatedWorkerIdentity, RecordedWorkerAuthenticator,
-    RegisteredWorkerSession, ReservationClaimTimeoutMillis, WorkerAuthenticationError,
-    WorkerAuthenticationSubject, WorkerAuthenticator, WorkerAvailability,
-    WorkerAvailabilityArtifact, WorkerBinaryIdentity, WorkerControlError, WorkerHealth,
-    WorkerHello, WorkerMatchFailure, WorkerProfile, WorkerProfileArtifact, WorkerProtocolVersion,
-    WorkerResourceClaim, WorkerResourceInventory, WorkerResourceSource, WorkerSessionState,
-    WorkerSessionTimeoutMillis, WorkerSlotCount, WorkerValueError, disconnect_worker, match_worker,
-    record_worker_heartbeat, recover_worker_session, register_worker,
+    RegisteredWorkerSession, ReservationClaimTimeoutMillis, ResourceProbeVersion,
+    WorkerAuthenticationError, WorkerAuthenticationSubject, WorkerAuthenticator,
+    WorkerAvailability, WorkerAvailabilityArtifact, WorkerBinaryIdentity, WorkerControlError,
+    WorkerHealth, WorkerHello, WorkerMatchFailure, WorkerProfile, WorkerProfileArtifact,
+    WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory, WorkerResourceObservation,
+    WorkerResourceSource, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
+    WorkerValueError, disconnect_worker, match_worker, match_worker_at, record_worker_heartbeat,
+    recover_worker_session, register_worker,
 };

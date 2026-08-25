@@ -18,8 +18,8 @@ use cairn_server::{
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
-    ControllerEndpoint, WorkerConfig, WorkerIdentityConfig, WorkerProfileConfig, enroll,
-    rollback_rotation, rotate,
+    ControllerEndpoint, ExpectedResourceConstraints, ResourceProbeConfig, WorkerConfig,
+    WorkerIdentityConfig, WorkerProfileConfig, enroll, rollback_rotation, rotate,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -414,14 +414,14 @@ fn worker_config(
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     let journal_database = state_directory.join("worker-journal.sqlite3");
     Ok(WorkerConfig {
-        schema_version: 3,
+        schema_version: 4,
         controller: ControllerEndpoint {
             tcp_address: control.to_string(),
             websocket_uri: format!("wss://localhost:{}/control", control.port()),
         },
         identity: WorkerIdentityConfig::Managed { state_directory },
         profile: WorkerProfileConfig {
-            schema_version: 1,
+            schema_version: 2,
             protocol_version: WorkerProtocolVersion::new(1)?,
             binary_identity: WorkerBinaryIdentity::new("sha256:enrollment-test")?,
             backends: vec![ExecutionBackend::new("transport-test")?],
@@ -429,6 +429,15 @@ fn worker_config(
             max_concurrency: WorkerSlotCount::new(1)?,
         },
         expected_platform: ExecutionPlatformRequirement::default(),
+        resource_probe: ResourceProbeConfig {
+            scratch_path: journal_database
+                .parent()
+                .expect("journal parent")
+                .to_path_buf(),
+            accelerator_sysfs: None,
+            freshness_ms: None,
+            expected: ExpectedResourceConstraints::default(),
+        },
         availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())?,
         journal_database,
         handshake_timeout_ms: NonZeroU64::new(2_000),

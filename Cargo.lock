@@ -245,6 +245,7 @@ dependencies = [
  "cairn-protocol",
  "cairn-store-sqlite",
  "rcgen",
+ "rustix",
  "rustls-pemfile",
  "serde",
  "serde_json",

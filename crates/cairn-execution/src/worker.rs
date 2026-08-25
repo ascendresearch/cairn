@@ -78,6 +78,16 @@ worker_label!(
     WorkerBinaryIdentity,
     InvalidBinaryIdentity
 );
+worker_label!(
+    /// Versioned implementation identity for one resource probe.
+    ResourceProbeVersion,
+    InvalidResourceProbeVersion
+);
+worker_label!(
+    /// Stable identifier reported for one accelerator within an observation.
+    AcceleratorDeviceId,
+    InvalidAcceleratorDeviceId
+);
 
 macro_rules! positive_worker_quantity {
     ($(#[$meta:meta])* $name:ident, $wire:ty, $error:ident) => {
@@ -180,6 +190,12 @@ pub enum WorkerValueError {
     /// Binary identities have a conservative text boundary.
     #[error("worker binary identity is invalid")]
     InvalidBinaryIdentity,
+    /// Probe versions have a conservative text boundary.
+    #[error("worker resource probe version is invalid")]
+    InvalidResourceProbeVersion,
+    /// Accelerator identifiers have a conservative text boundary.
+    #[error("worker accelerator device identity is invalid")]
+    InvalidAcceleratorDeviceId,
     /// Protocol version zero is not a version.
     #[error("worker protocol version must be greater than zero")]
     ZeroProtocolVersion,
@@ -198,6 +214,12 @@ pub enum WorkerValueError {
     /// Resource claims must retain one canonical entry for each backend/capability.
     #[error("worker resource claims must be unique and in canonical order")]
     NonCanonicalResourceClaims,
+    /// Resource observations must have coherent time bounds and canonical devices/capabilities.
+    #[error("worker resource observation is invalid or non-canonical")]
+    InvalidResourceObservation,
+    /// A built-in worker observation was created in the future or is no longer fresh.
+    #[error("worker resource observation is not fresh at the controller observation time")]
+    StaleResourceObservation,
     /// A hello cannot elevate its own resource claim to controller/external assurance.
     #[error("worker hello contains resource provenance it is not authorized to assert")]
     UnadmittedResourceProvenance,
@@ -207,7 +229,7 @@ pub enum WorkerValueError {
     /// Dynamic availability exceeded the registered capacity.
     #[error("worker available slots exceed registered maximum concurrency")]
     SlotsExceedCapacity,
-    /// Only the implemented V2 worker profile is accepted.
+    /// Only the implemented V3 worker profile is accepted.
     #[error("worker profile schema version is unsupported")]
     UnsupportedProfileSchema,
 }
@@ -254,6 +276,196 @@ impl<T> WorkerResourceClaim<T> {
     }
 }
 
+/// Whether the probe accounted for the complete accelerator namespace it inspected.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AcceleratorDiscoveryCompleteness {
+    /// An empty device list proves absence in the inspected namespace.
+    Complete,
+    /// Discovery was disabled or at least one device could not be fully inspected.
+    Partial,
+}
+
+/// One vendor-neutral accelerator device and its probe-observed equality capabilities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceleratorDevice {
+    device_id: AcceleratorDeviceId,
+    capabilities: Vec<CapabilityRequirement>,
+}
+
+impl AcceleratorDevice {
+    /// Creates a device with canonical, uniquely named capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate capability names.
+    pub fn new(
+        device_id: AcceleratorDeviceId,
+        mut capabilities: Vec<CapabilityRequirement>,
+    ) -> Result<Self, WorkerValueError> {
+        capabilities.sort_by(|left, right| left.name.cmp(&right.name));
+        let value = Self {
+            device_id,
+            capabilities,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), WorkerValueError> {
+        if self
+            .capabilities
+            .windows(2)
+            .any(|pair| pair[0].name >= pair[1].name)
+        {
+            Err(WorkerValueError::InvalidResourceObservation)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[must_use]
+    pub const fn device_id(&self) -> &AcceleratorDeviceId {
+        &self.device_id
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> &[CapabilityRequirement] {
+        &self.capabilities
+    }
+}
+
+/// One timestamped, freshness-bounded quantitative resource observation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResourceObservation {
+    source: WorkerResourceSource,
+    probe_version: ResourceProbeVersion,
+    observed_at: ObservedAtUnixMillis,
+    valid_until: Option<ObservedAtUnixMillis>,
+    logical_cpus: crate::LogicalCpuCount,
+    memory_bytes: crate::MemoryByteCount,
+    scratch_available_bytes: crate::ScratchByteCount,
+    accelerator_discovery: AcceleratorDiscoveryCompleteness,
+    accelerators: Vec<AcceleratorDevice>,
+}
+
+impl WorkerResourceObservation {
+    /// Creates a canonical quantitative observation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid freshness, duplicate devices, or non-canonical capabilities.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every independently audited resource dimension remains explicit"
+    )]
+    pub fn new(
+        source: WorkerResourceSource,
+        probe_version: ResourceProbeVersion,
+        observed_at: ObservedAtUnixMillis,
+        valid_until: Option<ObservedAtUnixMillis>,
+        logical_cpus: crate::LogicalCpuCount,
+        memory_bytes: crate::MemoryByteCount,
+        scratch_available_bytes: crate::ScratchByteCount,
+        accelerator_discovery: AcceleratorDiscoveryCompleteness,
+        mut accelerators: Vec<AcceleratorDevice>,
+    ) -> Result<Self, WorkerValueError> {
+        accelerators.sort_by(|left, right| left.device_id.cmp(&right.device_id));
+        let value = Self {
+            source,
+            probe_version,
+            observed_at,
+            valid_until,
+            logical_cpus,
+            memory_bytes,
+            scratch_available_bytes,
+            accelerator_discovery,
+            accelerators,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), WorkerValueError> {
+        if self
+            .valid_until
+            .is_some_and(|until| until <= self.observed_at)
+            || self
+                .accelerators
+                .windows(2)
+                .any(|pair| pair[0].device_id >= pair[1].device_id)
+            || self
+                .accelerators
+                .iter()
+                .any(|device| device.validate().is_err())
+        {
+            Err(WorkerValueError::InvalidResourceObservation)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn ensure_fresh_at(
+        &self,
+        observed_at: ObservedAtUnixMillis,
+    ) -> Result<(), WorkerValueError> {
+        if observed_at < self.observed_at
+            || self.valid_until.is_some_and(|until| observed_at >= until)
+        {
+            Err(WorkerValueError::StaleResourceObservation)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> WorkerResourceSource {
+        self.source
+    }
+
+    #[must_use]
+    pub const fn probe_version(&self) -> &ResourceProbeVersion {
+        &self.probe_version
+    }
+
+    #[must_use]
+    pub const fn observed_at(&self) -> ObservedAtUnixMillis {
+        self.observed_at
+    }
+
+    #[must_use]
+    pub const fn valid_until(&self) -> Option<ObservedAtUnixMillis> {
+        self.valid_until
+    }
+
+    #[must_use]
+    pub const fn logical_cpus(&self) -> crate::LogicalCpuCount {
+        self.logical_cpus
+    }
+
+    #[must_use]
+    pub const fn memory_bytes(&self) -> crate::MemoryByteCount {
+        self.memory_bytes
+    }
+
+    #[must_use]
+    pub const fn scratch_available_bytes(&self) -> crate::ScratchByteCount {
+        self.scratch_available_bytes
+    }
+
+    #[must_use]
+    pub const fn accelerator_discovery(&self) -> AcceleratorDiscoveryCompleteness {
+        self.accelerator_discovery
+    }
+
+    #[must_use]
+    pub fn accelerators(&self) -> &[AcceleratorDevice] {
+        &self.accelerators
+    }
+}
+
 /// Static resource inventory advertised by one worker incarnation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -261,6 +473,7 @@ pub struct WorkerResourceInventory {
     platform: WorkerResourceClaim<ExecutionPlatform>,
     backends: Vec<WorkerResourceClaim<ExecutionBackend>>,
     capabilities: Vec<WorkerResourceClaim<CapabilityRequirement>>,
+    quantitative: WorkerResourceObservation,
     max_concurrency: WorkerSlotCount,
 }
 
@@ -274,6 +487,7 @@ impl WorkerResourceInventory {
         platform: WorkerResourceClaim<ExecutionPlatform>,
         mut backends: Vec<WorkerResourceClaim<ExecutionBackend>>,
         mut capabilities: Vec<WorkerResourceClaim<CapabilityRequirement>>,
+        quantitative: WorkerResourceObservation,
         max_concurrency: WorkerSlotCount,
     ) -> Result<Self, WorkerValueError> {
         backends.sort_by(|left, right| left.value.cmp(&right.value));
@@ -282,6 +496,7 @@ impl WorkerResourceInventory {
             platform,
             backends,
             capabilities,
+            quantitative,
             max_concurrency,
         };
         inventory.validate()?;
@@ -301,7 +516,7 @@ impl WorkerResourceInventory {
         {
             return Err(WorkerValueError::NonCanonicalResourceClaims);
         }
-        Ok(())
+        self.quantitative.validate()
     }
 
     /// Returns the exact native worker platform claim.
@@ -320,6 +535,12 @@ impl WorkerResourceInventory {
     #[must_use]
     pub fn capabilities(&self) -> &[WorkerResourceClaim<CapabilityRequirement>] {
         &self.capabilities
+    }
+
+    /// Returns the timestamped quantitative resource observation.
+    #[must_use]
+    pub const fn quantitative(&self) -> &WorkerResourceObservation {
+        &self.quantitative
     }
 
     /// Returns maximum concurrent assignments.
@@ -351,7 +572,7 @@ impl WorkerProfile {
         resources: WorkerResourceInventory,
     ) -> Result<Self, WorkerValueError> {
         let profile = Self {
-            schema_version: 2,
+            schema_version: 3,
             protocol_version,
             binary_identity,
             resources,
@@ -361,15 +582,19 @@ impl WorkerProfile {
     }
 
     fn validate(&self) -> Result<(), WorkerValueError> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err(WorkerValueError::UnsupportedProfileSchema);
         }
         self.resources.validate()
     }
 
-    fn validate_advertised(&self) -> Result<(), WorkerValueError> {
+    fn validate_advertised(
+        &self,
+        observed_at: ObservedAtUnixMillis,
+    ) -> Result<(), WorkerValueError> {
         self.validate()?;
         if self.resources.platform.source != WorkerResourceSource::BuiltinProbe
+            || self.resources.quantitative.source != WorkerResourceSource::BuiltinProbe
             || self
                 .resources
                 .backends
@@ -383,7 +608,7 @@ impl WorkerProfile {
         {
             return Err(WorkerValueError::UnadmittedResourceProvenance);
         }
-        Ok(())
+        self.resources.quantitative.ensure_fresh_at(observed_at)
     }
 
     /// Returns the control-protocol version.
@@ -630,7 +855,7 @@ impl WorkerAvailability {
 /// Immutable content domain for canonical worker profiles.
 pub struct WorkerProfileArtifact;
 impl ContentType for WorkerProfileArtifact {
-    const DOMAIN: &'static str = "execution.worker-profile.v2";
+    const DOMAIN: &'static str = "execution.worker-profile.v3";
 }
 
 /// Immutable content domain for dynamic availability snapshots.
@@ -761,6 +986,24 @@ pub enum WorkerMatchFailure {
     /// A required static capability is absent or has another value.
     #[error("worker does not satisfy capability {0}")]
     Capability(String),
+    /// The quantitative observation is from the future or outside its freshness bound.
+    #[error("worker quantitative resource observation is stale")]
+    StaleResources,
+    /// Observed logical CPU capacity is below the requested minimum.
+    #[error("worker logical CPU capacity is insufficient")]
+    LogicalCpuCapacity,
+    /// Observed memory capacity is below the requested byte minimum.
+    #[error("worker memory capacity is insufficient")]
+    MemoryCapacity,
+    /// Observed local scratch capacity is below the requested byte minimum.
+    #[error("worker scratch capacity is insufficient")]
+    ScratchCapacity,
+    /// Request requires complete accelerator discovery but the observation is partial.
+    #[error("worker accelerator discovery is partial")]
+    AcceleratorDiscoveryIncomplete,
+    /// Observed accelerator count is below the requested minimum.
+    #[error("worker accelerator capacity is insufficient")]
+    AcceleratorCapacity,
     /// Worker health does not admit new assignments.
     #[error("worker health does not admit new assignments")]
     Health,
@@ -885,7 +1128,7 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<RegisteredWorkerSession, WorkerControlError> {
-    hello.profile.validate_advertised()?;
+    hello.profile.validate_advertised(observed_at)?;
     let authenticated = authenticator.authenticate(hello)?;
     let profile_bytes = cairn_codec::to_vec(&hello.profile)
         .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?;
@@ -1132,6 +1375,32 @@ pub fn match_worker(
     session: &RegisteredWorkerSession,
     contract: &JobContract,
 ) -> Result<(), WorkerMatchFailure> {
+    match_worker_at(session, contract, session.last_seen_at)
+}
+
+/// Matches a contract and rejects quantitative evidence stale at the caller's observation time.
+///
+/// # Errors
+///
+/// Returns the first deterministic reason the worker cannot accept the contract.
+pub fn match_worker_at(
+    session: &RegisteredWorkerSession,
+    contract: &JobContract,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), WorkerMatchFailure> {
+    match_static_resources(session, contract)?;
+    match_quantitative_resources(
+        session.profile.resources.quantitative(),
+        contract.resources().quantitative(),
+        observed_at,
+    )?;
+    match_availability(session.availability.as_ref())
+}
+
+fn match_static_resources(
+    session: &RegisteredWorkerSession,
+    contract: &JobContract,
+) -> Result<(), WorkerMatchFailure> {
     let placement = contract.resources().placement();
     if !placement.allowed_worker_pools().is_empty()
         && !placement.allowed_worker_pools().contains(&session.pool)
@@ -1185,10 +1454,61 @@ pub fn match_worker(
             ));
         }
     }
-    let availability = session
-        .availability
-        .as_ref()
-        .ok_or(WorkerMatchFailure::MissingAvailability)?;
+    Ok(())
+}
+
+fn match_quantitative_resources(
+    quantitative: &WorkerResourceObservation,
+    requested: &crate::QuantitativeResourceRequest,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), WorkerMatchFailure> {
+    quantitative
+        .ensure_fresh_at(observed_at)
+        .map_err(|_| WorkerMatchFailure::StaleResources)?;
+    if requested
+        .minimum_logical_cpus()
+        .is_some_and(|minimum| quantitative.logical_cpus() < minimum)
+    {
+        return Err(WorkerMatchFailure::LogicalCpuCapacity);
+    }
+    if requested
+        .minimum_memory_bytes()
+        .is_some_and(|minimum| quantitative.memory_bytes() < minimum)
+    {
+        return Err(WorkerMatchFailure::MemoryCapacity);
+    }
+    if requested
+        .minimum_scratch_bytes()
+        .is_some_and(|minimum| quantitative.scratch_available_bytes() < minimum)
+    {
+        return Err(WorkerMatchFailure::ScratchCapacity);
+    }
+    if requested.require_complete_accelerator_discovery()
+        && quantitative.accelerator_discovery() != AcceleratorDiscoveryCompleteness::Complete
+    {
+        return Err(WorkerMatchFailure::AcceleratorDiscoveryIncomplete);
+    }
+    if let Some(accelerator) = requested.accelerator() {
+        let matching = quantitative
+            .accelerators()
+            .iter()
+            .filter(|device| {
+                accelerator.capabilities().iter().all(|required| {
+                    device.capabilities().iter().any(|observed| {
+                        observed.name == required.name && observed.value == required.value
+                    })
+                })
+            })
+            .count();
+        if u64::try_from(matching).unwrap_or(u64::MAX) < accelerator.minimum_devices().get() {
+            return Err(WorkerMatchFailure::AcceleratorCapacity);
+        }
+    }
+    Ok(())
+}
+
+fn match_availability(availability: Option<&WorkerAvailability>) -> Result<(), WorkerMatchFailure> {
+    let availability = availability.ok_or(WorkerMatchFailure::MissingAvailability)?;
     if availability.health != WorkerHealth::Ready {
         return Err(WorkerMatchFailure::Health);
     }
@@ -1456,6 +1776,22 @@ fn invalid_history<T>(message: &str) -> Result<T, WorkerControlError> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_resource_observation(observed_at: i64) -> WorkerResourceObservation {
+    WorkerResourceObservation::new(
+        WorkerResourceSource::BuiltinProbe,
+        ResourceProbeVersion::new("fixture-probe-v1").expect("probe version"),
+        ObservedAtUnixMillis::new(observed_at),
+        None,
+        crate::LogicalCpuCount::new(8).expect("logical CPUs"),
+        crate::MemoryByteCount::new(16 * 1024 * 1024 * 1024).expect("memory"),
+        crate::ScratchByteCount::new(64 * 1024 * 1024 * 1024).expect("scratch"),
+        AcceleratorDiscoveryCompleteness::Complete,
+        Vec::new(),
+    )
+    .expect("resource observation")
+}
+
+#[cfg(test)]
 mod tests {
     use cairn_protocol::{CommandId, ContentId, JobId};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
@@ -1503,6 +1839,13 @@ mod tests {
     }
 
     fn profile(architecture: &str) -> WorkerProfile {
+        profile_with_observation(architecture, resource_observation(0))
+    }
+
+    fn profile_with_observation(
+        architecture: &str,
+        observation: WorkerResourceObservation,
+    ) -> WorkerProfile {
         WorkerProfile::new(
             WorkerProtocolVersion::new(1).expect("protocol"),
             WorkerBinaryIdentity::new("sha256:worker-v1").expect("binary"),
@@ -1522,6 +1865,7 @@ mod tests {
                     },
                     WorkerResourceSource::OperatorDeclared,
                 )],
+                observation,
                 WorkerSlotCount::new(2).expect("slots"),
             )
             .expect("resources"),
@@ -1535,6 +1879,10 @@ mod tests {
             OperatingSystemName::new("linux").expect("os"),
             TargetEnvironmentName::new("gnu").expect("environment"),
         )
+    }
+
+    fn resource_observation(observed_at: i64) -> WorkerResourceObservation {
+        test_resource_observation(observed_at)
     }
 
     fn contract(architecture: &str, pool: &str) -> JobContract {
@@ -1552,6 +1900,18 @@ mod tests {
         platform_requirement: ExecutionPlatformRequirement,
         pool: &str,
     ) -> JobContract {
+        contract_for_platform_and_resources(
+            platform_requirement,
+            pool,
+            crate::QuantitativeResourceRequest::default(),
+        )
+    }
+
+    fn contract_for_platform_and_resources(
+        platform_requirement: ExecutionPlatformRequirement,
+        pool: &str,
+        quantitative: crate::QuantitativeResourceRequest,
+    ) -> JobContract {
         JobContract::new(
             JobId::new(),
             ContentId::<InputBundleArtifact>::derive(b"input").expect("input"),
@@ -1562,7 +1922,7 @@ mod tests {
                 Vec::new(),
                 SandboxPath::new("work").expect("working directory"),
             ),
-            ResourceRequest::new(
+            ResourceRequest::new_with_quantitative(
                 ExecutionTimeoutMillis::new(1_000).expect("timeout"),
                 PlacementRequest::new(
                     platform_requirement,
@@ -1573,6 +1933,7 @@ mod tests {
                     }],
                 )
                 .expect("placement"),
+                quantitative,
             )
             .expect("resources"),
             NetworkPolicy::Disabled,
@@ -1693,6 +2054,240 @@ mod tests {
             WorkerResourceSource::BuiltinProbe
         );
         assert_eq!(recovered.availability(), Some(&available));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table-like control covers all quantitative dimensions and freshness ordering"
+    )]
+    fn quantitative_matching_is_typed_device_aware_and_freshness_bounded() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let device = AcceleratorDevice::new(
+            AcceleratorDeviceId::new("accel0").expect("device ID"),
+            vec![CapabilityRequirement {
+                name: crate::CapabilityName::new("driver").expect("capability"),
+                value: crate::CapabilityValue::new("fixture").expect("value"),
+            }],
+        )
+        .expect("device");
+        let observation = WorkerResourceObservation::new(
+            WorkerResourceSource::BuiltinProbe,
+            ResourceProbeVersion::new("fixture-probe-v1").expect("probe version"),
+            ObservedAtUnixMillis::new(0),
+            Some(ObservedAtUnixMillis::new(20)),
+            crate::LogicalCpuCount::new(8).expect("logical CPUs"),
+            crate::MemoryByteCount::new(16_000).expect("memory"),
+            crate::ScratchByteCount::new(64_000).expect("scratch"),
+            AcceleratorDiscoveryCompleteness::Complete,
+            vec![device],
+        )
+        .expect("observation");
+        let hello = WorkerHello::new(
+            worker_id,
+            WorkerIncarnationId::new(),
+            profile_with_observation("x86_64", observation),
+        );
+        let mut auth = authenticator(worker_id, "spiffe://cairn/worker/quantitative");
+        let registered = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut auth,
+            &hello,
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(0),
+        )
+        .expect("register");
+        let available = WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+            .expect("availability");
+        let session = record_worker_heartbeat(
+            &mut fixture.events,
+            &mut fixture.content,
+            &registered,
+            &available,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(10),
+        )
+        .expect("heartbeat");
+        let requested = |logical, memory, scratch, accelerator| {
+            contract_for_platform_and_resources(
+                ExecutionPlatformRequirement::default(),
+                "fixture",
+                crate::QuantitativeResourceRequest::new(
+                    logical,
+                    memory,
+                    scratch,
+                    accelerator,
+                    true,
+                ),
+            )
+        };
+        assert!(
+            match_worker_at(
+                &session,
+                &requested(
+                    Some(crate::LogicalCpuCount::new(8).expect("CPUs")),
+                    Some(crate::MemoryByteCount::new(16_000).expect("memory")),
+                    Some(crate::ScratchByteCount::new(64_000).expect("scratch")),
+                    Some(
+                        crate::AcceleratorResourceRequest::new(
+                            crate::AcceleratorDeviceCount::new(1).expect("device count"),
+                            vec![CapabilityRequirement {
+                                name: crate::CapabilityName::new("driver").expect("capability"),
+                                value: crate::CapabilityValue::new("fixture").expect("value"),
+                            }],
+                        )
+                        .expect("accelerator request"),
+                    ),
+                ),
+                ObservedAtUnixMillis::new(19),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            match_worker_at(
+                &session,
+                &requested(
+                    Some(crate::LogicalCpuCount::new(9).expect("CPUs")),
+                    None,
+                    None,
+                    None,
+                ),
+                ObservedAtUnixMillis::new(10),
+            ),
+            Err(WorkerMatchFailure::LogicalCpuCapacity)
+        );
+        assert_eq!(
+            match_worker_at(
+                &session,
+                &requested(
+                    None,
+                    Some(crate::MemoryByteCount::new(16_001).expect("memory")),
+                    None,
+                    None,
+                ),
+                ObservedAtUnixMillis::new(10),
+            ),
+            Err(WorkerMatchFailure::MemoryCapacity)
+        );
+        assert_eq!(
+            match_worker_at(
+                &session,
+                &requested(
+                    None,
+                    None,
+                    Some(crate::ScratchByteCount::new(64_001).expect("scratch")),
+                    None,
+                ),
+                ObservedAtUnixMillis::new(10),
+            ),
+            Err(WorkerMatchFailure::ScratchCapacity)
+        );
+        let wrong_device = crate::AcceleratorResourceRequest::new(
+            crate::AcceleratorDeviceCount::new(1).expect("device count"),
+            vec![CapabilityRequirement {
+                name: crate::CapabilityName::new("driver").expect("capability"),
+                value: crate::CapabilityValue::new("other").expect("value"),
+            }],
+        )
+        .expect("accelerator request");
+        assert_eq!(
+            match_worker_at(
+                &session,
+                &requested(None, None, None, Some(wrong_device)),
+                ObservedAtUnixMillis::new(10),
+            ),
+            Err(WorkerMatchFailure::AcceleratorCapacity)
+        );
+        assert_eq!(
+            match_worker_at(
+                &session,
+                &requested(None, None, None, None),
+                ObservedAtUnixMillis::new(20),
+            ),
+            Err(WorkerMatchFailure::StaleResources)
+        );
+    }
+
+    #[test]
+    fn duplicate_devices_and_partial_discovery_fail_closed() {
+        let device = || {
+            AcceleratorDevice::new(
+                AcceleratorDeviceId::new("same-device").expect("device ID"),
+                Vec::new(),
+            )
+            .expect("device")
+        };
+        assert_eq!(
+            WorkerResourceObservation::new(
+                WorkerResourceSource::BuiltinProbe,
+                ResourceProbeVersion::new("fixture-probe-v1").expect("probe version"),
+                ObservedAtUnixMillis::new(0),
+                None,
+                crate::LogicalCpuCount::new(1).expect("logical CPUs"),
+                crate::MemoryByteCount::new(1).expect("memory"),
+                crate::ScratchByteCount::new(1).expect("scratch"),
+                AcceleratorDiscoveryCompleteness::Complete,
+                vec![device(), device()],
+            ),
+            Err(WorkerValueError::InvalidResourceObservation)
+        );
+
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let partial = WorkerResourceObservation::new(
+            WorkerResourceSource::BuiltinProbe,
+            ResourceProbeVersion::new("fixture-probe-v1").expect("probe version"),
+            ObservedAtUnixMillis::new(0),
+            None,
+            crate::LogicalCpuCount::new(1).expect("logical CPUs"),
+            crate::MemoryByteCount::new(1).expect("memory"),
+            crate::ScratchByteCount::new(1).expect("scratch"),
+            AcceleratorDiscoveryCompleteness::Partial,
+            Vec::new(),
+        )
+        .expect("partial observation");
+        let hello = WorkerHello::new(
+            worker_id,
+            WorkerIncarnationId::new(),
+            profile_with_observation("aarch64", partial),
+        );
+        let mut auth = authenticator(worker_id, "spiffe://cairn/worker/partial");
+        let registered = register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut auth,
+            &hello,
+            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(0),
+        )
+        .expect("register");
+        let session = record_worker_heartbeat(
+            &mut fixture.events,
+            &mut fixture.content,
+            &registered,
+            &WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+                .expect("availability"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(1),
+        )
+        .expect("heartbeat");
+        let contract = contract_for_platform_and_resources(
+            ExecutionPlatformRequirement::new(
+                Some(ArchitectureName::new("aarch64").expect("architecture")),
+                None,
+                None,
+            ),
+            "fixture",
+            crate::QuantitativeResourceRequest::new(None, None, None, None, true),
+        );
+        assert_eq!(
+            match_worker(&session, &contract),
+            Err(WorkerMatchFailure::AcceleratorDiscoveryIncomplete)
+        );
     }
 
     #[test]
@@ -1916,6 +2511,7 @@ mod tests {
                     WorkerResourceSource::OperatorDeclared,
                 )],
                 Vec::new(),
+                resource_observation(0),
                 WorkerSlotCount::new(1).expect("slots"),
             )
             .expect("resources"),

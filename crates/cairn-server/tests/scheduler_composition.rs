@@ -2,15 +2,17 @@ use std::{error::Error, io::Cursor, net::SocketAddr, num::NonZeroU64};
 
 use cairn_control_transport::{ServerTlsFiles, TransportPolicy};
 use cairn_execution::{
-    ArchitectureName, AssignmentLeaseDurationMillis, AuthenticatedWorkerIdentity, CapturePolicy,
-    CommandContract, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend,
-    ExecutionEnvironmentArtifact, ExecutionPlatform, ExecutionTimeoutMillis, InputBundleArtifact,
-    NetworkPolicy, OperatingSystemName, OutputByteLimit, RecordedWorkerAuthenticator,
-    ReservationClaimTimeoutMillis, SandboxPath, SchedulerPolicyVersion,
-    WorkerAuthenticationSubject, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth,
-    WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
-    WorkerResourceInventory, WorkerResourceSource, WorkerSessionTimeoutMillis, WorkerSlotCount,
-    pending_controller_messages, record_worker_heartbeat, register_worker,
+    AcceleratorDiscoveryCompleteness, ArchitectureName, AssignmentLeaseDurationMillis,
+    AuthenticatedWorkerIdentity, CapturePolicy, CommandContract, DiagnosticByteLimit,
+    EvidenceByteLimit, ExecutionBackend, ExecutionEnvironmentArtifact, ExecutionPlatform,
+    ExecutionTimeoutMillis, InputBundleArtifact, LogicalCpuCount, MemoryByteCount, NetworkPolicy,
+    OperatingSystemName, OutputByteLimit, RecordedWorkerAuthenticator,
+    ReservationClaimTimeoutMillis, ResourceProbeVersion, SandboxPath, SchedulerPolicyVersion,
+    ScratchByteCount, WorkerAuthenticationSubject, WorkerAvailability, WorkerBinaryIdentity,
+    WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion,
+    WorkerResourceClaim, WorkerResourceInventory, WorkerResourceObservation, WorkerResourceSource,
+    WorkerSessionTimeoutMillis, WorkerSlotCount, pending_controller_messages,
+    record_worker_heartbeat, register_worker,
 };
 use cairn_migration::{MigrationExecutionNeed, MigrationValidationTier};
 use cairn_protocol::{
@@ -93,6 +95,17 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
                 WorkerResourceSource::OperatorDeclared,
             )],
             Vec::new(),
+            WorkerResourceObservation::new(
+                WorkerResourceSource::BuiltinProbe,
+                ResourceProbeVersion::new("fixture-probe-v1")?,
+                ObservedAtUnixMillis::new(10),
+                None,
+                LogicalCpuCount::new(8)?,
+                MemoryByteCount::new(16 * 1024 * 1024 * 1024)?,
+                ScratchByteCount::new(64 * 1024 * 1024 * 1024)?,
+                AcceleratorDiscoveryCompleteness::Complete,
+                Vec::new(),
+            )?,
             WorkerSlotCount::new(1)?,
         )?,
     )?;

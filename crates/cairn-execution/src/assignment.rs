@@ -15,7 +15,7 @@ use crate::{
     AssignmentLeaseDurationMillis, ExecutionAttemptAuthority, ExecutionCoordinatorError,
     ExecutionJob, ExecutionJobState, ExecutionReceiptArtifact, JobContractArtifact,
     RegisteredWorkerSession, StartedExecutionAttempt, WorkerControlError, WorkerSessionState,
-    WorkerSessionTimeoutMillis, begin_execution_attempt, match_worker, recover_execution_job,
+    WorkerSessionTimeoutMillis, begin_execution_attempt, match_worker_at, recover_execution_job,
     recover_worker_session,
 };
 
@@ -460,7 +460,8 @@ pub fn grant_assignment_lease<E: EventStore, C: ContentStore>(
         grant.policy.session_timeout,
         observed_at,
     )?;
-    match_worker(worker, authority.contract()).map_err(WorkerControlError::Match)?;
+    match_worker_at(worker, authority.contract(), observed_at)
+        .map_err(WorkerControlError::Match)?;
     let binding = AssignmentBinding {
         assignment_id: grant.assignment_id,
         lease_id: grant.lease_id,
@@ -1240,6 +1241,7 @@ mod tests {
                         WorkerResourceSource::OperatorDeclared,
                     )],
                     Vec::new(),
+                    crate::worker::test_resource_observation(0),
                     WorkerSlotCount::new(1).expect("slots"),
                 )
                 .expect("resources"),

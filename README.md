@@ -89,10 +89,17 @@ worker use independent SQLite authorities for durable delivery and recovery; con
 timeout, heartbeat, polling, reconnect, and diagnostic controls can each be explicitly disabled
 where optional. A two-worker integration test proves that distinct certificates and journals become
 two recoverable live sessions, while post-commit heartbeat acknowledgements keep independently
-idle-bounded connections stable. Worker profile V2 now reports the built-in-observed native
+idle-bounded connections stable. Worker profile V3 now reports the built-in-observed native
 architecture/OS/target environment separately from operator-declared backends and capabilities,
 with provenance retained for every claim. Operator `expected_platform` values fail closed instead
-of overriding detection. Controller-authorized worker pools and domain-neutral placement requests
+of overriding detection. Its immutable startup resource observation adds strongly typed logical
+CPU, memory-byte, scratch-byte, accelerator discovery, and per-device capability facts. Operator
+configuration provides only probe paths, optional expectations, and optional expiry; it cannot
+forge observed capacity. Job contract V3 expresses quantitative minima and the scheduler rejects
+stale or insufficient observations, including accelerator devices that do not satisfy requested
+device capabilities. Dynamic refresh, quantitative reservation subtraction, and trusted claim
+admission remain Phase D2; see [`docs/RESOURCE_PROBING.md`](docs/RESOURCE_PROBING.md).
+Controller-authorized worker pools and domain-neutral placement requests
 let `cairn-migration` validation tiers ask for resources without assigning business roles to workers.
 Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
 retains its own private key. Exact-CSR replay closes a lost-response window, and a fresh controller
@@ -119,7 +126,7 @@ it to generic platform/pool/backend/capability/resource constraints; its fixture
 worker without leaking migration roles into execution types. Scheduler enablement, policy, session
 time, claim time, and lease time are configuration rather than constants. See
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
-executor deliberately returns `NotStarted`; real local/container backends, richer resource probing,
+executor deliberately returns `NotStarted`; real local/container backends, dynamic resource refresh,
 static-registry import, and real-host job execution remain subsequent slices. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
@@ -142,6 +149,8 @@ Start with [`docs/README.md`](docs/README.md). The normative baseline is:
 - [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) — decisions deliberately left unresolved.
 - [`docs/RELEASE.md`](docs/RELEASE.md) — pinned cross-link toolchain, reproducible bundles, and the
   real-host deployment gate.
+- [`docs/RESOURCE_PROBING.md`](docs/RESOURCE_PROBING.md) — startup resource facts, operator
+  expectations, quantitative matching, and the explicit D2 boundary.
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — the integrated authority,
   scheduling, probing, registry, and onboarding delivery plan.
 

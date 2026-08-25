@@ -298,6 +298,14 @@ positive_quantity!(/// Maximum durable executor-diagnostic byte count.
 DiagnosticByteLimit, ZeroDiagnosticLimit);
 positive_quantity!(/// Maximum canonical trusted-evidence byte count.
 EvidenceByteLimit, ZeroEvidenceLimit);
+positive_quantity!(/// Minimum or observed logical CPU count.
+LogicalCpuCount, ZeroLogicalCpuCount);
+positive_quantity!(/// Minimum or observed memory size in bytes.
+MemoryByteCount, ZeroMemoryBytes);
+positive_quantity!(/// Minimum or observed local scratch capacity in bytes.
+ScratchByteCount, ZeroScratchBytes);
+positive_quantity!(/// Minimum accelerator device count.
+AcceleratorDeviceCount, ZeroAcceleratorCount);
 
 /// Non-negative elapsed execution time observed by the trusted executor.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -342,6 +350,18 @@ pub enum ContractValueError {
     /// Evidence zero would disable trusted observation capture ambiguously.
     #[error("evidence byte limit must be greater than zero")]
     ZeroEvidenceLimit,
+    /// Logical CPU quantities are explicit and positive.
+    #[error("logical CPU count must be greater than zero")]
+    ZeroLogicalCpuCount,
+    /// Memory quantities are explicit bytes and positive.
+    #[error("memory byte count must be greater than zero")]
+    ZeroMemoryBytes,
+    /// Scratch quantities are explicit bytes and positive.
+    #[error("scratch byte count must be greater than zero")]
+    ZeroScratchBytes,
+    /// Requested accelerator counts are positive; absence is represented by `None`.
+    #[error("accelerator device count must be greater than zero")]
+    ZeroAcceleratorCount,
     /// A command must name one program.
     #[error("execution command must name one sandbox-relative program")]
     MissingProgram,
@@ -369,7 +389,7 @@ pub enum ContractValueError {
     /// Persisted observations must retain constructor ordering.
     #[error("trusted execution observations are not in canonical order")]
     NonCanonicalObservations,
-    /// V2 contracts use a fixed schema version.
+    /// V3 contracts use a fixed schema version.
     #[error("job contract schema version is unsupported")]
     UnsupportedSchema,
 }
@@ -669,6 +689,119 @@ impl PlacementRequest {
 pub struct ResourceRequest {
     timeout: ExecutionTimeoutMillis,
     placement: PlacementRequest,
+    quantitative: QuantitativeResourceRequest,
+}
+
+/// Vendor-neutral accelerator capacity and per-device equality capabilities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceleratorResourceRequest {
+    minimum_devices: AcceleratorDeviceCount,
+    capabilities: Vec<CapabilityRequirement>,
+}
+
+impl AcceleratorResourceRequest {
+    /// Creates a request counted only over devices satisfying every capability.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate device capability names.
+    pub fn new(
+        minimum_devices: AcceleratorDeviceCount,
+        mut capabilities: Vec<CapabilityRequirement>,
+    ) -> Result<Self, ContractValueError> {
+        capabilities.sort_by(|left, right| left.name.cmp(&right.name));
+        let request = Self {
+            minimum_devices,
+            capabilities,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    #[must_use]
+    pub const fn minimum_devices(&self) -> AcceleratorDeviceCount {
+        self.minimum_devices
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> &[CapabilityRequirement] {
+        &self.capabilities
+    }
+
+    fn validate(&self) -> Result<(), ContractValueError> {
+        if self
+            .capabilities
+            .windows(2)
+            .any(|pair| pair[0].name >= pair[1].name)
+        {
+            Err(ContractValueError::NonCanonicalCapabilities)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Vendor-neutral minimum quantitative capacity required by one assignment.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuantitativeResourceRequest {
+    minimum_logical_cpus: Option<LogicalCpuCount>,
+    minimum_memory_bytes: Option<MemoryByteCount>,
+    minimum_scratch_bytes: Option<ScratchByteCount>,
+    accelerator: Option<AcceleratorResourceRequest>,
+    require_complete_accelerator_discovery: bool,
+}
+
+impl QuantitativeResourceRequest {
+    /// Creates independently optional, unit-explicit minimum capacity constraints.
+    #[must_use]
+    pub const fn new(
+        minimum_logical_cpus: Option<LogicalCpuCount>,
+        minimum_memory_bytes: Option<MemoryByteCount>,
+        minimum_scratch_bytes: Option<ScratchByteCount>,
+        accelerator: Option<AcceleratorResourceRequest>,
+        require_complete_accelerator_discovery: bool,
+    ) -> Self {
+        Self {
+            minimum_logical_cpus,
+            minimum_memory_bytes,
+            minimum_scratch_bytes,
+            accelerator,
+            require_complete_accelerator_discovery,
+        }
+    }
+
+    #[must_use]
+    pub const fn minimum_logical_cpus(&self) -> Option<LogicalCpuCount> {
+        self.minimum_logical_cpus
+    }
+
+    #[must_use]
+    pub const fn minimum_memory_bytes(&self) -> Option<MemoryByteCount> {
+        self.minimum_memory_bytes
+    }
+
+    #[must_use]
+    pub const fn minimum_scratch_bytes(&self) -> Option<ScratchByteCount> {
+        self.minimum_scratch_bytes
+    }
+
+    #[must_use]
+    pub const fn accelerator(&self) -> Option<&AcceleratorResourceRequest> {
+        self.accelerator.as_ref()
+    }
+
+    #[must_use]
+    pub const fn require_complete_accelerator_discovery(&self) -> bool {
+        self.require_complete_accelerator_discovery
+    }
+
+    fn validate(&self) -> Result<(), ContractValueError> {
+        self.accelerator
+            .as_ref()
+            .map_or(Ok(()), AcceleratorResourceRequest::validate)
+    }
 }
 
 impl ResourceRequest {
@@ -681,8 +814,26 @@ impl ResourceRequest {
         timeout: ExecutionTimeoutMillis,
         placement: PlacementRequest,
     ) -> Result<Self, ContractValueError> {
+        Self::new_with_quantitative(timeout, placement, QuantitativeResourceRequest::default())
+    }
+
+    /// Creates a resource request with explicit quantitative minima.
+    ///
+    /// # Errors
+    ///
+    /// Rejects non-canonical placement selectors.
+    pub fn new_with_quantitative(
+        timeout: ExecutionTimeoutMillis,
+        placement: PlacementRequest,
+        quantitative: QuantitativeResourceRequest,
+    ) -> Result<Self, ContractValueError> {
         placement.validate()?;
-        Ok(Self { timeout, placement })
+        quantitative.validate()?;
+        Ok(Self {
+            timeout,
+            placement,
+            quantitative,
+        })
     }
 
     /// Returns the execution timeout.
@@ -697,8 +848,15 @@ impl ResourceRequest {
         &self.placement
     }
 
+    /// Returns vendor-neutral minimum quantitative resource constraints.
+    #[must_use]
+    pub const fn quantitative(&self) -> &QuantitativeResourceRequest {
+        &self.quantitative
+    }
+
     fn validate(&self) -> Result<(), ContractValueError> {
-        self.placement.validate()
+        self.placement.validate()?;
+        self.quantitative.validate()
     }
 }
 
@@ -828,7 +986,7 @@ pub struct JobContract {
 }
 
 impl JobContract {
-    /// Creates a V2 opaque job contract with explicit placement selectors.
+    /// Creates a V3 opaque job contract with explicit placement selectors and quantitative needs.
     #[expect(
         clippy::too_many_arguments,
         reason = "every immutable execution dimension remains explicit at construction"
@@ -845,7 +1003,7 @@ impl JobContract {
         capture: CapturePolicy,
     ) -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             job_id,
             input_bundle_id,
             environment_id,
@@ -858,7 +1016,7 @@ impl JobContract {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ContractValueError> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err(ContractValueError::UnsupportedSchema);
         }
         self.resources.validate()?;
@@ -1086,7 +1244,7 @@ macro_rules! content_type {
 
 content_type!(InputBundleArtifact, "execution.input-bundle.v1");
 content_type!(ExecutionEnvironmentArtifact, "execution.environment.v1");
-content_type!(JobContractArtifact, "execution.job-contract.v2");
+content_type!(JobContractArtifact, "execution.job-contract.v3");
 content_type!(ExecutionStdoutArtifact, "execution.stdout-untrusted.v1");
 content_type!(ExecutionStderrArtifact, "execution.stderr-untrusted.v1");
 content_type!(
@@ -1108,7 +1266,7 @@ mod tests {
     #[test]
     fn persisted_contract_cannot_bypass_canonical_collection_invariants() {
         let contract = JobContract {
-            schema_version: 2,
+            schema_version: 3,
             job_id: JobId::new(),
             input_bundle_id: ContentId::derive(b"input").expect("input identity"),
             environment_id: ContentId::derive(b"environment").expect("environment identity"),
@@ -1120,6 +1278,7 @@ mod tests {
             ),
             resources: ResourceRequest {
                 timeout: ExecutionTimeoutMillis::new(1).expect("timeout"),
+                quantitative: QuantitativeResourceRequest::default(),
                 placement: PlacementRequest {
                     platform: ExecutionPlatformRequirement::default(),
                     allowed_worker_pools: Vec::new(),
@@ -1171,6 +1330,63 @@ mod tests {
         assert_eq!(exact.architecture(), Some(host.architecture()));
         assert_eq!(exact.operating_system(), Some(host.operating_system()));
         assert_eq!(exact.target_environment(), Some(host.target_environment()));
+    }
+
+    #[test]
+    fn quantitative_units_and_device_capabilities_fail_closed() {
+        assert_eq!(
+            LogicalCpuCount::new(0),
+            Err(ContractValueError::ZeroLogicalCpuCount)
+        );
+        assert_eq!(
+            MemoryByteCount::new(0),
+            Err(ContractValueError::ZeroMemoryBytes)
+        );
+        assert_eq!(
+            ScratchByteCount::new(0),
+            Err(ContractValueError::ZeroScratchBytes)
+        );
+        assert_eq!(
+            AcceleratorDeviceCount::new(0),
+            Err(ContractValueError::ZeroAcceleratorCount)
+        );
+        assert!(
+            cairn_codec::from_slice::<QuantitativeResourceRequest>(
+                r#"{
+                    "minimum_logical_cpus": 0,
+                    "minimum_memory_bytes": null,
+                    "minimum_scratch_bytes": null,
+                    "accelerator": null,
+                    "require_complete_accelerator_discovery": false
+                }"#
+                .as_bytes(),
+            )
+            .is_err()
+        );
+
+        let noncanonical = QuantitativeResourceRequest {
+            minimum_logical_cpus: None,
+            minimum_memory_bytes: None,
+            minimum_scratch_bytes: None,
+            accelerator: Some(AcceleratorResourceRequest {
+                minimum_devices: AcceleratorDeviceCount::new(1).expect("device count"),
+                capabilities: vec![
+                    CapabilityRequirement {
+                        name: CapabilityName::new("z").expect("name"),
+                        value: CapabilityValue::new("1").expect("value"),
+                    },
+                    CapabilityRequirement {
+                        name: CapabilityName::new("a").expect("name"),
+                        value: CapabilityValue::new("1").expect("value"),
+                    },
+                ],
+            }),
+            require_complete_accelerator_discovery: false,
+        };
+        assert_eq!(
+            noncanonical.validate(),
+            Err(ContractValueError::NonCanonicalCapabilities)
+        );
     }
 
     #[test]

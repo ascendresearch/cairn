@@ -83,19 +83,41 @@ Acceptance gate:
 - reservation release follows pre-start expiry or terminal execution but never an in-doubt start;
 - one migration fixture reaches an assigned worker without product vocabulary in execution types.
 
-## Phase D — resource probe V2
+## Phase D1 — typed startup resource observation (implemented 2026-08-25)
 
 Extend the built-in platform probe beyond architecture/OS/target environment to typed quantitative
 inventory: logical CPU, memory, local scratch space, accelerators, and backend/device capabilities.
 Every observation retains source, timestamp/freshness, and probe version. Configuration supplies
-expected constraints or policy, never forged observed values. Refresh and admission intervals and
-all quantitative thresholds are configurable or disableable.
+expected constraints, never forged observed values. The first observation is immutable for one
+worker incarnation. Its optional expiry is configuration; disabling expiry keeps it valid for that
+incarnation. The generic matcher evaluates typed CPU, byte, accelerator-count, discovery-
+completeness, and per-device capability requirements.
 
 Acceptance gate:
 
 - probe fixtures cover x86-64 and AArch64 plus absent/partial accelerator discovery;
 - overflow, unit mismatch, duplicate device, stale evidence, and expected-value mismatch fail closed;
-- scheduler reservations consume quantitative inventory without embedding vendor/product roles;
+- frozen contracts and profiles use new V3 identity domains so old bytes cannot gain invented
+  quantitative meaning;
+- matching remains vendor/product neutral and counts only accelerator devices satisfying every
+  requested device capability.
+
+## Phase D2 — refresh, quantitative reservation, and trusted admission
+
+Add a resource-update protocol independent of immutable worker-profile identity. Freeze each
+scheduler snapshot against an exact admitted observation revision, subtract outstanding
+quantitative reservations, and recheck that revision at assignment grant. Refresh/admission
+intervals and thresholds remain configurable or disableable. A controller challenge or external
+attestation may supersede built-in observations only through a typed admission fact; worker hello
+cannot self-assert higher provenance.
+
+Acceptance gate:
+
+- refresh survives reconnect/restart without mutating a historical worker profile;
+- scheduler reservations consume CPU, memory, scratch, and matching accelerator inventory without
+  embedding vendor/product roles;
+- concurrent placements cannot overcommit any quantitative dimension;
+- stale or superseded observation revisions fail assignment grant;
 - externally attested or controller-verified claims can replace a built-in claim through a typed
   admission seam.
 

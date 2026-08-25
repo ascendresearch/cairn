@@ -31,10 +31,22 @@
     "capabilities": [],
     "max_concurrency": 1,
     "protocol_version": 1,
-    "schema_version": 1
+    "schema_version": 2
+  },
+  "resource_probe": {
+    "accelerator_sysfs": "/sys/class/accel",
+    "expected": {
+      "minimum_accelerator_devices": null,
+      "minimum_logical_cpus": null,
+      "minimum_memory_bytes": null,
+      "minimum_scratch_bytes": null,
+      "require_complete_accelerator_discovery": false
+    },
+    "freshness_ms": null,
+    "scratch_path": "."
   },
   "reconnect_delay_ms": 1000,
-  "schema_version": 3,
+  "schema_version": 4,
   "transport": {
     "message_byte_limit": 1048576
   }

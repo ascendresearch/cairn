@@ -550,7 +550,7 @@ capabilities; real local-process and remote-worker adapters remain target work.
 Authentication is a replaceable trusted capability that resolves transport evidence to a stable
 principal, exact `CredentialId`, and operator-authorized worker pool; the controller permanently
 binds subject and pool to the logical worker while binding the credential to one incarnation.
-Static protocol, binary, observed platform, backend, capability,
+Static protocol, binary, observed platform, backend, capability, quantitative startup observation,
 provenance, and concurrency data is a canonical content-addressed profile.
 Dynamic health, drain state, available slots, and the worker's advisory active-attempt set are a
 separate content-addressed heartbeat snapshot.
@@ -564,7 +564,7 @@ placement and dynamic availability matching are generic and contain no product t
 target environment are strong extensible selector types. `cairn-worker` derives them from the
 compiled/running binary; serialized `expected_platform` fields are assertions that fail closed and
 cannot overwrite the observation. Every profile resource claim retains whether it came from a
-built-in probe, operator declaration, controller verification, or external attestation. The V2
+built-in probe, operator declaration, controller verification, or external attestation. The V3
 profile content domain prevents the new meaning from being confused with earlier flat capability
 bytes.
 
@@ -573,7 +573,35 @@ backend/capability claims. It cannot label its own bytes `ControllerVerified` or
 `ExternalAttestation`; those assurance levels require a later trusted controller challenge or
 attestation adapter and a separate authoritative fact.
 
-This is a pre-public compatibility change: V1 job-contract/profile artifacts and pre-V3 worker
+**Implemented startup resource observation (2026-08-25).** Worker profile V3 embeds one immutable,
+versioned startup observation for the process incarnation. The Linux host probe records logical
+CPU count, total memory bytes, available bytes on a configured scratch filesystem, accelerator
+namespace discovery completeness, and canonical device facts. Every device has a strong device ID
+and zero or more equality capabilities such as driver or PCI identity. CPU counts and each byte or
+device quantity are distinct positive Rust/wire types; a value from one unit cannot be passed as
+another without an explicit conversion.
+
+Operator configuration selects probe paths, independently optional expected minima, whether
+accelerator discovery is disabled, and an optional freshness duration. These values are assertions
+and policy only: they never become observed capacity. A missing configured accelerator namespace
+is a complete empty observation of that namespace; disabled discovery or an unreadable device is
+partial. Unit mismatch, arithmetic overflow, duplicate device/capability identity, expectation
+mismatch, future evidence, and expired evidence fail closed. The initial `/sys/class/accel`
+adapter is deliberately generic and does not claim to discover every vendor device class.
+
+Job contract V3 carries optional logical-CPU, memory-byte, scratch-byte, accelerator-count, and
+discovery-completeness requirements. An accelerator requirement also contains canonical per-device
+capabilities; only devices satisfying all of them contribute to its count. Scheduler filtering and
+assignment recheck use the caller's observation time, so expired evidence cannot remain eligible.
+
+The startup observation remains part of immutable profile identity. Dynamic refresh, exact
+observation revisions, controller/attestation admission, and subtraction of quantitative resources
+consumed by reservations are Phase D2. Until then, the reservation ledger enforces slot capacity
+while quantitative matching treats every request as needing no more than the startup total. An
+operator that configures finite freshness must expect the worker to become unschedulable at expiry
+and restart it or wait for D2 refresh support.
+
+This is a pre-public compatibility change: pre-V3 job-contract/profile artifacts and pre-V3 worker
 registration payloads are rejected rather than assigned invented pool, platform provenance, or
 credential identity. A
 deployment retaining development-era state needs the controlled migration/rebuild path before

@@ -22,6 +22,7 @@ document is complete.
 | [`RELEASE.md`](RELEASE.md) | How are x86-64/AArch64 artifacts cross-linked, inspected, and promoted? | Normative release procedure |
 | [`ENROLLMENT.md`](ENROLLMENT.md) | How does a worker bootstrap a local managed identity without copied private keys? | Operator procedure and implemented trust boundary |
 | [`SCHEDULER.md`](SCHEDULER.md) | How are generic candidates selected, reserved, assigned, retried, and safely released? | Implemented scheduling trust boundary |
+| [`RESOURCE_PROBING.md`](RESOURCE_PROBING.md) | Which resource facts are observed, configured, matched, and still deferred? | Implemented D1 probe/operator contract |
 | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | In what dependency order do worker authority, scheduling, probing, registry migration, and onboarding close? | Active delivery plan and acceptance gates |
 
 ## Reading order

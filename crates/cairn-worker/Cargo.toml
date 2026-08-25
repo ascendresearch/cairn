@@ -13,6 +13,7 @@ cairn-protocol.workspace = true
 cairn-store-sqlite.workspace = true
 rcgen.workspace = true
 rustls-pemfile.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -17,8 +17,8 @@ use crate::{
     ExecutionAttemptAuthority, JobContract, JobContractArtifact, LeasedExecutionAssignment,
     RegisteredWorkerSession, ReservationClaimTimeoutMillis, WorkerAvailabilityArtifact,
     WorkerControlError, WorkerMatchFailure, WorkerProfileArtifact, WorkerSessionState,
-    WorkerSessionTimeoutMillis, grant_assignment_lease, match_worker, recover_execution_assignment,
-    recover_worker_session,
+    WorkerSessionTimeoutMillis, grant_assignment_lease, match_worker_at,
+    recover_execution_assignment, recover_worker_session,
 };
 
 const PLACEMENT_RECORDED: &str = "execution.placement-recorded";
@@ -803,7 +803,7 @@ fn evaluate_live_candidate<A: WorkerPlacementAuthority>(
         CandidateDisposition::Rejected {
             reason: PlacementCandidateRejection::AuthorityInactive,
         }
-    } else if let Err(reason) = match_worker(session, contract) {
+    } else if let Err(reason) = match_worker_at(session, contract, observed_at) {
         CandidateDisposition::Rejected {
             reason: PlacementCandidateRejection::WorkerMismatch(reason),
         }
@@ -1304,6 +1304,7 @@ mod tests {
                         WorkerResourceSource::OperatorDeclared,
                     )],
                     Vec::new(),
+                    crate::worker::test_resource_observation(observed_at),
                     WorkerSlotCount::new(1).expect("slots"),
                 )
                 .expect("resources"),
