@@ -63,6 +63,7 @@ extracts provider usage receipts, and retains ambiguous-effect semantics. The op
 Responses check has also completed a real tool-call continuation across a SQLite/CAS close-reopen
 boundary without printing thinking or answer content. Later configuration changes affect new
 episodes, not historical meaning.
+
 The first execution-control slice is now implemented in `cairn-execution`: opaque versioned job
 contracts have typed input/environment/backend/argv/resource/policy/output dimensions, configurable
 capture bounds, and content identities that change when any immutable dimension changes. One-shot
@@ -72,6 +73,18 @@ attempt identity after a proven-not-started or completed terminal state, and rev
 receipts against their frozen contract. Recorded/scripted executors exercise the seam without local
 process authority. Candidate-writable stdout, stderr, and declared outputs occupy separate
 untrusted content domains from canonical trusted supervisor evidence.
+
+The controller-side worker slice now adds authenticated stable `WorkerId` ownership, unique
+`WorkerIncarnationId` processes, content-addressed static profiles, separate dynamic availability
+heartbeats, deterministic capability matching, and configurable session/assignment timeouts.
+Duplicate live incarnations are rejected; replacement is accepted only after explicit disconnect or
+a durably checkable predecessor-expiry boundary. Every execution `AttemptId` owns one assignment
+stream, preventing parallel leases after restart. A worker must durably accept a lease and still be
+the current live incarnation before the controller commits `AttemptStarted`. Pre-start expiry may be
+re-placed under fresh `AssignmentId`/`LeaseId` values; post-start expiry yields reconciliation, never
+a retry signal. Network streaming, durable worker-local inbox/outbox, and remote receipt ingestion
+remain future adapters over these controller capabilities.
+
 The remaining architecture in the normative documents is still target design. The old repositories
 are evidence and compatibility references, not source trees to copy mechanically.
 

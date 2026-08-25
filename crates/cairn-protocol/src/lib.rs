@@ -11,9 +11,9 @@ use thiserror::Error;
 mod identity;
 
 pub use identity::{
-    AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType, DerivedId, EpisodeId,
-    EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, MeteredActionId,
-    ModelAttemptId, OperationId, StepId, TaskId,
+    AssignmentId, AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType, DerivedId,
+    EpisodeId, EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, LeaseId,
+    MeteredActionId, ModelAttemptId, OperationId, StepId, TaskId, WorkerId, WorkerIncarnationId,
 };
 
 const MAX_IDENTIFIER_LEN: usize = 255;

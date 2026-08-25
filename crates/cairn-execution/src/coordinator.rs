@@ -95,10 +95,28 @@ pub struct ExecutionAttemptAuthority {
 }
 
 impl ExecutionAttemptAuthority {
+    /// Returns the stable logical job identity.
+    #[must_use]
+    pub const fn job_id(&self) -> JobId {
+        self.prepared.contract.job_id()
+    }
+
     /// Returns the fresh concrete attempt identity.
     #[must_use]
     pub const fn attempt_id(&self) -> AttemptId {
         self.attempt_id
+    }
+
+    /// Returns the exact archived job contract identity.
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.prepared.contract_id
+    }
+
+    /// Returns the immutable job contract used for capability matching.
+    #[must_use]
+    pub const fn contract(&self) -> &JobContract {
+        &self.prepared.contract
     }
 }
 
@@ -109,6 +127,26 @@ pub struct StartedExecutionAttempt {
     started_event_id: EventId,
     attempt_id: AttemptId,
     prepared: PreparedExecutionJob,
+}
+
+impl StartedExecutionAttempt {
+    /// Returns the stable logical job identity.
+    #[must_use]
+    pub const fn job_id(&self) -> JobId {
+        self.prepared.contract.job_id()
+    }
+
+    /// Returns the concrete started-attempt identity.
+    #[must_use]
+    pub const fn attempt_id(&self) -> AttemptId {
+        self.attempt_id
+    }
+
+    /// Returns the immutable job contract identity.
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.prepared.contract_id
+    }
 }
 
 /// Terminal result after executor capture and event publication.

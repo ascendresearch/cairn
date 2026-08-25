@@ -544,9 +544,40 @@ capabilities; real local-process and remote-worker adapters remain target work.
 
 ### 10.2 Worker protocol
 
-This subsection is the next execution slice, not an implementation claim. Worker identity,
-incarnation, authentication, capability matching, leases, heartbeat, expiry, and reconciliation are
-deliberately built on the controller attempt kernel above.
+**Implemented controller control plane (2026-08-24).** The domain layer now distinguishes stable
+`WorkerId`, process/boot `WorkerIncarnationId`, logical `AssignmentId`, and bounded `LeaseId`.
+Authentication is a replaceable trusted capability that resolves a transport hello to a stable
+principal; the controller permanently binds that principal to the logical worker identity. Static
+protocol/binary/backend/capability/concurrency data is a canonical content-addressed profile.
+Dynamic health, drain state, available slots, and the worker's advisory active-attempt set are a
+separate content-addressed heartbeat snapshot.
+
+Registration rejects a second incarnation while the first is live. An incarnation replacement is
+accepted only after explicit disconnect or a configured session timeout, and the replacement fact
+records the old incarnation and exact expiry boundary so recovery can recheck the decision. Static
+capability equality and dynamic availability matching are generic and contain no product task kind.
+
+Assignment delivery uses a two-phase authority boundary:
+
+```text
+AttemptAuthorized
+  → AssignmentLeased (persist before send)
+  → AssignmentAccepted (worker has persisted admission; still cannot execute)
+  → AttemptStarted (controller grants the one-shot execution capability)
+```
+
+Each `AttemptId` owns exactly one assignment aggregate, so restart cannot create parallel active
+leases for the same attempt. Before `AttemptStarted`, an expired lease is reaped as
+`BeforeExecutionStart`; the same attempt authority may then be placed again using fresh assignment
+and lease identities. After `AttemptStarted`, lease expiry is `ExecutionInDoubt` and grants only a
+reconciliation requirement. Renewal requires an unexpired accepted lease, the current live worker
+incarnation, and a heartbeat no older than the accepted/renewed assignment state that names the
+attempt active. Heartbeat presence never establishes start, completion, or cancellation.
+
+The network stream, connection-local sequencing/acknowledgements, controller outbox, worker-local
+durable admission journal, scheduler-wide slot reservation across different attempts, cancellation
+delivery, and remote terminal-receipt reconciliation remain adapter/application slices. Until those
+exist, this is a tested controller state machine rather than a deployable remote worker service.
 
 Workers dial the controller. A connection establishes:
 

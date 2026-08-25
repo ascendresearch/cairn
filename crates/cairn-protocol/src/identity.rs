@@ -617,6 +617,23 @@ lifecycle_id!(/// Logical execution job identity.
 JobId, "job");
 lifecycle_id!(/// Concrete execution-attempt identity.
 AttemptId, "attempt");
+lifecycle_id!(/// Stable logical remote-worker identity.
+///
+/// A stable worker and one of its process incarnations are never interchangeable:
+///
+/// ```compile_fail
+/// use cairn_protocol::{WorkerId, WorkerIncarnationId};
+///
+/// let worker = WorkerId::new();
+/// let _incarnation: WorkerIncarnationId = worker;
+/// ```
+WorkerId, "worker");
+lifecycle_id!(/// One process/boot incarnation of a remote worker.
+WorkerIncarnationId, "worker-incarnation");
+lifecycle_id!(/// One controller-to-worker assignment identity.
+AssignmentId, "assignment");
+lifecycle_id!(/// One bounded assignment-lease identity.
+LeaseId, "lease");
 lifecycle_id!(/// Idempotent command identity.
 CommandId, "command");
 lifecycle_id!(/// Counterfactual/replay branch identity.

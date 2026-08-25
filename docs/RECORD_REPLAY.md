@@ -301,7 +301,24 @@ projection. Receipt recovery walks and semantically revalidates stdout, stderr, 
 trusted evidence, and the receipt itself. CAS objects archived before a failed terminal-event append
 remain inert evidence; they do not create a completion fact.
 
-The remaining remote-worker/lease vocabulary is target design:
+The implemented worker/assignment subset now also uses:
+
+- `execution.worker-registered` and `execution.worker-replaced-after-expiry` for authenticated
+  stable ownership and incarnation changes;
+- `execution.worker-heartbeat` for a cited dynamic availability snapshot;
+- `execution.worker-disconnected` for explicit incarnation closure;
+- `execution.assignment-leased`, `execution.assignment-accepted`, and
+  `execution.assignment-lease-renewed` for store-before-send placement and liveness;
+- `execution.assignment-lease-expired` with `before-execution-start` or `execution-in-doubt`
+  classification derived against the authoritative execution stream.
+
+Worker profile and availability artifacts are reloaded and validated on restart. Assignment streams
+are keyed by `AttemptId`, while assignment and lease identities remain explicit payload identities;
+this makes two concurrent live placements for one attempt a stream conflict rather than a scheduler
+convention. Recovered acceptance can reconstruct start authority only while its worker incarnation
+is independently live. A recovered started attempt never reconstructs execution authority.
+
+The remaining transport/worker-journal vocabulary is target design:
 
 - `JobDeclared`
 - `AssignmentLeased`
