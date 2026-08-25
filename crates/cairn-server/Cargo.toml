@@ -27,6 +27,7 @@ tokio.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+cairn-migration.workspace = true
 cairn-worker = { path = "../cairn-worker" }
 tempfile.workspace = true
 

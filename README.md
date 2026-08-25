@@ -93,7 +93,7 @@ idle-bounded connections stable. Worker profile V2 now reports the built-in-obse
 architecture/OS/target environment separately from operator-declared backends and capabilities,
 with provenance retained for every claim. Operator `expected_platform` values fail closed instead
 of overriding detection. Controller-authorized worker pools and domain-neutral placement requests
-let future `cairn-migration` stages ask for resources without assigning business roles to workers.
+let `cairn-migration` validation tiers ask for resources without assigning business roles to workers.
 Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
 retains its own private key. Exact-CSR replay closes a lost-response window, and a fresh controller
 recovers certificate-to-`CredentialId`/`WorkerId`/pool authority from the append-only registry.
@@ -111,9 +111,15 @@ bundles for x86-64 and AArch64 against a pinned GLIBC baseline and verifies thei
 before deployment. A generic scheduler kernel now freezes explainable candidate snapshots, applies
 a versioned deterministic policy, and commits a distinct capacity reservation before assignment;
 independent SQLite writers cannot reserve one slot twice, and stale worker/credential evidence is
-rechecked before lease grant. See [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and
-recovery contract. The current worker executor deliberately returns `NotStarted`; real
-local/container backends, controller/migration scheduler composition, richer resource probing,
+rechecked before lease grant. The controller now composes managed enrollment authority, contract
+preparation, placement, conditional attempt authorization, lease grant, and durable offer enqueue
+with exact identity-preserving retry. Managed observations cite the latest registry event and a
+post-snapshot revocation fails closed. `cairn-migration` owns V0–V3 product meaning and translates
+it to generic platform/pool/backend/capability/resource constraints; its fixture reaches a selected
+worker without leaking migration roles into execution types. Scheduler enablement, policy, session
+time, claim time, and lease time are configuration rather than constants. See
+[`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
+executor deliberately returns `NotStarted`; real local/container backends, richer resource probing,
 static-registry import, and real-host job execution remain subsequent slices. The active
 dependency-ordered roadmap is [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 

@@ -31,6 +31,11 @@
   "outbox_poll_interval_ms": 100,
   "protocol_version": 1,
   "schema_version": 2,
+  "scheduler": {
+    "assignment_lease_duration_ms": 120000,
+    "policy_version": "stable-worker-id-v1",
+    "reservation_claim_timeout_ms": 30000
+  },
   "session_timeout_ms": 180000,
   "storage": {
     "content_database": "state/content.sqlite3",

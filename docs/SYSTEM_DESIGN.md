@@ -718,8 +718,24 @@ execution or expiry before start. A reservation never becomes reusable for an in
 attempt. If a crash occurs after reservation but before assignment, a separately configured
 positive claim deadline permits release only while the assignment stream remains absent. The
 singleton ledger is an initial correctness boundary, not a permanent scale claim; it can be sharded
-later while retaining placement/snapshot/reservation identities. Controller composition and the
-`cairn-migration` translation fixture remain C2.
+later while retaining placement/snapshot/reservation identities.
+
+**Implemented scheduler composition C2 (2026-08-25).** The controller now derives its canonical
+candidate set from managed and transitional static enrollment, reloads the managed registry for
+every placement-authority observation, and cites the latest registry event. Contract preparation,
+placement reservation, conditional attempt authorization, assignment grant, and durable offer
+enqueue form one
+recoverable application service. Callers retain strong identities for every boundary; exact retry
+recovers the prior assignment phase and never invents a second lease. Revocation after snapshot but
+before grant fails closed, while reservation release remains limited to unclaimed, proven
+pre-start-expired, or terminal assignments and continues to reject execution-in-doubt state.
+
+The new `cairn-migration` translation layer retains V0–V3 validation meaning above the execution
+boundary and emits only generic platform, authenticated pool, backend, capability, timeout, and
+resource constraints. A SQLite-backed fixture reaches the selected worker's durable outbox without
+placing migration-stage vocabulary in execution types. Scheduler enablement, algorithm version,
+reservation claim time, lease time, and session time are explicit configuration; scheduler
+enablement may be turned off without disabling reconciliation.
 
 After a worker heartbeat is durably accepted, the controller returns an ephemeral
 `HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence

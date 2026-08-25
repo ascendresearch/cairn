@@ -4,6 +4,7 @@ members = [
     "crates/cairn-codec",
     "crates/cairn-control-transport",
     "crates/cairn-execution",
+    "crates/cairn-migration",
     "crates/cairn-protocol",
     "crates/cairn-record",
     "crates/cairn-server",
@@ -22,6 +23,7 @@ license = "MIT"
 cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }
+cairn-migration = { path = "crates/cairn-migration" }
 cairn-control-transport = { path = "crates/cairn-control-transport" }
 cairn-protocol = { path = "crates/cairn-protocol" }
 cairn-record = { path = "crates/cairn-record" }

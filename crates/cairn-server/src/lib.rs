@@ -1,6 +1,13 @@
 //! Runnable Cairn controller composition root.
 
 mod enrollment;
+mod scheduling;
+
+pub use scheduling::{
+    ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome,
+    ScheduledAssignmentPhase, SchedulerServiceConfig, release_execution_reservation,
+    release_execution_reservation_at, schedule_execution_contract, schedule_execution_contract_at,
+};
 
 use std::{
     collections::BTreeMap,
@@ -21,13 +28,14 @@ use cairn_control_transport::{
     write_wire_message,
 };
 use cairn_execution::{
-    AuthenticatedWorkerIdentity, ControlFrame, ExecutionAssignmentState, InboundControlSession,
-    RecordedWorkerAuthenticator, RegisteredWorkerSession, WorkerAuthenticationSubject,
-    WorkerControlMessage, WorkerPoolName, WorkerProtocolVersion, WorkerResultReconciliation,
-    WorkerSessionTimeoutMillis, accept_worker_assignment, acknowledge_controller_messages,
-    deliver_controller_acknowledgement, deliver_controller_messages, disconnect_worker,
-    reconcile_worker_result, record_worker_heartbeat, recover_execution_assignment,
-    register_worker,
+    AcceptedExecutionAssignment, AssignmentLeaseRecord, AuthenticatedWorkerIdentity, ControlFrame,
+    ExecutionAssignmentState, InboundControlSession, RecordedWorkerAuthenticator,
+    RegisteredWorkerSession, WorkerAuthenticationSubject, WorkerControlMessage, WorkerPoolName,
+    WorkerProtocolVersion, WorkerResultReconciliation, WorkerSessionTimeoutMillis,
+    accept_worker_assignment, acknowledge_controller_messages, deliver_controller_acknowledgement,
+    deliver_controller_messages, disconnect_worker, enqueue_controller_message,
+    execution_start_message, reconcile_worker_result, record_worker_heartbeat,
+    recover_execution_assignment, register_worker, start_accepted_assignment,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId,
@@ -60,6 +68,10 @@ pub struct ServerConfig {
     pub storage: ServerStorageConfig,
     pub protocol_version: WorkerProtocolVersion,
     pub session_timeout_ms: WorkerSessionTimeoutMillis,
+    /// Optional generic scheduler service. `null` disables new placement while worker control and
+    /// reconciliation remain available.
+    #[serde(default)]
+    pub scheduler: Option<SchedulerServiceConfig>,
     pub handshake_timeout_ms: Option<NonZeroU64>,
     pub idle_timeout_ms: Option<NonZeroU64>,
     pub outbox_poll_interval_ms: Option<NonZeroU64>,
@@ -128,6 +140,8 @@ pub enum ServerError {
     Startup(String),
     #[error("worker session failed: {0}")]
     Session(String),
+    #[error("controller scheduling failed: {0}")]
+    Scheduling(String),
 }
 
 struct ControllerState {
@@ -1067,12 +1081,19 @@ async fn process_worker_frame(
     };
     match &message.payload {
         WorkerControlMessage::AssignmentAccepted { binding } => {
+            if binding.worker_id() != session.worker_id()
+                || binding.worker_incarnation_id() != session.incarnation_id()
+            {
+                return Err(ServerError::Session(
+                    "assignment acceptance claimant differs from the authenticated session".into(),
+                ));
+            }
             let assignment =
                 recover_execution_assignment(events, content, binding.attempt_id(), now)
                     .map_err(|error| ServerError::Session(error.to_string()))?;
             match assignment {
                 ExecutionAssignmentState::Leased(lease) => {
-                    accept_worker_assignment(
+                    let accepted = accept_worker_assignment(
                         events,
                         content,
                         lease,
@@ -1083,12 +1104,17 @@ async fn process_worker_frame(
                         now,
                     )
                     .map_err(|error| ServerError::Session(error.to_string()))?;
+                    start_and_enqueue_assignment(events, content, accepted, session, config, now)?;
                 }
                 ExecutionAssignmentState::Accepted(accepted) => {
                     ensure_binding(accepted.lease().binding(), binding)?;
+                    start_and_enqueue_assignment(events, content, accepted, session, config, now)?;
                 }
-                ExecutionAssignmentState::Running { lease }
-                | ExecutionAssignmentState::ExpiredBeforeStart { lease }
+                ExecutionAssignmentState::Running { lease } => {
+                    ensure_binding(lease.binding(), binding)?;
+                    enqueue_assignment_start(events, &lease, session, now)?;
+                }
+                ExecutionAssignmentState::ExpiredBeforeStart { lease }
                 | ExecutionAssignmentState::ReconciliationRequired { lease }
                 | ExecutionAssignmentState::ExecutionTerminal { lease, .. } => {
                     ensure_binding(lease.binding(), binding)?;
@@ -1112,6 +1138,53 @@ async fn process_worker_frame(
             .map_err(|error| ServerError::Session(error.to_string()))?;
         }
     }
+    Ok(())
+}
+
+fn start_and_enqueue_assignment(
+    events: &mut SqliteEventStore,
+    content: &SqliteContentStore,
+    accepted: AcceptedExecutionAssignment,
+    session: &RegisteredWorkerSession,
+    config: &ServerConfig,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), ServerError> {
+    let start = execution_start_message(accepted.lease());
+    start_accepted_assignment(
+        events,
+        content,
+        accepted,
+        session,
+        config.session_timeout_ms,
+        &command("start-attempt"),
+        observed_at,
+    )
+    .map_err(|error| ServerError::Session(error.to_string()))?;
+    enqueue_controller_message(
+        events,
+        session.worker_id(),
+        &start,
+        &command("enqueue-start"),
+        observed_at,
+    )
+    .map_err(|error| ServerError::Session(error.to_string()))?;
+    Ok(())
+}
+
+fn enqueue_assignment_start(
+    events: &mut SqliteEventStore,
+    lease: &AssignmentLeaseRecord,
+    session: &RegisteredWorkerSession,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<(), ServerError> {
+    enqueue_controller_message(
+        events,
+        session.worker_id(),
+        &execution_start_message(lease),
+        &command("recover-start-outbox"),
+        observed_at,
+    )
+    .map_err(|error| ServerError::Session(error.to_string()))?;
     Ok(())
 }
 
@@ -1273,9 +1346,35 @@ mod tests {
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
-        let _: ServerConfig =
+        let config: ServerConfig =
             serde_json::from_str(include_str!("../../../config/controller.example.json"))
                 .expect("documented server configuration");
+        assert!(config.scheduler.is_some());
+    }
+
+    #[test]
+    fn scheduler_can_be_disabled_or_omitted_but_enabled_durations_are_positive() {
+        let mut documented: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented JSON");
+        documented["scheduler"] = serde_json::Value::Null;
+        let disabled: ServerConfig =
+            serde_json::from_value(documented.clone()).expect("disabled scheduler");
+        assert!(disabled.scheduler.is_none());
+
+        documented
+            .as_object_mut()
+            .expect("controller object")
+            .remove("scheduler");
+        let omitted: ServerConfig =
+            serde_json::from_value(documented).expect("pre-scheduler configuration");
+        assert!(omitted.scheduler.is_none());
+
+        let mut invalid: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented JSON");
+        invalid["scheduler"]["assignment_lease_duration_ms"] = 0.into();
+        assert!(serde_json::from_value::<ServerConfig>(invalid).is_err());
     }
 
     #[test]

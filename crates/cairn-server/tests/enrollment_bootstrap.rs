@@ -398,6 +398,7 @@ fn server_config(
         },
         protocol_version: WorkerProtocolVersion::new(1)?,
         session_timeout_ms: WorkerSessionTimeoutMillis::new(10_000)?,
+        scheduler: None,
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
         outbox_poll_interval_ms: None,

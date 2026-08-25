@@ -1176,14 +1176,15 @@ mod tests {
         ArchitectureName, AssignmentControlMessageIds, AssignmentLeaseDurationMillis,
         AssignmentLeasePolicy, AuthenticatedWorkerIdentity, CapturePolicy, CommandContract,
         DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionEnvironmentArtifact,
-        ExecutionPlatform, ExecutionPlatformRequirement, ExecutionTimeoutMillis,
+        ExecutionPlatform, ExecutionPlatformRequirement, ExecutionTimeoutMillis, ExecutorError,
         InputBundleArtifact, NetworkPolicy, OperatingSystemName, OutputByteLimit, PlacementRequest,
         PreparedExecutionJob, RecordedWorkerAuthenticator, ResourceRequest, SandboxPath,
-        TargetEnvironmentName, WorkerAuthenticationSubject, WorkerAvailability,
+        ScriptedExecutor, TargetEnvironmentName, WorkerAuthenticationSubject, WorkerAvailability,
         WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile,
         WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory, WorkerResourceSource,
-        WorkerSlotCount, accept_assignment, authorize_execution_attempt, prepare_execution_job,
-        record_worker_heartbeat, recover_execution_job, register_worker, start_accepted_assignment,
+        WorkerSlotCount, accept_assignment, authorize_execution_attempt, execute_execution_attempt,
+        prepare_execution_job, record_worker_heartbeat, recover_execution_job, register_worker,
+        start_accepted_assignment,
     };
 
     struct ToggleAuthority(Cell<bool>);
@@ -1731,7 +1732,7 @@ mod tests {
     }
 
     #[test]
-    fn started_in_doubt_assignment_keeps_its_capacity_reservation() {
+    fn started_in_doubt_assignment_keeps_capacity_until_terminal() {
         let mut fixture = Fixture::new();
         let worker_id = WorkerId::new();
         let worker = fixture.register(worker_id, 0);
@@ -1780,7 +1781,7 @@ mod tests {
             ObservedAtUnixMillis::new(5),
         )
         .expect("accept");
-        start_accepted_assignment(
+        let started = start_accepted_assignment(
             &mut fixture.events,
             &fixture.content,
             accepted,
@@ -1800,6 +1801,31 @@ mod tests {
             ),
             Err(SchedulerError::UnsafeRelease)
         ));
+        let mut executor = ScriptedExecutor::new(|_: &crate::ExecutionInput<'_>| {
+            Err(ExecutorError::NotStarted(
+                "fixture proved the workload did not begin".into(),
+            ))
+        });
+        execute_execution_attempt(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut executor,
+            started,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(26),
+        )
+        .expect("record terminal not-started result");
+        assert_eq!(
+            release_scheduler_reservation(
+                &mut fixture.events,
+                &fixture.content,
+                reservation_id,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(27),
+            )
+            .expect("release terminal reservation"),
+            ReservationReleaseReason::ExecutionTerminal
+        );
     }
 
     #[test]

@@ -1,13 +1,28 @@
-use std::{error::Error, fs, net::TcpListener as StdTcpListener, num::NonZeroU64, time::Duration};
+use std::{
+    error::Error, fs, io::Cursor, net::TcpListener as StdTcpListener, num::NonZeroU64,
+    time::Duration,
+};
 
 use cairn_control_transport::{ClientTlsFiles, ServerTlsFiles, TransportPolicy};
 use cairn_execution::{
-    ExecutionBackend, ExecutionPlatformRequirement, WorkerAvailability, WorkerBinaryIdentity,
-    WorkerHealth, WorkerPoolName, WorkerProtocolVersion, WorkerSessionState,
-    WorkerSessionTimeoutMillis, WorkerSlotCount, recover_worker_session,
+    AssignmentLeaseDurationMillis, CapturePolicy, CommandContract, DiagnosticByteLimit,
+    EvidenceByteLimit, ExecutionAssignmentState, ExecutionBackend, ExecutionEnvironmentArtifact,
+    ExecutionPlatformRequirement, ExecutionTimeoutMillis, InputBundleArtifact, NetworkPolicy,
+    OutputByteLimit, PlacementRequest, ReservationClaimTimeoutMillis, ResourceRequest, SandboxPath,
+    SchedulerPolicyVersion, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerPoolName,
+    WorkerProtocolVersion, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
+    recover_execution_assignment, recover_worker_session,
 };
-use cairn_protocol::{ObservedAtUnixMillis, WorkerId};
-use cairn_server::{ServerConfig, ServerStorageConfig, WorkerEnrollment};
+use cairn_protocol::{
+    AssignmentId, AttemptId, CommandId, ContentType, ControlMessageId, CredentialId, JobId,
+    LeaseId, ObservedAtUnixMillis, PlacementId, ReservationId, WorkerId,
+};
+use cairn_record::ContentStore;
+use cairn_server::{
+    ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome,
+    ScheduledAssignmentPhase, SchedulerServiceConfig, ServerConfig, ServerStorageConfig,
+    WorkerEnrollment, release_execution_reservation_at, schedule_execution_contract_at,
+};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{ControllerEndpoint, WorkerConfig, WorkerIdentityConfig, WorkerProfileConfig};
 use rcgen::{
@@ -34,6 +49,8 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     let worker_b = write_identity(directory.path(), "worker-b", &pki.worker_b)?;
     let worker_a_id = WorkerId::new();
     let worker_b_id = WorkerId::new();
+    let worker_a_credential = CredentialId::new();
+    let worker_b_credential = CredentialId::new();
 
     let port_probe = StdTcpListener::bind("127.0.0.1:0")?;
     let listen = port_probe.local_addr()?;
@@ -43,7 +60,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     let content_directory = directory.path().join("controller-content");
     let protocol = WorkerProtocolVersion::new(1)?;
     let session_timeout = WorkerSessionTimeoutMillis::new(10_000)?;
-    let server = tokio::spawn(cairn_server::run(ServerConfig {
+    let controller_config = ServerConfig {
         schema_version: 2,
         listen,
         tls: ServerTlsFiles {
@@ -54,13 +71,13 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         enrollment: vec![
             WorkerEnrollment {
                 worker_id: worker_a_id,
-                credential_id: cairn_protocol::CredentialId::new(),
+                credential_id: worker_a_credential,
                 pool: WorkerPoolName::new("fixture").expect("pool"),
                 certificate: worker_a.0.clone(),
             },
             WorkerEnrollment {
                 worker_id: worker_b_id,
-                credential_id: cairn_protocol::CredentialId::new(),
+                credential_id: worker_b_credential,
                 pool: WorkerPoolName::new("fixture").expect("pool"),
                 certificate: worker_b.0.clone(),
             },
@@ -73,13 +90,20 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         },
         protocol_version: protocol,
         session_timeout_ms: session_timeout,
+        scheduler: Some(SchedulerServiceConfig {
+            policy_version: SchedulerPolicyVersion::StableWorkerIdV1,
+            reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(2_000)?,
+            assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(2_000)?,
+        }),
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: NonZeroU64::new(200),
         outbox_poll_interval_ms: NonZeroU64::new(25),
         authority_poll_interval_ms: NonZeroU64::new(25).expect("authority poll"),
         transport: TransportPolicy::default(),
         diagnostic_byte_limit: NonZeroU64::new(256),
-    }));
+    };
+    let scheduling_config = controller_config.clone();
+    let server = tokio::spawn(cairn_server::run(controller_config));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let controller = ControllerEndpoint {
@@ -165,6 +189,82 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         "heartbeat acknowledgements must keep both idle-bounded sessions open"
     );
 
+    let mut content = SqliteContentStore::open(&content_database, &content_directory)?;
+    let input = put::<InputBundleArtifact>(&mut content, b"dual-worker-input")?;
+    let environment = put::<ExecutionEnvironmentArtifact>(&mut content, b"dual-worker-env")?;
+    let contract = cairn_execution::JobContract::new(
+        JobId::new(),
+        input,
+        environment,
+        ExecutionBackend::new("transport-test")?,
+        CommandContract::new(
+            SandboxPath::new("bin/fixture")?,
+            Vec::new(),
+            SandboxPath::new("work")?,
+        ),
+        ResourceRequest::new(
+            ExecutionTimeoutMillis::new(1_000)?,
+            PlacementRequest::new(
+                ExecutionPlatformRequirement::default(),
+                vec![WorkerPoolName::new("fixture")?],
+                Vec::new(),
+            )?,
+        )?,
+        NetworkPolicy::Disabled,
+        CapturePolicy::new(
+            OutputByteLimit::new(1_024)?,
+            OutputByteLimit::new(1_024)?,
+            DiagnosticByteLimit::new(1_024)?,
+            EvidenceByteLimit::new(4_096)?,
+            Vec::new(),
+        )?,
+    );
+    let schedule_ids = schedule_ids();
+    let scheduled_at = ObservedAtUnixMillis::new(chrono_free_unix_millis()?);
+    let ControllerSchedulingOutcome::Scheduled {
+        placement, binding, ..
+    } = schedule_execution_contract_at(&scheduling_config, &contract, schedule_ids, scheduled_at)?
+    else {
+        return Err("ready dual-worker fixture had no scheduling candidate".into());
+    };
+    assert_eq!(binding.worker_id(), worker_a_id.min(worker_b_id));
+    let terminal = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let events = SqliteEventStore::open(&event_database).expect("open assignment events");
+            let content = SqliteContentStore::open(&content_database, &content_directory)
+                .expect("open assignment content");
+            let now =
+                ObservedAtUnixMillis::new(chrono_free_unix_millis().expect("current Unix time"));
+            if matches!(
+                recover_execution_assignment(&events, &content, schedule_ids.attempt_id, now),
+                Ok(ExecutionAssignmentState::ExecutionTerminal { .. })
+            ) {
+                break now;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?;
+    let ControllerSchedulingOutcome::Scheduled {
+        binding: recovered_binding,
+        phase: recovered_phase,
+        ..
+    } = schedule_execution_contract_at(&scheduling_config, &contract, schedule_ids, terminal)?
+    else {
+        return Err("terminal scheduling retry lost its durable placement".into());
+    };
+    assert_eq!(recovered_binding, binding);
+    assert_eq!(recovered_phase, ScheduledAssignmentPhase::Terminal);
+    assert_eq!(
+        release_execution_reservation_at(
+            &scheduling_config,
+            placement.reservation_id().expect("reservation"),
+            &CommandId::new(),
+            terminal,
+        )?,
+        cairn_execution::ReservationReleaseReason::ExecutionTerminal
+    );
+
     worker_task_a.abort();
     worker_task_b.abort();
     server.abort();
@@ -201,7 +301,7 @@ fn worker_config(
             max_concurrency: WorkerSlotCount::new(1)?,
         },
         expected_platform: ExecutionPlatformRequirement::default(),
-        availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())?,
+        availability: WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())?,
         journal_database: directory.join(format!("worker-{suffix}.sqlite3")),
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
@@ -210,6 +310,31 @@ fn worker_config(
         reconnect_delay_ms: None,
         transport: TransportPolicy::default(),
     })
+}
+
+fn schedule_ids() -> ControllerScheduleIds {
+    ControllerScheduleIds {
+        attempt_id: AttemptId::new(),
+        placement_id: PlacementId::new(),
+        reservation_id: ReservationId::new(),
+        assignment_id: AssignmentId::new(),
+        lease_id: LeaseId::new(),
+        offer_message_id: ControlMessageId::new(),
+        start_message_id: ControlMessageId::new(),
+        commands: ControllerScheduleCommandIds {
+            authorize_attempt: CommandId::new(),
+            reserve_placement: CommandId::new(),
+            grant_assignment: CommandId::new(),
+            enqueue_offer: CommandId::new(),
+        },
+    }
+}
+
+fn put<T: ContentType>(
+    content: &mut SqliteContentStore,
+    bytes: &[u8],
+) -> Result<cairn_protocol::ContentId<T>, Box<dyn Error + Send + Sync>> {
+    Ok(content.put::<T>(&mut Cursor::new(bytes))?.content_id)
 }
 
 fn chrono_free_unix_millis() -> Result<i64, Box<dyn Error + Send + Sync>> {

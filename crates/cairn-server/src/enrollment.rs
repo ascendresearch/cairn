@@ -181,6 +181,17 @@ impl EnrollmentRegistry {
     pub(crate) fn credential_is_known(&self, credential_id: CredentialId) -> bool {
         self.credentials.contains_key(&credential_id)
     }
+
+    pub(crate) fn worker_ids(&self) -> BTreeSet<WorkerId> {
+        self.credentials
+            .values()
+            .map(|record| record.enrolled.worker_id)
+            .collect()
+    }
+
+    pub(crate) const fn last_event_id(&self) -> Option<EventId> {
+        self.last_event_id
+    }
 }
 
 impl CredentialRecord {

@@ -1,0 +1,17 @@
+[package]
+name = "cairn-migration"
+description = "Cairn operator-migration product orchestration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-execution.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -69,7 +69,7 @@ Acceptance gate:
 - stale snapshots and authority changes fail closed;
 - replay reconstructs the candidate set, policy version, rejection reasons, reservation, and choice.
 
-## Phase C2 — scheduler composition and migration translation
+## Phase C2 — scheduler composition and migration translation (implemented 2026-08-25)
 
 Compose the scheduler authority seam with the managed enrollment registry and the controller's
 assignment/outbox path. `cairn-migration` owns translation from migration-stage needs to the frozen
