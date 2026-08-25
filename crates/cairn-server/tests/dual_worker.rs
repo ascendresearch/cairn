@@ -2,14 +2,14 @@ use std::{error::Error, fs, net::TcpListener as StdTcpListener, num::NonZeroU64,
 
 use cairn_control_transport::{ClientTlsFiles, ServerTlsFiles, TransportPolicy};
 use cairn_execution::{
-    ExecutionBackend, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerProfile,
-    WorkerProtocolVersion, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
-    recover_worker_session,
+    ExecutionBackend, ExecutionPlatformRequirement, WorkerAvailability, WorkerBinaryIdentity,
+    WorkerHealth, WorkerPoolName, WorkerProtocolVersion, WorkerSessionState,
+    WorkerSessionTimeoutMillis, WorkerSlotCount, recover_worker_session,
 };
 use cairn_protocol::{ObservedAtUnixMillis, WorkerId};
 use cairn_server::{ServerConfig, ServerStorageConfig, WorkerEnrollment};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-use cairn_worker::{ControllerEndpoint, WorkerConfig};
+use cairn_worker::{ControllerEndpoint, WorkerConfig, WorkerProfileConfig};
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose,
@@ -54,10 +54,12 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         enrollment: vec![
             WorkerEnrollment {
                 worker_id: worker_a_id,
+                pool: WorkerPoolName::new("fixture").expect("pool"),
                 certificate: worker_a.0.clone(),
             },
             WorkerEnrollment {
                 worker_id: worker_b_id,
+                pool: WorkerPoolName::new("fixture").expect("pool"),
                 certificate: worker_b.0.clone(),
             },
         ],
@@ -184,13 +186,15 @@ fn worker_config(
             server_name: "localhost".into(),
         },
         worker_id,
-        profile: WorkerProfile::new(
-            protocol,
-            WorkerBinaryIdentity::new("sha256:transport-test")?,
-            vec![ExecutionBackend::new("transport-test")?],
-            Vec::new(),
-            WorkerSlotCount::new(1)?,
-        )?,
+        profile: WorkerProfileConfig {
+            schema_version: 1,
+            protocol_version: protocol,
+            binary_identity: WorkerBinaryIdentity::new("sha256:transport-test")?,
+            backends: vec![ExecutionBackend::new("transport-test")?],
+            capabilities: Vec::new(),
+            max_concurrency: WorkerSlotCount::new(1)?,
+        },
+        expected_platform: ExecutionPlatformRequirement::default(),
         availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())?,
         journal_database: directory.join(format!("worker-{suffix}.sqlite3")),
         handshake_timeout_ms: NonZeroU64::new(2_000),

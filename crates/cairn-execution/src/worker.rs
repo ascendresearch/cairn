@@ -11,7 +11,9 @@ use cairn_record::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
-use crate::{CapabilityRequirement, ExecutionBackend, JobContract};
+use crate::{
+    CapabilityRequirement, ExecutionBackend, ExecutionPlatform, JobContract, WorkerPoolName,
+};
 
 const WORKER_REGISTERED: &str = "execution.worker-registered";
 const WORKER_REPLACED: &str = "execution.worker-replaced-after-expiry";
@@ -183,21 +185,138 @@ pub enum WorkerValueError {
     /// Assignment lease duration must be explicitly positive.
     #[error("assignment lease duration must be greater than zero")]
     ZeroLeaseDuration,
-    /// Backend names must be unique and canonical.
-    #[error("worker backends must be unique and in canonical order")]
-    NonCanonicalBackends,
-    /// Capability names must be unique and canonical.
-    #[error("worker capabilities must have unique names in canonical order")]
-    NonCanonicalCapabilities,
+    /// Resource claims must retain one canonical entry for each backend/capability.
+    #[error("worker resource claims must be unique and in canonical order")]
+    NonCanonicalResourceClaims,
+    /// A hello cannot elevate its own resource claim to controller/external assurance.
+    #[error("worker hello contains resource provenance it is not authorized to assert")]
+    UnadmittedResourceProvenance,
     /// Active attempt snapshots must be a canonical set.
     #[error("worker active attempts must be unique and in canonical order")]
     NonCanonicalActiveAttempts,
     /// Dynamic availability exceeded the registered capacity.
     #[error("worker available slots exceed registered maximum concurrency")]
     SlotsExceedCapacity,
-    /// Only the implemented V1 worker profile is accepted.
+    /// Only the implemented V2 worker profile is accepted.
     #[error("worker profile schema version is unsupported")]
     UnsupportedProfileSchema,
+}
+
+/// Provenance of one static worker resource claim.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerResourceSource {
+    /// Reported by a built-in Cairn platform/device probe.
+    BuiltinProbe,
+    /// Declared in deployment configuration without independent verification.
+    OperatorDeclared,
+    /// Checked by a controller challenge or trusted probe job.
+    ControllerVerified,
+    /// Supported by an external attestation authority.
+    ExternalAttestation,
+}
+
+/// One resource value together with the evidence class that introduced it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResourceClaim<T> {
+    value: T,
+    source: WorkerResourceSource,
+}
+
+impl<T> WorkerResourceClaim<T> {
+    /// Creates a resource claim without elevating its source.
+    #[must_use]
+    pub const fn new(value: T, source: WorkerResourceSource) -> Self {
+        Self { value, source }
+    }
+
+    /// Returns the claimed resource value.
+    #[must_use]
+    pub const fn value(&self) -> &T {
+        &self.value
+    }
+
+    /// Returns how this claim was established.
+    #[must_use]
+    pub const fn source(&self) -> WorkerResourceSource {
+        self.source
+    }
+}
+
+/// Static resource inventory advertised by one worker incarnation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResourceInventory {
+    platform: WorkerResourceClaim<ExecutionPlatform>,
+    backends: Vec<WorkerResourceClaim<ExecutionBackend>>,
+    capabilities: Vec<WorkerResourceClaim<CapabilityRequirement>>,
+    max_concurrency: WorkerSlotCount,
+}
+
+impl WorkerResourceInventory {
+    /// Creates a canonical static inventory.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty/duplicate backend set or duplicate capability keys.
+    pub fn new(
+        platform: WorkerResourceClaim<ExecutionPlatform>,
+        mut backends: Vec<WorkerResourceClaim<ExecutionBackend>>,
+        mut capabilities: Vec<WorkerResourceClaim<CapabilityRequirement>>,
+        max_concurrency: WorkerSlotCount,
+    ) -> Result<Self, WorkerValueError> {
+        backends.sort_by(|left, right| left.value.cmp(&right.value));
+        capabilities.sort_by(|left, right| left.value.name.cmp(&right.value.name));
+        let inventory = Self {
+            platform,
+            backends,
+            capabilities,
+            max_concurrency,
+        };
+        inventory.validate()?;
+        Ok(inventory)
+    }
+
+    fn validate(&self) -> Result<(), WorkerValueError> {
+        if self.backends.is_empty()
+            || self
+                .backends
+                .windows(2)
+                .any(|pair| pair[0].value >= pair[1].value)
+            || self
+                .capabilities
+                .windows(2)
+                .any(|pair| pair[0].value.name >= pair[1].value.name)
+        {
+            return Err(WorkerValueError::NonCanonicalResourceClaims);
+        }
+        Ok(())
+    }
+
+    /// Returns the exact native worker platform claim.
+    #[must_use]
+    pub const fn platform(&self) -> &WorkerResourceClaim<ExecutionPlatform> {
+        &self.platform
+    }
+
+    /// Returns canonical backend claims.
+    #[must_use]
+    pub fn backends(&self) -> &[WorkerResourceClaim<ExecutionBackend>] {
+        &self.backends
+    }
+
+    /// Returns canonical additional capability claims.
+    #[must_use]
+    pub fn capabilities(&self) -> &[WorkerResourceClaim<CapabilityRequirement>] {
+        &self.capabilities
+    }
+
+    /// Returns maximum concurrent assignments.
+    #[must_use]
+    pub const fn max_concurrency(&self) -> WorkerSlotCount {
+        self.max_concurrency
+    }
 }
 
 /// Static, incarnation-scoped worker capabilities.
@@ -207,9 +326,7 @@ pub struct WorkerProfile {
     schema_version: u16,
     protocol_version: WorkerProtocolVersion,
     binary_identity: WorkerBinaryIdentity,
-    backends: Vec<ExecutionBackend>,
-    capabilities: Vec<CapabilityRequirement>,
-    max_concurrency: WorkerSlotCount,
+    resources: WorkerResourceInventory,
 }
 
 impl WorkerProfile {
@@ -221,46 +338,40 @@ impl WorkerProfile {
     pub fn new(
         protocol_version: WorkerProtocolVersion,
         binary_identity: WorkerBinaryIdentity,
-        mut backends: Vec<ExecutionBackend>,
-        mut capabilities: Vec<CapabilityRequirement>,
-        max_concurrency: WorkerSlotCount,
+        resources: WorkerResourceInventory,
     ) -> Result<Self, WorkerValueError> {
-        backends.sort();
-        if backends.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(WorkerValueError::NonCanonicalBackends);
-        }
-        capabilities.sort_by(|left, right| left.name.cmp(&right.name));
-        if capabilities
-            .windows(2)
-            .any(|pair| pair[0].name == pair[1].name)
-        {
-            return Err(WorkerValueError::NonCanonicalCapabilities);
-        }
         let profile = Self {
-            schema_version: 1,
+            schema_version: 2,
             protocol_version,
             binary_identity,
-            backends,
-            capabilities,
-            max_concurrency,
+            resources,
         };
         profile.validate()?;
         Ok(profile)
     }
 
     fn validate(&self) -> Result<(), WorkerValueError> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err(WorkerValueError::UnsupportedProfileSchema);
         }
-        if self.backends.is_empty() || self.backends.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(WorkerValueError::NonCanonicalBackends);
-        }
-        if self
-            .capabilities
-            .windows(2)
-            .any(|pair| pair[0].name >= pair[1].name)
+        self.resources.validate()
+    }
+
+    fn validate_advertised(&self) -> Result<(), WorkerValueError> {
+        self.validate()?;
+        if self.resources.platform.source != WorkerResourceSource::BuiltinProbe
+            || self
+                .resources
+                .backends
+                .iter()
+                .any(|claim| claim.source != WorkerResourceSource::OperatorDeclared)
+            || self
+                .resources
+                .capabilities
+                .iter()
+                .any(|claim| claim.source != WorkerResourceSource::OperatorDeclared)
         {
-            return Err(WorkerValueError::NonCanonicalCapabilities);
+            return Err(WorkerValueError::UnadmittedResourceProvenance);
         }
         Ok(())
     }
@@ -277,22 +388,16 @@ impl WorkerProfile {
         &self.binary_identity
     }
 
-    /// Returns supported domain-neutral execution backends.
+    /// Returns the immutable resource inventory.
     #[must_use]
-    pub fn backends(&self) -> &[ExecutionBackend] {
-        &self.backends
-    }
-
-    /// Returns static capabilities in canonical name order.
-    #[must_use]
-    pub fn capabilities(&self) -> &[CapabilityRequirement] {
-        &self.capabilities
+    pub const fn resources(&self) -> &WorkerResourceInventory {
+        &self.resources
     }
 
     /// Returns maximum concurrent assignments.
     #[must_use]
     pub const fn max_concurrency(&self) -> WorkerSlotCount {
-        self.max_concurrency
+        self.resources.max_concurrency
     }
 }
 
@@ -344,6 +449,33 @@ impl WorkerHello {
 #[error("worker authentication failed: {0}")]
 pub struct WorkerAuthenticationError(pub String);
 
+/// Controller-authoritative identity and pool membership established during authentication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedWorkerIdentity {
+    subject: WorkerAuthenticationSubject,
+    pool: WorkerPoolName,
+}
+
+impl AuthenticatedWorkerIdentity {
+    /// Binds an authenticated principal to an operator-owned scheduling pool.
+    #[must_use]
+    pub const fn new(subject: WorkerAuthenticationSubject, pool: WorkerPoolName) -> Self {
+        Self { subject, pool }
+    }
+
+    /// Returns the authenticated principal.
+    #[must_use]
+    pub const fn subject(&self) -> &WorkerAuthenticationSubject {
+        &self.subject
+    }
+
+    /// Returns the authenticated, controller-authorized worker pool.
+    #[must_use]
+    pub const fn pool(&self) -> &WorkerPoolName {
+        &self.pool
+    }
+}
+
 /// Replaceable verifier for mTLS enrollment, local development credentials, or future mechanisms.
 pub trait WorkerAuthenticator {
     /// Verifies a hello and returns the stable principal proven by the transport.
@@ -354,21 +486,21 @@ pub trait WorkerAuthenticator {
     fn authenticate(
         &mut self,
         hello: &WorkerHello,
-    ) -> Result<WorkerAuthenticationSubject, WorkerAuthenticationError>;
+    ) -> Result<AuthenticatedWorkerIdentity, WorkerAuthenticationError>;
 }
 
 /// Deterministic authenticator mapping worker identities to enrolled principals.
 pub struct RecordedWorkerAuthenticator {
-    subjects: BTreeMap<WorkerId, WorkerAuthenticationSubject>,
+    identities: BTreeMap<WorkerId, AuthenticatedWorkerIdentity>,
 }
 
 impl RecordedWorkerAuthenticator {
     /// Creates a deterministic enrollment fixture.
     pub fn new(
-        subjects: impl IntoIterator<Item = (WorkerId, WorkerAuthenticationSubject)>,
+        identities: impl IntoIterator<Item = (WorkerId, AuthenticatedWorkerIdentity)>,
     ) -> Self {
         Self {
-            subjects: subjects.into_iter().collect(),
+            identities: identities.into_iter().collect(),
         }
     }
 }
@@ -377,8 +509,8 @@ impl WorkerAuthenticator for RecordedWorkerAuthenticator {
     fn authenticate(
         &mut self,
         hello: &WorkerHello,
-    ) -> Result<WorkerAuthenticationSubject, WorkerAuthenticationError> {
-        self.subjects
+    ) -> Result<AuthenticatedWorkerIdentity, WorkerAuthenticationError> {
+        self.identities
             .get(&hello.worker_id)
             .cloned()
             .ok_or_else(|| WorkerAuthenticationError("worker is not enrolled".to_owned()))
@@ -439,7 +571,7 @@ impl WorkerAvailability {
         {
             return Err(WorkerValueError::NonCanonicalActiveAttempts);
         }
-        if self.available_slots > profile.max_concurrency.get() {
+        if self.available_slots > profile.max_concurrency().get() {
             return Err(WorkerValueError::SlotsExceedCapacity);
         }
         Ok(())
@@ -473,7 +605,7 @@ impl WorkerAvailability {
 /// Immutable content domain for canonical worker profiles.
 pub struct WorkerProfileArtifact;
 impl ContentType for WorkerProfileArtifact {
-    const DOMAIN: &'static str = "execution.worker-profile.v1";
+    const DOMAIN: &'static str = "execution.worker-profile.v2";
 }
 
 /// Immutable content domain for dynamic availability snapshots.
@@ -488,6 +620,7 @@ pub struct RegisteredWorkerSession {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
+    pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     profile: WorkerProfile,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
@@ -512,6 +645,12 @@ impl RegisteredWorkerSession {
     #[must_use]
     pub const fn authentication_subject(&self) -> &WorkerAuthenticationSubject {
         &self.authentication_subject
+    }
+
+    /// Returns the controller-authorized worker pool.
+    #[must_use]
+    pub const fn pool(&self) -> &WorkerPoolName {
+        &self.pool
     }
 
     /// Returns the exact static profile identity.
@@ -571,6 +710,18 @@ pub enum WorkerMatchFailure {
     /// No heartbeat has established dynamic availability.
     #[error("worker has no durable availability heartbeat")]
     MissingAvailability,
+    /// The authenticated worker pool is outside the request's allow-list.
+    #[error("worker pool {0} is not allowed by the placement request")]
+    Pool(String),
+    /// The native worker architecture differs from the placement request.
+    #[error("worker architecture does not satisfy the placement request")]
+    Architecture,
+    /// The native worker operating system differs from the placement request.
+    #[error("worker operating system does not satisfy the placement request")]
+    OperatingSystem,
+    /// The native worker target environment/ABI differs from the placement request.
+    #[error("worker target environment does not satisfy the placement request")]
+    TargetEnvironment,
     /// Worker does not advertise the requested execution backend.
     #[error("worker does not support backend {0}")]
     Backend(String),
@@ -606,6 +757,9 @@ pub enum WorkerControlError {
     /// Stable identity is already owned by a different authenticated principal.
     #[error("worker identity is bound to another authentication subject")]
     AuthenticationSubjectChanged,
+    /// Pool membership cannot change implicitly with a reconnect or process restart.
+    #[error("worker pool changed without explicit reassignment")]
+    WorkerPoolChanged,
     /// A different incarnation attempted to replace a session still inside its liveness window.
     #[error("worker {worker_id} already has live incarnation {live_incarnation}")]
     DuplicateLiveWorker {
@@ -637,6 +791,7 @@ struct RegistrationPayload {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
+    pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     replaced_incarnation_id: Option<WorkerIncarnationId>,
     predecessor_expired_at: Option<ObservedAtUnixMillis>,
@@ -664,6 +819,7 @@ struct DisconnectedPayload {
 struct WorkerProjection {
     incarnation_id: WorkerIncarnationId,
     authentication_subject: WorkerAuthenticationSubject,
+    pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     last_seen_at: ObservedAtUnixMillis,
@@ -691,8 +847,8 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<RegisteredWorkerSession, WorkerControlError> {
-    hello.profile.validate()?;
-    let authentication_subject = authenticator.authenticate(hello)?;
+    hello.profile.validate_advertised()?;
+    let authenticated = authenticator.authenticate(hello)?;
     let profile_bytes = cairn_codec::to_vec(&hello.profile)
         .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?;
     let profile_id = content
@@ -711,8 +867,11 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             )
         } else {
             let projection = project_worker(&history, hello.worker_id)?;
-            if projection.authentication_subject != authentication_subject {
+            if projection.authentication_subject != *authenticated.subject() {
                 return Err(WorkerControlError::AuthenticationSubjectChanged);
+            }
+            if projection.pool != *authenticated.pool() {
+                return Err(WorkerControlError::WorkerPoolChanged);
             }
             ensure_nonregressing(observed_at, projection.last_seen_at)?;
             if !projection.disconnected
@@ -749,12 +908,14 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         };
     let event = fact(
         schema,
+        2,
         parent,
         observed_at,
         &RegistrationPayload {
             worker_id: hello.worker_id,
             incarnation_id: hello.incarnation_id,
-            authentication_subject: authentication_subject.clone(),
+            authentication_subject: authenticated.subject().clone(),
+            pool: authenticated.pool().clone(),
             profile_id,
             replaced_incarnation_id,
             predecessor_expired_at,
@@ -765,7 +926,8 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     Ok(RegisteredWorkerSession {
         worker_id: hello.worker_id,
         incarnation_id: hello.incarnation_id,
-        authentication_subject,
+        authentication_subject: authenticated.subject,
+        pool: authenticated.pool,
         profile_id,
         profile: hello.profile.clone(),
         availability_id: None,
@@ -808,6 +970,7 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
     ensure_nonregressing(observed_at, projection.last_seen_at)?;
     let event = fact(
         WORKER_HEARTBEAT,
+        1,
         Some(projection.last_event_id),
         observed_at,
         &HeartbeatPayload {
@@ -826,6 +989,7 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         worker_id: session.worker_id,
         incarnation_id: session.incarnation_id,
         authentication_subject: session.authentication_subject.clone(),
+        pool: session.pool.clone(),
         profile_id: session.profile_id,
         profile: session.profile.clone(),
         availability_id: Some(availability_id),
@@ -851,6 +1015,7 @@ pub fn disconnect_worker<E: EventStore>(
     let projection = project_worker(&history, session.worker_id)?;
     if projection.incarnation_id != session.incarnation_id
         || projection.authentication_subject != session.authentication_subject
+        || projection.pool != session.pool
         || projection.profile_id != session.profile_id
     {
         return Err(WorkerControlError::StaleIncarnation);
@@ -861,6 +1026,7 @@ pub fn disconnect_worker<E: EventStore>(
     ensure_nonregressing(observed_at, projection.last_seen_at)?;
     let event = fact(
         WORKER_DISCONNECTED,
+        1,
         Some(projection.last_event_id),
         observed_at,
         &DisconnectedPayload {
@@ -921,18 +1087,53 @@ pub fn match_worker(
     session: &RegisteredWorkerSession,
     contract: &JobContract,
 ) -> Result<(), WorkerMatchFailure> {
-    if !session.profile.backends.contains(contract.backend()) {
+    let placement = contract.resources().placement();
+    if !placement.allowed_worker_pools().is_empty()
+        && !placement.allowed_worker_pools().contains(&session.pool)
+    {
+        return Err(WorkerMatchFailure::Pool(session.pool.as_str().to_owned()));
+    }
+    let platform = session.profile.resources.platform.value();
+    if placement
+        .platform()
+        .architecture()
+        .is_some_and(|required| required != platform.architecture())
+    {
+        return Err(WorkerMatchFailure::Architecture);
+    }
+    if placement
+        .platform()
+        .operating_system()
+        .is_some_and(|required| required != platform.operating_system())
+    {
+        return Err(WorkerMatchFailure::OperatingSystem);
+    }
+    if placement
+        .platform()
+        .target_environment()
+        .is_some_and(|required| required != platform.target_environment())
+    {
+        return Err(WorkerMatchFailure::TargetEnvironment);
+    }
+    if !session
+        .profile
+        .resources
+        .backends
+        .iter()
+        .any(|claim| claim.value == *contract.backend())
+    {
         return Err(WorkerMatchFailure::Backend(
             contract.backend().as_str().to_owned(),
         ));
     }
     let capabilities = session
         .profile
+        .resources
         .capabilities
         .iter()
-        .map(|capability| (&capability.name, &capability.value))
+        .map(|claim| (&claim.value.name, &claim.value.value))
         .collect::<BTreeMap<_, _>>();
-    for required in contract.resources().capabilities() {
+    for required in placement.capabilities() {
         if capabilities.get(&required.name) != Some(&&required.value) {
             return Err(WorkerMatchFailure::Capability(
                 required.name.as_str().to_owned(),
@@ -973,6 +1174,7 @@ fn materialize_session<C: ContentStore>(
         worker_id,
         incarnation_id: projection.incarnation_id,
         authentication_subject: projection.authentication_subject,
+        pool: projection.pool,
         profile_id: projection.profile_id,
         profile,
         availability_id: projection.availability_id,
@@ -981,19 +1183,27 @@ fn materialize_session<C: ContentStore>(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the event projector checks every versioned registration/liveness invariant linearly"
+)]
 fn project_worker(
     events: &[EventEnvelope],
     expected_worker_id: WorkerId,
 ) -> Result<WorkerProjection, WorkerControlError> {
     let mut projection: Option<WorkerProjection> = None;
     let mut bound_subject = None;
+    let mut bound_pool = None;
     let mut previous = None;
     for event in events {
-        if event.schema_version.get() != 1 || event.parent_event_id != previous {
-            return invalid_history("worker event version or causal chain is invalid");
+        if event.parent_event_id != previous {
+            return invalid_history("worker event causal chain is invalid");
         }
         match event.schema_name.as_str() {
             WORKER_REGISTERED | WORKER_REPLACED => {
+                if event.schema_version.get() != 2 {
+                    return invalid_history("worker registration schema version is unsupported");
+                }
                 let payload: RegistrationPayload = decode(event)?;
                 if payload.worker_id != expected_worker_id {
                     return invalid_history("worker event identity differs from its stream");
@@ -1003,6 +1213,12 @@ fn project_worker(
                     .is_some_and(|subject| subject != &payload.authentication_subject)
                 {
                     return invalid_history("worker authentication subject changed in history");
+                }
+                if bound_pool
+                    .as_ref()
+                    .is_some_and(|pool| pool != &payload.pool)
+                {
+                    return invalid_history("worker pool changed in history");
                 }
                 if event.schema_name.as_str() == WORKER_REGISTERED
                     && projection.as_ref().is_some_and(|state| !state.disconnected)
@@ -1033,9 +1249,11 @@ fn project_worker(
                     );
                 }
                 bound_subject = Some(payload.authentication_subject.clone());
+                bound_pool = Some(payload.pool.clone());
                 projection = Some(WorkerProjection {
                     incarnation_id: payload.incarnation_id,
                     authentication_subject: payload.authentication_subject,
+                    pool: payload.pool,
                     profile_id: payload.profile_id,
                     availability_id: None,
                     last_seen_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
@@ -1045,6 +1263,9 @@ fn project_worker(
                 });
             }
             WORKER_HEARTBEAT => {
+                if event.schema_version.get() != 1 {
+                    return invalid_history("worker heartbeat schema version is unsupported");
+                }
                 let payload: HeartbeatPayload = decode(event)?;
                 let state = projection.as_mut().ok_or_else(|| {
                     WorkerControlError::InvalidHistory("heartbeat before registration".into())
@@ -1062,6 +1283,9 @@ fn project_worker(
                 state.revision = revision(event)?;
             }
             WORKER_DISCONNECTED => {
+                if event.schema_version.get() != 1 {
+                    return invalid_history("worker disconnect schema version is unsupported");
+                }
                 let payload: DisconnectedPayload = decode(event)?;
                 let state = projection.as_mut().ok_or_else(|| {
                     WorkerControlError::InvalidHistory("disconnect before registration".into())
@@ -1091,6 +1315,7 @@ fn ensure_current(
 ) -> Result<(), WorkerControlError> {
     if projection.incarnation_id != session.incarnation_id
         || projection.authentication_subject != session.authentication_subject
+        || projection.pool != session.pool
         || projection.profile_id != session.profile_id
         || projection.disconnected
     {
@@ -1133,6 +1358,7 @@ fn worker_stream(worker_id: WorkerId) -> Result<StreamId, WorkerControlError> {
 
 fn fact<P: Serialize>(
     schema: &str,
+    schema_version: u32,
     parent_event_id: Option<EventId>,
     observed_at: ObservedAtUnixMillis,
     payload: &P,
@@ -1140,7 +1366,7 @@ fn fact<P: Serialize>(
     Ok(NewEvent {
         schema_name: SchemaName::new(schema)
             .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(1)
+        schema_version: SchemaVersion::new(schema_version)
             .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?,
         parent_event_id,
         observed_at_unix_ms: observed_at.get(),
@@ -1188,9 +1414,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        CapturePolicy, CommandContract, DiagnosticByteLimit, EvidenceByteLimit,
-        ExecutionEnvironmentArtifact, ExecutionTimeoutMillis, InputBundleArtifact, NetworkPolicy,
-        OutputByteLimit, ResourceRequest, SandboxPath,
+        ArchitectureName, CapturePolicy, CommandContract, DiagnosticByteLimit, EvidenceByteLimit,
+        ExecutionEnvironmentArtifact, ExecutionPlatformRequirement, ExecutionTimeoutMillis,
+        InputBundleArtifact, NetworkPolicy, OperatingSystemName, OutputByteLimit, PlacementRequest,
+        ResourceRequest, SandboxPath, TargetEnvironmentName,
     };
 
     struct Fixture {
@@ -1231,17 +1458,52 @@ mod tests {
         WorkerProfile::new(
             WorkerProtocolVersion::new(1).expect("protocol"),
             WorkerBinaryIdentity::new("sha256:worker-v1").expect("binary"),
-            vec![ExecutionBackend::new("container").expect("backend")],
-            vec![CapabilityRequirement {
-                name: crate::CapabilityName::new("architecture").expect("capability"),
-                value: crate::CapabilityValue::new(architecture).expect("value"),
-            }],
-            WorkerSlotCount::new(2).expect("slots"),
+            WorkerResourceInventory::new(
+                WorkerResourceClaim::new(
+                    platform(architecture),
+                    WorkerResourceSource::BuiltinProbe,
+                ),
+                vec![WorkerResourceClaim::new(
+                    ExecutionBackend::new("container").expect("backend"),
+                    WorkerResourceSource::OperatorDeclared,
+                )],
+                vec![WorkerResourceClaim::new(
+                    CapabilityRequirement {
+                        name: crate::CapabilityName::new("sandbox").expect("capability"),
+                        value: crate::CapabilityValue::new("container").expect("value"),
+                    },
+                    WorkerResourceSource::OperatorDeclared,
+                )],
+                WorkerSlotCount::new(2).expect("slots"),
+            )
+            .expect("resources"),
         )
         .expect("profile")
     }
 
-    fn contract(architecture: &str) -> JobContract {
+    fn platform(architecture: &str) -> ExecutionPlatform {
+        ExecutionPlatform::new(
+            ArchitectureName::new(architecture).expect("architecture"),
+            OperatingSystemName::new("linux").expect("os"),
+            TargetEnvironmentName::new("gnu").expect("environment"),
+        )
+    }
+
+    fn contract(architecture: &str, pool: &str) -> JobContract {
+        contract_for_platform(
+            ExecutionPlatformRequirement::new(
+                Some(ArchitectureName::new(architecture).expect("architecture")),
+                None,
+                None,
+            ),
+            pool,
+        )
+    }
+
+    fn contract_for_platform(
+        platform_requirement: ExecutionPlatformRequirement,
+        pool: &str,
+    ) -> JobContract {
         JobContract::new(
             JobId::new(),
             ContentId::<InputBundleArtifact>::derive(b"input").expect("input"),
@@ -1254,10 +1516,15 @@ mod tests {
             ),
             ResourceRequest::new(
                 ExecutionTimeoutMillis::new(1_000).expect("timeout"),
-                vec![CapabilityRequirement {
-                    name: crate::CapabilityName::new("architecture").expect("capability"),
-                    value: crate::CapabilityValue::new(architecture).expect("value"),
-                }],
+                PlacementRequest::new(
+                    platform_requirement,
+                    vec![WorkerPoolName::new(pool).expect("pool")],
+                    vec![CapabilityRequirement {
+                        name: crate::CapabilityName::new("sandbox").expect("capability"),
+                        value: crate::CapabilityValue::new("container").expect("value"),
+                    }],
+                )
+                .expect("placement"),
             )
             .expect("resources"),
             NetworkPolicy::Disabled,
@@ -1275,7 +1542,10 @@ mod tests {
     fn authenticator(worker_id: WorkerId, subject: &str) -> RecordedWorkerAuthenticator {
         RecordedWorkerAuthenticator::new([(
             worker_id,
-            WorkerAuthenticationSubject::new(subject).expect("subject"),
+            AuthenticatedWorkerIdentity::new(
+                WorkerAuthenticationSubject::new(subject).expect("subject"),
+                WorkerPoolName::new("fixture").expect("pool"),
+            ),
         )])
     }
 
@@ -1296,7 +1566,7 @@ mod tests {
         )
         .expect("register");
         assert_eq!(
-            match_worker(&session, &contract("x86_64")),
+            match_worker(&session, &contract("x86_64", "fixture")),
             Err(WorkerMatchFailure::MissingAvailability)
         );
         let available = WorkerAvailability::new(WorkerHealth::Ready, false, 2, Vec::new())
@@ -1310,10 +1580,42 @@ mod tests {
             ObservedAtUnixMillis::new(10),
         )
         .expect("heartbeat");
-        assert!(match_worker(&session, &contract("x86_64")).is_ok());
+        assert!(match_worker(&session, &contract("x86_64", "fixture")).is_ok());
         assert!(matches!(
-            match_worker(&session, &contract("aarch64")),
-            Err(WorkerMatchFailure::Capability(name)) if name == "architecture"
+            match_worker(&session, &contract("aarch64", "fixture")),
+            Err(WorkerMatchFailure::Architecture)
+        ));
+        assert!(matches!(
+            match_worker(
+                &session,
+                &contract_for_platform(
+                    ExecutionPlatformRequirement::new(
+                        None,
+                        Some(OperatingSystemName::new("other-os").expect("os")),
+                        None,
+                    ),
+                    "fixture",
+                ),
+            ),
+            Err(WorkerMatchFailure::OperatingSystem)
+        ));
+        assert!(matches!(
+            match_worker(
+                &session,
+                &contract_for_platform(
+                    ExecutionPlatformRequirement::new(
+                        None,
+                        None,
+                        Some(TargetEnvironmentName::new("musl").expect("environment")),
+                    ),
+                    "fixture",
+                ),
+            ),
+            Err(WorkerMatchFailure::TargetEnvironment)
+        ));
+        assert!(matches!(
+            match_worker(&session, &contract("x86_64", "another-pool")),
+            Err(WorkerMatchFailure::Pool(pool)) if pool == "fixture"
         ));
 
         fixture.reopen();
@@ -1328,6 +1630,11 @@ mod tests {
             panic!("live worker");
         };
         assert_eq!(recovered.profile_id(), session.profile_id());
+        assert_eq!(recovered.pool().as_str(), "fixture");
+        assert_eq!(
+            recovered.profile().resources().platform().source(),
+            WorkerResourceSource::BuiltinProbe
+        );
         assert_eq!(recovered.availability(), Some(&available));
     }
 
@@ -1419,6 +1726,82 @@ mod tests {
                 ObservedAtUnixMillis::new(10),
             ),
             Err(WorkerControlError::AuthenticationSubjectChanged)
+        ));
+    }
+
+    #[test]
+    fn authenticated_pool_cannot_change_implicitly() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let hello = WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"));
+        let mut first_auth = authenticator(worker_id, "spiffe://cairn/worker/one");
+        register_worker(
+            &mut fixture.events,
+            &mut fixture.content,
+            &mut first_auth,
+            &hello,
+            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(0),
+        )
+        .expect("register");
+        let mut moved = RecordedWorkerAuthenticator::new([(
+            worker_id,
+            AuthenticatedWorkerIdentity::new(
+                WorkerAuthenticationSubject::new("spiffe://cairn/worker/one").expect("subject"),
+                WorkerPoolName::new("another-pool").expect("pool"),
+            ),
+        )]);
+        assert!(matches!(
+            register_worker(
+                &mut fixture.events,
+                &mut fixture.content,
+                &mut moved,
+                &WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"),),
+                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(10),
+            ),
+            Err(WorkerControlError::WorkerPoolChanged)
+        ));
+    }
+
+    #[test]
+    fn worker_hello_cannot_self_assert_verified_provenance() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let forged = WorkerProfile::new(
+            WorkerProtocolVersion::new(1).expect("protocol"),
+            WorkerBinaryIdentity::new("sha256:worker-v1").expect("binary"),
+            WorkerResourceInventory::new(
+                WorkerResourceClaim::new(
+                    platform("x86_64"),
+                    WorkerResourceSource::ControllerVerified,
+                ),
+                vec![WorkerResourceClaim::new(
+                    ExecutionBackend::new("container").expect("backend"),
+                    WorkerResourceSource::OperatorDeclared,
+                )],
+                Vec::new(),
+                WorkerSlotCount::new(1).expect("slots"),
+            )
+            .expect("resources"),
+        )
+        .expect("profile structure");
+        let mut auth = authenticator(worker_id, "spiffe://cairn/worker/one");
+        assert!(matches!(
+            register_worker(
+                &mut fixture.events,
+                &mut fixture.content,
+                &mut auth,
+                &WorkerHello::new(worker_id, WorkerIncarnationId::new(), forged),
+                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(0),
+            ),
+            Err(WorkerControlError::Value(
+                WorkerValueError::UnadmittedResourceProvenance
+            ))
         ));
     }
 }

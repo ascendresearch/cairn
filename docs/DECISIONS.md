@@ -283,3 +283,33 @@ Resolution includes the exact typed template content identity and materialized c
 secret-free episode snapshot. A template update changes new episodes only. Endpoint conformance is a
 separate measured fact and may later narrow or reject a configured deployment; it does not require
 operators to maintain a duplicate capability profile.
+
+## D-010 — Resource-driven placement, not worker business roles
+
+- Decision: accepted
+
+Workers have stable identity, controller-authorized pool membership, observed resources, execution
+backends, dynamic capacity, and evidence provenance. They do not have oracle, candidate, source,
+target, or migration-stage roles. Agent roles remain episode capabilities; migration stages remain
+product orchestration metadata.
+
+`cairn-migration` decides which evidence and opaque execution are required and emits a generic
+placement request. The execution scheduler selects a concrete worker by platform, allowed pool,
+backend, capabilities, availability, trust, and later cost policy. Native platform facts come from
+runtime/binary probes; operator configuration may constrain expected values but cannot replace the
+observation. Pool membership comes from controller enrollment authority rather than worker report.
+
+## D-011 — Local worker keys and enrollment bootstrap
+
+- Decision: accepted; implementation pending
+
+A worker private key is generated and retained on the worker. The normal online path accepts one
+short-lived enrollment bundle, submits a CSR over a pinned/authenticated controller channel, and
+persists the issued credential, trust anchor, stable `WorkerId`, and configuration under one state
+directory. Operators do not copy private keys or hand-author lifecycle identities.
+
+The identity chain remains explicit: one-shot `EnrollmentId`, stable `WorkerId`, rotatable
+credential identity/serial, per-process `WorkerIncarnationId`, and per-connection
+`ControlConnectionId`. Offline CSR exchange and external issuers such as enterprise CA or SPIFFE
+must fit behind the same issuer port. A built-in CA may be the open-source default, but it does not
+grant permission to conflate a certificate fingerprint with permanent worker identity.

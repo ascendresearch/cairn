@@ -15,14 +15,16 @@ pub use assignment::{
     recover_execution_assignment, renew_assignment_lease, start_accepted_assignment,
 };
 pub use contract::{
-    ArchivedOutput, CapabilityName, CapabilityRequirement, CapabilityValue, CapturePolicy,
-    CommandArgument, CommandContract, ContractValueError, DeclaredOutputArtifact,
+    ArchitectureName, ArchivedOutput, CapabilityName, CapabilityRequirement, CapabilityValue,
+    CapturePolicy, CommandArgument, CommandContract, ContractValueError, DeclaredOutputArtifact,
     DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionElapsedMillis,
     ExecutionEnvironmentArtifact, ExecutionEvidenceArtifact, ExecutionObservation,
-    ExecutionOutcome, ExecutionReceipt, ExecutionReceiptArtifact, ExecutionStderrArtifact,
-    ExecutionStdoutArtifact, ExecutionTimeoutMillis, ExpectedOutput, InputBundleArtifact,
-    JobContract, JobContractArtifact, NetworkPolicy, OutputByteLimit, OutputName,
-    ResolvedProgramIdentity, ResourceRequest, SandboxPath, TrustedExecutionEvidence,
+    ExecutionOutcome, ExecutionPlatform, ExecutionPlatformRequirement, ExecutionReceipt,
+    ExecutionReceiptArtifact, ExecutionStderrArtifact, ExecutionStdoutArtifact,
+    ExecutionTimeoutMillis, ExpectedOutput, InputBundleArtifact, JobContract, JobContractArtifact,
+    NetworkPolicy, OperatingSystemName, OutputByteLimit, OutputName, PlacementRequest,
+    ResolvedProgramIdentity, ResourceRequest, SandboxPath, TargetEnvironmentName,
+    TrustedExecutionEvidence, WorkerPoolName,
 };
 pub use control::{
     ControlEnqueueOutcome, ControlFrame, ControlFrameByteLimit, ControlFramePolicy,
@@ -47,11 +49,12 @@ pub use executor::{
     ExecutorFailureClass, RecordedExecution, RecordedExecutor, ScriptedExecutor,
 };
 pub use worker::{
-    AssignmentLeaseDurationMillis, RecordedWorkerAuthenticator, RegisteredWorkerSession,
-    WorkerAuthenticationError, WorkerAuthenticationSubject, WorkerAuthenticator,
-    WorkerAvailability, WorkerAvailabilityArtifact, WorkerBinaryIdentity, WorkerControlError,
-    WorkerHealth, WorkerHello, WorkerMatchFailure, WorkerProfile, WorkerProfileArtifact,
-    WorkerProtocolVersion, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
+    AssignmentLeaseDurationMillis, AuthenticatedWorkerIdentity, RecordedWorkerAuthenticator,
+    RegisteredWorkerSession, WorkerAuthenticationError, WorkerAuthenticationSubject,
+    WorkerAuthenticator, WorkerAvailability, WorkerAvailabilityArtifact, WorkerBinaryIdentity,
+    WorkerControlError, WorkerHealth, WorkerHello, WorkerMatchFailure, WorkerProfile,
+    WorkerProfileArtifact, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
+    WorkerResourceSource, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
     WorkerValueError, disconnect_worker, match_worker, record_worker_heartbeat,
     recover_worker_session, register_worker,
 };

@@ -1583,15 +1583,17 @@ mod tests {
 
     use super::*;
     use crate::{
-        AssignmentControlMessageIds, AssignmentLeaseDurationMillis, AssignmentLeaseGrant,
-        AssignmentLeasePolicy, CapabilityName, CapabilityRequirement, CapabilityValue,
-        CapturePolicy, CapturedOutput, CommandContract, DiagnosticByteLimit, EvidenceByteLimit,
-        ExecutionBackend, ExecutionElapsedMillis, ExecutionEnvironmentArtifact, ExecutionOutcome,
-        ExecutionTimeoutMillis, InputBundleArtifact, NetworkPolicy, OutputByteLimit, OutputName,
-        RecordedExecution, RecordedExecutor, RecordedWorkerAuthenticator, ResolvedProgramIdentity,
-        ResourceRequest, SandboxPath, TrustedExecutionEvidence, WorkerAuthenticationSubject,
-        WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerProfile,
-        WorkerProtocolVersion, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
+        ArchitectureName, AssignmentControlMessageIds, AssignmentLeaseDurationMillis,
+        AssignmentLeaseGrant, AssignmentLeasePolicy, AuthenticatedWorkerIdentity, CapturePolicy,
+        CapturedOutput, CommandContract, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend,
+        ExecutionElapsedMillis, ExecutionEnvironmentArtifact, ExecutionOutcome, ExecutionPlatform,
+        ExecutionPlatformRequirement, ExecutionTimeoutMillis, InputBundleArtifact, NetworkPolicy,
+        OperatingSystemName, OutputByteLimit, OutputName, PlacementRequest, RecordedExecution,
+        RecordedExecutor, RecordedWorkerAuthenticator, ResolvedProgramIdentity, ResourceRequest,
+        SandboxPath, TargetEnvironmentName, TrustedExecutionEvidence, WorkerAuthenticationSubject,
+        WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName,
+        WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
+        WorkerResourceSource, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
         authorize_execution_attempt, grant_assignment_lease, prepare_execution_job,
         record_worker_heartbeat, recover_execution_job, recover_worker_session, register_worker,
         start_accepted_assignment,
@@ -1639,10 +1641,16 @@ mod tests {
                 ),
                 ResourceRequest::new(
                     ExecutionTimeoutMillis::new(5_000).expect("timeout"),
-                    vec![CapabilityRequirement {
-                        name: CapabilityName::new("architecture").expect("name"),
-                        value: CapabilityValue::new("x86_64").expect("value"),
-                    }],
+                    PlacementRequest::new(
+                        ExecutionPlatformRequirement::new(
+                            Some(ArchitectureName::new("x86_64").expect("architecture")),
+                            None,
+                            None,
+                        ),
+                        vec![WorkerPoolName::new("fixture").expect("pool")],
+                        Vec::new(),
+                    )
+                    .expect("placement"),
                 )
                 .expect("resources"),
                 NetworkPolicy::Disabled,
@@ -1690,17 +1698,34 @@ mod tests {
             let profile = WorkerProfile::new(
                 protocol_version(),
                 WorkerBinaryIdentity::new("sha256:worker-v1").expect("binary"),
-                vec![ExecutionBackend::new("remote-recorded-process").expect("backend")],
-                vec![CapabilityRequirement {
-                    name: CapabilityName::new("architecture").expect("name"),
-                    value: CapabilityValue::new("x86_64").expect("value"),
-                }],
-                WorkerSlotCount::new(1).expect("slots"),
+                WorkerResourceInventory::new(
+                    WorkerResourceClaim::new(
+                        ExecutionPlatform::new(
+                            ArchitectureName::new("x86_64").expect("architecture"),
+                            OperatingSystemName::new("linux").expect("os"),
+                            TargetEnvironmentName::new("gnu").expect("environment"),
+                        ),
+                        WorkerResourceSource::BuiltinProbe,
+                    ),
+                    vec![WorkerResourceClaim::new(
+                        ExecutionBackend::new("remote-recorded-process").expect("backend"),
+                        WorkerResourceSource::OperatorDeclared,
+                    )],
+                    Vec::new(),
+                    WorkerSlotCount::new(1).expect("slots"),
+                )
+                .expect("resources"),
             )
             .expect("profile");
             let hello = WorkerHello::new(self.worker_id, WorkerIncarnationId::new(), profile);
             let subject = WorkerAuthenticationSubject::new("fixture-worker").expect("subject");
-            let mut authenticator = RecordedWorkerAuthenticator::new([(self.worker_id, subject)]);
+            let mut authenticator = RecordedWorkerAuthenticator::new([(
+                self.worker_id,
+                AuthenticatedWorkerIdentity::new(
+                    subject,
+                    WorkerPoolName::new("fixture").expect("pool"),
+                ),
+            )]);
             let registered = register_worker(
                 &mut self.controller_events,
                 &mut self.content,

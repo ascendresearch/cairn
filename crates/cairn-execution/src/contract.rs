@@ -51,20 +51,96 @@ macro_rules! label_type {
     };
 }
 
-label_type!(
+macro_rules! selector_label_type {
+    ($(#[$meta:meta])* $name:ident, $description:literal) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+
+        impl $name {
+            /// Creates a bounded lowercase ASCII selector.
+            ///
+            /// # Errors
+            ///
+            #[doc = $description]
+            pub fn new(value: impl Into<String>) -> Result<Self, ContractValueError> {
+                let value = value.into();
+                let bounded_edge = |byte: Option<&u8>| {
+                    byte.is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                };
+                if value.is_empty()
+                    || value.len() > 64
+                    || !bounded_edge(value.as_bytes().first())
+                    || !bounded_edge(value.as_bytes().last())
+                    || !value.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_' | b'.')
+                    })
+                {
+                    return Err(ContractValueError::InvalidLabel(stringify!($name)));
+                }
+                Ok(Self(value))
+            }
+
+            /// Returns the validated selector.
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = ContractValueError;
+
+            fn try_from(value: String) -> Result<Self, Self::Error> {
+                Self::new(value)
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    };
+}
+
+selector_label_type!(
     /// Domain-neutral executor/backend capability name.
     ExecutionBackend,
-    "Rejects empty, untrimmed, or control-containing backend names."
+    "Rejects empty, overlong, or non-lowercase-ASCII-selector backend names."
 );
-label_type!(
+selector_label_type!(
     /// Required worker capability key.
     CapabilityName,
-    "Rejects empty, untrimmed, or control-containing capability names."
+    "Rejects empty, overlong, or non-lowercase-ASCII-selector capability names."
 );
 label_type!(
     /// Required worker capability value.
     CapabilityValue,
     "Rejects empty, untrimmed, or control-containing capability values."
+);
+selector_label_type!(
+    /// Canonical execution-platform architecture such as `x86_64` or `aarch64`.
+    ArchitectureName,
+    "Rejects empty, overlong, or non-lowercase-ASCII-selector architecture names."
+);
+selector_label_type!(
+    /// Canonical execution-platform operating system such as `linux`.
+    OperatingSystemName,
+    "Rejects empty, overlong, or non-lowercase-ASCII-selector operating-system names."
+);
+selector_label_type!(
+    /// Canonical target environment/ABI such as `gnu` or `musl`.
+    TargetEnvironmentName,
+    "Rejects empty, overlong, or non-lowercase-ASCII-selector target-environment names."
+);
+selector_label_type!(
+    /// Operator-owned worker-pool name used as a scheduling and policy boundary.
+    WorkerPoolName,
+    "Rejects empty, overlong, or non-lowercase-ASCII-selector worker-pool names."
 );
 label_type!(
     /// Logical declared-output name.
@@ -275,6 +351,12 @@ pub enum ContractValueError {
     /// Persisted capability requirements must retain constructor ordering.
     #[error("execution capability requirements are not in canonical name order")]
     NonCanonicalCapabilities,
+    /// Allowed worker pools must form a canonical set.
+    #[error("worker pool selector is duplicated: {0}")]
+    DuplicateWorkerPool(String),
+    /// Persisted worker-pool selectors must retain constructor ordering.
+    #[error("worker pool selectors are not in canonical order")]
+    NonCanonicalWorkerPools,
     /// Expected output names and paths must both be unique.
     #[error("expected output name or path is duplicated: {0}")]
     DuplicateExpectedOutput(String),
@@ -287,7 +369,7 @@ pub enum ContractValueError {
     /// Persisted observations must retain constructor ordering.
     #[error("trusted execution observations are not in canonical order")]
     NonCanonicalObservations,
-    /// V1 contracts use a fixed schema version.
+    /// V2 contracts use a fixed schema version.
     #[error("job contract schema version is unsupported")]
     UnsupportedSchema,
 }
@@ -373,42 +455,187 @@ pub struct CapabilityRequirement {
     pub value: CapabilityValue,
 }
 
-/// Domain-neutral resources and capability selectors.
+/// Concrete platform on which a native worker binary is executing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ResourceRequest {
-    timeout: ExecutionTimeoutMillis,
-    capabilities: Vec<CapabilityRequirement>,
+pub struct ExecutionPlatform {
+    architecture: ArchitectureName,
+    operating_system: OperatingSystemName,
+    target_environment: TargetEnvironmentName,
 }
 
-impl ResourceRequest {
-    /// Creates a resource request with unique capability keys.
+impl ExecutionPlatform {
+    /// Creates one exact execution platform.
+    #[must_use]
+    pub const fn new(
+        architecture: ArchitectureName,
+        operating_system: OperatingSystemName,
+        target_environment: TargetEnvironmentName,
+    ) -> Self {
+        Self {
+            architecture,
+            operating_system,
+            target_environment,
+        }
+    }
+
+    /// Detects the platform compiled into the current worker binary.
     ///
     /// # Errors
     ///
-    /// Rejects duplicate capability names.
+    /// Returns an error only if Rust exposes a non-canonical target label.
+    pub fn detect_host() -> Result<Self, ContractValueError> {
+        Ok(Self::new(
+            ArchitectureName::new(std::env::consts::ARCH)?,
+            OperatingSystemName::new(std::env::consts::OS)?,
+            TargetEnvironmentName::new(compiled_target_environment())?,
+        ))
+    }
+
+    /// Returns the CPU architecture.
+    #[must_use]
+    pub const fn architecture(&self) -> &ArchitectureName {
+        &self.architecture
+    }
+
+    /// Returns the operating system.
+    #[must_use]
+    pub const fn operating_system(&self) -> &OperatingSystemName {
+        &self.operating_system
+    }
+
+    /// Returns the compiler target environment/ABI.
+    #[must_use]
+    pub const fn target_environment(&self) -> &TargetEnvironmentName {
+        &self.target_environment
+    }
+}
+
+fn compiled_target_environment() -> &'static str {
+    if cfg!(target_env = "gnu") {
+        "gnu"
+    } else if cfg!(target_env = "musl") {
+        "musl"
+    } else if cfg!(target_env = "msvc") {
+        "msvc"
+    } else if cfg!(target_env = "sgx") {
+        "sgx"
+    } else {
+        "unknown"
+    }
+}
+
+/// Optional exact platform dimensions requested by a domain-neutral job.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionPlatformRequirement {
+    architecture: Option<ArchitectureName>,
+    operating_system: Option<OperatingSystemName>,
+    target_environment: Option<TargetEnvironmentName>,
+}
+
+impl ExecutionPlatformRequirement {
+    /// Creates independently optional platform constraints.
+    #[must_use]
+    pub const fn new(
+        architecture: Option<ArchitectureName>,
+        operating_system: Option<OperatingSystemName>,
+        target_environment: Option<TargetEnvironmentName>,
+    ) -> Self {
+        Self {
+            architecture,
+            operating_system,
+            target_environment,
+        }
+    }
+
+    /// Requires all dimensions of one exact platform.
+    #[must_use]
+    pub fn exact(platform: &ExecutionPlatform) -> Self {
+        Self::new(
+            Some(platform.architecture.clone()),
+            Some(platform.operating_system.clone()),
+            Some(platform.target_environment.clone()),
+        )
+    }
+
+    /// Returns the optional architecture constraint.
+    #[must_use]
+    pub const fn architecture(&self) -> Option<&ArchitectureName> {
+        self.architecture.as_ref()
+    }
+
+    /// Returns the optional operating-system constraint.
+    #[must_use]
+    pub const fn operating_system(&self) -> Option<&OperatingSystemName> {
+        self.operating_system.as_ref()
+    }
+
+    /// Returns the optional target-environment constraint.
+    #[must_use]
+    pub const fn target_environment(&self) -> Option<&TargetEnvironmentName> {
+        self.target_environment.as_ref()
+    }
+}
+
+/// Domain-neutral placement selectors produced above the execution scheduler.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlacementRequest {
+    platform: ExecutionPlatformRequirement,
+    allowed_worker_pools: Vec<WorkerPoolName>,
+    capabilities: Vec<CapabilityRequirement>,
+}
+
+impl PlacementRequest {
+    /// Creates canonical platform, pool, and capability selectors.
+    ///
+    /// An empty pool list admits every authenticated pool. It does not mean that the worker may
+    /// self-select a pool.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate pool names or capability keys.
     pub fn new(
-        timeout: ExecutionTimeoutMillis,
+        platform: ExecutionPlatformRequirement,
+        mut allowed_worker_pools: Vec<WorkerPoolName>,
         mut capabilities: Vec<CapabilityRequirement>,
     ) -> Result<Self, ContractValueError> {
+        allowed_worker_pools.sort();
+        if let Some(pair) = allowed_worker_pools
+            .windows(2)
+            .find(|pair| pair[0] == pair[1])
+        {
+            return Err(ContractValueError::DuplicateWorkerPool(
+                pair[0].as_str().to_owned(),
+            ));
+        }
         capabilities.sort_by(|left, right| left.name.cmp(&right.name));
-        for pair in capabilities.windows(2) {
-            if pair[0].name == pair[1].name {
-                return Err(ContractValueError::DuplicateCapability(
-                    pair[0].name.as_str().to_owned(),
-                ));
-            }
+        if let Some(pair) = capabilities
+            .windows(2)
+            .find(|pair| pair[0].name == pair[1].name)
+        {
+            return Err(ContractValueError::DuplicateCapability(
+                pair[0].name.as_str().to_owned(),
+            ));
         }
         Ok(Self {
-            timeout,
+            platform,
+            allowed_worker_pools,
             capabilities,
         })
     }
 
-    /// Returns the execution timeout.
+    /// Returns platform selectors.
     #[must_use]
-    pub const fn timeout(&self) -> ExecutionTimeoutMillis {
-        self.timeout
+    pub const fn platform(&self) -> &ExecutionPlatformRequirement {
+        &self.platform
+    }
+
+    /// Returns the canonical allowed-pool set; empty means any authenticated pool.
+    #[must_use]
+    pub fn allowed_worker_pools(&self) -> &[WorkerPoolName] {
+        &self.allowed_worker_pools
     }
 
     /// Returns sorted capability requirements.
@@ -419,6 +646,13 @@ impl ResourceRequest {
 
     fn validate(&self) -> Result<(), ContractValueError> {
         if self
+            .allowed_worker_pools
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ContractValueError::NonCanonicalWorkerPools);
+        }
+        if self
             .capabilities
             .windows(2)
             .any(|pair| pair[0].name >= pair[1].name)
@@ -426,6 +660,45 @@ impl ResourceRequest {
             return Err(ContractValueError::NonCanonicalCapabilities);
         }
         Ok(())
+    }
+}
+
+/// Domain-neutral resources and capability selectors.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceRequest {
+    timeout: ExecutionTimeoutMillis,
+    placement: PlacementRequest,
+}
+
+impl ResourceRequest {
+    /// Creates a resource request with unique capability keys.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate capability names.
+    pub fn new(
+        timeout: ExecutionTimeoutMillis,
+        placement: PlacementRequest,
+    ) -> Result<Self, ContractValueError> {
+        placement.validate()?;
+        Ok(Self { timeout, placement })
+    }
+
+    /// Returns the execution timeout.
+    #[must_use]
+    pub const fn timeout(&self) -> ExecutionTimeoutMillis {
+        self.timeout
+    }
+
+    /// Returns the immutable placement request.
+    #[must_use]
+    pub const fn placement(&self) -> &PlacementRequest {
+        &self.placement
+    }
+
+    fn validate(&self) -> Result<(), ContractValueError> {
+        self.placement.validate()
     }
 }
 
@@ -555,7 +828,7 @@ pub struct JobContract {
 }
 
 impl JobContract {
-    /// Creates a V1 opaque job contract.
+    /// Creates a V2 opaque job contract with explicit placement selectors.
     #[expect(
         clippy::too_many_arguments,
         reason = "every immutable execution dimension remains explicit at construction"
@@ -572,7 +845,7 @@ impl JobContract {
         capture: CapturePolicy,
     ) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             job_id,
             input_bundle_id,
             environment_id,
@@ -585,7 +858,7 @@ impl JobContract {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ContractValueError> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err(ContractValueError::UnsupportedSchema);
         }
         self.resources.validate()?;
@@ -813,7 +1086,7 @@ macro_rules! content_type {
 
 content_type!(InputBundleArtifact, "execution.input-bundle.v1");
 content_type!(ExecutionEnvironmentArtifact, "execution.environment.v1");
-content_type!(JobContractArtifact, "execution.job-contract.v1");
+content_type!(JobContractArtifact, "execution.job-contract.v2");
 content_type!(ExecutionStdoutArtifact, "execution.stdout-untrusted.v1");
 content_type!(ExecutionStderrArtifact, "execution.stderr-untrusted.v1");
 content_type!(
@@ -835,7 +1108,7 @@ mod tests {
     #[test]
     fn persisted_contract_cannot_bypass_canonical_collection_invariants() {
         let contract = JobContract {
-            schema_version: 1,
+            schema_version: 2,
             job_id: JobId::new(),
             input_bundle_id: ContentId::derive(b"input").expect("input identity"),
             environment_id: ContentId::derive(b"environment").expect("environment identity"),
@@ -847,16 +1120,20 @@ mod tests {
             ),
             resources: ResourceRequest {
                 timeout: ExecutionTimeoutMillis::new(1).expect("timeout"),
-                capabilities: vec![
-                    CapabilityRequirement {
-                        name: CapabilityName::new("z").expect("name"),
-                        value: CapabilityValue::new("1").expect("value"),
-                    },
-                    CapabilityRequirement {
-                        name: CapabilityName::new("a").expect("name"),
-                        value: CapabilityValue::new("1").expect("value"),
-                    },
-                ],
+                placement: PlacementRequest {
+                    platform: ExecutionPlatformRequirement::default(),
+                    allowed_worker_pools: Vec::new(),
+                    capabilities: vec![
+                        CapabilityRequirement {
+                            name: CapabilityName::new("z").expect("name"),
+                            value: CapabilityValue::new("1").expect("value"),
+                        },
+                        CapabilityRequirement {
+                            name: CapabilityName::new("a").expect("name"),
+                            value: CapabilityValue::new("1").expect("value"),
+                        },
+                    ],
+                },
             },
             network: NetworkPolicy::Disabled,
             capture: CapturePolicy::new(
@@ -874,6 +1151,26 @@ mod tests {
             decoded.validate(),
             Err(ContractValueError::NonCanonicalCapabilities)
         );
+    }
+
+    #[test]
+    fn placement_has_strong_platform_and_canonical_pool_boundaries() {
+        assert!(ArchitectureName::new("X86_64").is_err());
+        assert!(WorkerPoolName::new("-target-lab").is_err());
+        let pool = WorkerPoolName::new("target-lab").expect("pool");
+        assert_eq!(
+            PlacementRequest::new(
+                ExecutionPlatformRequirement::default(),
+                vec![pool.clone(), pool],
+                Vec::new(),
+            ),
+            Err(ContractValueError::DuplicateWorkerPool("target-lab".into()))
+        );
+        let host = ExecutionPlatform::detect_host().expect("host platform");
+        let exact = ExecutionPlatformRequirement::exact(&host);
+        assert_eq!(exact.architecture(), Some(host.architecture()));
+        assert_eq!(exact.operating_system(), Some(host.operating_system()));
+        assert_eq!(exact.target_environment(), Some(host.target_environment()));
     }
 
     #[test]

@@ -1118,13 +1118,16 @@ mod tests {
 
     use super::*;
     use crate::{
-        CapabilityName, CapabilityRequirement, CapabilityValue, CapturePolicy, CommandContract,
+        ArchitectureName, AuthenticatedWorkerIdentity, CapturePolicy, CommandContract,
         DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionEnvironmentArtifact,
-        ExecutionTimeoutMillis, InputBundleArtifact, NetworkPolicy, OutputByteLimit,
-        RecordedWorkerAuthenticator, ResourceRequest, SandboxPath, WorkerAuthenticationSubject,
-        WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerProfile,
-        WorkerProtocolVersion, WorkerSlotCount, authorize_execution_attempt, disconnect_worker,
-        prepare_execution_job, record_worker_heartbeat, register_worker,
+        ExecutionPlatform, ExecutionPlatformRequirement, ExecutionTimeoutMillis,
+        InputBundleArtifact, NetworkPolicy, OperatingSystemName, OutputByteLimit, PlacementRequest,
+        RecordedWorkerAuthenticator, ResourceRequest, SandboxPath, TargetEnvironmentName,
+        WorkerAuthenticationSubject, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth,
+        WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
+        WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount,
+        authorize_execution_attempt, disconnect_worker, prepare_execution_job,
+        record_worker_heartbeat, register_worker,
     };
 
     struct Fixture {
@@ -1161,10 +1164,16 @@ mod tests {
                 ),
                 ResourceRequest::new(
                     ExecutionTimeoutMillis::new(1_000).expect("timeout"),
-                    vec![CapabilityRequirement {
-                        name: CapabilityName::new("architecture").expect("capability"),
-                        value: CapabilityValue::new("x86_64").expect("value"),
-                    }],
+                    PlacementRequest::new(
+                        ExecutionPlatformRequirement::new(
+                            Some(ArchitectureName::new("x86_64").expect("architecture")),
+                            None,
+                            None,
+                        ),
+                        vec![WorkerPoolName::new("fixture").expect("pool")],
+                        Vec::new(),
+                    )
+                    .expect("placement"),
                 )
                 .expect("resources"),
                 NetworkPolicy::Disabled,
@@ -1199,18 +1208,33 @@ mod tests {
             let profile = WorkerProfile::new(
                 WorkerProtocolVersion::new(1).expect("protocol"),
                 WorkerBinaryIdentity::new("sha256:worker-v1").expect("binary"),
-                vec![ExecutionBackend::new("container").expect("backend")],
-                vec![CapabilityRequirement {
-                    name: CapabilityName::new("architecture").expect("capability"),
-                    value: CapabilityValue::new("x86_64").expect("value"),
-                }],
-                WorkerSlotCount::new(1).expect("slots"),
+                WorkerResourceInventory::new(
+                    WorkerResourceClaim::new(
+                        ExecutionPlatform::new(
+                            ArchitectureName::new("x86_64").expect("architecture"),
+                            OperatingSystemName::new("linux").expect("os"),
+                            TargetEnvironmentName::new("gnu").expect("environment"),
+                        ),
+                        WorkerResourceSource::BuiltinProbe,
+                    ),
+                    vec![WorkerResourceClaim::new(
+                        ExecutionBackend::new("container").expect("backend"),
+                        WorkerResourceSource::OperatorDeclared,
+                    )],
+                    Vec::new(),
+                    WorkerSlotCount::new(1).expect("slots"),
+                )
+                .expect("resources"),
             )
             .expect("profile");
             let hello = WorkerHello::new(self.worker_id, WorkerIncarnationId::new(), profile);
             let mut authenticator = RecordedWorkerAuthenticator::new([(
                 self.worker_id,
-                WorkerAuthenticationSubject::new("spiffe://cairn/worker/fixture").expect("subject"),
+                AuthenticatedWorkerIdentity::new(
+                    WorkerAuthenticationSubject::new("spiffe://cairn/worker/fixture")
+                        .expect("subject"),
+                    WorkerPoolName::new("fixture").expect("pool"),
+                ),
             )]);
             register_worker(
                 &mut self.events,

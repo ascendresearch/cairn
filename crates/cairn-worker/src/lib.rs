@@ -13,9 +13,11 @@ use cairn_control_transport::{
     connect_worker_socket, read_wire_message, write_wire_message,
 };
 use cairn_execution::{
-    ControlFrame, ControllerControlMessage, ExecutionCapture, ExecutionInput, Executor,
-    ExecutorError, InboundControlSession, WorkerAvailability, WorkerHello, WorkerProfile,
-    WorkerProtocolVersion, acknowledge_worker_messages, active_worker_attempts,
+    CapabilityRequirement, ControlFrame, ControllerControlMessage, ExecutionBackend,
+    ExecutionCapture, ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor,
+    ExecutorError, InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHello,
+    WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
+    WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages, active_worker_attempts,
     admit_worker_assignment, deliver_worker_acknowledgement, deliver_worker_messages,
     execute_worker_attempt, record_worker_execution_start,
 };
@@ -36,7 +38,9 @@ pub struct WorkerConfig {
     pub controller: ControllerEndpoint,
     pub tls: ClientTlsFiles,
     pub worker_id: WorkerId,
-    pub profile: WorkerProfile,
+    pub profile: WorkerProfileConfig,
+    #[serde(default)]
+    pub expected_platform: ExecutionPlatformRequirement,
     pub availability: WorkerAvailability,
     pub journal_database: PathBuf,
     pub handshake_timeout_ms: Option<NonZeroU64>,
@@ -45,6 +49,18 @@ pub struct WorkerConfig {
     pub reconnect_delay_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
+}
+
+/// Operator configuration used to construct a runtime-observed worker profile.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerProfileConfig {
+    pub schema_version: u16,
+    pub protocol_version: WorkerProtocolVersion,
+    pub binary_identity: WorkerBinaryIdentity,
+    pub backends: Vec<ExecutionBackend>,
+    pub capabilities: Vec<CapabilityRequirement>,
+    pub max_concurrency: WorkerSlotCount,
 }
 
 /// Separates the routable TCP address from the TLS/WebSocket authority URI.
@@ -114,12 +130,19 @@ pub async fn run_from_arguments(
 /// Returns an error for invalid configuration, journal startup, or a terminal session failure when
 /// reconnect is disabled.
 pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
-    config.validate()?;
+    let profile = config.runtime_profile()?;
+    config.validate(&profile)?;
     let incarnation_id = WorkerIncarnationId::new();
     let mut journal = SqliteEventStore::open(&config.journal_database)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     loop {
-        let outcome = Box::pin(run_session(&config, &incarnation_id, &mut journal)).await;
+        let outcome = Box::pin(run_session(
+            &config,
+            &profile,
+            &incarnation_id,
+            &mut journal,
+        ))
+        .await;
         if let Err(error) = &outcome {
             eprintln!("cairn-worker session: {error}");
         }
@@ -131,13 +154,67 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
 }
 
 impl WorkerConfig {
-    fn validate(&self) -> Result<(), WorkerError> {
+    fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
         if self.schema_version != 1 {
             return Err(WorkerError::Configuration(
                 "only worker schema_version 1 is supported".into(),
             ));
         }
-        if self.profile.protocol_version()
+        if self.profile.schema_version != 1 {
+            return Err(WorkerError::Configuration(
+                "only worker profile configuration schema_version 1 is supported".into(),
+            ));
+        }
+        let platform = ExecutionPlatform::detect_host()
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        if self
+            .expected_platform
+            .architecture()
+            .is_some_and(|required| required != platform.architecture())
+            || self
+                .expected_platform
+                .operating_system()
+                .is_some_and(|required| required != platform.operating_system())
+            || self
+                .expected_platform
+                .target_environment()
+                .is_some_and(|required| required != platform.target_environment())
+        {
+            return Err(WorkerError::Configuration(format!(
+                "detected platform {}/{}/{} does not satisfy expected_platform",
+                platform.architecture().as_str(),
+                platform.operating_system().as_str(),
+                platform.target_environment().as_str()
+            )));
+        }
+        let declared = WorkerResourceSource::OperatorDeclared;
+        let resources = WorkerResourceInventory::new(
+            WorkerResourceClaim::new(platform, WorkerResourceSource::BuiltinProbe),
+            self.profile
+                .backends
+                .iter()
+                .cloned()
+                .map(|value| WorkerResourceClaim::new(value, declared))
+                .collect(),
+            self.profile
+                .capabilities
+                .iter()
+                .cloned()
+                .map(|value| WorkerResourceClaim::new(value, declared))
+                .collect(),
+            self.profile.max_concurrency,
+        )
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        WorkerProfile::new(
+            self.profile.protocol_version,
+            self.profile.binary_identity.clone(),
+            resources,
+        )
+        .map_err(|error| WorkerError::Configuration(error.to_string()))
+    }
+
+    fn validate(&self, profile: &WorkerProfile) -> Result<(), WorkerError> {
+        if profile.protocol_version()
             != WorkerProtocolVersion::new(1)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?
         {
@@ -158,7 +235,7 @@ impl WorkerConfig {
                     .into(),
             ));
         }
-        if self.availability.available_slots() > self.profile.max_concurrency().get() {
+        if self.availability.available_slots() > profile.max_concurrency().get() {
             return Err(WorkerError::Configuration(
                 "availability exceeds profile max_concurrency".into(),
             ));
@@ -194,6 +271,7 @@ impl WorkerConfig {
 )]
 async fn run_session(
     config: &WorkerConfig,
+    profile: &WorkerProfile,
     incarnation_id: &WorkerIncarnationId,
     journal: &mut SqliteEventStore,
 ) -> Result<(), WorkerError> {
@@ -206,11 +284,11 @@ async fn run_session(
     let mut socket = timeout_optional(config.handshake_timeout_ms, connecting)
         .await?
         .map_err(|error| WorkerError::Session(error.to_string()))?;
-    let protocol_version = config.profile.protocol_version();
+    let protocol_version = profile.protocol_version();
     write_wire_message(
         &mut socket,
         &WorkerWireMessage::Hello {
-            hello: WorkerHello::new(config.worker_id, *incarnation_id, config.profile.clone()),
+            hello: WorkerHello::new(config.worker_id, *incarnation_id, profile.clone()),
             availability: config.availability(journal)?,
         },
         config.transport,
@@ -384,7 +462,7 @@ async fn flush_worker(
     let mut frames = deliver_worker_messages(
         journal,
         config.worker_id,
-        config.profile.protocol_version(),
+        config.profile.protocol_version,
         *connection_id,
         acknowledges,
         &command("deliver"),
@@ -398,7 +476,7 @@ async fn flush_worker(
             deliver_worker_acknowledgement(
                 journal,
                 config.worker_id,
-                config.profile.protocol_version(),
+                config.profile.protocol_version,
                 *connection_id,
                 acknowledges,
                 &command("deliver-ack"),
@@ -472,12 +550,39 @@ fn resolve(path: &mut PathBuf, base: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use cairn_execution::{ArchitectureName, ExecutionPlatformRequirement, WorkerResourceSource};
+
     use super::WorkerConfig;
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
-        let _: WorkerConfig =
+        let config: WorkerConfig =
             serde_json::from_str(include_str!("../../../config/worker.example.json"))
                 .expect("documented worker configuration");
+        let profile = config.runtime_profile().expect("runtime profile");
+        assert_eq!(
+            profile.resources().platform().source(),
+            WorkerResourceSource::BuiltinProbe
+        );
+        assert!(
+            profile
+                .resources()
+                .backends()
+                .iter()
+                .all(|claim| { claim.source() == WorkerResourceSource::OperatorDeclared })
+        );
+    }
+
+    #[test]
+    fn expected_platform_fails_closed_instead_of_overriding_detection() {
+        let mut config: WorkerConfig =
+            serde_json::from_str(include_str!("../../../config/worker.example.json"))
+                .expect("documented worker configuration");
+        config.expected_platform = ExecutionPlatformRequirement::new(
+            Some(ArchitectureName::new("definitely-not-the-host").expect("architecture")),
+            None,
+            None,
+        );
+        assert!(config.runtime_profile().is_err());
     }
 }

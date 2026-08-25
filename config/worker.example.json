@@ -9,6 +9,11 @@
     "tcp_address": "controller.example.test:7443",
     "websocket_uri": "wss://controller.example.test:7443/control"
   },
+  "expected_platform": {
+    "architecture": null,
+    "operating_system": "linux",
+    "target_environment": "gnu"
+  },
   "handshake_timeout_ms": 10000,
   "heartbeat_interval_ms": 30000,
   "idle_timeout_ms": 120000,

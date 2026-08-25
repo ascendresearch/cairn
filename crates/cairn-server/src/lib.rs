@@ -16,12 +16,13 @@ use cairn_control_transport::{
     write_wire_message,
 };
 use cairn_execution::{
-    ControlFrame, ExecutionAssignmentState, InboundControlSession, RecordedWorkerAuthenticator,
-    RegisteredWorkerSession, WorkerAuthenticationSubject, WorkerControlMessage,
-    WorkerProtocolVersion, WorkerResultReconciliation, WorkerSessionTimeoutMillis,
-    accept_worker_assignment, acknowledge_controller_messages, deliver_controller_acknowledgement,
-    deliver_controller_messages, disconnect_worker, reconcile_worker_result,
-    record_worker_heartbeat, recover_execution_assignment, register_worker,
+    AuthenticatedWorkerIdentity, ControlFrame, ExecutionAssignmentState, InboundControlSession,
+    RecordedWorkerAuthenticator, RegisteredWorkerSession, WorkerAuthenticationSubject,
+    WorkerControlMessage, WorkerPoolName, WorkerProtocolVersion, WorkerResultReconciliation,
+    WorkerSessionTimeoutMillis, accept_worker_assignment, acknowledge_controller_messages,
+    deliver_controller_acknowledgement, deliver_controller_messages, disconnect_worker,
+    reconcile_worker_result, record_worker_heartbeat, recover_execution_assignment,
+    register_worker,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, ObservedAtUnixMillis, WorkerId,
@@ -55,7 +56,14 @@ pub struct ServerConfig {
 #[serde(deny_unknown_fields)]
 pub struct WorkerEnrollment {
     pub worker_id: WorkerId,
+    pub pool: WorkerPoolName,
     pub certificate: PathBuf,
+}
+
+#[derive(Clone)]
+struct EnrolledWorker {
+    worker_id: WorkerId,
+    pool: WorkerPoolName,
 }
 
 /// Controller durable storage locations.
@@ -192,13 +200,22 @@ impl ServerConfig {
         resolve(&mut self.storage.content_directory, base);
     }
 
-    fn enrollments(&self) -> Result<BTreeMap<CertificateFingerprint, WorkerId>, ServerError> {
+    fn enrollments(&self) -> Result<BTreeMap<CertificateFingerprint, EnrolledWorker>, ServerError> {
         let mut result = BTreeMap::new();
         let mut workers = BTreeMap::new();
         for enrollment in &self.enrollment {
             let fingerprint = CertificateFingerprint::from_pem_file(&enrollment.certificate)
                 .map_err(|error| ServerError::Configuration(error.to_string()))?;
-            if result.insert(fingerprint, enrollment.worker_id).is_some() {
+            if result
+                .insert(
+                    fingerprint,
+                    EnrolledWorker {
+                        worker_id: enrollment.worker_id,
+                        pool: enrollment.pool.clone(),
+                    },
+                )
+                .is_some()
+            {
                 return Err(ServerError::Configuration(
                     "one certificate is enrolled to more than one worker".into(),
                 ));
@@ -222,7 +239,7 @@ async fn handle_connection(
     tcp: tokio::net::TcpStream,
     tls: Arc<rustls::ServerConfig>,
     state: Arc<Mutex<ControllerState>>,
-    enrollments: BTreeMap<CertificateFingerprint, WorkerId>,
+    enrollments: BTreeMap<CertificateFingerprint, EnrolledWorker>,
     config: ServerConfig,
 ) -> Result<(), ServerError> {
     let accepted = accept_worker_socket(tcp, tls, config.transport);
@@ -263,7 +280,7 @@ async fn handle_connection(
             "client certificate is not enrolled".into(),
         ));
     };
-    if enrolled_worker != &hello.worker_id() {
+    if enrolled_worker.worker_id != hello.worker_id() {
         reject(
             &mut socket,
             config.transport,
@@ -314,7 +331,10 @@ async fn handle_connection(
     let mut session = {
         let mut locked = state.lock().await;
         let ControllerState { events, content } = &mut *locked;
-        let mut authenticator = RecordedWorkerAuthenticator::new([(hello.worker_id(), subject)]);
+        let mut authenticator = RecordedWorkerAuthenticator::new([(
+            hello.worker_id(),
+            AuthenticatedWorkerIdentity::new(subject, enrolled_worker.pool.clone()),
+        )]);
         let registered = register_worker(
             events,
             content,

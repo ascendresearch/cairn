@@ -519,7 +519,7 @@ A job contains:
 
 Product task kind is metadata owned by the workflow, not an execution enum variant.
 
-**Implemented controller kernel (2026-08-24).** `cairn-execution` archives the canonical V1 job
+**Implemented controller kernel (2026-08-24).** `cairn-execution` archives the canonical V2 job
 contract only after verifying its typed input-bundle and environment references. Its current
 identity covers logical job, input, environment, backend, command, resources/capabilities, network,
 and configurable stdout, stderr, diagnostic, trusted-evidence, and declared-output bounds. Mount
@@ -548,15 +548,42 @@ capabilities; real local-process and remote-worker adapters remain target work.
 `WorkerId`, process/boot `WorkerIncarnationId`, logical `AssignmentId`, bounded `LeaseId`, durable
 `ControlMessageId`, short-lived `ControlConnectionId`, and connection-local `ControlSequence`.
 Authentication is a replaceable trusted capability that resolves a transport hello to a stable
-principal; the controller permanently binds that principal to the logical worker identity. Static
-protocol/binary/backend/capability/concurrency data is a canonical content-addressed profile.
+principal and an operator-authorized worker pool; the controller permanently binds both to the
+logical worker identity. Static protocol, binary, observed platform, backend, capability,
+provenance, and concurrency data is a canonical content-addressed profile.
 Dynamic health, drain state, available slots, and the worker's advisory active-attempt set are a
 separate content-addressed heartbeat snapshot.
 
 Registration rejects a second incarnation while the first is live. An incarnation replacement is
 accepted only after explicit disconnect or a configured session timeout, and the replacement fact
 records the old incarnation and exact expiry boundary so recovery can recheck the decision. Static
-capability equality and dynamic availability matching are generic and contain no product task kind.
+placement and dynamic availability matching are generic and contain no product task kind.
+
+**Implemented resource-placement kernel (2026-08-25).** Native architecture, operating system, and
+target environment are strong extensible selector types. `cairn-worker` derives them from the
+compiled/running binary; serialized `expected_platform` fields are assertions that fail closed and
+cannot overwrite the observation. Every profile resource claim retains whether it came from a
+built-in probe, operator declaration, controller verification, or external attestation. The V2
+profile content domain prevents the new meaning from being confused with earlier flat capability
+bytes.
+
+A worker hello may introduce only built-in platform observations and operator-declared
+backend/capability claims. It cannot label its own bytes `ControllerVerified` or
+`ExternalAttestation`; those assurance levels require a later trusted controller challenge or
+attestation adapter and a separate authoritative fact.
+
+This is a pre-public compatibility change: V1 job-contract/profile artifacts and V1 worker
+registration payloads are rejected rather than assigned invented pool or platform provenance. A
+deployment retaining development-era state needs the controlled migration/rebuild path before
+upgrade; the first public compatibility baseline will include that migration gate.
+
+An immutable `PlacementRequest` now separates optional platform constraints, an authenticated-pool
+allow-list, and additional capability equality from timeout and backend. Pool membership comes from
+controller enrollment rather than worker hello. Registration persists it beside the authenticated
+subject and rejects an implicit change on restart. `cairn-migration` will decide which evidence and
+opaque job are needed, then produce this domain-neutral request; the execution scheduler—not the
+migration adapter—selects a concrete worker. Agent role and migration stage never become worker
+profile fields.
 
 Assignment delivery uses a two-phase authority boundary:
 
@@ -644,7 +671,8 @@ Workers dial the controller. A connection establishes:
 
 - stable worker identity and unique process incarnation;
 - binary/protocol version;
-- OS/architecture and available execution backends;
+- built-in-observed OS/architecture/target environment and available execution backends;
+- controller-authorized worker pool, separately from any business or agent role;
 - device capabilities and current policy state;
 - supported evidence/attestation features.
 

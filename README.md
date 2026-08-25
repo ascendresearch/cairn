@@ -89,7 +89,12 @@ worker use independent SQLite authorities for durable delivery and recovery; con
 timeout, heartbeat, polling, reconnect, and diagnostic controls can each be explicitly disabled
 where optional. A two-worker integration test proves that distinct certificates and journals become
 two recoverable live sessions, while post-commit heartbeat acknowledgements keep independently
-idle-bounded connections stable. Reproducible release tooling cross-links controller and worker
+idle-bounded connections stable. Worker profile V2 now reports the built-in-observed native
+architecture/OS/target environment separately from operator-declared backends and capabilities,
+with provenance retained for every claim. Operator `expected_platform` values fail closed instead
+of overriding detection. Controller-authorized worker pools and domain-neutral placement requests
+let future `cairn-migration` stages ask for resources without assigning business roles to workers.
+Reproducible release tooling cross-links controller and worker
 bundles for x86-64 and AArch64 against a pinned GLIBC baseline and verifies their ELF contracts
 before deployment. The current worker executor deliberately returns `NotStarted`; real
 local/container backends, artifact transfer, certificate lifecycle management, and real-host job

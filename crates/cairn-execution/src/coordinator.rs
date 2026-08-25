@@ -91,7 +91,7 @@ pub struct ExecutionAttemptAuthority {
     revision: StreamRevision,
     authority_event_id: EventId,
     attempt_id: AttemptId,
-    prepared: PreparedExecutionJob,
+    prepared: Box<PreparedExecutionJob>,
 }
 
 impl ExecutionAttemptAuthority {
@@ -397,7 +397,7 @@ pub fn authorize_execution_attempt<E: EventStore>(
                     revision: revision(last.sequence)?,
                     authority_event_id: event_id,
                     attempt_id,
-                    prepared,
+                    prepared: Box::new(prepared),
                 });
             }
             return invalid_history("job already has active attempt authority");
@@ -435,7 +435,7 @@ pub fn authorize_execution_attempt<E: EventStore>(
         revision: revision(outcome.last_sequence)?,
         authority_event_id: outcome.event_ids[0],
         attempt_id,
-        prepared,
+        prepared: Box::new(prepared),
     })
 }
 
@@ -471,7 +471,7 @@ pub fn begin_execution_attempt<E: EventStore>(
         revision: revision(outcome.last_sequence)?,
         started_event_id: outcome.event_ids[0],
         attempt_id: authority.attempt_id,
-        prepared: authority.prepared,
+        prepared: *authority.prepared,
     })
 }
 
@@ -577,7 +577,7 @@ pub fn recover_execution_job<E: EventStore, C: ContentStore>(
             revision: revision(last.sequence)?,
             authority_event_id: event_id,
             attempt_id,
-            prepared,
+            prepared: Box::new(prepared),
         })),
         ProjectedState::Started { attempt_id, .. } => Ok(ExecutionJobState::InDoubt { attempt_id }),
         ProjectedState::Completed {
@@ -1185,10 +1185,10 @@ mod tests {
         CapabilityName, CapabilityRequirement, CapabilityValue, CapturePolicy, CapturedOutput,
         CommandArgument, CommandContract, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend,
         ExecutionCapture, ExecutionElapsedMillis, ExecutionEnvironmentArtifact, ExecutionOutcome,
-        ExecutionTimeoutMillis, ExecutorError, ExpectedOutput, InputBundleArtifact, JobContract,
-        NetworkPolicy, OutputByteLimit, OutputName, RecordedExecution, RecordedExecutor,
-        ResolvedProgramIdentity, ResourceRequest, SandboxPath, ScriptedExecutor,
-        TrustedExecutionEvidence,
+        ExecutionPlatformRequirement, ExecutionTimeoutMillis, ExecutorError, ExpectedOutput,
+        InputBundleArtifact, JobContract, NetworkPolicy, OutputByteLimit, OutputName,
+        PlacementRequest, RecordedExecution, RecordedExecutor, ResolvedProgramIdentity,
+        ResourceRequest, SandboxPath, ScriptedExecutor, TrustedExecutionEvidence,
     };
 
     struct Fixture {
@@ -1225,10 +1225,15 @@ mod tests {
                 ),
                 ResourceRequest::new(
                     ExecutionTimeoutMillis::new(5_000).expect("timeout"),
-                    vec![CapabilityRequirement {
-                        name: CapabilityName::new("architecture").expect("capability"),
-                        value: CapabilityValue::new("x86_64").expect("value"),
-                    }],
+                    PlacementRequest::new(
+                        ExecutionPlatformRequirement::default(),
+                        Vec::new(),
+                        vec![CapabilityRequirement {
+                            name: CapabilityName::new("fixture-runtime").expect("capability"),
+                            value: CapabilityValue::new("v1").expect("value"),
+                        }],
+                    )
+                    .expect("placement"),
                 )
                 .expect("resources"),
                 NetworkPolicy::Disabled,
@@ -1604,7 +1609,7 @@ mod tests {
         );
         let alternate_resources = ResourceRequest::new(
             ExecutionTimeoutMillis::new(7_000).expect("timeout"),
-            fixture.contract.resources().capabilities().to_vec(),
+            fixture.contract.resources().placement().clone(),
         )
         .expect("resources");
         let alternate_capture = CapturePolicy::new(
