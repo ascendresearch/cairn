@@ -19,6 +19,7 @@ document is complete.
 | [`RECORD_REPLAY.md`](RECORD_REPLAY.md) | What is recorded, reconstructed, replayed, and compared? | Normative record design |
 | [`DECISIONS.md`](DECISIONS.md) | Which formerly open choices have been resolved? | Normative decision register |
 | [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) | What has not been decided? | Explicitly non-normative decision backlog |
+| [`RELEASE.md`](RELEASE.md) | How are x86-64/AArch64 artifacts cross-linked, inspected, and promoted? | Normative release procedure |
 
 ## Reading order
 

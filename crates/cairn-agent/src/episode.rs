@@ -938,10 +938,10 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             steps_started: completion.steps_started,
         });
     }
-    if let Some(last) = history.last()
-        && last.command_id == *command_id
-        && last.schema_name.as_str() == STEP_ADVANCED
-    {
+    let replayed_advance = history.last().filter(|last| {
+        last.command_id == *command_id && last.schema_name.as_str() == STEP_ADVANCED
+    });
+    if let Some(last) = replayed_advance {
         if last.observed_at_unix_ms != observed_at.get()
             || current.step_id != next_step_id
             || current.model_attempt_id != next_model_attempt_id

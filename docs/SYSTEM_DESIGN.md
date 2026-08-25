@@ -610,6 +610,12 @@ exact strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId` and n
 version before either side accepts control frames. TLS/WebSocket bytes never become execution
 facts by themselves.
 
+After a worker heartbeat is durably accepted, the controller returns an ephemeral
+`HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence
+deadline without entering either durable control outbox. It conveys connection liveness only: it
+cannot acknowledge a control sequence, prove an execution attempt, renew a lease, or create a
+verdict-relevant fact.
+
 Runnable `cairn-server` and `cairn-worker` composition roots now connect this adapter to separate
 SQLite authorities. The server durably registers and heartbeats workers, validates inbound
 sequence/acknowledgement cursors, drains its durable outbox, and reconciles worker messages. The
@@ -622,8 +628,17 @@ polling, reconnect, and diagnostic bounds are configured; `null` disables an opt
 This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
 It can close the control protocol without claiming an external workload ran. Scheduler-wide slot
 reservation across different attempts, cancellation delivery, artifact transfer, local
-process/container supervision, certificate rotation/revocation storage, and real-host deployment
-remain application/adapter slices.
+process/container supervision, certificate rotation/revocation storage, and production service
+deployment remain application/adapter slices.
+
+**Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
+cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
+builds `cairn-server` and `cairn-worker` for both `x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`, then rejects the result unless its ELF machine, interpreter, maximum
+GLIBC symbol, and shared-library set match the frozen target contract. Sorted archives use a fixed
+source epoch and contain checksums plus commit/toolchain metadata. The deployment gate rebuilds each
+archive independently and executes the workers on both real host architectures; target machines
+contain no Rust or C build toolchain.
 
 Workers dial the controller. A connection establishes:
 

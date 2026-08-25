@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cargo fmt --all --check
+cargo check --workspace --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo test --workspace --doc --all-features
@@ -21,7 +22,7 @@ for file in README.md docs/*.md; do
   done < <(sed -n 's/.*](\([^)]*\)).*/\1/p' "$file")
 done
 
-if rg -n '[[:blank:]]+$' README.md LICENSE config model-templates docs crates scripts Cargo.toml rustfmt.toml; then
+if rg -n '[[:blank:]]+$' README.md LICENSE config model-templates docs crates scripts release Cargo.toml rustfmt.toml rust-toolchain.toml; then
   status=1
 fi
 

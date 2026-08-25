@@ -424,16 +424,25 @@ async fn controller_session_loop(
         match message {
             WorkerWireMessage::Heartbeat { availability } => {
                 let now = observed_now()?;
-                let mut locked = state.lock().await;
-                let ControllerState { events, content } = &mut *locked;
-                *session = record_worker_heartbeat(
-                    events,
-                    content,
-                    session,
-                    &availability,
-                    &command("heartbeat"),
-                    now,
+                {
+                    let mut locked = state.lock().await;
+                    let ControllerState { events, content } = &mut *locked;
+                    *session = record_worker_heartbeat(
+                        events,
+                        content,
+                        session,
+                        &availability,
+                        &command("heartbeat"),
+                        now,
+                    )
+                    .map_err(|error| ServerError::Session(error.to_string()))?;
+                }
+                write_wire_message(
+                    socket,
+                    &ControllerWireMessage::HeartbeatAccepted { accepted_at: now },
+                    config.transport,
                 )
+                .await
                 .map_err(|error| ServerError::Session(error.to_string()))?;
             }
             WorkerWireMessage::Control { frame } => {
@@ -574,10 +583,9 @@ async fn flush_controller(
             now,
         )
         .map_err(|error| ServerError::Session(error.to_string()))?;
-        if let Some(acknowledges) = acknowledges
-            && frames.is_empty()
-            && Some(acknowledges) > *acknowledgement_sent
-        {
+        let acknowledgement_only =
+            acknowledges.filter(|value| frames.is_empty() && Some(*value) > *acknowledgement_sent);
+        if let Some(acknowledges) = acknowledgement_only {
             vec![
                 deliver_controller_acknowledgement(
                     &mut locked.events,

@@ -1468,15 +1468,13 @@ fn enforce_frame_limit(
     policy: ControlFramePolicy,
 ) -> Result<(), ControlProtocolError> {
     let observed = u64::try_from(byte_len).unwrap_or(u64::MAX);
-    if let Some(limit) = policy.byte_limit
-        && observed > limit.get()
-    {
-        return Err(ControlProtocolError::FrameTooLarge {
+    match policy.byte_limit {
+        Some(limit) if observed > limit.get() => Err(ControlProtocolError::FrameTooLarge {
             observed,
             limit: limit.get(),
-        });
+        }),
+        Some(_) | None => Ok(()),
     }
-    Ok(())
 }
 
 fn controller_stream(worker_id: WorkerId) -> Result<StreamId, ControlProtocolError> {

@@ -114,6 +114,8 @@ pub enum ControllerWireMessage {
         protocol_version: WorkerProtocolVersion,
         accepted_at: ObservedAtUnixMillis,
     },
+    /// Ephemeral acknowledgement sent only after the controller accepts a heartbeat.
+    HeartbeatAccepted { accepted_at: ObservedAtUnixMillis },
     /// Durable controller outbox delivery or acknowledgement-only frame.
     Control {
         frame: Box<ControlFrame<ControllerControlMessage>>,
@@ -184,13 +186,11 @@ where
 
 fn enforce_limit(byte_len: usize, policy: TransportPolicy) -> Result<(), TransportError> {
     let observed = u64::try_from(byte_len).unwrap_or(u64::MAX);
-    if let Some(limit) = policy.message_byte_limit
-        && observed > limit.get()
-    {
-        return Err(TransportError::MessageTooLarge {
+    match policy.message_byte_limit {
+        Some(limit) if observed > limit.get() => Err(TransportError::MessageTooLarge {
             observed,
             limit: limit.get(),
-        });
+        }),
+        Some(_) | None => Ok(()),
     }
-    Ok(())
 }

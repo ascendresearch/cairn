@@ -644,7 +644,7 @@ struct RegistrationPayload {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-#[expect(
+#[allow(
     clippy::struct_field_names,
     reason = "durable heartbeat schema keeps explicit typed identity field names"
 )]

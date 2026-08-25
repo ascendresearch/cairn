@@ -88,9 +88,12 @@ bind the verified leaf-certificate fingerprint to an enrolled strong `WorkerId`.
 worker use independent SQLite authorities for durable delivery and recovery; configurable wire,
 timeout, heartbeat, polling, reconnect, and diagnostic controls can each be explicitly disabled
 where optional. A two-worker integration test proves that distinct certificates and journals become
-two recoverable live sessions. The current worker executor deliberately returns `NotStarted`; real
-local/container backends, artifact transfer, certificate lifecycle management, and real-host
-deployment remain subsequent slices.
+two recoverable live sessions, while post-commit heartbeat acknowledgements keep independently
+idle-bounded connections stable. Reproducible release tooling cross-links controller and worker
+bundles for x86-64 and AArch64 against a pinned GLIBC baseline and verifies their ELF contracts
+before deployment. The current worker executor deliberately returns `NotStarted`; real
+local/container backends, artifact transfer, certificate lifecycle management, and real-host job
+execution remain subsequent slices.
 
 The remaining architecture in the normative documents is still target design. The old repositories
 are evidence and compatibility references, not source trees to copy mechanically.
@@ -109,6 +112,8 @@ Start with [`docs/README.md`](docs/README.md). The normative baseline is:
   reconstruction, replay, and counterfactual execution.
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — resolved architecture choices and their boundaries.
 - [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) — decisions deliberately left unresolved.
+- [`docs/RELEASE.md`](docs/RELEASE.md) — pinned cross-link toolchain, reproducible bundles, and the
+  real-host deployment gate.
 
 ## Project principle
 

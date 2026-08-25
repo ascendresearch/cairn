@@ -289,6 +289,7 @@ async fn run_session(
                     .idle_timeout_ms
                     .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
                 match message {
+                    ControllerWireMessage::HeartbeatAccepted { .. } => {}
                     ControllerWireMessage::Control { frame } => {
                         inbound
                             .accept(&frame, highest_sent)
@@ -390,10 +391,9 @@ async fn flush_worker(
         now,
     )
     .map_err(|error| WorkerError::Session(error.to_string()))?;
-    if let Some(acknowledges) = acknowledges
-        && frames.is_empty()
-        && Some(acknowledges) > *acknowledgement_sent
-    {
+    let acknowledgement_only =
+        acknowledges.filter(|value| frames.is_empty() && Some(*value) > *acknowledgement_sent);
+    if let Some(acknowledges) = acknowledgement_only {
         frames.push(
             deliver_worker_acknowledgement(
                 journal,

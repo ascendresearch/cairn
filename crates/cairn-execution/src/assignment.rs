@@ -27,7 +27,7 @@ const ASSIGNMENT_LEASE_EXPIRED: &str = "execution.assignment-lease-expired";
 /// Immutable binding between one execution attempt and one worker incarnation/lease.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-#[expect(
+#[allow(
     clippy::struct_field_names,
     reason = "the binding intentionally exposes only strongly typed identities"
 )]
@@ -373,7 +373,7 @@ struct LeasedPayload {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-#[expect(
+#[allow(
     clippy::struct_field_names,
     reason = "durable acceptance schema keeps explicit typed identity field names"
 )]

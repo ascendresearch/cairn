@@ -69,7 +69,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         protocol_version: protocol,
         session_timeout_ms: session_timeout,
         handshake_timeout_ms: NonZeroU64::new(2_000),
-        idle_timeout_ms: None,
+        idle_timeout_ms: NonZeroU64::new(200),
         outbox_poll_interval_ms: NonZeroU64::new(25),
         transport: TransportPolicy::default(),
         diagnostic_byte_limit: NonZeroU64::new(256),
@@ -151,6 +151,12 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         server.is_finished(),
         worker_task_a.is_finished(),
         worker_task_b.is_finished()
+    );
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !server.is_finished() && !worker_task_a.is_finished() && !worker_task_b.is_finished(),
+        "heartbeat acknowledgements must keep both idle-bounded sessions open"
     );
 
     worker_task_a.abort();
