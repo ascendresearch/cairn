@@ -325,17 +325,24 @@ frames wholesale:
 - `control.worker-delivery-recorded` and `control.worker-acknowledged` preserve terminal replay until
   controller domain processing succeeds.
 
-The durable offer freezes exact typed input-bundle and execution-environment bytes. Before
-`control.worker-assignment-admitted`, the worker verifies their `ContentId<T>` values and stores
-them in its independent CAS. Before `control.worker-execution-started`, it reads and verifies those
-local objects again. The event stream remains assignment authority while CAS is material
-availability/integrity evidence: missing local bytes after restart prevent start rather than being
-silently reconstructed from an admission fact.
+Control protocol V2 changes the durable offer and admission payload shapes, so the complete
+controller-outbox/worker-journal fact family uses event schema V2. A V1 control stream fails closed
+and requires the controlled development-state migration/rebuild gate; it is never decoded as V2.
+Registry, scheduler, execution, agent, and content histories retain their independent versions.
+
+The durable offer freezes exact typed input-bundle and execution-environment identities, lengths,
+and chunk policy. Bounded range request/responses do not enter the event stream. An unacknowledged
+offer remains their controller authorization; synced per-offer staging length is the worker restart
+cursor. Before `control.worker-assignment-admitted`, the worker assembles and verifies both
+`ContentId<T>` values in its independent CAS. Before `control.worker-execution-started`, it reads
+and verifies those local objects again. The event stream remains assignment authority while CAS is
+material availability/integrity evidence: missing local bytes after restart prevent start rather
+than being silently reconstructed from an admission fact.
 
 `ControlMessageId` is stable across reconnect, while `ControlConnectionId` and `ControlSequence`
 name only a delivery attempt. Rebuilding either side checks causal event chains, exact assignment
 bindings, non-regressing/in-bounds cumulative acknowledgements, and delivery mappings. Canonical
-JSON is an isolated V1 frame codec. A recorded delivery may intentionally have no logical message
+JSON is an isolated V2 frame codec. A recorded delivery may intentionally have no logical message
 when it is an acknowledgement-only frame; such a frame advances connection sequence but never
 creates domain truth or a replay obligation. Replay authority comes from the storage-domain facts
 above, not from treating decoded transport envelopes as execution truth.

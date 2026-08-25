@@ -6,7 +6,7 @@ use std::{
 };
 
 use cairn_protocol::{BlobDigest, ContentId, ContentType};
-use cairn_record::{ContentDescriptor, ContentStore, ContentStoreError};
+use cairn_record::{ContentDescriptor, ContentRangeStore, ContentStore, ContentStoreError};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::schema;
@@ -241,6 +241,60 @@ impl ContentStore for SqliteContentStore {
     }
 }
 
+impl ContentRangeStore for SqliteContentStore {
+    fn write_range_to<T: ContentType>(
+        &self,
+        content_id: &ContentId<T>,
+        offset: u64,
+        range_byte_len: u64,
+        writer: &mut dyn Write,
+    ) -> Result<ContentDescriptor<T>, ContentStoreError> {
+        let metadata = self
+            .connection
+            .query_row(
+                "SELECT blob_digest, byte_len FROM content_objects
+                 WHERE content_id = ?1 AND content_domain = ?2 AND algorithm = 'sha256'",
+                params![content_id.to_wire(), T::DOMAIN],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(metadata_error)?
+            .ok_or_else(|| ContentStoreError::NotFound {
+                content_id: content_id.to_wire(),
+            })?;
+        let blob_digest =
+            BlobDigest::from_str(&metadata.0).map_err(|error| ContentStoreError::Integrity {
+                message: format!("invalid stored blob digest: {error}"),
+            })?;
+        let total_byte_len = to_u64(metadata.1)?;
+        let end = offset
+            .checked_add(range_byte_len)
+            .filter(|end| *end <= total_byte_len)
+            .ok_or_else(|| ContentStoreError::Integrity {
+                message: "requested content range is outside the immutable object".to_owned(),
+            })?;
+        let path = self.blob_path(blob_digest);
+        let mut file = File::open(&path).map_err(io_error)?;
+        if file.metadata().map_err(io_error)?.len() != total_byte_len {
+            return Err(ContentStoreError::Integrity {
+                message: "physical byte length differs from immutable metadata".to_owned(),
+            });
+        }
+        file.seek(SeekFrom::Start(offset)).map_err(io_error)?;
+        let written = std::io::copy(&mut file.take(end - offset), writer).map_err(io_error)?;
+        if written != range_byte_len {
+            return Err(ContentStoreError::Integrity {
+                message: "physical content range ended before its declared length".to_owned(),
+            });
+        }
+        Ok(ContentDescriptor {
+            content_id: *content_id,
+            blob_digest,
+            byte_len: total_byte_len,
+        })
+    }
+}
+
 fn verify_physical_blob(
     path: &Path,
     expected: BlobDigest,
@@ -285,7 +339,7 @@ mod tests {
     use std::io::{Cursor, Read};
 
     use cairn_protocol::ContentType;
-    use cairn_record::{ContentStore, ContentStoreError};
+    use cairn_record::{ContentRangeStore, ContentStore, ContentStoreError};
 
     use super::SqliteContentStore;
 
@@ -343,6 +397,31 @@ mod tests {
             .expect("verified read");
         assert_eq!(output, b"persistent bytes");
         assert_eq!(read.blob_digest, descriptor.blob_digest);
+    }
+
+    #[test]
+    fn range_source_reads_exact_offsets_and_rejects_overrun() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut store = SqliteContentStore::open(
+            directory.path().join("content.db"),
+            directory.path().join("cas"),
+        )
+        .expect("store");
+        let descriptor = store
+            .put::<SourceFile>(&mut Cursor::new(b"0123456789"))
+            .expect("put");
+        let mut range = Vec::new();
+        let observed = store
+            .write_range_to(&descriptor.content_id, 3, 4, &mut range)
+            .expect("range");
+        assert_eq!(range, b"3456");
+        assert_eq!(observed.content_id, descriptor.content_id);
+        assert_eq!(observed.blob_digest, descriptor.blob_digest);
+        assert_eq!(observed.byte_len, descriptor.byte_len);
+        assert!(matches!(
+            store.write_range_to(&descriptor.content_id, 9, 2, &mut Vec::new()),
+            Err(ContentStoreError::Integrity { .. })
+        ));
     }
 
     #[test]

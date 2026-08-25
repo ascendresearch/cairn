@@ -139,12 +139,13 @@ post-snapshot revocation fails closed. `cairn-migration` owns V0–V3 product me
 it to generic platform/pool/backend/capability/resource constraints; its fixture reaches a selected
 worker without leaking migration roles into execution types. Scheduler enablement, policy, session
 time, claim time, and lease time are configuration rather than constants. See
-[`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
-now receives exact typed input/environment bytes from controller CAS, verifies and commits them to
-its independent local CAS before accepting the assignment, and reloads them before recording local
-start. Controller and worker material limits are independently configurable or disableable, with a
-separate encoded-frame bound; the current inline representation intentionally targets small
-artifacts until chunked transfer is implemented. The executor deliberately returns `NotStarted`;
+[`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. Worker-control V2
+now freezes a compact typed input/environment manifest, transfers bounded canonical-base64 ranges,
+syncs and resumes private per-offer staging after reconnect, and commits fully verified objects to
+independent worker CAS before accepting the assignment. Start reloads those local objects.
+Controller and worker aggregate limits are independently configurable or disableable; positive
+chunk sizes are configurable and prevalidated against the separate optional encoded-message bound.
+The executor deliberately returns `NotStarted`;
 real local/container backends, concrete resource
 challenge/attestation adapters, and real-host job
 execution remain subsequent slices. Legacy static credentials now enter the persistent registry

@@ -31,7 +31,7 @@ use cairn_control_transport::{
     CertificateFingerprint, ControllerRejectCode, ControllerWireMessage, EnrollmentBundle,
     EnrollmentRejectCode, EnrollmentRequest, EnrollmentResponse, ServerTlsFiles, TransportPolicy,
     WorkerWireMessage, accept_enrollment_socket, accept_worker_socket, read_wire_message,
-    write_wire_message,
+    validate_material_chunk_wire_size, write_wire_message,
 };
 use cairn_execution::{
     AcceptedExecutionAssignment, AssignmentLeaseRecord, AuthenticatedWorkerIdentity, ControlFrame,
@@ -41,9 +41,9 @@ use cairn_execution::{
     WorkerResultReconciliation, WorkerSessionTimeoutMillis, accept_worker_assignment,
     acknowledge_controller_messages, deliver_controller_acknowledgement,
     deliver_controller_messages, disconnect_worker, enqueue_controller_message,
-    execution_start_message, reconcile_worker_result, record_worker_heartbeat,
-    record_worker_resource_observation, recover_execution_assignment, register_worker,
-    start_accepted_assignment, synchronize_worker_pool_assignment,
+    execution_start_message, read_assignment_material_chunk, reconcile_worker_result,
+    record_worker_heartbeat, record_worker_resource_observation, recover_execution_assignment,
+    register_worker, start_accepted_assignment, synchronize_worker_pool_assignment,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
@@ -769,6 +769,13 @@ impl ServerConfig {
                 "only scheduler policy stable-worker-id-quantitative-v2 is supported".into(),
             ));
         }
+        if let Some(scheduler) = self.scheduler {
+            validate_material_chunk_wire_size(
+                self.transport,
+                scheduler.assignment_material_chunk_size,
+            )
+            .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        }
         if !self.enrollment.is_empty() {
             return Err(ServerError::Configuration(
                 "server schema_version 3 requires an empty enrollment list; import legacy static bindings first"
@@ -1354,6 +1361,25 @@ async fn controller_session_loop(
                     acknowledgement_sent,
                 )
                 .await?;
+            }
+            WorkerWireMessage::MaterialChunkRequest { request } => {
+                let chunk = {
+                    let locked = state.lock().await;
+                    read_assignment_material_chunk(
+                        &locked.events,
+                        &locked.content,
+                        session.worker_id(),
+                        &request,
+                    )
+                    .map_err(|error| ServerError::Session(error.to_string()))?
+                };
+                write_wire_message(
+                    socket,
+                    &ControllerWireMessage::MaterialChunk { chunk },
+                    config.transport,
+                )
+                .await
+                .map_err(|error| ServerError::Session(error.to_string()))?;
             }
             WorkerWireMessage::Hello { .. } => {
                 return Err(ServerError::Session("hello repeated after welcome".into()));

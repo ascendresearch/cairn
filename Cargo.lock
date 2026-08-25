@@ -244,6 +244,7 @@ dependencies = [
  "cairn-control-transport",
  "cairn-execution",
  "cairn-protocol",
+ "cairn-record",
  "cairn-store-sqlite",
  "rcgen",
  "rustix",

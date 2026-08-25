@@ -3,7 +3,9 @@ use std::{
     time::Duration,
 };
 
-use cairn_control_transport::{ClientTlsFiles, ServerTlsFiles, TransportPolicy};
+use cairn_control_transport::{
+    ClientTlsFiles, ServerTlsFiles, TransportMessageByteLimit, TransportPolicy,
+};
 use cairn_execution::{
     AssignmentLeaseDurationMillis, CapturePolicy, CommandContract, DiagnosticByteLimit,
     EvidenceByteLimit, ExecutionAssignmentState, ExecutionBackend, ExecutionEnvironmentArtifact,
@@ -62,7 +64,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     let event_database = directory.path().join("controller-events.sqlite3");
     let content_database = directory.path().join("controller-content.sqlite3");
     let content_directory = directory.path().join("controller-content");
-    let protocol = WorkerProtocolVersion::new(1)?;
+    let protocol = WorkerProtocolVersion::new(2)?;
     let session_timeout = WorkerSessionTimeoutMillis::new(10_000)?;
     let mut controller_config = ServerConfig {
         schema_version: 2,
@@ -99,12 +101,17 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
             reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(2_000)?,
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(2_000)?,
             assignment_material_byte_limit: None,
+            assignment_material_chunk_size: cairn_execution::AssignmentMaterialChunkSize::new(
+                16 * 1024,
+            )?,
         }),
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: NonZeroU64::new(500),
         outbox_poll_interval_ms: NonZeroU64::new(25),
         authority_poll_interval_ms: NonZeroU64::new(25).expect("authority poll"),
-        transport: TransportPolicy::default(),
+        transport: TransportPolicy {
+            message_byte_limit: Some(TransportMessageByteLimit::new(32 * 1024)?),
+        },
         diagnostic_byte_limit: NonZeroU64::new(256),
     };
     let import_command = CommandId::new();
@@ -243,7 +250,10 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     );
 
     let mut content = SqliteContentStore::open(&content_database, &content_directory)?;
-    let input = put::<InputBundleArtifact>(&mut content, b"dual-worker-input")?;
+    let input_bytes: Vec<u8> = (0..(128 * 1024 + 17))
+        .map(|index| u8::try_from(index % 251).expect("pattern byte"))
+        .collect();
+    let input = put::<InputBundleArtifact>(&mut content, &input_bytes)?;
     let environment = put::<ExecutionEnvironmentArtifact>(&mut content, b"dual-worker-env")?;
     let contract = cairn_execution::JobContract::new(
         JobId::new(),
@@ -273,6 +283,16 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
         )?,
     );
     let schedule_ids = schedule_ids();
+    let selected_worker_suffix = if worker_a_id < worker_b_id { "a" } else { "b" };
+    let staged_offer_directory = directory
+        .path()
+        .join(format!("worker-{selected_worker_suffix}-transfers"))
+        .join(schedule_ids.offer_message_id.as_uuid().to_string());
+    fs::create_dir_all(&staged_offer_directory)?;
+    fs::write(
+        staged_offer_directory.join("input-bundle.part"),
+        &input_bytes[..12_345],
+    )?;
     let scheduled_at = ObservedAtUnixMillis::new(chrono_free_unix_millis()?);
     let ControllerSchedulingOutcome::Scheduled {
         placement, binding, ..
@@ -324,11 +344,15 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
     )?;
     assert_eq!(
         read::<InputBundleArtifact>(&selected_worker_content, &contract.input_bundle_id())?,
-        b"dual-worker-input"
+        input_bytes
     );
     assert_eq!(
         read::<ExecutionEnvironmentArtifact>(&selected_worker_content, &contract.environment_id(),)?,
         b"dual-worker-env"
+    );
+    assert!(
+        !staged_offer_directory.exists(),
+        "successful resumed transfer must remove its offer staging directory"
     );
     assert_eq!(
         release_execution_reservation_at(
@@ -356,7 +380,7 @@ fn worker_config(
     protocol: WorkerProtocolVersion,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     Ok(WorkerConfig {
-        schema_version: 6,
+        schema_version: 7,
         controller,
         identity: WorkerIdentityConfig::External {
             worker_id,
@@ -388,7 +412,11 @@ fn worker_config(
         content: cairn_worker::WorkerContentConfig {
             database: directory.join(format!("worker-{suffix}-content.sqlite3")),
             directory: directory.join(format!("worker-{suffix}-content")),
+            transfer_directory: directory.join(format!("worker-{suffix}-transfers")),
             assignment_material_byte_limit: None,
+            assignment_material_chunk_size: cairn_execution::AssignmentMaterialChunkSize::new(
+                8 * 1024,
+            )?,
         },
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,
@@ -398,7 +426,9 @@ fn worker_config(
         heartbeat_interval_ms: NonZeroU64::new(250),
         identity_poll_interval_ms: NonZeroU64::new(25).expect("identity poll"),
         reconnect_delay_ms: None,
-        transport: TransportPolicy::default(),
+        transport: TransportPolicy {
+            message_byte_limit: Some(TransportMessageByteLimit::new(32 * 1024)?),
+        },
     })
 }
 

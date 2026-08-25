@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use cairn_execution::{
     AssignmentBinding, AssignmentControlMessageIds, AssignmentLeaseDurationMillis,
     AssignmentLeaseGrant, AssignmentLeasePolicy, AssignmentMaterialByteLimit,
-    ControlEnqueueOutcome, ExecutionAssignmentState, JobContract, PlacementAuthorityError,
-    PlacementAuthorityObservation, PlacementOutcome, PlacementRecord,
+    AssignmentMaterialChunkSize, ControlEnqueueOutcome, ExecutionAssignmentState, JobContract,
+    PlacementAuthorityError, PlacementAuthorityObservation, PlacementOutcome, PlacementRecord,
     ReservationClaimTimeoutMillis, ReservationReleaseReason, SchedulerPolicy,
     SchedulerPolicyVersion, WorkerPlacementAuthority, assignment_offer_message,
     authorize_execution_attempt, enqueue_controller_message, grant_reserved_assignment,
-    load_assignment_materials, prepare_execution_job, recover_execution_assignment,
+    load_assignment_material_manifest, prepare_execution_job, recover_execution_assignment,
     release_scheduler_reservation, reserve_worker_placement,
 };
 use cairn_protocol::{
@@ -27,8 +27,10 @@ pub struct SchedulerServiceConfig {
     pub policy_version: SchedulerPolicyVersion,
     pub reservation_claim_timeout_ms: ReservationClaimTimeoutMillis,
     pub assignment_lease_duration_ms: AssignmentLeaseDurationMillis,
-    /// Aggregate input-bundle plus environment bytes copied into one offer; `null` disables it.
+    /// Aggregate input-bundle plus environment bytes authorized by one offer; `null` disables it.
     pub assignment_material_byte_limit: Option<AssignmentMaterialByteLimit>,
+    /// Positive maximum raw bytes returned in one resumable chunk.
+    pub assignment_material_chunk_size: AssignmentMaterialChunkSize,
 }
 
 /// Stable command identities for each independently committed scheduling boundary.
@@ -219,9 +221,10 @@ pub fn schedule_execution_contract_at(
                 observed_at,
             )
             .map_err(|error| ServerError::Scheduling(error.to_string()))?;
-            let materials = load_assignment_materials(
+            let materials = load_assignment_material_manifest(
                 &content,
                 leased.contract(),
+                scheduler.assignment_material_chunk_size,
                 scheduler.assignment_material_byte_limit,
             )
             .map_err(|error| ServerError::Scheduling(error.to_string()))?;
@@ -233,9 +236,10 @@ pub fn schedule_execution_contract_at(
             )
         }
         ExecutionAssignmentState::Leased(leased) => {
-            let materials = load_assignment_materials(
+            let materials = load_assignment_material_manifest(
                 &content,
                 leased.contract(),
+                scheduler.assignment_material_chunk_size,
                 scheduler.assignment_material_byte_limit,
             )
             .map_err(|error| ServerError::Scheduling(error.to_string()))?;
@@ -452,7 +456,7 @@ mod tests {
         )
         .expect("redeem offer");
         let profile = WorkerProfile::new(
-            WorkerProtocolVersion::new(1).expect("protocol"),
+            WorkerProtocolVersion::new(2).expect("protocol"),
             WorkerBinaryIdentity::new("sha256:managed-authority-fixture").expect("binary"),
             WorkerResourceInventory::new(
                 WorkerResourceClaim::new(

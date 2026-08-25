@@ -10,9 +10,11 @@
     "websocket_uri": "wss://controller.example.test:7443/control"
   },
   "content": {
-    "assignment_material_byte_limit": 524288,
+    "assignment_material_byte_limit": 536870912,
+    "assignment_material_chunk_size": 262144,
     "database": "state/content.sqlite3",
-    "directory": "state/content"
+    "directory": "state/content",
+    "transfer_directory": "state/transfers"
   },
   "expected_platform": {
     "architecture": null,
@@ -35,7 +37,7 @@
     "binary_identity": "sha256:replace-with-release-digest",
     "capabilities": [],
     "max_concurrency": 1,
-    "protocol_version": 1,
+    "protocol_version": 2,
     "schema_version": 2
   },
   "resource_probe": {
@@ -52,7 +54,7 @@
     "scratch_path": "."
   },
   "reconnect_delay_ms": 1000,
-  "schema_version": 6,
+  "schema_version": 7,
   "transport": {
     "message_byte_limit": 1048576
   }

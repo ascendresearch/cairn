@@ -71,13 +71,16 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
             content_database: content_database.clone(),
             content_directory: content_directory.clone(),
         },
-        protocol_version: WorkerProtocolVersion::new(1)?,
+        protocol_version: WorkerProtocolVersion::new(2)?,
         session_timeout_ms: WorkerSessionTimeoutMillis::new(100)?,
         scheduler: Some(SchedulerServiceConfig {
             policy_version: SchedulerPolicyVersion::StableWorkerIdQuantitativeV2,
             reservation_claim_timeout_ms: ReservationClaimTimeoutMillis::new(20)?,
             assignment_lease_duration_ms: AssignmentLeaseDurationMillis::new(40)?,
             assignment_material_byte_limit: None,
+            assignment_material_chunk_size: cairn_execution::AssignmentMaterialChunkSize::new(
+                16 * 1024,
+            )?,
         }),
         handshake_timeout_ms: None,
         idle_timeout_ms: None,
@@ -93,7 +96,7 @@ fn migration_need_reaches_durable_worker_assignment_and_releases_only_when_safe(
     let mut events = SqliteEventStore::open(&event_database)?;
     let mut content = SqliteContentStore::open(&content_database, &content_directory)?;
     let profile = WorkerProfile::new(
-        WorkerProtocolVersion::new(1)?,
+        WorkerProtocolVersion::new(2)?,
         WorkerBinaryIdentity::new("sha256:migration-fixture")?,
         WorkerResourceInventory::new(
             WorkerResourceClaim::new(

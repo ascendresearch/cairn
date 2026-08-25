@@ -20,7 +20,7 @@ pub use tls::{
 };
 pub use wire::{
     ControllerRejectCode, ControllerWireMessage, TransportMessageByteLimit, TransportPolicy,
-    WorkerWireMessage, read_wire_message, write_wire_message,
+    WorkerWireMessage, read_wire_message, validate_material_chunk_wire_size, write_wire_message,
 };
 
 use thiserror::Error;

@@ -4,21 +4,18 @@
 //! sides record a delivery mapping before returning a frame to a transport adapter, then compact
 //! logical messages only after a bounded, non-regressing cumulative acknowledgement.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Cursor,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 
 use cairn_protocol::{
-    AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ControlConnectionId,
+    AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, ControlConnectionId,
     ControlMessageId, ControlSequence, EventId, ObservedAtUnixMillis, SchemaName, SchemaVersion,
     StreamRevision, WorkerId,
 };
 use cairn_record::{
-    ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError, ExpectedRevision,
-    NewEvent, StreamId,
+    ContentRangeStore, ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError,
+    ExpectedRevision, NewEvent, StreamId,
 };
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
@@ -132,33 +129,96 @@ impl From<AssignmentMaterialByteLimit> for u64 {
     }
 }
 
-/// Exact input and environment bytes carried by one durable offer.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AssignmentMaterials {
-    #[serde(with = "canonical_base64")]
-    input_bundle: Vec<u8>,
-    #[serde(with = "canonical_base64")]
-    environment: Vec<u8>,
-}
+/// Positive maximum payload requested in one resumable material chunk.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct AssignmentMaterialChunkSize(u64);
 
-impl AssignmentMaterials {
-    #[must_use]
-    pub fn new(input_bundle: Vec<u8>, environment: Vec<u8>) -> Self {
-        Self {
-            input_bundle,
-            environment,
+impl AssignmentMaterialChunkSize {
+    /// Creates a positive chunk size.
+    ///
+    /// # Errors
+    ///
+    /// Zero is rejected because it cannot advance a transfer.
+    pub fn new(value: u64) -> Result<Self, ControlProtocolError> {
+        if value == 0 {
+            Err(ControlProtocolError::ZeroMaterialChunkSize)
+        } else {
+            Ok(Self(value))
         }
     }
 
     #[must_use]
-    pub fn input_bundle(&self) -> &[u8] {
-        &self.input_bundle
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for AssignmentMaterialChunkSize {
+    type Error = ControlProtocolError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<AssignmentMaterialChunkSize> for u64 {
+    fn from(value: AssignmentMaterialChunkSize) -> Self {
+        value.0
+    }
+}
+
+/// Which immutable contract artifact is being transferred.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentMaterialKind {
+    InputBundle,
+    ExecutionEnvironment,
+}
+
+/// Exact typed identities and lengths frozen in one durable offer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentMaterialManifest {
+    input_bundle_id: ContentId<InputBundleArtifact>,
+    input_bundle_byte_len: u64,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+    environment_byte_len: u64,
+    chunk_size: AssignmentMaterialChunkSize,
+}
+
+impl AssignmentMaterialManifest {
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
     }
 
     #[must_use]
-    pub fn environment(&self) -> &[u8] {
-        &self.environment
+    pub const fn input_bundle_byte_len(&self) -> u64 {
+        self.input_bundle_byte_len
+    }
+
+    #[must_use]
+    pub const fn environment_id(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.environment_id
+    }
+
+    #[must_use]
+    pub const fn environment_byte_len(&self) -> u64 {
+        self.environment_byte_len
+    }
+
+    #[must_use]
+    pub const fn chunk_size(&self) -> AssignmentMaterialChunkSize {
+        self.chunk_size
+    }
+
+    #[must_use]
+    pub const fn byte_len(&self, kind: AssignmentMaterialKind) -> u64 {
+        match kind {
+            AssignmentMaterialKind::InputBundle => self.input_bundle_byte_len,
+            AssignmentMaterialKind::ExecutionEnvironment => self.environment_byte_len,
+        }
     }
 }
 
@@ -167,6 +227,28 @@ impl AssignmentMaterials {
 pub struct VerifiedAssignmentMaterials {
     input_bundle_id: ContentId<InputBundleArtifact>,
     environment_id: ContentId<ExecutionEnvironmentArtifact>,
+}
+
+/// Ephemeral, retry-safe request for one contiguous material range.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentMaterialChunkRequest {
+    pub offer_message_id: ControlMessageId,
+    pub kind: AssignmentMaterialKind,
+    pub offset: u64,
+    pub max_bytes: AssignmentMaterialChunkSize,
+}
+
+/// Ephemeral material bytes. Authority remains in the durable offer and final typed identity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentMaterialChunk {
+    pub offer_message_id: ControlMessageId,
+    pub kind: AssignmentMaterialKind,
+    pub offset: u64,
+    pub total_byte_len: u64,
+    #[serde(with = "canonical_base64")]
+    pub bytes: Vec<u8>,
 }
 
 mod canonical_base64 {
@@ -203,7 +285,7 @@ pub enum ControllerControlMessage {
         binding: AssignmentBinding,
         lease_expires_at: ObservedAtUnixMillis,
         contract: Box<JobContract>,
-        materials: AssignmentMaterials,
+        materials: AssignmentMaterialManifest,
     },
     /// Grants execution only after the controller has committed the attempt-start fact.
     StartExecution { binding: AssignmentBinding },
@@ -394,12 +476,18 @@ pub enum ControlProtocolError {
     /// Enabled assignment-material bounds must be positive.
     #[error("assignment material byte limit must be positive or disabled")]
     ZeroMaterialLimit,
+    /// A material chunk must be able to advance the transfer.
+    #[error("assignment material chunk size must be positive")]
+    ZeroMaterialChunkSize,
     /// Input plus environment bytes exceeded the configured replication budget.
     #[error("assignment materials are {observed} bytes, exceeding configured limit {limit}")]
     MaterialsTooLarge { observed: u64, limit: u64 },
     /// Offered or locally persisted bytes do not derive the contract's typed identities.
     #[error("assignment material bytes do not match the immutable job contract")]
     MaterialIdentityMismatch,
+    /// A material manifest or chunk range is inconsistent with the durable offer.
+    #[error("assignment material range is outside the durable offer")]
+    InvalidMaterialRange,
     /// A frame exceeded the configured budget.
     #[error("worker-control frame is {observed} bytes, exceeding configured limit {limit}")]
     FrameTooLarge { observed: u64, limit: u64 },
@@ -477,6 +565,7 @@ struct AdmittedPayload {
     binding: AssignmentBinding,
     lease_expires_at: ObservedAtUnixMillis,
     contract: JobContract,
+    materials: AssignmentMaterialManifest,
     response: DurableControlMessage<WorkerControlMessage>,
 }
 
@@ -507,6 +596,7 @@ enum LocalPhase {
 struct LocalAttempt {
     binding: AssignmentBinding,
     contract: JobContract,
+    materials: AssignmentMaterialManifest,
     phase: LocalPhase,
 }
 
@@ -573,7 +663,7 @@ pub fn decode_control_frame<T: DeserializeOwned>(
 pub fn assignment_offer_message(
     lease: &AssignmentLeaseRecord,
     contract: &JobContract,
-    materials: AssignmentMaterials,
+    materials: AssignmentMaterialManifest,
 ) -> DurableControlMessage<ControllerControlMessage> {
     DurableControlMessage {
         message_id: lease.binding().offer_message_id(),
@@ -586,52 +676,65 @@ pub fn assignment_offer_message(
     }
 }
 
-/// Loads and verifies exact assignment material from an authoritative content store.
+/// Loads and verifies a bounded assignment-material manifest without retaining artifact bytes.
 ///
 /// # Errors
 ///
 /// Returns an error for missing/corrupt content or an enabled aggregate byte budget.
-pub fn load_assignment_materials<C: ContentStore>(
+pub fn load_assignment_material_manifest<C: ContentStore>(
     content: &C,
     contract: &JobContract,
+    chunk_size: AssignmentMaterialChunkSize,
     limit: Option<AssignmentMaterialByteLimit>,
-) -> Result<AssignmentMaterials, ControlProtocolError> {
-    if limit.is_some() {
-        let input = content.write_to(&contract.input_bundle_id(), &mut std::io::sink())?;
-        let environment = content.write_to(&contract.environment_id(), &mut std::io::sink())?;
-        check_material_byte_lengths(input.byte_len, environment.byte_len, limit)?;
-    }
-    let mut input_bundle = Vec::new();
-    content.write_to(&contract.input_bundle_id(), &mut input_bundle)?;
-    let mut environment = Vec::new();
-    content.write_to(&contract.environment_id(), &mut environment)?;
-    check_material_limit(input_bundle.len(), environment.len(), limit)?;
-    Ok(AssignmentMaterials::new(input_bundle, environment))
+) -> Result<AssignmentMaterialManifest, ControlProtocolError> {
+    let input = content.write_to(&contract.input_bundle_id(), &mut std::io::sink())?;
+    let environment = content.write_to(&contract.environment_id(), &mut std::io::sink())?;
+    check_material_byte_lengths(input.byte_len, environment.byte_len, limit)?;
+    Ok(AssignmentMaterialManifest {
+        input_bundle_id: input.content_id,
+        input_bundle_byte_len: input.byte_len,
+        environment_id: environment.content_id,
+        environment_byte_len: environment.byte_len,
+        chunk_size,
+    })
 }
 
-/// Verifies offered identities and durably replicates exact bytes into a worker-local content
-/// store before assignment admission.
+/// Validates typed identities and the independently configured aggregate ingress budget.
+///
+/// # Errors
+///
+/// Returns an error for a contract mismatch, length overflow, or enabled budget violation.
+pub fn validate_assignment_material_manifest(
+    contract: &JobContract,
+    materials: &AssignmentMaterialManifest,
+    limit: Option<AssignmentMaterialByteLimit>,
+) -> Result<(), ControlProtocolError> {
+    validate_material_manifest(contract, materials)?;
+    check_material_byte_lengths(
+        materials.input_bundle_byte_len,
+        materials.environment_byte_len,
+        limit,
+    )
+}
+
+/// Verifies that both manifest objects exist intact in worker-local content storage.
 ///
 /// # Errors
 ///
 /// Returns an error for a bound violation, identity mismatch, or local content-store failure.
-pub fn persist_assignment_materials<C: ContentStore>(
-    content: &mut C,
+pub fn verify_persisted_assignment_materials<C: ContentStore>(
+    content: &C,
     contract: &JobContract,
-    materials: &AssignmentMaterials,
+    materials: &AssignmentMaterialManifest,
     limit: Option<AssignmentMaterialByteLimit>,
 ) -> Result<VerifiedAssignmentMaterials, ControlProtocolError> {
-    check_material_limit(
-        materials.input_bundle.len(),
-        materials.environment.len(),
-        limit,
-    )?;
-    let input_bundle =
-        content.put::<InputBundleArtifact>(&mut Cursor::new(&materials.input_bundle))?;
-    let environment =
-        content.put::<ExecutionEnvironmentArtifact>(&mut Cursor::new(&materials.environment))?;
-    if input_bundle.content_id != contract.input_bundle_id()
-        || environment.content_id != contract.environment_id()
+    validate_assignment_material_manifest(contract, materials, limit)?;
+    let input_bundle = content.write_to(&materials.input_bundle_id, &mut std::io::sink())?;
+    let environment = content.write_to(&materials.environment_id, &mut std::io::sink())?;
+    if input_bundle.content_id != materials.input_bundle_id
+        || input_bundle.byte_len != materials.input_bundle_byte_len
+        || environment.content_id != materials.environment_id
+        || environment.byte_len != materials.environment_byte_len
     {
         return Err(ControlProtocolError::MaterialIdentityMismatch);
     }
@@ -639,24 +742,6 @@ pub fn persist_assignment_materials<C: ContentStore>(
         input_bundle_id: input_bundle.content_id,
         environment_id: environment.content_id,
     })
-}
-
-fn check_material_limit(
-    input_len: usize,
-    environment_len: usize,
-    limit: Option<AssignmentMaterialByteLimit>,
-) -> Result<(), ControlProtocolError> {
-    let input_len =
-        u64::try_from(input_len).map_err(|_| ControlProtocolError::MaterialsTooLarge {
-            observed: u64::MAX,
-            limit: limit.map_or(u64::MAX, AssignmentMaterialByteLimit::get),
-        })?;
-    let environment_len =
-        u64::try_from(environment_len).map_err(|_| ControlProtocolError::MaterialsTooLarge {
-            observed: u64::MAX,
-            limit: limit.map_or(u64::MAX, AssignmentMaterialByteLimit::get),
-        })?;
-    check_material_byte_lengths(input_len, environment_len, limit)
 }
 
 fn check_material_byte_lengths(
@@ -678,6 +763,89 @@ fn check_material_byte_lengths(
         });
     }
     Ok(())
+}
+
+/// Reads one bounded range only while the exact durable offer remains pending for this worker.
+/// Chunk delivery is repeatable and creates no execution authority.
+///
+/// # Errors
+///
+/// Returns an error for an unknown/acknowledged offer, mismatched range, corrupt CAS object, or
+/// contradictory controller history.
+pub fn read_assignment_material_chunk<E: EventStore, C: ContentRangeStore>(
+    events: &E,
+    content: &C,
+    worker_id: WorkerId,
+    request: &AssignmentMaterialChunkRequest,
+) -> Result<AssignmentMaterialChunk, ControlProtocolError> {
+    let stream = controller_stream(worker_id)?;
+    let projection = project_controller(&events.read_stream(&stream, None)?, worker_id)?;
+    let message = projection
+        .outbox
+        .pending
+        .get(&request.offer_message_id)
+        .ok_or(ControlProtocolError::InvalidTransition)?;
+    let ControllerControlMessage::AssignmentOffer {
+        binding,
+        contract,
+        materials,
+        ..
+    } = message
+    else {
+        return Err(ControlProtocolError::InvalidTransition);
+    };
+    if binding.worker_id() != worker_id {
+        return Err(ControlProtocolError::BindingMismatch);
+    }
+    validate_contract_binding(binding, contract)?;
+    validate_material_manifest(contract, materials)?;
+    let total_byte_len = materials.byte_len(request.kind);
+    if request.offset >= total_byte_len {
+        return Err(ControlProtocolError::InvalidMaterialRange);
+    }
+    let requested = request.max_bytes.min(materials.chunk_size).get();
+    let byte_len = requested.min(total_byte_len - request.offset);
+    let bytes = match request.kind {
+        AssignmentMaterialKind::InputBundle => read_content_range(
+            content,
+            &materials.input_bundle_id,
+            materials.input_bundle_byte_len,
+            request.offset,
+            byte_len,
+        )?,
+        AssignmentMaterialKind::ExecutionEnvironment => read_content_range(
+            content,
+            &materials.environment_id,
+            materials.environment_byte_len,
+            request.offset,
+            byte_len,
+        )?,
+    };
+    Ok(AssignmentMaterialChunk {
+        offer_message_id: request.offer_message_id,
+        kind: request.kind,
+        offset: request.offset,
+        total_byte_len,
+        bytes,
+    })
+}
+
+fn read_content_range<C: ContentRangeStore, T: ContentType>(
+    content: &C,
+    content_id: &ContentId<T>,
+    expected_total: u64,
+    offset: u64,
+    byte_len: u64,
+) -> Result<Vec<u8>, ControlProtocolError> {
+    let mut bytes = Vec::new();
+    let descriptor = content.write_range_to(content_id, offset, byte_len, &mut bytes)?;
+    if descriptor.content_id != *content_id
+        || descriptor.byte_len != expected_total
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) != byte_len
+    {
+        return Err(ControlProtocolError::MaterialIdentityMismatch);
+    }
+    Ok(bytes)
 }
 
 /// Builds the stable start payload. It may be re-created after a controller restart because its
@@ -729,8 +897,9 @@ pub fn enqueue_controller_message<E: EventStore>(
     Ok(ControlEnqueueOutcome::Enqueued)
 }
 
-/// Records fresh connection-local mappings for every pending controller message, then returns the
-/// frames. Reusing the same connection does not redeliver; a new connection replays with sequence 1.
+/// Records a fresh connection-local mapping for the next pending controller message. Serial
+/// delivery prevents another control frame from being interleaved with an offer's chunk exchange.
+/// Reusing the same connection does not redeliver; a new connection replays with sequence 1.
 ///
 /// # Errors
 ///
@@ -757,13 +926,22 @@ pub fn deliver_controller_messages<E: EventStore>(
         .flatten()
         .copied()
         .collect::<BTreeSet<_>>();
+    if already
+        .iter()
+        .any(|message_id| projection.outbox.pending.contains_key(message_id))
+    {
+        return Ok(Vec::new());
+    }
     let mut next = next_sequence_value(existing.keys().next_back().copied())?;
     let mut frames = Vec::new();
     let mut deliveries = Vec::new();
-    for (message_id, payload) in &projection.outbox.pending {
-        if already.contains(message_id) {
-            continue;
-        }
+    for (message_id, payload) in projection
+        .outbox
+        .pending
+        .iter()
+        .filter(|(message_id, _)| !already.contains(message_id))
+        .take(1)
+    {
         let sequence = ControlSequence::new(next)
             .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?;
         next = next.checked_add(1).ok_or_else(|| {
@@ -955,7 +1133,7 @@ pub fn admit_worker_assignment<E: EventStore>(
         binding,
         lease_expires_at,
         contract,
-        materials: _,
+        materials: manifest,
     } = &offer.payload
     else {
         return Err(ControlProtocolError::InvalidTransition);
@@ -965,7 +1143,10 @@ pub fn admit_worker_assignment<E: EventStore>(
     let stream = worker_stream(worker_id)?;
     let projection = project_worker(&events.read_stream(&stream, None)?, worker_id)?;
     if let Some(existing) = projection.attempts.get(&binding.attempt_id()) {
-        return if existing.binding == *binding && existing.contract == **contract {
+        return if existing.binding == *binding
+            && existing.contract == **contract
+            && existing.materials == *manifest
+        {
             Ok(WorkerAdmissionOutcome::AlreadyAdmitted)
         } else {
             Err(ControlProtocolError::ConflictingMessage)
@@ -990,6 +1171,7 @@ pub fn admit_worker_assignment<E: EventStore>(
             binding: binding.clone(),
             lease_expires_at: *lease_expires_at,
             contract: contract.as_ref().clone(),
+            materials: manifest.clone(),
             response,
         },
     )?;
@@ -1031,8 +1213,12 @@ pub fn record_worker_execution_start<E: EventStore, C: ContentStore>(
         LocalPhase::Started => return Err(ControlProtocolError::WorkerExecutionInDoubt),
         LocalPhase::Admitted => {}
     }
-    let stored = load_assignment_materials(content, &attempt.contract, material_limit)?;
-    validate_material_identities(&attempt.contract, &stored)?;
+    verify_persisted_assignment_materials(
+        content,
+        &attempt.contract,
+        &attempt.materials,
+        material_limit,
+    )?;
     let event = fact(
         WORKER_STARTED,
         projection.last_event_id,
@@ -1377,20 +1563,18 @@ fn validate_controller_message(
     } = &message.payload
     {
         validate_contract_binding(binding, contract)?;
-        validate_material_identities(contract, materials)?;
+        validate_material_manifest(contract, materials)?;
     }
     Ok(())
 }
 
-fn validate_material_identities(
+fn validate_material_manifest(
     contract: &JobContract,
-    materials: &AssignmentMaterials,
+    materials: &AssignmentMaterialManifest,
 ) -> Result<(), ControlProtocolError> {
-    let input_bundle = ContentId::<InputBundleArtifact>::derive(&materials.input_bundle)
-        .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?;
-    let environment = ContentId::<ExecutionEnvironmentArtifact>::derive(&materials.environment)
-        .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?;
-    if input_bundle != contract.input_bundle_id() || environment != contract.environment_id() {
+    if materials.input_bundle_id != contract.input_bundle_id()
+        || materials.environment_id != contract.environment_id()
+    {
         return Err(ControlProtocolError::MaterialIdentityMismatch);
     }
     Ok(())
@@ -1493,6 +1677,7 @@ fn project_worker(
                     return invalid("worker admission binding changed");
                 }
                 validate_contract_binding(&payload.binding, &payload.contract)?;
+                validate_material_manifest(&payload.contract, &payload.materials)?;
                 if projection
                     .attempts
                     .insert(
@@ -1500,6 +1685,7 @@ fn project_worker(
                         LocalAttempt {
                             binding: payload.binding,
                             contract: payload.contract,
+                            materials: payload.materials,
                             phase: LocalPhase::Admitted,
                         },
                     )
@@ -1766,7 +1952,7 @@ fn fact<P: Serialize>(
     Ok(NewEvent {
         schema_name: SchemaName::new(schema)
             .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?,
-        schema_version: SchemaVersion::new(1)
+        schema_version: SchemaVersion::new(2)
             .map_err(|error| ControlProtocolError::InvalidHistory(error.to_string()))?,
         parent_event_id,
         observed_at_unix_ms: observed_at.get(),
@@ -1784,7 +1970,7 @@ fn validate_event(
     event: &EventEnvelope,
     previous: Option<EventId>,
 ) -> Result<(), ControlProtocolError> {
-    if event.schema_version.get() != 1 || event.parent_event_id != previous {
+    if event.schema_version.get() != 2 || event.parent_event_id != previous {
         return invalid("event version or causal chain is invalid");
     }
     Ok(())
@@ -2055,8 +2241,46 @@ mod tests {
             .content_id
     }
 
+    fn material_chunk_size() -> AssignmentMaterialChunkSize {
+        AssignmentMaterialChunkSize::new(4).expect("chunk size")
+    }
+
+    fn fetch_material<T: ContentType>(
+        fixture: &mut Fixture,
+        offer_message_id: ControlMessageId,
+        kind: AssignmentMaterialKind,
+        content_id: ContentId<T>,
+        byte_len: u64,
+    ) {
+        let mut bytes = Vec::new();
+        while u64::try_from(bytes.len()).expect("offset") < byte_len {
+            let chunk = read_assignment_material_chunk(
+                &fixture.controller_events,
+                &fixture.content,
+                fixture.worker_id,
+                &AssignmentMaterialChunkRequest {
+                    offer_message_id,
+                    kind,
+                    offset: u64::try_from(bytes.len()).expect("offset"),
+                    max_bytes: material_chunk_size(),
+                },
+            )
+            .expect("read material chunk");
+            assert_eq!(chunk.offset, u64::try_from(bytes.len()).expect("offset"));
+            assert_eq!(chunk.total_byte_len, byte_len);
+            assert!(!chunk.bytes.is_empty());
+            bytes.extend_from_slice(&chunk.bytes);
+        }
+        let stored = fixture
+            .worker_content
+            .put::<T>(&mut std::io::Cursor::new(bytes))
+            .expect("persist fetched material");
+        assert_eq!(stored.content_id, content_id);
+        assert_eq!(stored.byte_len, byte_len);
+    }
+
     fn protocol_version() -> crate::WorkerProtocolVersion {
-        WorkerProtocolVersion::new(1).expect("protocol")
+        WorkerProtocolVersion::new(2).expect("protocol")
     }
 
     fn session_timeout() -> WorkerSessionTimeoutMillis {
@@ -2074,50 +2298,66 @@ mod tests {
     fn assignment_material_replication_is_bounded_typed_and_restart_safe() {
         let mut fixture = Fixture::new();
         assert!(AssignmentMaterialByteLimit::new(0).is_err());
+        assert!(AssignmentMaterialChunkSize::new(0).is_err());
         assert_eq!(
             cairn_codec::from_slice::<Option<AssignmentMaterialByteLimit>>(b"null")
                 .expect("explicitly disabled material limit"),
             None
         );
         assert!(matches!(
-            load_assignment_materials(
+            load_assignment_material_manifest(
                 &fixture.content,
                 &fixture.contract,
+                material_chunk_size(),
                 Some(AssignmentMaterialByteLimit::new(1).expect("limit")),
             ),
             Err(ControlProtocolError::MaterialsTooLarge { .. })
         ));
-        let materials = load_assignment_materials(&fixture.content, &fixture.contract, None)
-            .expect("load controller materials");
-        let wrong =
-            AssignmentMaterials::new(b"different-input".to_vec(), materials.environment.clone());
+        let materials = load_assignment_material_manifest(
+            &fixture.content,
+            &fixture.contract,
+            material_chunk_size(),
+            None,
+        )
+        .expect("load controller manifest");
+        let mut wrong = materials.clone();
+        wrong.input_bundle_id = ContentId::derive(b"different-input").expect("wrong identity");
         assert!(matches!(
-            persist_assignment_materials(
-                &mut fixture.worker_content,
-                &fixture.contract,
-                &wrong,
-                None,
-            )
-            .expect_err("changed bytes cannot satisfy typed content identity"),
+            validate_assignment_material_manifest(&fixture.contract, &wrong, None)
+                .expect_err("changed identity cannot satisfy contract"),
             ControlProtocolError::MaterialIdentityMismatch
         ));
-        persist_assignment_materials(
-            &mut fixture.worker_content,
+        let mut input = Vec::new();
+        fixture
+            .content
+            .write_to(&fixture.contract.input_bundle_id(), &mut input)
+            .expect("read input");
+        put::<InputBundleArtifact>(&mut fixture.worker_content, &input);
+        let mut environment = Vec::new();
+        fixture
+            .content
+            .write_to(&fixture.contract.environment_id(), &mut environment)
+            .expect("read environment");
+        put::<ExecutionEnvironmentArtifact>(&mut fixture.worker_content, &environment);
+        fixture.reopen_worker();
+        verify_persisted_assignment_materials(
+            &fixture.worker_content,
             &fixture.contract,
             &materials,
             None,
         )
-        .expect("persist exact materials");
-        fixture.reopen_worker();
-        let recovered = load_assignment_materials(&fixture.worker_content, &fixture.contract, None)
-            .expect("recover worker materials");
-        assert_eq!(recovered, materials);
-        assert!(
-            cairn_codec::from_slice::<AssignmentMaterials>(
-                br#"{"environment":"","input_bundle":"YQ=="}"#
-            )
-            .is_err()
-        );
+        .expect("recover worker materials");
+        let chunk = AssignmentMaterialChunk {
+            offer_message_id: ControlMessageId::new(),
+            kind: AssignmentMaterialKind::InputBundle,
+            offset: 0,
+            total_byte_len: 1,
+            bytes: b"a".to_vec(),
+        };
+        let wire = String::from_utf8(cairn_codec::to_vec(&chunk).expect("chunk JSON"))
+            .expect("UTF-8 JSON")
+            .replace("\"YQ\"", "\"YQ==\"");
+        assert!(cairn_codec::from_slice::<AssignmentMaterialChunk>(wire.as_bytes()).is_err());
     }
 
     #[test]
@@ -2156,15 +2396,13 @@ mod tests {
         )
         .expect("lease");
         let binding = leased.lease().binding().clone();
-        let materials = load_assignment_materials(&fixture.content, leased.contract(), None)
-            .expect("load assignment materials");
-        let verified = persist_assignment_materials(
-            &mut fixture.worker_content,
+        let materials = load_assignment_material_manifest(
+            &fixture.content,
             leased.contract(),
-            &materials,
+            material_chunk_size(),
             None,
         )
-        .expect("persist assignment materials");
+        .expect("load assignment materials");
         let offer = assignment_offer_message(leased.lease(), leased.contract(), materials);
         enqueue_controller_message(
             &mut fixture.controller_events,
@@ -2174,6 +2412,35 @@ mod tests {
             ObservedAtUnixMillis::new(3),
         )
         .expect("enqueue offer");
+        let ControllerControlMessage::AssignmentOffer {
+            contract,
+            materials,
+            ..
+        } = &offer.payload
+        else {
+            unreachable!("offer")
+        };
+        fetch_material(
+            &mut fixture,
+            offer.message_id,
+            AssignmentMaterialKind::InputBundle,
+            materials.input_bundle_id(),
+            materials.input_bundle_byte_len(),
+        );
+        fetch_material(
+            &mut fixture,
+            offer.message_id,
+            AssignmentMaterialKind::ExecutionEnvironment,
+            materials.environment_id(),
+            materials.environment_byte_len(),
+        );
+        let verified = verify_persisted_assignment_materials(
+            &fixture.worker_content,
+            contract,
+            materials,
+            None,
+        )
+        .expect("verify fetched assignment materials");
 
         let first_connection = ControlConnectionId::new();
         let first_offer_frames = deliver_controller_messages(
@@ -2312,6 +2579,20 @@ mod tests {
             ObservedAtUnixMillis::new(5),
         )
         .expect("ack offer");
+        assert!(matches!(
+            read_assignment_material_chunk(
+                &fixture.controller_events,
+                &fixture.content,
+                fixture.worker_id,
+                &AssignmentMaterialChunkRequest {
+                    offer_message_id: offer.message_id,
+                    kind: AssignmentMaterialKind::InputBundle,
+                    offset: 0,
+                    max_bytes: material_chunk_size(),
+                },
+            ),
+            Err(ControlProtocolError::InvalidTransition)
+        ));
         let accepted_ack = deliver_controller_acknowledgement(
             &mut fixture.controller_events,
             fixture.worker_id,
@@ -2562,8 +2843,13 @@ mod tests {
             ObservedAtUnixMillis::new(3),
         )
         .expect("lease");
-        let materials = load_assignment_materials(&fixture.content, leased.contract(), None)
-            .expect("load assignment materials");
+        let materials = load_assignment_material_manifest(
+            &fixture.content,
+            leased.contract(),
+            material_chunk_size(),
+            None,
+        )
+        .expect("load assignment materials");
         let connection_id = ControlConnectionId::new();
         let frame = ControlFrame {
             protocol_version: protocol_version(),

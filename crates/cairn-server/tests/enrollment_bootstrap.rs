@@ -140,6 +140,7 @@ async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
     assert!(state.join("scratch").is_dir());
     assert!(state.join("content.sqlite3").is_file());
     assert!(state.join("content").is_dir());
+    assert!(state.join("transfers").is_dir());
     assert_eq!(fs::read(&receipt.config_path)?, operator_config);
 
     let worker = tokio::spawn(cairn_worker::run_from_arguments([
@@ -624,7 +625,7 @@ fn server_config(
             content_database: content_database.to_path_buf(),
             content_directory: content_directory.to_path_buf(),
         },
-        protocol_version: WorkerProtocolVersion::new(1)?,
+        protocol_version: WorkerProtocolVersion::new(2)?,
         session_timeout_ms: WorkerSessionTimeoutMillis::new(10_000)?,
         scheduler: None,
         handshake_timeout_ms: NonZeroU64::new(2_000),
@@ -642,7 +643,7 @@ fn worker_config(
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     let journal_database = state_directory.join("worker-journal.sqlite3");
     Ok(WorkerConfig {
-        schema_version: 6,
+        schema_version: 7,
         controller: ControllerEndpoint {
             tcp_address: control.to_string(),
             websocket_uri: format!("wss://localhost:{}/control", control.port()),
@@ -652,7 +653,7 @@ fn worker_config(
         },
         profile: WorkerProfileConfig {
             schema_version: 2,
-            protocol_version: WorkerProtocolVersion::new(1)?,
+            protocol_version: WorkerProtocolVersion::new(2)?,
             binary_identity: WorkerBinaryIdentity::new("sha256:enrollment-test")?,
             backends: vec![ExecutionBackend::new("transport-test")?],
             capabilities: Vec::new(),
@@ -674,7 +675,11 @@ fn worker_config(
         content: cairn_worker::WorkerContentConfig {
             database: state_directory.join("content.sqlite3"),
             directory: state_directory.join("content"),
+            transfer_directory: state_directory.join("transfers"),
             assignment_material_byte_limit: None,
+            assignment_material_chunk_size: cairn_execution::AssignmentMaterialChunkSize::new(
+                16 * 1024,
+            )?,
         },
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,

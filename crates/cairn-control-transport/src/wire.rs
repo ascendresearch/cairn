@@ -4,10 +4,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
 use cairn_execution::{
-    ControlFrame, ControllerControlMessage, WorkerAvailability, WorkerControlMessage, WorkerHello,
-    WorkerProtocolVersion, WorkerResourceObservation, WorkerResourceObservationArtifact,
+    AssignmentMaterialChunk, AssignmentMaterialChunkRequest, AssignmentMaterialChunkSize,
+    AssignmentMaterialKind, ControlFrame, ControllerControlMessage, WorkerAvailability,
+    WorkerControlMessage, WorkerHello, WorkerProtocolVersion, WorkerResourceObservation,
+    WorkerResourceObservationArtifact,
 };
-use cairn_protocol::{ContentId, ControlConnectionId, ObservedAtUnixMillis};
+use cairn_protocol::{ContentId, ControlConnectionId, ControlMessageId, ObservedAtUnixMillis};
 
 use crate::TransportError;
 
@@ -92,6 +94,10 @@ pub enum WorkerWireMessage {
     Control {
         frame: Box<ControlFrame<WorkerControlMessage>>,
     },
+    /// Ephemeral resumable range request authorized by one still-pending durable offer.
+    MaterialChunkRequest {
+        request: AssignmentMaterialChunkRequest,
+    },
 }
 
 /// Stable machine-readable handshake rejection classification.
@@ -129,6 +135,8 @@ pub enum ControllerWireMessage {
     Control {
         frame: Box<ControlFrame<ControllerControlMessage>>,
     },
+    /// Ephemeral chunk bytes whose final authority is the offer's typed content identity.
+    MaterialChunk { chunk: AssignmentMaterialChunk },
     /// Bounded public diagnostic followed by connection close.
     Reject {
         code: ControllerRejectCode,
@@ -193,6 +201,55 @@ where
     }
 }
 
+/// Validates the exact canonical-wire upper bound for a configured raw material chunk size.
+///
+/// # Errors
+///
+/// Returns [`TransportError::MessageTooLarge`] when base64 expansion plus the largest fixed
+/// response envelope exceeds an enabled WebSocket message limit.
+pub fn validate_material_chunk_wire_size(
+    policy: TransportPolicy,
+    chunk_size: AssignmentMaterialChunkSize,
+) -> Result<(), TransportError> {
+    let Some(limit) = policy.message_byte_limit else {
+        return Ok(());
+    };
+    let empty = ControllerWireMessage::MaterialChunk {
+        chunk: AssignmentMaterialChunk {
+            offer_message_id: ControlMessageId::new(),
+            kind: AssignmentMaterialKind::ExecutionEnvironment,
+            offset: u64::MAX,
+            total_byte_len: u64::MAX,
+            bytes: Vec::new(),
+        },
+    };
+    let envelope = u64::try_from(
+        cairn_codec::to_vec(&empty)
+            .map_err(|error| TransportError::Codec(error.to_string()))?
+            .len(),
+    )
+    .unwrap_or(u64::MAX);
+    let full_groups = chunk_size.get() / 3;
+    let remainder = match chunk_size.get() % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => unreachable!("modulo three"),
+    };
+    let observed = full_groups
+        .checked_mul(4)
+        .and_then(|encoded| encoded.checked_add(remainder))
+        .and_then(|encoded| encoded.checked_add(envelope))
+        .unwrap_or(u64::MAX);
+    if observed > limit.get() {
+        return Err(TransportError::MessageTooLarge {
+            observed,
+            limit: limit.get(),
+        });
+    }
+    Ok(())
+}
+
 fn enforce_limit(byte_len: usize, policy: TransportPolicy) -> Result<(), TransportError> {
     let observed = u64::try_from(byte_len).unwrap_or(u64::MAX);
     match policy.message_byte_limit {
@@ -201,5 +258,30 @@ fn enforce_limit(byte_len: usize, policy: TransportPolicy) -> Result<(), Transpo
             limit: limit.get(),
         }),
         Some(_) | None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cairn_execution::AssignmentMaterialChunkSize;
+
+    use super::{TransportMessageByteLimit, TransportPolicy, validate_material_chunk_wire_size};
+
+    #[test]
+    fn material_chunk_base64_expansion_is_checked_before_session_start() {
+        let chunk = AssignmentMaterialChunkSize::new(24 * 1024).expect("chunk");
+        assert!(
+            validate_material_chunk_wire_size(
+                TransportPolicy {
+                    message_byte_limit: Some(
+                        TransportMessageByteLimit::new(16 * 1024).expect("wire limit"),
+                    ),
+                },
+                chunk,
+            )
+            .is_err()
+        );
+        validate_material_chunk_wire_size(TransportPolicy::default(), chunk)
+            .expect("disabled wire limit");
     }
 }

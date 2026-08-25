@@ -412,18 +412,33 @@ explicit activation path configures a real executor.
 
 ## D-017 — Worker-local typed material is a prerequisite for execution authority
 
-- Decision: accepted; F2a implemented
+- Decision: accepted; F2a implemented and preserved by F2b
 
 An assignment identity alone does not prove that a worker can execute its frozen contract. The
-controller therefore loads the exact typed input bundle and execution environment from authoritative
-CAS and places their bytes in the durable offer. The worker must derive the expected type-tagged
-identities and commit both objects to its independent local CAS before it may persist assignment
+controller therefore loads and verifies the exact typed input bundle and execution environment from
+authoritative CAS and places their identities and lengths in the durable offer. The worker must
+derive the expected type-tagged identities and commit both objects to its independent local CAS
+before it may persist assignment
 admission. It must read and verify them again from local CAS before it may persist execution start.
 An in-memory acknowledgement or controller-side content binding cannot substitute for that local
 proof.
 
-The first transport representation is a bounded monolithic canonical-JSON payload using unpadded
-base64. Controller raw-material budget, worker raw-material budget, and encoded transport-frame
-budget remain separate optional controls. This is a deliberate small-artifact baseline, not a
-large-artifact protocol; chunking, resumability, and sandbox expansion may replace the transfer
-adapter without changing `ContentId<T>`, admission, or start-authority semantics.
+## D-018 — Chunk transfer is resumable data movement, not execution history
+
+- Decision: accepted; F2b implemented
+
+The durable offer freezes a compact typed manifest, not artifact bytes or one event per chunk. An
+authenticated worker may request sequential bounded ranges only while that exact offer remains in
+the controller outbox. Controller delivery is one in-flight logical message per worker connection,
+so another control message cannot be mistaken for a chunk response. Range traffic is ephemeral and
+repeatable; acknowledging the offer is deliberately delayed until complete local-CAS verification
+and assignment admission.
+
+Each response is canonical unpadded-base64 JSON under control protocol V2. Worker staging is a
+fixed private per-offer directory; every append is synced, its regular-file length is the restart
+cursor, and invalid range metadata fails before append. The authoritative controller object is
+fully verified once when building the manifest. A replaceable `ContentRangeStore` port then avoids
+O(n²) rescans, while the worker's final full `ContentId<T>` derivation detects source/storage/wire
+corruption. Aggregate controller/worker limits remain independently optional. Positive controller
+and worker chunk sizes are explicit, and exact base64 envelope expansion must fit any enabled
+transport bound before startup.

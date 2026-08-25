@@ -660,17 +660,20 @@ lease expiry only as reconciliation state, reruns all capture/receipt validation
 terminal execution fact. Duplicate delivery after publication is recognized without overwriting the
 receipt.
 
-Assignment material is also a separate readiness boundary. The controller reads the contract's
-typed `InputBundleArtifact` and `ExecutionEnvironmentArtifact` from its CAS and freezes their exact
-bytes in the durable offer. The worker derives both typed identities before committing the bytes to
-its own SQLite/CAS; only that persistence result can authorize admission. Start processing does not
-trust an earlier in-memory proof: it reopens both objects from worker-local CAS and verifies them
-again before appending the local start fact. Thus a restart or local loss fails before executor
-authority. F2a encodes small material inline as canonical unpadded base64 with independently
-optional raw-material and encoded-frame limits. Chunked/resumable large-artifact transfer and
-create-only sandbox-tree expansion remain later adapter work.
+Assignment material is also a separate readiness boundary. The controller fully verifies the
+contract's typed `InputBundleArtifact` and `ExecutionEnvironmentArtifact` in CAS and freezes their
+identities, lengths, and chunk policy in the durable offer. While that offer remains pending, the
+authenticated assigned worker requests sequential ranges through an efficient `ContentRangeStore`
+port. Chunk messages are ephemeral protocol V2 data movement, never domain facts. One controller
+logical message remains in flight, preventing control/chunk interleaving. The worker syncs each
+range to a private per-offer regular file and resumes from exact length after reconnect. It derives
+both typed identities while publishing the assembled files into its own SQLite/CAS; only that
+persistence result can authorize admission and offer acknowledgement. Start does not trust this
+earlier proof: it reopens both local objects before appending the start fact. Aggregate limits are
+independently optional; positive chunk size and exact base64-expanded wire fit are startup-checked.
+Create-only sandbox-tree expansion remains later adapter work.
 
-V1 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
+V2 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
 is a typed configuration value with `None` as its disabled state. Logical outboxes and admissions
 persist storage-domain payloads rather than treating a network frame as a domain fact. A test uses
 independent controller and worker SQLite event stores, drops both directions' acknowledgements,
@@ -853,9 +856,9 @@ polling, reconnect, and diagnostic bounds are configured; `null` disables an opt
 
 This slice intentionally uses a `NotStarted` executor capability until a real backend is composed.
 It can close the control protocol without claiming an external workload ran. Small typed artifact
-replication is implemented; chunked transfer, sandbox materialization, cancellation delivery, local
-process/container supervision, and production service deployment remain application/adapter
-slices.
+replication and resumable chunk transfer are implemented; sandbox materialization, cancellation
+delivery, local process/container supervision, and production service deployment remain
+application/adapter slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point

@@ -288,6 +288,27 @@ pub trait ContentStore {
     ) -> Result<ContentDescriptor<T>, ContentStoreError>;
 }
 
+/// Efficient immutable range-read port for resumable replication.
+///
+/// A range read validates the typed metadata binding, physical length, and requested bounds but
+/// does not claim that one range proves the complete object's digest. Callers must first validate
+/// the authoritative source object and must verify the fully assembled destination identity.
+pub trait ContentRangeStore: ContentStore {
+    /// Streams one exact contiguous range to `writer`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContentStoreError`] for an unknown typed object, invalid range, changed physical
+    /// length, short write, or adapter failure.
+    fn write_range_to<T: ContentType>(
+        &self,
+        content_id: &ContentId<T>,
+        offset: u64,
+        byte_len: u64,
+        writer: &mut dyn Write,
+    ) -> Result<ContentDescriptor<T>, ContentStoreError>;
+}
+
 #[cfg(test)]
 mod tests {
     use cairn_protocol::{

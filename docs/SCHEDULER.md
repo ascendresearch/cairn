@@ -78,13 +78,15 @@ recovered from running state and reuses the frozen start-message identity. The l
 control carries one assignment through offer, acceptance, start, the worker's conservative
 `NotStarted` result, terminal reconciliation, exact scheduling retry, and reservation release.
 
-Before offer enqueue, the controller loads the contract's exact typed input and environment from
-controller CAS. These bytes are part of the durable logical offer, so retry/reconnect cannot select
-different material. The selected worker verifies and persists both into its independent local CAS
-before acceptance and verifies them again before local start. `assignment_material_byte_limit`
-independently bounds aggregate raw bytes on both scheduler and worker and may be `null`; the
-transport frame limit separately bounds canonical JSON after base64 expansion. This F2a form is a
-small-artifact baseline pending chunked/resumable transfer.
+Before offer enqueue, the controller fully verifies the contract's typed input and environment in
+controller CAS. Their exact identities and lengths form a compact durable manifest, so retry cannot
+select different material. Until the offer is acknowledged, the assigned worker may resume bounded
+range requests from its synced staging length. It publishes both assembled objects to independent
+local CAS before acceptance and verifies them again before local start. Chunk traffic creates no
+scheduler or execution fact. `assignment_material_byte_limit` independently bounds aggregate raw
+bytes on scheduler and worker and may be `null`; positive `assignment_material_chunk_size` is
+explicit on both sides. Canonical base64 expansion is checked against the separately optional
+transport limit before startup.
 
 The candidate universe comes exclusively from persistent registry worker identities. Every
 credential observation reopens and projects the SQLite enrollment stream, then cites its latest

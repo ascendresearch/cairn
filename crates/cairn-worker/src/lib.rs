@@ -15,22 +15,26 @@ use std::{
 use cairn_control_transport::{
     ClientTlsFiles, ControllerWireMessage, EnrollmentBundle, EnrollmentPurpose, EnrollmentRequest,
     EnrollmentResponse, TransportPolicy, WorkerWireMessage, connect_enrollment_socket,
-    connect_worker_socket, read_wire_message, write_wire_message,
+    connect_worker_socket, read_wire_message, validate_material_chunk_wire_size,
+    write_wire_message,
 };
 use cairn_execution::{
-    AssignmentMaterialByteLimit, CapabilityRequirement, ControlFrame, ControllerControlMessage,
-    ExecutionBackend, ExecutionCapture, ExecutionInput, ExecutionPlatform,
-    ExecutionPlatformRequirement, Executor, ExecutorError, InboundControlSession,
-    WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName,
-    WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
-    WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages, active_worker_attempts,
-    admit_worker_assignment, deliver_worker_acknowledgement, deliver_worker_messages,
-    execute_worker_attempt, persist_assignment_materials, record_worker_execution_start,
+    AssignmentMaterialByteLimit, AssignmentMaterialChunkRequest, AssignmentMaterialChunkSize,
+    AssignmentMaterialKind, AssignmentMaterialManifest, CapabilityRequirement, ControlFrame,
+    ControllerControlMessage, DurableControlMessage, ExecutionBackend, ExecutionCapture,
+    ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor, ExecutorError,
+    InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello,
+    WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
+    WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages,
+    active_worker_attempts, admit_worker_assignment, deliver_worker_acknowledgement,
+    deliver_worker_messages, execute_worker_attempt, record_worker_execution_start,
+    validate_assignment_material_manifest, verify_persisted_assignment_materials,
 };
 use cairn_protocol::{
-    CommandId, ControlConnectionId, ControlMessageId, ControlSequence, CredentialId, EnrollmentId,
-    ObservedAtUnixMillis, WorkerId, WorkerIncarnationId,
+    CommandId, ContentId, ContentType, ControlConnectionId, ControlMessageId, ControlSequence,
+    CredentialId, EnrollmentId, ObservedAtUnixMillis, WorkerId, WorkerIncarnationId,
 };
+use cairn_record::{ContentStore, ContentStoreError};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyPair,
@@ -74,8 +78,11 @@ pub struct WorkerConfig {
 pub struct WorkerContentConfig {
     pub database: PathBuf,
     pub directory: PathBuf,
+    pub transfer_directory: PathBuf,
     /// Aggregate input-bundle plus environment bytes; `null` disables this budget.
     pub assignment_material_byte_limit: Option<AssignmentMaterialByteLimit>,
+    /// Positive maximum raw bytes requested in one resumable chunk.
+    pub assignment_material_chunk_size: AssignmentMaterialChunkSize,
 }
 
 /// Selects either explicitly provisioned files or one controller-issued managed state directory.
@@ -249,6 +256,7 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     let mut content = SqliteContentStore::open(&config.content.database, &config.content.directory)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    prepare_state_directory(&config.content.transfer_directory)?;
     loop {
         let identity = config.resolve_identity()?;
         if bound_credential.is_some() && bound_credential != identity.credential_id {
@@ -336,9 +344,9 @@ impl WorkerConfig {
     }
 
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 6 {
+        if self.schema_version != 7 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 6 is supported".into(),
+                "only worker schema_version 7 is supported".into(),
             ));
         }
         if self.profile.schema_version != 2 {
@@ -402,11 +410,11 @@ impl WorkerConfig {
 
     fn validate(&self, profile: &WorkerProfile) -> Result<(), WorkerError> {
         if profile.protocol_version()
-            != WorkerProtocolVersion::new(1)
+            != WorkerProtocolVersion::new(2)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?
         {
             return Err(WorkerError::Configuration(
-                "this worker binary implements protocol_version 1".into(),
+                "this worker binary implements protocol_version 2".into(),
             ));
         }
         let configured = WorkerAvailability::new(
@@ -427,6 +435,11 @@ impl WorkerConfig {
                 "availability exceeds profile max_concurrency".into(),
             ));
         }
+        validate_material_chunk_wire_size(
+            self.transport,
+            self.content.assignment_material_chunk_size,
+        )
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
         Ok(())
     }
 
@@ -442,6 +455,7 @@ impl WorkerConfig {
         resolve(&mut self.journal_database, base);
         resolve(&mut self.content.database, base);
         resolve(&mut self.content.directory, base);
+        resolve(&mut self.content.transfer_directory, base);
         resolve(&mut self.resource_probe.scratch_path, base);
         if let Some(path) = &mut self.resource_probe.accelerator_sysfs {
             resolve(path, base);
@@ -601,13 +615,20 @@ async fn run_session(
                             .accept(&frame, highest_sent)
                             .map_err(|error| WorkerError::Session(error.to_string()))?;
                         process_controller_frame(
+                            &mut socket,
                             journal,
                             content,
-                            config.content.assignment_material_byte_limit,
+                            config,
                             identity.worker_id,
                             &connection_id,
                             &frame,
-                        )?;
+                        )
+                        .await?;
+                    }
+                    ControllerWireMessage::MaterialChunk { .. } => {
+                        return Err(WorkerError::Session(
+                            "unsolicited assignment material chunk".into(),
+                        ));
                     }
                     ControllerWireMessage::Welcome { .. } => {
                         return Err(WorkerError::Session(
@@ -625,10 +646,11 @@ async fn run_session(
     }
 }
 
-fn process_controller_frame(
+async fn process_controller_frame(
+    socket: &mut cairn_control_transport::ClientWebSocket,
     journal: &mut SqliteEventStore,
     content: &mut SqliteContentStore,
-    material_limit: Option<AssignmentMaterialByteLimit>,
+    config: &WorkerConfig,
     worker_id: WorkerId,
     connection_id: &ControlConnectionId,
     frame: &ControlFrame<ControllerControlMessage>,
@@ -655,8 +677,8 @@ fn process_controller_frame(
             ..
         } => {
             let verified =
-                persist_assignment_materials(content, contract, materials, material_limit)
-                    .map_err(|error| WorkerError::Session(error.to_string()))?;
+                materialize_assignment_offer(socket, content, config, message, contract, materials)
+                    .await?;
             admit_worker_assignment(
                 journal,
                 worker_id,
@@ -674,7 +696,7 @@ fn process_controller_frame(
                 content,
                 worker_id,
                 message,
-                material_limit,
+                config.content.assignment_material_byte_limit,
                 &command("start"),
                 now,
             )
@@ -694,6 +716,207 @@ fn process_controller_frame(
         }
     }
     Ok(())
+}
+
+async fn materialize_assignment_offer(
+    socket: &mut cairn_control_transport::ClientWebSocket,
+    content: &mut SqliteContentStore,
+    config: &WorkerConfig,
+    offer: &DurableControlMessage<ControllerControlMessage>,
+    contract: &cairn_execution::JobContract,
+    materials: &AssignmentMaterialManifest,
+) -> Result<cairn_execution::VerifiedAssignmentMaterials, WorkerError> {
+    validate_assignment_material_manifest(
+        contract,
+        materials,
+        config.content.assignment_material_byte_limit,
+    )
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    let transfer_directory = config
+        .content
+        .transfer_directory
+        .join(offer.message_id.as_uuid().to_string());
+    prepare_state_directory(&transfer_directory)?;
+    materialize_assignment_artifact(
+        socket,
+        content,
+        config,
+        offer.message_id,
+        AssignmentMaterialKind::InputBundle,
+        &materials.input_bundle_id(),
+        materials.input_bundle_byte_len(),
+        materials.chunk_size(),
+        &transfer_directory.join("input-bundle.part"),
+    )
+    .await?;
+    materialize_assignment_artifact(
+        socket,
+        content,
+        config,
+        offer.message_id,
+        AssignmentMaterialKind::ExecutionEnvironment,
+        &materials.environment_id(),
+        materials.environment_byte_len(),
+        materials.chunk_size(),
+        &transfer_directory.join("execution-environment.part"),
+    )
+    .await?;
+    let verified = verify_persisted_assignment_materials(
+        content,
+        contract,
+        materials,
+        config.content.assignment_material_byte_limit,
+    )
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    fs::remove_dir(&transfer_directory).map_err(|error| WorkerError::Session(error.to_string()))?;
+    sync_parent(&transfer_directory)?;
+    Ok(verified)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "typed content identity, range policy, and fixed staging path remain explicit"
+)]
+async fn materialize_assignment_artifact<T: ContentType>(
+    socket: &mut cairn_control_transport::ClientWebSocket,
+    content: &mut SqliteContentStore,
+    config: &WorkerConfig,
+    offer_message_id: ControlMessageId,
+    kind: AssignmentMaterialKind,
+    content_id: &ContentId<T>,
+    expected_byte_len: u64,
+    offered_chunk_size: AssignmentMaterialChunkSize,
+    staging_path: &Path,
+) -> Result<(), WorkerError> {
+    match content.write_to(content_id, &mut std::io::sink()) {
+        Ok(descriptor) if descriptor.byte_len == expected_byte_len => {
+            if staging_path.exists() {
+                fs::remove_file(staging_path)
+                    .map_err(|error| WorkerError::Session(error.to_string()))?;
+                sync_parent(staging_path)?;
+            }
+            return Ok(());
+        }
+        Ok(_) => {
+            return Err(WorkerError::Session(
+                "worker-local assignment material length differs from offer".into(),
+            ));
+        }
+        Err(ContentStoreError::NotFound { .. }) => {}
+        Err(error) => return Err(WorkerError::Session(error.to_string())),
+    }
+
+    let mut offset = prepare_transfer_file(staging_path, expected_byte_len)?;
+    let chunk_size = config
+        .content
+        .assignment_material_chunk_size
+        .min(offered_chunk_size);
+    while offset < expected_byte_len {
+        let request = AssignmentMaterialChunkRequest {
+            offer_message_id,
+            kind,
+            offset,
+            max_bytes: chunk_size,
+        };
+        write_wire_message(
+            socket,
+            &WorkerWireMessage::MaterialChunkRequest {
+                request: request.clone(),
+            },
+            config.transport,
+        )
+        .await
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+        let response = timeout_optional(
+            config.idle_timeout_ms,
+            read_wire_message::<_, ControllerWireMessage>(socket, config.transport),
+        )
+        .await?
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+        let ControllerWireMessage::MaterialChunk { chunk } = response else {
+            return Err(WorkerError::Session(
+                "controller interleaved a non-material response during transfer".into(),
+            ));
+        };
+        let observed_len = u64::try_from(chunk.bytes.len()).unwrap_or(u64::MAX);
+        if chunk.offer_message_id != offer_message_id
+            || chunk.kind != kind
+            || chunk.offset != offset
+            || chunk.total_byte_len != expected_byte_len
+            || chunk.bytes.is_empty()
+            || observed_len > chunk_size.get()
+            || offset
+                .checked_add(observed_len)
+                .is_none_or(|end| end > expected_byte_len)
+        {
+            return Err(WorkerError::Session(
+                "controller returned an invalid assignment material range".into(),
+            ));
+        }
+        append_transfer_chunk(staging_path, &chunk.bytes)?;
+        offset += observed_len;
+    }
+
+    let mut staged =
+        fs::File::open(staging_path).map_err(|error| WorkerError::Session(error.to_string()))?;
+    let descriptor = content
+        .put::<T>(&mut staged)
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+    if descriptor.content_id != *content_id || descriptor.byte_len != expected_byte_len {
+        fs::remove_file(staging_path).map_err(|error| WorkerError::Session(error.to_string()))?;
+        sync_parent(staging_path)?;
+        return Err(WorkerError::Session(
+            "assembled assignment material failed its typed content identity".into(),
+        ));
+    }
+    fs::remove_file(staging_path).map_err(|error| WorkerError::Session(error.to_string()))?;
+    sync_parent(staging_path)
+}
+
+fn prepare_transfer_file(path: &Path, expected_byte_len: u64) -> Result<u64, WorkerError> {
+    if let Some(parent) = path.parent() {
+        prepare_state_directory(parent)?;
+    }
+    let mut observed = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => metadata.len(),
+        Ok(_) => {
+            return Err(WorkerError::Session(
+                "assignment transfer staging path is not a regular file".into(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(WorkerError::Session(error.to_string())),
+    };
+    if observed > expected_byte_len {
+        fs::remove_file(path).map_err(|error| WorkerError::Session(error.to_string()))?;
+        observed = 0;
+    }
+    if !path.exists() {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        options
+            .open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| WorkerError::Session(error.to_string()))?;
+        sync_parent(path)?;
+    }
+    Ok(observed)
+}
+
+fn append_transfer_chunk(path: &Path, bytes: &[u8]) -> Result<(), WorkerError> {
+    fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_data()
+        })
+        .map_err(|error| WorkerError::Session(error.to_string()))
 }
 
 #[expect(
@@ -838,6 +1061,7 @@ pub async fn join_from_bundle(
     resolved.validate(&profile)?;
     SqliteContentStore::open(&resolved.content.database, &resolved.content.directory)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    prepare_state_directory(&resolved.content.transfer_directory)?;
     let bytes = serde_json::to_vec_pretty(&config)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     persist_exact(&config_path, &bytes, false)?;
@@ -853,7 +1077,7 @@ fn generated_join_configuration(
     control: &cairn_control_transport::WorkerControlEndpoint,
 ) -> Result<WorkerConfig, WorkerError> {
     Ok(WorkerConfig {
-        schema_version: 6,
+        schema_version: 7,
         controller: ControllerEndpoint {
             tcp_address: control.tcp_address.clone(),
             websocket_uri: control.websocket_uri.clone(),
@@ -863,7 +1087,7 @@ fn generated_join_configuration(
         },
         profile: WorkerProfileConfig {
             schema_version: 2,
-            protocol_version: WorkerProtocolVersion::new(1)
+            protocol_version: WorkerProtocolVersion::new(2)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
             binary_identity: current_binary_identity()?,
             backends: vec![
@@ -888,8 +1112,11 @@ fn generated_join_configuration(
         content: WorkerContentConfig {
             database: PathBuf::from("content.sqlite3"),
             directory: PathBuf::from("content"),
-            assignment_material_byte_limit: AssignmentMaterialByteLimit::new(512 * 1024)
+            transfer_directory: PathBuf::from("transfers"),
+            assignment_material_byte_limit: AssignmentMaterialByteLimit::new(512 * 1024 * 1024)
                 .map(Some)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+            assignment_material_chunk_size: AssignmentMaterialChunkSize::new(256 * 1024)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         },
         handshake_timeout_ms: NonZeroU64::new(10_000),

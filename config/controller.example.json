@@ -32,11 +32,12 @@
   "idle_timeout_ms": 120000,
   "listen": "0.0.0.0:7443",
   "outbox_poll_interval_ms": 100,
-  "protocol_version": 1,
+  "protocol_version": 2,
   "schema_version": 3,
   "scheduler": {
     "assignment_lease_duration_ms": 120000,
-    "assignment_material_byte_limit": 524288,
+    "assignment_material_byte_limit": 536870912,
+    "assignment_material_chunk_size": 262144,
     "policy_version": "stable-worker-id-quantitative-v2",
     "reservation_claim_timeout_ms": 30000
   },
