@@ -2,30 +2,37 @@
 
 use std::{
     ffi::OsString,
+    fs,
     future::Future,
+    io::{BufReader, Write},
     num::NonZeroU64,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use cairn_control_transport::{
-    ClientTlsFiles, ControllerWireMessage, TransportPolicy, WorkerWireMessage,
-    connect_worker_socket, read_wire_message, write_wire_message,
+    ClientTlsFiles, ControllerWireMessage, EnrollmentBundle, EnrollmentRequest, EnrollmentResponse,
+    TransportPolicy, WorkerWireMessage, connect_enrollment_socket, connect_worker_socket,
+    read_wire_message, write_wire_message,
 };
 use cairn_execution::{
     CapabilityRequirement, ControlFrame, ControllerControlMessage, ExecutionBackend,
     ExecutionCapture, ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor,
     ExecutorError, InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerHello,
-    WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
-    WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages, active_worker_attempts,
-    admit_worker_assignment, deliver_worker_acknowledgement, deliver_worker_messages,
-    execute_worker_attempt, record_worker_execution_start,
+    WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
+    WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount, acknowledge_worker_messages,
+    active_worker_attempts, admit_worker_assignment, deliver_worker_acknowledgement,
+    deliver_worker_messages, execute_worker_attempt, record_worker_execution_start,
 };
 use cairn_protocol::{
-    CommandId, ControlConnectionId, ControlMessageId, ControlSequence, ObservedAtUnixMillis,
-    WorkerId, WorkerIncarnationId,
+    CommandId, ControlConnectionId, ControlMessageId, ControlSequence, CredentialId, EnrollmentId,
+    ObservedAtUnixMillis, WorkerId, WorkerIncarnationId,
 };
 use cairn_store_sqlite::SqliteEventStore;
+use rcgen::{
+    CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyPair,
+    KeyUsagePurpose, PublicKeyData,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::time::Instant;
@@ -36,8 +43,7 @@ use tokio::time::Instant;
 pub struct WorkerConfig {
     pub schema_version: u16,
     pub controller: ControllerEndpoint,
-    pub tls: ClientTlsFiles,
-    pub worker_id: WorkerId,
+    pub identity: WorkerIdentityConfig,
     pub profile: WorkerProfileConfig,
     #[serde(default)]
     pub expected_platform: ExecutionPlatformRequirement,
@@ -49,6 +55,37 @@ pub struct WorkerConfig {
     pub reconnect_delay_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
+}
+
+/// Selects either explicitly provisioned files or one controller-issued managed state directory.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum WorkerIdentityConfig {
+    External {
+        worker_id: WorkerId,
+        tls: ClientTlsFiles,
+    },
+    Managed {
+        state_directory: PathBuf,
+    },
+}
+
+/// Non-secret identity metadata atomically committed after successful bootstrap.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedWorkerIdentity {
+    pub schema_version: u16,
+    pub enrollment_id: EnrollmentId,
+    pub worker_id: WorkerId,
+    pub credential_id: CredentialId,
+    pub pool: WorkerPoolName,
+    pub tls: ClientTlsFiles,
+}
+
+#[derive(Clone)]
+struct ResolvedWorkerIdentity {
+    worker_id: WorkerId,
+    tls: ClientTlsFiles,
 }
 
 /// Operator configuration used to construct a runtime-observed worker profile.
@@ -74,7 +111,7 @@ pub struct ControllerEndpoint {
 /// Configuration, transport, or durable worker-journal process failure.
 #[derive(Debug, Error)]
 pub enum WorkerError {
-    #[error("usage: cairn-worker <config.json>")]
+    #[error("usage: cairn-worker <config.json> | cairn-worker enroll <bundle.json> <state-dir>")]
     Usage,
     #[error("worker configuration failed: {0}")]
     Configuration(String),
@@ -108,7 +145,17 @@ pub async fn run_from_arguments(
 ) -> Result<(), WorkerError> {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
-    let config_path = arguments.next().ok_or(WorkerError::Usage)?;
+    let first = arguments.next().ok_or(WorkerError::Usage)?;
+    if first == "enroll" {
+        let bundle_path = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        let state_directory = PathBuf::from(arguments.next().ok_or(WorkerError::Usage)?);
+        if arguments.next().is_some() {
+            return Err(WorkerError::Usage);
+        }
+        Box::pin(enroll_from_bundle(&bundle_path, &state_directory)).await?;
+        return Ok(());
+    }
+    let config_path = first;
     if arguments.next().is_some() {
         return Err(WorkerError::Usage);
     }
@@ -130,6 +177,7 @@ pub async fn run_from_arguments(
 /// Returns an error for invalid configuration, journal startup, or a terminal session failure when
 /// reconnect is disabled.
 pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
+    let identity = config.resolve_identity()?;
     let profile = config.runtime_profile()?;
     config.validate(&profile)?;
     let incarnation_id = WorkerIncarnationId::new();
@@ -138,6 +186,7 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     loop {
         let outcome = Box::pin(run_session(
             &config,
+            &identity,
             &profile,
             &incarnation_id,
             &mut journal,
@@ -154,10 +203,40 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
 }
 
 impl WorkerConfig {
+    fn resolve_identity(&self) -> Result<ResolvedWorkerIdentity, WorkerError> {
+        match &self.identity {
+            WorkerIdentityConfig::External { worker_id, tls } => Ok(ResolvedWorkerIdentity {
+                worker_id: *worker_id,
+                tls: tls.clone(),
+            }),
+            WorkerIdentityConfig::Managed { state_directory } => {
+                let identity_path = state_directory.join("identity.json");
+                let mut identity: ManagedWorkerIdentity = serde_json::from_slice(
+                    &fs::read(&identity_path)
+                        .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+                )
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+                if identity.schema_version != 1 {
+                    return Err(WorkerError::Configuration(
+                        "only managed worker identity schema_version 1 is supported".into(),
+                    ));
+                }
+                validate_managed_material(state_directory, &identity)?;
+                resolve(&mut identity.tls.certificate, state_directory);
+                resolve(&mut identity.tls.private_key, state_directory);
+                resolve(&mut identity.tls.server_ca, state_directory);
+                Ok(ResolvedWorkerIdentity {
+                    worker_id: identity.worker_id,
+                    tls: identity.tls,
+                })
+            }
+        }
+    }
+
     fn runtime_profile(&self) -> Result<WorkerProfile, WorkerError> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err(WorkerError::Configuration(
-                "only worker schema_version 1 is supported".into(),
+                "only worker schema_version 2 is supported".into(),
             ));
         }
         if self.profile.schema_version != 1 {
@@ -244,14 +323,23 @@ impl WorkerConfig {
     }
 
     fn resolve_paths(&mut self, base: &Path) {
-        resolve(&mut self.tls.certificate, base);
-        resolve(&mut self.tls.private_key, base);
-        resolve(&mut self.tls.server_ca, base);
+        match &mut self.identity {
+            WorkerIdentityConfig::External { tls, .. } => {
+                resolve(&mut tls.certificate, base);
+                resolve(&mut tls.private_key, base);
+                resolve(&mut tls.server_ca, base);
+            }
+            WorkerIdentityConfig::Managed { state_directory } => resolve(state_directory, base),
+        }
         resolve(&mut self.journal_database, base);
     }
 
-    fn availability(&self, journal: &SqliteEventStore) -> Result<WorkerAvailability, WorkerError> {
-        let attempts = active_worker_attempts(journal, self.worker_id)
+    fn availability(
+        &self,
+        journal: &SqliteEventStore,
+        worker_id: WorkerId,
+    ) -> Result<WorkerAvailability, WorkerError> {
+        let attempts = active_worker_attempts(journal, worker_id)
             .map_err(|error| WorkerError::Session(error.to_string()))?;
         let occupied = u16::try_from(attempts.len()).unwrap_or(u16::MAX);
         let slots = self.availability.available_slots().saturating_sub(occupied);
@@ -271,6 +359,7 @@ impl WorkerConfig {
 )]
 async fn run_session(
     config: &WorkerConfig,
+    identity: &ResolvedWorkerIdentity,
     profile: &WorkerProfile,
     incarnation_id: &WorkerIncarnationId,
     journal: &mut SqliteEventStore,
@@ -278,7 +367,7 @@ async fn run_session(
     let connecting = connect_worker_socket(
         config.controller.tcp_address.as_str(),
         &config.controller.websocket_uri,
-        &config.tls,
+        &identity.tls,
         config.transport,
     );
     let mut socket = timeout_optional(config.handshake_timeout_ms, connecting)
@@ -288,8 +377,8 @@ async fn run_session(
     write_wire_message(
         &mut socket,
         &WorkerWireMessage::Hello {
-            hello: WorkerHello::new(config.worker_id, *incarnation_id, profile.clone()),
-            availability: config.availability(journal)?,
+            hello: WorkerHello::new(identity.worker_id, *incarnation_id, profile.clone()),
+            availability: config.availability(journal, identity.worker_id)?,
         },
         config.transport,
     )
@@ -318,7 +407,7 @@ async fn run_session(
     }
     eprintln!(
         "cairn-worker {} connected as {}",
-        config.worker_id, connection_id
+        identity.worker_id, connection_id
     );
     let mut inbound = InboundControlSession::new(protocol_version, connection_id);
     let mut highest_sent = None;
@@ -331,6 +420,7 @@ async fn run_session(
             &mut socket,
             journal,
             config,
+            identity.worker_id,
             &connection_id,
             inbound.received_through(),
             &mut highest_sent,
@@ -354,7 +444,7 @@ async fn run_session(
                 write_wire_message(
                     &mut socket,
                     &WorkerWireMessage::Heartbeat {
-                        availability: config.availability(journal)?,
+                        availability: config.availability(journal, identity.worker_id)?,
                     },
                     config.transport,
                 )
@@ -372,7 +462,12 @@ async fn run_session(
                         inbound
                             .accept(&frame, highest_sent)
                             .map_err(|error| WorkerError::Session(error.to_string()))?;
-                        process_controller_frame(journal, config, &connection_id, &frame)?;
+                        process_controller_frame(
+                            journal,
+                            identity.worker_id,
+                            &connection_id,
+                            &frame,
+                        )?;
                     }
                     ControllerWireMessage::Welcome { .. } => {
                         return Err(WorkerError::Session(
@@ -392,7 +487,7 @@ async fn run_session(
 
 fn process_controller_frame(
     journal: &mut SqliteEventStore,
-    config: &WorkerConfig,
+    worker_id: WorkerId,
     connection_id: &ControlConnectionId,
     frame: &ControlFrame<ControllerControlMessage>,
 ) -> Result<(), WorkerError> {
@@ -400,7 +495,7 @@ fn process_controller_frame(
     if let Some(acknowledged) = frame.acknowledges_peer_through {
         acknowledge_worker_messages(
             journal,
-            config.worker_id,
+            worker_id,
             *connection_id,
             acknowledged,
             &command("worker-ack"),
@@ -415,7 +510,7 @@ fn process_controller_frame(
         ControllerControlMessage::AssignmentOffer { .. } => {
             admit_worker_assignment(
                 journal,
-                config.worker_id,
+                worker_id,
                 message,
                 ControlMessageId::new(),
                 &command("admit"),
@@ -424,14 +519,9 @@ fn process_controller_frame(
             .map_err(|error| WorkerError::Session(error.to_string()))?;
         }
         ControllerControlMessage::StartExecution { .. } => {
-            if let Some(authority) = record_worker_execution_start(
-                journal,
-                config.worker_id,
-                message,
-                &command("start"),
-                now,
-            )
-            .map_err(|error| WorkerError::Session(error.to_string()))?
+            if let Some(authority) =
+                record_worker_execution_start(journal, worker_id, message, &command("start"), now)
+                    .map_err(|error| WorkerError::Session(error.to_string()))?
             {
                 let mut executor = NotStartedExecutor;
                 execute_worker_attempt(
@@ -449,10 +539,15 @@ fn process_controller_frame(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "durable delivery cursors and the stable worker identity remain explicit"
+)]
 async fn flush_worker(
     socket: &mut cairn_control_transport::ClientWebSocket,
     journal: &mut SqliteEventStore,
     config: &WorkerConfig,
+    worker_id: WorkerId,
     connection_id: &ControlConnectionId,
     acknowledges: Option<ControlSequence>,
     highest_sent: &mut Option<ControlSequence>,
@@ -461,7 +556,7 @@ async fn flush_worker(
     let now = observed_now()?;
     let mut frames = deliver_worker_messages(
         journal,
-        config.worker_id,
+        worker_id,
         config.profile.protocol_version,
         *connection_id,
         acknowledges,
@@ -475,7 +570,7 @@ async fn flush_worker(
         frames.push(
             deliver_worker_acknowledgement(
                 journal,
-                config.worker_id,
+                worker_id,
                 config.profile.protocol_version,
                 *connection_id,
                 acknowledges,
@@ -500,6 +595,261 @@ async fn flush_worker(
             *acknowledgement_sent = frame.acknowledges_peer_through;
         }
     }
+    Ok(())
+}
+
+/// Redeems one enrollment bundle using a worker-local private key and atomically persists the
+/// managed identity. A retry reuses the staged key and exact CSR.
+///
+/// # Errors
+///
+/// Returns an error for invalid bundle/state, key generation, TLS, rejection, or persistence.
+pub async fn enroll_from_bundle(
+    bundle_path: &Path,
+    state_directory: &Path,
+) -> Result<ManagedWorkerIdentity, WorkerError> {
+    let bundle: EnrollmentBundle = serde_json::from_slice(
+        &fs::read(bundle_path).map_err(|error| WorkerError::Configuration(error.to_string()))?,
+    )
+    .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    Box::pin(enroll(bundle, state_directory)).await
+}
+
+/// Redeems one already-decoded enrollment bundle.
+///
+/// # Errors
+///
+/// Returns an error for invalid authority/state, network, rejection, or persistence.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the staged key, CSR, wire exchange, and atomic commit form one linear safety boundary"
+)]
+pub async fn enroll(
+    bundle: EnrollmentBundle,
+    state_directory: &Path,
+) -> Result<ManagedWorkerIdentity, WorkerError> {
+    if bundle.schema_version != 1 {
+        return Err(WorkerError::Configuration(
+            "only enrollment bundle schema_version 1 is supported".into(),
+        ));
+    }
+    prepare_state_directory(state_directory)?;
+    let identity_path = state_directory.join("identity.json");
+    if identity_path.exists() {
+        let identity: ManagedWorkerIdentity = serde_json::from_slice(
+            &fs::read(&identity_path)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?,
+        )
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        if identity.schema_version != 1 {
+            return Err(WorkerError::Configuration(
+                "managed identity has an unsupported schema".into(),
+            ));
+        }
+        if identity.enrollment_id != bundle.enrollment_id {
+            return Err(WorkerError::Configuration(
+                "managed state was created by another enrollment authority".into(),
+            ));
+        }
+        validate_managed_material(state_directory, &identity)?;
+        return Ok(identity);
+    }
+
+    let key_path = state_directory.join("worker-key.pem");
+    let key_pem = if key_path.exists() {
+        fs::read_to_string(&key_path)
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+    } else {
+        let generated = KeyPair::generate()
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+            .serialize_pem();
+        persist_exact(&key_path, generated.as_bytes(), true)?;
+        generated
+    };
+    let key = KeyPair::from_pem(&key_pem)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let csr_path = state_directory.join("enrollment.csr.pem");
+    let csr_pem = if csr_path.exists() {
+        fs::read_to_string(&csr_path)
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+    } else {
+        let mut params = CertificateParams::default();
+        let mut distinguished_name = DistinguishedName::new();
+        distinguished_name.push(DnType::CommonName, bundle.enrollment_id.to_string());
+        params.distinguished_name = distinguished_name;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let generated = params
+            .serialize_request(&key)
+            .and_then(|csr| csr.pem())
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        persist_exact(&csr_path, generated.as_bytes(), false)?;
+        generated
+    };
+    let parsed_csr = rcgen::CertificateSigningRequestParams::from_pem(&csr_pem)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if parsed_csr.public_key.der_bytes() != key.public_key_raw()
+        || parsed_csr.public_key.algorithm() != key.algorithm()
+    {
+        return Err(WorkerError::Configuration(
+            "staged enrollment CSR does not match the staged private key".into(),
+        ));
+    }
+
+    let connecting = connect_enrollment_socket(
+        bundle.endpoint.tcp_address.as_str(),
+        &bundle.endpoint.websocket_uri,
+        &bundle.endpoint.server_name,
+        &bundle.endpoint.server_ca_pem,
+        bundle.transport,
+    );
+    let mut socket = timeout_optional(bundle.handshake_timeout_ms, connecting)
+        .await?
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+    write_wire_message(
+        &mut socket,
+        &EnrollmentRequest {
+            schema_version: 1,
+            enrollment_id: bundle.enrollment_id,
+            secret: bundle.secret,
+            csr_pem,
+        },
+        bundle.transport,
+    )
+    .await
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    let response = timeout_optional(
+        bundle.handshake_timeout_ms,
+        read_wire_message::<_, EnrollmentResponse>(&mut socket, bundle.transport),
+    )
+    .await?
+    .map_err(|error| WorkerError::Session(error.to_string()))?;
+    let credential = match response {
+        EnrollmentResponse::Issued { credential } => credential,
+        EnrollmentResponse::Reject { code, diagnostic } => {
+            return Err(WorkerError::Session(format!(
+                "enrollment rejected ({code:?}): {diagnostic}"
+            )));
+        }
+    };
+    if credential.schema_version != 1 {
+        return Err(WorkerError::Session(
+            "controller returned an unsupported credential schema".into(),
+        ));
+    }
+    if certificate_public_key(&credential.certificate_chain_pem)? != key.public_key_der() {
+        return Err(WorkerError::Session(
+            "issued certificate does not bind the staged worker private key".into(),
+        ));
+    }
+    persist_exact(
+        &state_directory.join("worker.pem"),
+        credential.certificate_chain_pem.as_bytes(),
+        false,
+    )?;
+    persist_exact(
+        &state_directory.join("ca.pem"),
+        bundle.endpoint.server_ca_pem.as_bytes(),
+        false,
+    )?;
+    let identity = ManagedWorkerIdentity {
+        schema_version: 1,
+        enrollment_id: bundle.enrollment_id,
+        worker_id: credential.worker_id,
+        credential_id: credential.credential_id,
+        pool: credential.pool,
+        tls: ClientTlsFiles {
+            certificate: PathBuf::from("worker.pem"),
+            private_key: PathBuf::from("worker-key.pem"),
+            server_ca: PathBuf::from("ca.pem"),
+            server_name: bundle.endpoint.server_name,
+        },
+    };
+    let bytes = serde_json::to_vec_pretty(&identity)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    persist_exact(&identity_path, &bytes, false)?;
+    Ok(identity)
+}
+
+fn prepare_state_directory(path: &Path) -> Result<(), WorkerError> {
+    fs::create_dir_all(path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn certificate_public_key(pem: &str) -> Result<Vec<u8>, WorkerError> {
+    let mut reader = BufReader::new(pem.as_bytes());
+    let certificate = rustls_pemfile::certs(&mut reader)
+        .next()
+        .transpose()
+        .map_err(|error| WorkerError::Session(error.to_string()))?
+        .ok_or_else(|| WorkerError::Session("issued certificate chain is empty".into()))?;
+    let (_, parsed) = x509_parser::parse_x509_certificate(certificate.as_ref())
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+    Ok(parsed.public_key().raw.to_vec())
+}
+
+fn validate_managed_material(
+    state_directory: &Path,
+    identity: &ManagedWorkerIdentity,
+) -> Result<(), WorkerError> {
+    let key_pem = fs::read_to_string(state_directory.join(&identity.tls.private_key))
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let key = KeyPair::from_pem(&key_pem)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    let certificate = fs::read_to_string(state_directory.join(&identity.tls.certificate))
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if certificate_public_key(&certificate)? != key.public_key_der() {
+        return Err(WorkerError::Configuration(
+            "managed certificate does not bind the managed private key".into(),
+        ));
+    }
+    let ca = fs::read(state_directory.join(&identity.tls.server_ca))
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    if ca.is_empty() {
+        return Err(WorkerError::Configuration(
+            "managed controller trust anchor is empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn persist_exact(path: &Path, bytes: &[u8], secret: bool) -> Result<(), WorkerError> {
+    if path.exists() {
+        let existing =
+            fs::read(path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
+        return if existing == bytes {
+            Ok(())
+        } else {
+            Err(WorkerError::Configuration(format!(
+                "refusing to overwrite different managed identity material at {}",
+                path.display()
+            )))
+        };
+    }
+    let suffix = CommandId::new().as_uuid();
+    let temporary = path.with_extension(format!("tmp-{suffix}"));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(if secret { 0o600 } else { 0o644 });
+    }
+    #[cfg(not(unix))]
+    let _ = secret;
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    fs::rename(&temporary, path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
     Ok(())
 }
 

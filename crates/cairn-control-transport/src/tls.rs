@@ -44,6 +44,19 @@ impl CertificateFingerprint {
             .ok_or_else(|| TransportError::TlsMaterial("certificate chain is empty".into()))
     }
 
+    /// Loads the first certificate in in-memory PEM material.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid PEM or an empty certificate chain.
+    pub fn from_pem(pem: &str) -> Result<Self, TransportError> {
+        let certificates = read_certificates_from_bytes(pem.as_bytes(), "inline certificate")?;
+        certificates
+            .first()
+            .map(|certificate| Self::from_der(certificate.as_ref()))
+            .ok_or_else(|| TransportError::TlsMaterial("certificate chain is empty".into()))
+    }
+
     fn hexadecimal(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut output = String::with_capacity(64);
@@ -164,6 +177,38 @@ pub async fn connect_worker_socket<A: ToSocketAddrs>(
     Ok(socket)
 }
 
+/// Connects to the server-authenticated enrollment endpoint without presenting a client
+/// credential. Trust roots are pinned in the one-shot enrollment bundle.
+///
+/// # Errors
+///
+/// Returns an error for invalid trust material, DNS/TCP, TLS, URI, or WebSocket failure.
+pub async fn connect_enrollment_socket<A: ToSocketAddrs>(
+    address: A,
+    websocket_uri: &str,
+    server_name: &str,
+    server_ca_pem: &str,
+    policy: TransportPolicy,
+) -> Result<ClientWebSocket, TransportError> {
+    let tcp = TcpStream::connect(address).await?;
+    install_crypto_provider();
+    let roots = read_roots_from_bytes(server_ca_pem.as_bytes())?;
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let name = ServerName::try_from(server_name.to_owned())
+        .map_err(|_| TransportError::InvalidServerName)?;
+    let tls_stream = TlsConnector::from(Arc::new(config))
+        .connect(name, tcp)
+        .await
+        .map_err(|error| TransportError::TlsHandshake(error.to_string()))?;
+    let (socket, _) =
+        client_async_with_config(websocket_uri, tls_stream, Some(policy.websocket_config()))
+            .await
+            .map_err(|error| TransportError::WebSocket(error.to_string()))?;
+    Ok(socket)
+}
+
 /// Accepts and verifies one mTLS client, returns its leaf fingerprint, and upgrades to WebSocket.
 ///
 /// # Errors
@@ -192,6 +237,27 @@ pub async fn accept_worker_socket(
     Ok((socket, fingerprint, peer))
 }
 
+/// Accepts a server-authenticated enrollment WebSocket without requesting a client certificate.
+///
+/// # Errors
+///
+/// Returns an error for TLS, peer-address, WebSocket, or I/O failure.
+pub async fn accept_enrollment_socket(
+    tcp: TcpStream,
+    tls: Arc<ServerConfig>,
+    policy: TransportPolicy,
+) -> Result<(ServerWebSocket, SocketAddr), TransportError> {
+    let peer = tcp.peer_addr()?;
+    let tls_stream = TlsAcceptor::from(tls)
+        .accept(tcp)
+        .await
+        .map_err(|error| TransportError::TlsHandshake(error.to_string()))?;
+    let socket = accept_async_with_config(tls_stream, Some(policy.websocket_config()))
+        .await
+        .map_err(|error| TransportError::WebSocket(error.to_string()))?;
+    Ok((socket, peer))
+}
+
 impl ServerTlsFiles {
     /// Loads a rustls configuration that requires a client certificate chaining to `client_ca`.
     ///
@@ -208,6 +274,23 @@ impl ServerTlsFiles {
             .map_err(|error| TransportError::TlsMaterial(error.to_string()))?;
         let config = ServerConfig::builder()
             .with_client_cert_verifier(verifier)
+            .with_single_cert(certificates, key)
+            .map_err(|error| TransportError::TlsMaterial(error.to_string()))?;
+        Ok(Arc::new(config))
+    }
+
+    /// Loads the same controller identity without client authentication for the isolated
+    /// enrollment listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid certificate or key material.
+    pub fn load_enrollment(&self) -> Result<Arc<ServerConfig>, TransportError> {
+        install_crypto_provider();
+        let certificates = read_certificates(&self.certificate)?;
+        let key = read_private_key(&self.private_key)?;
+        let config = ServerConfig::builder()
+            .with_no_client_auth()
             .with_single_cert(certificates, key)
             .map_err(|error| TransportError::TlsMaterial(error.to_string()))?;
         Ok(Arc::new(config))
@@ -232,7 +315,12 @@ fn install_crypto_provider() {
 }
 
 fn read_roots(path: &Path) -> Result<RootCertStore, TransportError> {
-    let certificates = read_certificates(path)?;
+    let bytes = fs::read(path)?;
+    read_roots_from_bytes(&bytes)
+}
+
+fn read_roots_from_bytes(bytes: &[u8]) -> Result<RootCertStore, TransportError> {
+    let certificates = read_certificates_from_bytes(bytes, "inline CA material")?;
     let mut roots = RootCertStore::empty();
     let (added, ignored) = roots.add_parsable_certificates(certificates);
     if added == 0 || ignored != 0 {
@@ -245,14 +333,20 @@ fn read_roots(path: &Path) -> Result<RootCertStore, TransportError> {
 
 fn read_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>, TransportError> {
     let bytes = fs::read(path)?;
-    let mut reader = BufReader::new(bytes.as_slice());
+    read_certificates_from_bytes(&bytes, &path.display().to_string())
+}
+
+fn read_certificates_from_bytes(
+    bytes: &[u8],
+    description: &str,
+) -> Result<Vec<CertificateDer<'static>>, TransportError> {
+    let mut reader = BufReader::new(bytes);
     let certificates = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| TransportError::TlsMaterial(error.to_string()))?;
     if certificates.is_empty() {
         return Err(TransportError::TlsMaterial(format!(
-            "certificate file {} is empty",
-            path.display()
+            "certificate source {description} is empty"
         )));
     }
     Ok(certificates)

@@ -3,12 +3,19 @@
 //! This crate owns TLS, WebSocket, handshake envelopes, and bounded wire I/O. It does not decide
 //! assignment, lease, execution, acknowledgement, or receipt truth.
 
+mod enrollment;
 mod tls;
 mod wire;
 
+pub use enrollment::{
+    EnrollmentBundle, EnrollmentEndpoint, EnrollmentRejectCode, EnrollmentRequest,
+    EnrollmentResponse, EnrollmentSecret, IssuedWorkerCredential,
+};
+
 pub use tls::{
     CertificateFingerprint, ClientTlsFiles, ClientWebSocket, ServerTlsFiles, ServerWebSocket,
-    accept_worker_socket, connect_worker_socket,
+    accept_enrollment_socket, accept_worker_socket, connect_enrollment_socket,
+    connect_worker_socket,
 };
 pub use wire::{
     ControllerRejectCode, ControllerWireMessage, TransportMessageByteLimit, TransportPolicy,
@@ -56,4 +63,7 @@ pub enum TransportError {
     /// Certificate fingerprint wire form is invalid.
     #[error("certificate fingerprint must be sha256 plus 64 lowercase hexadecimal characters")]
     InvalidCertificateFingerprint,
+    /// Enrollment bearer secrets are exact lowercase 256-bit hexadecimal values.
+    #[error("enrollment secret must be exactly 64 lowercase hexadecimal characters")]
+    InvalidEnrollmentSecret,
 }

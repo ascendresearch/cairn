@@ -9,7 +9,7 @@ use cairn_execution::{
 use cairn_protocol::{ObservedAtUnixMillis, WorkerId};
 use cairn_server::{ServerConfig, ServerStorageConfig, WorkerEnrollment};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-use cairn_worker::{ControllerEndpoint, WorkerConfig, WorkerProfileConfig};
+use cairn_worker::{ControllerEndpoint, WorkerConfig, WorkerIdentityConfig, WorkerProfileConfig};
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose,
@@ -63,6 +63,7 @@ async fn two_outbound_workers_become_durably_live() -> Result<(), Box<dyn Error 
                 certificate: worker_b.0.clone(),
             },
         ],
+        enrollment_service: None,
         storage: ServerStorageConfig {
             event_database: event_database.clone(),
             content_database: content_database.clone(),
@@ -177,15 +178,17 @@ fn worker_config(
     protocol: WorkerProtocolVersion,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
     Ok(WorkerConfig {
-        schema_version: 1,
+        schema_version: 2,
         controller,
-        tls: ClientTlsFiles {
-            certificate: identity.0,
-            private_key: identity.1,
-            server_ca: ca.to_path_buf(),
-            server_name: "localhost".into(),
+        identity: WorkerIdentityConfig::External {
+            worker_id,
+            tls: ClientTlsFiles {
+                certificate: identity.0,
+                private_key: identity.1,
+                server_ca: ca.to_path_buf(),
+                server_name: "localhost".into(),
+            },
         },
-        worker_id,
         profile: WorkerProfileConfig {
             schema_version: 1,
             protocol_version: protocol,

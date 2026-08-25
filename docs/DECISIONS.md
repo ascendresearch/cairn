@@ -301,7 +301,7 @@ observation. Pool membership comes from controller enrollment authority rather t
 
 ## D-011 — Local worker keys and enrollment bootstrap
 
-- Decision: accepted; implementation pending
+- Decision: accepted; online reference path implemented
 
 A worker private key is generated and retained on the worker. The normal online path accepts one
 short-lived enrollment bundle, submits a CSR over a pinned/authenticated controller channel, and
@@ -313,3 +313,9 @@ credential identity/serial, per-process `WorkerIncarnationId`, and per-connectio
 `ControlConnectionId`. Offline CSR exchange and external issuers such as enterprise CA or SPIFFE
 must fit behind the same issuer port. A built-in CA may be the open-source default, but it does not
 grant permission to conflate a certificate fingerprint with permanent worker identity.
+
+The implemented reference path uses a separate server-authenticated TLS listener, a controller
+file-backed issuer adapter, and one append-only registry stream. Only a token digest is durable. A
+committed issuance retains the exact CSR digest and public credential result, so a lost response is
+recoverable only with the original staged worker key/CSR. Credential rotation, revocation, offline
+exchange, and non-file-backed issuers remain later slices.

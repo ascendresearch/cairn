@@ -94,10 +94,14 @@ architecture/OS/target environment separately from operator-declared backends an
 with provenance retained for every claim. Operator `expected_platform` values fail closed instead
 of overriding detection. Controller-authorized worker pools and domain-neutral placement requests
 let future `cairn-migration` stages ask for resources without assigning business roles to workers.
-Reproducible release tooling cross-links controller and worker
+Managed enrollment now lets the controller emit one expiring bundle while each worker generates and
+retains its own private key. Exact-CSR replay closes a lost-response window, and a fresh controller
+recovers certificate-to-`WorkerId`/pool authority from the append-only registry. See
+[`docs/ENROLLMENT.md`](docs/ENROLLMENT.md) for the operator flow. Reproducible release tooling
+cross-links controller and worker
 bundles for x86-64 and AArch64 against a pinned GLIBC baseline and verifies their ELF contracts
 before deployment. The current worker executor deliberately returns `NotStarted`; real
-local/container backends, artifact transfer, certificate lifecycle management, and real-host job
+local/container backends, artifact transfer, credential rotation/revocation, and real-host job
 execution remain subsequent slices.
 
 The remaining architecture in the normative documents is still target design. The old repositories

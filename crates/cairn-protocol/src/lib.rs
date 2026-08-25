@@ -12,9 +12,9 @@ mod identity;
 
 pub use identity::{
     AssignmentId, AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType,
-    ControlConnectionId, ControlMessageId, DerivedId, EpisodeId, EventId, HashAlgorithm,
-    IdentityError, IdentityReadError, JobId, LeaseId, MeteredActionId, ModelAttemptId, OperationId,
-    StepId, TaskId, WorkerId, WorkerIncarnationId,
+    ControlConnectionId, ControlMessageId, CredentialId, DerivedId, EnrollmentId, EpisodeId,
+    EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, LeaseId, MeteredActionId,
+    ModelAttemptId, OperationId, StepId, TaskId, WorkerId, WorkerIncarnationId,
 };
 
 const MAX_IDENTIFIER_LEN: usize = 255;

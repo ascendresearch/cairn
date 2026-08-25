@@ -632,10 +632,31 @@ both outboxes empty after another reopen.
 **Implemented outbound transport slice (2026-08-25).** `cairn-control-transport` now carries only
 binary canonical JSON over WebSocket on a mutually authenticated TLS stream. The worker verifies
 the controller certificate and DNS name; the controller verifies the client chain, hashes the
-verified leaf DER, and admits a hello only when that fingerprint is statically enrolled to the
-exact strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId` and negotiated protocol
-version before either side accepts control frames. TLS/WebSocket bytes never become execution
-facts by themselves.
+verified leaf DER, and admits a hello only when that fingerprint is statically configured or
+durably issued to the exact strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId`
+and negotiated protocol version before either side accepts control frames. TLS/WebSocket bytes
+never become execution facts by themselves.
+
+**Implemented enrollment bootstrap slice (2026-08-25).** Normal worker onboarding no longer
+requires an operator to create or copy a worker private key, certificate, and logical identity.
+`cairn-server enrollment create` first appends an expiring `EnrollmentId` offer with a secret digest
+and controller-authorized pool, then writes one non-overwriting `0600` bundle. The bundle pins a
+separate server-authenticated enrollment endpoint; the normal control endpoint continues to require
+a client certificate during TLS negotiation.
+
+`cairn-worker enroll` creates a `0700` state directory, persists its `0600` private key and exact
+CSR before network access, and submits the CSR with the one-shot authority. The issuer overwrites
+CSR subject, CA, usage, lifetime, and serial policy while retaining and verifying the worker public
+key. The serial is a rotatable `CredentialId`; the controller independently creates the stable
+`WorkerId` and binds the configured pool. Issuer certificate/key mismatch fails startup, and the
+worker verifies the returned leaf binds its staged key before committing public material.
+
+The append-only singleton registry stores offer and issuance events but never the bearer secret.
+An issuance records the CSR digest, certificate result, fingerprint, stable worker, credential, and
+pool. After a lost response, the same secret plus exact staged CSR returns the persisted result even
+after token expiry; another CSR is rejected. A fresh controller rebuilds fingerprint-to-worker/pool
+authentication from that stream. Static certificate bindings remain a transition/external-issuer
+input. Rotation, revocation, offline exchange, and external issuer adapters remain target work.
 
 After a worker heartbeat is durably accepted, the controller returns an ephemeral
 `HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence

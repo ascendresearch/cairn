@@ -1,8 +1,12 @@
 //! Runnable Cairn controller composition root.
 
+mod enrollment;
+
 use std::{
     collections::BTreeMap,
     ffi::OsString,
+    fs,
+    io::Write,
     net::SocketAddr,
     num::NonZeroU64,
     path::{Path, PathBuf},
@@ -11,8 +15,9 @@ use std::{
 };
 
 use cairn_control_transport::{
-    CertificateFingerprint, ControllerRejectCode, ControllerWireMessage, ServerTlsFiles,
-    TransportPolicy, WorkerWireMessage, accept_worker_socket, read_wire_message,
+    CertificateFingerprint, ControllerRejectCode, ControllerWireMessage, EnrollmentBundle,
+    EnrollmentRejectCode, EnrollmentRequest, EnrollmentResponse, ServerTlsFiles, TransportPolicy,
+    WorkerWireMessage, accept_enrollment_socket, accept_worker_socket, read_wire_message,
     write_wire_message,
 };
 use cairn_execution::{
@@ -30,7 +35,13 @@ use cairn_protocol::{
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{net::TcpListener, sync::Mutex, time::Instant};
+use tokio::{
+    net::TcpListener,
+    sync::{Mutex, RwLock},
+    time::Instant,
+};
+
+use enrollment::{EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, redeem};
 
 /// Strict controller process configuration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -40,6 +51,7 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub tls: ServerTlsFiles,
     pub enrollment: Vec<WorkerEnrollment>,
+    pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
     pub protocol_version: WorkerProtocolVersion,
     pub session_timeout_ms: WorkerSessionTimeoutMillis,
@@ -49,6 +61,24 @@ pub struct ServerConfig {
     #[serde(default)]
     pub transport: TransportPolicy,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
+}
+
+/// Isolated server-authenticated listener and certificate authority used only for bootstrap.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentServiceConfig {
+    pub listen: SocketAddr,
+    pub public_tcp_address: String,
+    pub websocket_uri: String,
+    pub server_name: String,
+    pub server_ca: PathBuf,
+    pub issuer_certificate: PathBuf,
+    pub issuer_private_key: PathBuf,
+    pub credential_validity_ms: NonZeroU64,
+    pub handshake_timeout_ms: Option<NonZeroU64>,
+    pub diagnostic_byte_limit: Option<NonZeroU64>,
+    #[serde(default)]
+    pub transport: TransportPolicy,
 }
 
 /// Static V1 binding from a logical worker ID to one exact leaf certificate.
@@ -61,9 +91,9 @@ pub struct WorkerEnrollment {
 }
 
 #[derive(Clone)]
-struct EnrolledWorker {
-    worker_id: WorkerId,
-    pool: WorkerPoolName,
+pub(crate) struct EnrolledWorker {
+    pub(crate) worker_id: WorkerId,
+    pub(crate) pool: WorkerPoolName,
 }
 
 /// Controller durable storage locations.
@@ -78,7 +108,9 @@ pub struct ServerStorageConfig {
 /// Configuration, transport, or durable-domain process failure.
 #[derive(Debug, Error)]
 pub enum ServerError {
-    #[error("usage: cairn-server <config.json>")]
+    #[error(
+        "usage: cairn-server <config.json> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json>"
+    )]
     Usage,
     #[error("controller configuration failed: {0}")]
     Configuration(String),
@@ -103,19 +135,95 @@ pub async fn run_from_arguments(
 ) -> Result<(), ServerError> {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
-    let config_path = arguments.next().ok_or(ServerError::Usage)?;
+    let first = arguments.next().ok_or(ServerError::Usage)?;
+    if first == "enrollment" {
+        let action = arguments.next().ok_or(ServerError::Usage)?;
+        if action != "create" {
+            return Err(ServerError::Usage);
+        }
+        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let pool = WorkerPoolName::new(
+            arguments
+                .next()
+                .ok_or(ServerError::Usage)?
+                .into_string()
+                .map_err(|_| ServerError::Usage)?,
+        )
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        let ttl_ms = arguments
+            .next()
+            .ok_or(ServerError::Usage)?
+            .into_string()
+            .map_err(|_| ServerError::Usage)?
+            .parse::<u64>()
+            .ok()
+            .and_then(NonZeroU64::new)
+            .ok_or(ServerError::Usage)?;
+        let output_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let config = load_config(&config_path)?;
+        let bundle = create_enrollment_bundle(&config, pool, ttl_ms)?;
+        let bytes = serde_json::to_vec_pretty(&bundle)
+            .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        write_new_secret_file(&output_path, &bytes)?;
+        eprintln!("wrote enrollment bundle to {}", output_path.display());
+        return Ok(());
+    }
+    let config_path = PathBuf::from(first);
     if arguments.next().is_some() {
         return Err(ServerError::Usage);
     }
-    let config_path = PathBuf::from(config_path);
+    run(load_config(&config_path)?).await
+}
+
+fn write_new_secret_file(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| ServerError::Configuration(error.to_string()))
+}
+
+fn load_config(config_path: &Path) -> Result<ServerConfig, ServerError> {
     let mut config: ServerConfig = serde_json::from_slice(
-        &std::fs::read(&config_path)
+        &std::fs::read(config_path)
             .map_err(|error| ServerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| ServerError::Configuration(error.to_string()))?;
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
     config.resolve_paths(base);
-    run(config).await
+    Ok(config)
+}
+
+/// Creates and durably records a one-shot enrollment bundle. The secret is returned only here.
+///
+/// # Errors
+///
+/// Returns an error for invalid configuration, storage, entropy, or time.
+pub fn create_enrollment_bundle(
+    config: &ServerConfig,
+    pool: WorkerPoolName,
+    ttl_ms: NonZeroU64,
+) -> Result<EnrollmentBundle, ServerError> {
+    config.validate()?;
+    let service = config
+        .enrollment_service
+        .as_ref()
+        .ok_or_else(|| ServerError::Configuration("enrollment_service is not configured".into()))?;
+    let mut events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    create_offer(&mut events, service, pool, ttl_ms, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
 }
 
 /// Runs the authenticated controller listener.
@@ -129,10 +237,21 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .tls
         .load()
         .map_err(|error| ServerError::Startup(error.to_string()))?;
-    let enrollments = config.enrollments()?;
+    let events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    let registry = EnrollmentRegistry::load(&events)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    let mut enrolled = config.enrollments()?;
+    for (fingerprint, worker) in registry.enrolled() {
+        if enrolled.insert(*fingerprint, worker.clone()).is_some() {
+            return Err(ServerError::Startup(
+                "static and issued enrollments contain the same certificate".into(),
+            ));
+        }
+    }
+    let enrollments = Arc::new(RwLock::new(enrolled));
     let state = Arc::new(Mutex::new(ControllerState {
-        events: SqliteEventStore::open(&config.storage.event_database)
-            .map_err(|error| ServerError::Startup(error.to_string()))?,
+        events,
         content: SqliteContentStore::open(
             &config.storage.content_database,
             &config.storage.content_directory,
@@ -142,6 +261,36 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
+    if let Some(service) = config.enrollment_service.clone() {
+        let enrollment_tls = config
+            .tls
+            .load_enrollment()
+            .map_err(|error| ServerError::Startup(error.to_string()))?;
+        let issuer = Arc::new(
+            EnrollmentIssuer::load(&service)
+                .map_err(|error| ServerError::Startup(error.to_string()))?,
+        );
+        let enrollment_listener = TcpListener::bind(service.listen)
+            .await
+            .map_err(|error| ServerError::Startup(error.to_string()))?;
+        let enrollment_state = Arc::clone(&state);
+        let issued_enrollments = Arc::clone(&enrollments);
+        let enrollment_config = config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = enrollment_listener_loop(
+                enrollment_listener,
+                enrollment_tls,
+                enrollment_state,
+                issued_enrollments,
+                issuer,
+                enrollment_config,
+            )
+            .await
+            {
+                eprintln!("cairn-server enrollment listener: {error}");
+            }
+        });
+    }
     eprintln!(
         "cairn-server listening on {}",
         listener
@@ -156,7 +305,7 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         let session_config = config.clone();
         let session_tls = Arc::clone(&tls);
         let session_state = Arc::clone(&state);
-        let session_enrollments = enrollments.clone();
+        let session_enrollments = Arc::clone(&enrollments);
         tokio::spawn(async move {
             if let Err(error) = Box::pin(handle_connection(
                 tcp,
@@ -180,10 +329,32 @@ impl ServerConfig {
                 "only server schema_version 1 is supported".into(),
             ));
         }
-        if self.enrollment.is_empty() {
+        if self.enrollment.is_empty() && self.enrollment_service.is_none() {
             return Err(ServerError::Configuration(
-                "at least one worker enrollment is required".into(),
+                "at least one static enrollment or enrollment_service is required".into(),
             ));
+        }
+        if let Some(service) = &self.enrollment_service {
+            if service.listen == self.listen
+                || service.public_tcp_address.is_empty()
+                || service.websocket_uri.is_empty()
+                || service.server_name.is_empty()
+            {
+                return Err(ServerError::Configuration(
+                    "enrollment service must use a distinct listener and non-empty public endpoint"
+                        .into(),
+                ));
+            }
+            let trusted = CertificateFingerprint::from_pem_file(&self.tls.client_ca)
+                .map_err(|error| ServerError::Configuration(error.to_string()))?;
+            let issuer = CertificateFingerprint::from_pem_file(&service.issuer_certificate)
+                .map_err(|error| ServerError::Configuration(error.to_string()))?;
+            if trusted != issuer {
+                return Err(ServerError::Configuration(
+                    "credential issuer must be the client CA trusted by the control listener"
+                        .into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -194,6 +365,11 @@ impl ServerConfig {
         resolve(&mut self.tls.client_ca, base);
         for enrollment in &mut self.enrollment {
             resolve(&mut enrollment.certificate, base);
+        }
+        if let Some(service) = &mut self.enrollment_service {
+            resolve(&mut service.server_ca, base);
+            resolve(&mut service.issuer_certificate, base);
+            resolve(&mut service.issuer_private_key, base);
         }
         resolve(&mut self.storage.event_database, base);
         resolve(&mut self.storage.content_database, base);
@@ -231,6 +407,167 @@ impl ServerConfig {
     }
 }
 
+async fn enrollment_listener_loop(
+    listener: TcpListener,
+    tls: Arc<rustls::ServerConfig>,
+    state: Arc<Mutex<ControllerState>>,
+    enrollments: Arc<RwLock<BTreeMap<CertificateFingerprint, EnrolledWorker>>>,
+    issuer: Arc<EnrollmentIssuer>,
+    config: ServerConfig,
+) -> Result<(), ServerError> {
+    eprintln!(
+        "cairn-server enrollment listening on {}",
+        listener
+            .local_addr()
+            .map_err(|error| ServerError::Startup(error.to_string()))?
+    );
+    loop {
+        let (tcp, _) = listener
+            .accept()
+            .await
+            .map_err(|error| ServerError::Startup(error.to_string()))?;
+        let connection_tls = Arc::clone(&tls);
+        let connection_state = Arc::clone(&state);
+        let connection_enrollments = Arc::clone(&enrollments);
+        let connection_issuer = Arc::clone(&issuer);
+        let connection_config = config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = Box::pin(handle_enrollment_connection(
+                tcp,
+                connection_tls,
+                connection_state,
+                connection_enrollments,
+                connection_issuer,
+                connection_config,
+            ))
+            .await
+            {
+                eprintln!("cairn-server enrollment connection: {error}");
+            }
+        });
+    }
+}
+
+async fn handle_enrollment_connection(
+    tcp: tokio::net::TcpStream,
+    tls: Arc<rustls::ServerConfig>,
+    state: Arc<Mutex<ControllerState>>,
+    enrollments: Arc<RwLock<BTreeMap<CertificateFingerprint, EnrolledWorker>>>,
+    issuer: Arc<EnrollmentIssuer>,
+    config: ServerConfig,
+) -> Result<(), ServerError> {
+    let service = config
+        .enrollment_service
+        .as_ref()
+        .ok_or_else(|| ServerError::Session("enrollment service configuration is absent".into()))?;
+    let accepted = accept_enrollment_socket(tcp, tls, service.transport);
+    let (mut socket, _peer) = Box::pin(timeout_optional(service.handshake_timeout_ms, accepted))
+        .await?
+        .map_err(|error| ServerError::Session(error.to_string()))?;
+    let request = timeout_optional(
+        service.handshake_timeout_ms,
+        read_wire_message::<_, EnrollmentRequest>(&mut socket, service.transport),
+    )
+    .await?;
+    let request = match request {
+        Ok(request) => request,
+        Err(error) => {
+            write_enrollment_reject(
+                &mut socket,
+                service,
+                EnrollmentRejectCode::InvalidRequest,
+                &error.to_string(),
+            )
+            .await;
+            return Err(ServerError::Session("invalid enrollment request".into()));
+        }
+    };
+    let result = {
+        let mut locked = state.lock().await;
+        redeem(
+            &mut locked.events,
+            issuer.as_ref(),
+            &request,
+            observed_now()?,
+        )
+    };
+    let credential = match result {
+        Ok(credential) => credential,
+        Err(error) => {
+            let (code, diagnostic) = enrollment_rejection(&error);
+            write_enrollment_reject(&mut socket, service, code, diagnostic).await;
+            return Err(ServerError::Session(error.to_string()));
+        }
+    };
+    let fingerprint = CertificateFingerprint::from_pem(&credential.certificate_chain_pem)
+        .map_err(|error| ServerError::Session(error.to_string()))?;
+    let enrolled = EnrolledWorker {
+        worker_id: credential.worker_id,
+        pool: credential.pool.clone(),
+    };
+    {
+        let mut index = enrollments.write().await;
+        if let Some(existing) = index.insert(fingerprint, enrolled.clone()) {
+            if existing.worker_id != enrolled.worker_id || existing.pool != enrolled.pool {
+                return Err(ServerError::Session(
+                    "issued fingerprint collides with another enrollment".into(),
+                ));
+            }
+        }
+    }
+    write_wire_message(
+        &mut socket,
+        &EnrollmentResponse::Issued { credential },
+        service.transport,
+    )
+    .await
+    .map_err(|error| ServerError::Session(error.to_string()))
+}
+
+fn enrollment_rejection(error: &EnrollmentError) -> (EnrollmentRejectCode, &'static str) {
+    match error {
+        EnrollmentError::InvalidAuthority => (
+            EnrollmentRejectCode::InvalidAuthority,
+            "enrollment authority is invalid",
+        ),
+        EnrollmentError::Expired => (
+            EnrollmentRejectCode::Expired,
+            "enrollment authority has expired",
+        ),
+        EnrollmentError::AlreadyUsed => (
+            EnrollmentRejectCode::AlreadyUsed,
+            "enrollment authority was already used",
+        ),
+        EnrollmentError::InvalidRequest(_) => (
+            EnrollmentRejectCode::InvalidRequest,
+            "enrollment request is invalid",
+        ),
+        EnrollmentError::Storage(_)
+        | EnrollmentError::InvalidHistory(_)
+        | EnrollmentError::Issuance(_) => (
+            EnrollmentRejectCode::ControllerUnavailable,
+            "controller could not durably issue a credential",
+        ),
+    }
+}
+
+async fn write_enrollment_reject(
+    socket: &mut cairn_control_transport::ServerWebSocket,
+    config: &EnrollmentServiceConfig,
+    code: EnrollmentRejectCode,
+    diagnostic: &str,
+) {
+    let _ = write_wire_message(
+        socket,
+        &EnrollmentResponse::Reject {
+            code,
+            diagnostic: bound(diagnostic, config.diagnostic_byte_limit),
+        },
+        config.transport,
+    )
+    .await;
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the authenticated handshake is intentionally linear"
@@ -239,7 +576,7 @@ async fn handle_connection(
     tcp: tokio::net::TcpStream,
     tls: Arc<rustls::ServerConfig>,
     state: Arc<Mutex<ControllerState>>,
-    enrollments: BTreeMap<CertificateFingerprint, EnrolledWorker>,
+    enrollments: Arc<RwLock<BTreeMap<CertificateFingerprint, EnrolledWorker>>>,
     config: ServerConfig,
 ) -> Result<(), ServerError> {
     let accepted = accept_worker_socket(tcp, tls, config.transport);
@@ -267,7 +604,8 @@ async fn handle_connection(
         .await;
         return Err(ServerError::Session("invalid initial hello".into()));
     };
-    let Some(enrolled_worker) = enrollments.get(&fingerprint) else {
+    let enrolled_worker = enrollments.read().await.get(&fingerprint).cloned();
+    let Some(enrolled_worker) = enrolled_worker else {
         reject(
             &mut socket,
             config.transport,
@@ -717,12 +1055,28 @@ fn bound(value: &str, limit: Option<NonZeroU64>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ServerConfig;
+    use super::{ServerConfig, write_new_secret_file};
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
         let _: ServerConfig =
             serde_json::from_str(include_str!("../../../config/controller.example.json"))
                 .expect("documented server configuration");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enrollment_bundle_output_is_private_and_never_overwritten() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("worker.enrollment.json");
+        write_new_secret_file(&path, b"first").expect("first write");
+        assert_eq!(
+            fs::metadata(&path).expect("metadata").permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(write_new_secret_file(&path, b"second").is_err());
+        assert_eq!(fs::read(path).expect("read"), b"first");
     }
 }

@@ -7,6 +7,21 @@
       "worker_id": "worker:019c0000-0000-7000-8000-000000000001"
     }
   ],
+  "enrollment_service": {
+    "credential_validity_ms": 2592000000,
+    "diagnostic_byte_limit": 1024,
+    "handshake_timeout_ms": 10000,
+    "issuer_certificate": "pki/ca.pem",
+    "issuer_private_key": "pki/ca-key.pem",
+    "listen": "0.0.0.0:7444",
+    "public_tcp_address": "controller.example.test:7444",
+    "server_ca": "pki/ca.pem",
+    "server_name": "controller.example.test",
+    "transport": {
+      "message_byte_limit": 1048576
+    },
+    "websocket_uri": "wss://controller.example.test:7444/enrollment"
+  },
   "handshake_timeout_ms": 10000,
   "idle_timeout_ms": 120000,
   "listen": "0.0.0.0:7443",

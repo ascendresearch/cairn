@@ -20,6 +20,7 @@ document is complete.
 | [`DECISIONS.md`](DECISIONS.md) | Which formerly open choices have been resolved? | Normative decision register |
 | [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) | What has not been decided? | Explicitly non-normative decision backlog |
 | [`RELEASE.md`](RELEASE.md) | How are x86-64/AArch64 artifacts cross-linked, inspected, and promoted? | Normative release procedure |
+| [`ENROLLMENT.md`](ENROLLMENT.md) | How does a worker bootstrap a local managed identity without copied private keys? | Operator procedure and implemented trust boundary |
 
 ## Reading order
 

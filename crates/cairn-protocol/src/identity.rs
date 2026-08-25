@@ -628,6 +628,10 @@ lifecycle_id!(/// Stable logical remote-worker identity.
 /// let _incarnation: WorkerIncarnationId = worker;
 /// ```
 WorkerId, "worker");
+lifecycle_id!(/// One short-lived, single-use worker enrollment authority.
+EnrollmentId, "enrollment");
+lifecycle_id!(/// One rotatable worker credential issued to a stable worker identity.
+CredentialId, "credential");
 lifecycle_id!(/// One process/boot incarnation of a remote worker.
 WorkerIncarnationId, "worker-incarnation");
 lifecycle_id!(/// One controller-to-worker assignment identity.
