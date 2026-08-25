@@ -3,7 +3,11 @@
 mod enrollment;
 mod scheduling;
 
-pub use enrollment::{RegistryMutationOutcome, StaticEnrollmentImportOutcome};
+pub use enrollment::{
+    RegistryCredentialInspection, RegistryCredentialProvenance, RegistryCredentialStatus,
+    RegistryMutationOutcome, RegistryWorkerInspection, StaticEnrollmentImportOutcome,
+    WorkerRegistryAudit, WorkerRegistryInspection,
+};
 
 pub use scheduling::{
     ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome,
@@ -52,11 +56,11 @@ use tokio::{net::TcpListener, sync::Mutex, time::Instant};
 
 use enrollment::{
     EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, create_rotation_offer,
-    import_static_credentials, redeem,
+    import_static_credentials, inspect_registry, redeem,
 };
 use enrollment::{
-    StaticCredentialImport, assign_worker_pool, disable_worker, enable_worker, revoke_credential,
-    revoke_enrollment,
+    StaticCredentialImport, assign_worker_pool, audit_registry, disable_worker, enable_worker,
+    revoke_credential, revoke_enrollment,
 };
 
 /// Strict controller process configuration.
@@ -136,7 +140,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server registry import-static <legacy-controller-v2.json> <command-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id>"
+        "usage: cairn-server <config.json> | cairn-server registry import-static <legacy-controller-v2.json> <command-id> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -147,6 +151,8 @@ pub enum ServerError {
     Session(String),
     #[error("controller scheduling failed: {0}")]
     Scheduling(String),
+    #[error("registry entry not found: {0}")]
+    RegistryEntryNotFound(String),
 }
 
 struct ControllerState {
@@ -304,22 +310,58 @@ pub async fn run_from_arguments(
 fn run_registry_command(arguments: &mut impl Iterator<Item = OsString>) -> Result<(), ServerError> {
     let action = arguments.next().ok_or(ServerError::Usage)?;
     let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
-    let command_id = parse_argument::<CommandId>(arguments.next())?;
-    if action != "import-static" || arguments.next().is_some() {
-        return Err(ServerError::Usage);
-    }
-    let outcome = import_static_enrollments(&load_config(&config_path)?, &command_id)?;
-    eprintln!(
-        "imported {} static credential(s) in {}{}",
-        outcome.imported_credentials(),
-        outcome.event_id(),
-        if outcome.was_replay() {
-            " (idempotent replay)"
-        } else {
-            ""
+    if action == "import-static" {
+        let command_id = parse_argument::<CommandId>(arguments.next())?;
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
         }
-    );
-    Ok(())
+        let outcome = import_static_enrollments(&load_config(&config_path)?, &command_id)?;
+        eprintln!(
+            "imported {} static credential(s) in {}{}",
+            outcome.imported_credentials(),
+            outcome.event_id(),
+            if outcome.was_replay() {
+                " (idempotent replay)"
+            } else {
+                ""
+            }
+        );
+        return Ok(());
+    }
+    let config = load_config(&config_path)?;
+    if action == "list" || action == "audit" {
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        return if action == "list" {
+            write_json_stdout(&inspect_worker_registry(&config)?)
+        } else {
+            write_json_stdout(&audit_worker_registry(&config)?)
+        };
+    }
+    if action == "show-worker" {
+        let worker_id = parse_argument::<WorkerId>(arguments.next())?;
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let inspection = inspect_worker_registry(&config)?;
+        let worker = inspection
+            .worker(worker_id)
+            .ok_or_else(|| ServerError::RegistryEntryNotFound(format!("worker {worker_id}")))?;
+        return write_json_stdout(worker);
+    }
+    if action == "show-credential" {
+        let credential_id = parse_argument::<CredentialId>(arguments.next())?;
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let inspection = inspect_worker_registry(&config)?;
+        let credential = inspection.credential(credential_id).ok_or_else(|| {
+            ServerError::RegistryEntryNotFound(format!("credential {credential_id}"))
+        })?;
+        return write_json_stdout(credential);
+    }
+    Err(ServerError::Usage)
 }
 
 fn parse_argument<T>(value: Option<OsString>) -> Result<T, ServerError>
@@ -348,6 +390,16 @@ fn report_registry_mutation(action: &str, outcome: RegistryMutationOutcome) {
             ""
         }
     );
+}
+
+fn write_json_stdout(value: &impl Serialize) -> Result<(), ServerError> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    bytes.push(b'\n');
+    std::io::stdout()
+        .lock()
+        .write_all(&bytes)
+        .map_err(|error| ServerError::Startup(error.to_string()))
 }
 
 fn write_new_secret_file(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
@@ -401,6 +453,49 @@ pub fn import_static_enrollments(
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     import_static_credentials(&mut events, credentials, command_id, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
+/// Reconstructs the canonical current worker and credential registry view.
+///
+/// The report contains no bearer secret, private key, certificate bytes, or unstable source path.
+///
+/// # Errors
+///
+/// Returns an error for a non-V3 runtime configuration, storage failure, or contradictory history.
+pub fn inspect_worker_registry(
+    config: &ServerConfig,
+) -> Result<WorkerRegistryInspection, ServerError> {
+    validate_registry_query(config)?;
+    let events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    inspect_registry(&events, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
+/// Validates the complete registry history and returns a compact authority summary.
+///
+/// Invalid history fails instead of producing a partially trusted report.
+///
+/// # Errors
+///
+/// Returns an error for a non-V3 runtime configuration, storage failure, or contradictory history.
+pub fn audit_worker_registry(config: &ServerConfig) -> Result<WorkerRegistryAudit, ServerError> {
+    validate_registry_query(config)?;
+    let events = SqliteEventStore::open(&config.storage.event_database)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    audit_registry(&events, observed_now()?)
+        .map_err(|error| ServerError::Startup(error.to_string()))
+}
+
+fn validate_registry_query(config: &ServerConfig) -> Result<(), ServerError> {
+    config.validate_schema()?;
+    if config.enrollment.is_empty() {
+        Ok(())
+    } else {
+        Err(ServerError::Configuration(
+            "registry queries require V3 persistent authority with an empty enrollment list".into(),
+        ))
+    }
 }
 
 /// Creates and durably records a one-shot enrollment bundle. The secret is returned only here.

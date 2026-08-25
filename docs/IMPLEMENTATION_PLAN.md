@@ -123,7 +123,7 @@ Acceptance gate:
 - externally attested or controller-verified claims can replace a built-in claim through a typed
   admission seam.
 
-## Phase E — registry and operator lifecycle closure (E1 and E2a implemented 2026-08-25)
+## Phase E — registry and operator lifecycle closure (implemented 2026-08-25)
 
 Finish migration away from controller static certificate lists. Add `import-static` with collision
 and ownership checks, list/show/audit commands, worker re-enable, credential inspection, and
@@ -141,8 +141,14 @@ assignment require explicit strong `CommandId` values and recover the original f
 Pool is an independent worker projection: reassignment requires the worker to be disabled and an
 actual pool change. A subsequent handshake reloads current registry authority rather than a startup
 snapshot, then cross-links the exact pool-assignment event into the execution-worker stream. That
-cross-link can modify only a durably disconnected or exactly expired session. E2b retains
-list/show/audit and credential inspection/query commands.
+cross-link can modify only a durably disconnected or exactly expired session.
+
+E2b implements the read-only operator surface. `registry list`, `show-worker`, `show-credential`,
+and `audit` rebuild the complete causal history before emitting versioned strict JSON. Reports use
+strong worker/credential/event identities, retain pool and import authority revisions plus rotation
+lineage, distinguish active/worker-disabled/retired/revoked credential states at an explicit
+observation time, and omit secrets, certificate bytes, and unstable paths. Invalid history fails
+without a partial report.
 
 Acceptance gate:
 

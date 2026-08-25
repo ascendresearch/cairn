@@ -727,6 +727,16 @@ rule rejecting implicit pool change remain intact. The managed mTLS integration 
 worker through disable, reassignment, re-enable, automatic reconnect, and restart-safe cross-link
 projection.
 
+**Implemented registry inspection E2b (2026-08-25).** Read-only inspection is another adapter over
+the same projector, not a parallel SQL read model. Every list/show/audit request reads and validates
+the complete singleton registry stream at one explicit wall-clock instant. The versioned report is
+ordered by strong IDs and exposes the current worker-pool authority revision, disabled state,
+credential fingerprint/provenance, rotation predecessor/successor and retirement boundary, plus
+the effective credential state. Audit returns causal head and aggregate counts only after all
+history invariants pass. Report DTOs reject unknown fields and unsupported versions; CLI stdout is
+JSON-only, while not-found and invalid-history diagnostics remain on stderr. Secret digests,
+certificate bodies, private material, and legacy source paths never enter the report boundary.
+
 **Implemented static-registry migration E1 (2026-08-25).** Controller schema V3 requires an empty
 static enrollment array. A schema V2 file is accepted only by `registry import-static`, which reads
 and fingerprints the configured leaf certificates, canonicalizes the complete batch by strong

@@ -135,7 +135,7 @@ worker without leaking migration roles into execution types. Scheduler enablemen
 time, claim time, and lease time are configuration rather than constants. See
 [`docs/SCHEDULER.md`](docs/SCHEDULER.md) for the authority and recovery contract. The current worker
 executor deliberately returns `NotStarted`; real local/container backends, concrete resource
-challenge/attestation adapters, registry inspection/query commands, and real-host job
+challenge/attestation adapters, and real-host job
 execution remain subsequent slices. Legacy static credentials now enter the persistent registry
 through an atomic, explicitly idempotent V2-to-V3 import gate; ordinary startup accepts only V3
 configuration with an empty static enrollment list. The active

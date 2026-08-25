@@ -130,6 +130,292 @@ impl RegistryMutationOutcome {
     }
 }
 
+/// Closed wire version for read-only registry reports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+struct RegistryReportSchemaVersion(u16);
+
+impl<'de> Deserialize<'de> for RegistryReportSchemaVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u16::deserialize(deserializer)?;
+        if value == 1 {
+            Ok(Self(value))
+        } else {
+            Err(serde::de::Error::custom(
+                "registry report schema version is unsupported",
+            ))
+        }
+    }
+}
+
+/// Effective authority state of one retained credential at the inspection time.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegistryCredentialStatus {
+    /// Credential currently authorizes its worker.
+    Active,
+    /// Credential is intact but its logical worker is disabled.
+    WorkerDisabled,
+    /// Credential reached its frozen rotation-retirement boundary.
+    Retired,
+    /// Credential was explicitly revoked.
+    Revoked,
+}
+
+/// Durable origin of one registry credential.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum RegistryCredentialProvenance {
+    /// Credential was issued through a one-shot enrollment authority.
+    Issued { enrollment_id: EnrollmentId },
+    /// Credential entered through the explicit legacy migration boundary.
+    ImportedStatic { import_revision: EventId },
+}
+
+/// Operator-facing projection of one stable logical worker.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryWorkerInspection {
+    worker_id: WorkerId,
+    pool: WorkerPoolName,
+    pool_assignment_revision: EventId,
+    disabled: bool,
+    credential_ids: Vec<CredentialId>,
+}
+
+impl RegistryWorkerInspection {
+    /// Returns the stable logical worker identity.
+    #[must_use]
+    pub const fn worker_id(&self) -> WorkerId {
+        self.worker_id
+    }
+
+    /// Returns current controller-authorized scheduling pool.
+    #[must_use]
+    pub const fn pool(&self) -> &WorkerPoolName {
+        &self.pool
+    }
+
+    /// Returns the exact registry fact establishing the current pool.
+    #[must_use]
+    pub const fn pool_assignment_revision(&self) -> EventId {
+        self.pool_assignment_revision
+    }
+
+    /// Returns whether all credentials are currently suppressed by worker disablement.
+    #[must_use]
+    pub const fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    /// Returns all retained credentials in stable identity order.
+    #[must_use]
+    pub fn credential_ids(&self) -> &[CredentialId] {
+        &self.credential_ids
+    }
+}
+
+/// Operator-facing projection of one retained credential without secret or certificate bytes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryCredentialInspection {
+    credential_id: CredentialId,
+    worker_id: WorkerId,
+    certificate_fingerprint: CertificateFingerprint,
+    status: RegistryCredentialStatus,
+    provenance: RegistryCredentialProvenance,
+    predecessor_credential_id: Option<CredentialId>,
+    successor_credential_id: Option<CredentialId>,
+    retire_at: Option<ObservedAtUnixMillis>,
+}
+
+impl RegistryCredentialInspection {
+    /// Returns the rotatable credential identity.
+    #[must_use]
+    pub const fn credential_id(&self) -> CredentialId {
+        self.credential_id
+    }
+
+    /// Returns the stable worker owning the credential.
+    #[must_use]
+    pub const fn worker_id(&self) -> WorkerId {
+        self.worker_id
+    }
+
+    /// Returns effective authority state at the report observation time.
+    #[must_use]
+    pub const fn status(&self) -> RegistryCredentialStatus {
+        self.status
+    }
+
+    /// Returns the exact leaf-certificate fingerprint retained as credential evidence.
+    #[must_use]
+    pub const fn certificate_fingerprint(&self) -> CertificateFingerprint {
+        self.certificate_fingerprint
+    }
+
+    /// Returns how the credential entered managed authority.
+    #[must_use]
+    pub const fn provenance(&self) -> RegistryCredentialProvenance {
+        self.provenance
+    }
+
+    /// Returns rotation predecessor lineage, when present.
+    #[must_use]
+    pub const fn predecessor_credential_id(&self) -> Option<CredentialId> {
+        self.predecessor_credential_id
+    }
+
+    /// Returns the successor that superseded this credential, when present.
+    #[must_use]
+    pub const fn successor_credential_id(&self) -> Option<CredentialId> {
+        self.successor_credential_id
+    }
+
+    /// Returns the frozen retirement boundary, when configured.
+    #[must_use]
+    pub const fn retire_at(&self) -> Option<ObservedAtUnixMillis> {
+        self.retire_at
+    }
+}
+
+/// Canonical current registry view used by list and show operations.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRegistryInspection {
+    schema_version: RegistryReportSchemaVersion,
+    observed_at: ObservedAtUnixMillis,
+    head_event_id: Option<EventId>,
+    event_count: u64,
+    workers: Vec<RegistryWorkerInspection>,
+    credentials: Vec<RegistryCredentialInspection>,
+}
+
+impl WorkerRegistryInspection {
+    /// Returns the explicit wall-clock instant used to evaluate effective authority.
+    #[must_use]
+    pub const fn observed_at(&self) -> ObservedAtUnixMillis {
+        self.observed_at
+    }
+
+    /// Returns the validated registry head, if any facts exist.
+    #[must_use]
+    pub const fn head_event_id(&self) -> Option<EventId> {
+        self.head_event_id
+    }
+
+    /// Returns the number of causally validated registry facts.
+    #[must_use]
+    pub const fn event_count(&self) -> u64 {
+        self.event_count
+    }
+
+    /// Returns workers in stable identity order.
+    #[must_use]
+    pub fn workers(&self) -> &[RegistryWorkerInspection] {
+        &self.workers
+    }
+
+    /// Returns credentials in stable identity order.
+    #[must_use]
+    pub fn credentials(&self) -> &[RegistryCredentialInspection] {
+        &self.credentials
+    }
+
+    /// Finds one stable worker.
+    #[must_use]
+    pub fn worker(&self, worker_id: WorkerId) -> Option<&RegistryWorkerInspection> {
+        self.workers
+            .binary_search_by_key(&worker_id, RegistryWorkerInspection::worker_id)
+            .ok()
+            .map(|index| &self.workers[index])
+    }
+
+    /// Finds one retained credential.
+    #[must_use]
+    pub fn credential(&self, credential_id: CredentialId) -> Option<&RegistryCredentialInspection> {
+        self.credentials
+            .binary_search_by_key(&credential_id, RegistryCredentialInspection::credential_id)
+            .ok()
+            .map(|index| &self.credentials[index])
+    }
+}
+
+/// Successful full-history audit summary. Invalid history returns an error instead of a report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRegistryAudit {
+    schema_version: RegistryReportSchemaVersion,
+    observed_at: ObservedAtUnixMillis,
+    head_event_id: Option<EventId>,
+    event_count: u64,
+    worker_count: u64,
+    disabled_worker_count: u64,
+    credential_count: u64,
+    authorized_credential_count: u64,
+    enrollment_count: u64,
+    open_enrollment_count: u64,
+}
+
+impl WorkerRegistryAudit {
+    /// Returns the wall-clock instant used to evaluate effective authority.
+    #[must_use]
+    pub const fn observed_at(&self) -> ObservedAtUnixMillis {
+        self.observed_at
+    }
+
+    /// Returns the validated registry head, if the registry is non-empty.
+    #[must_use]
+    pub const fn head_event_id(&self) -> Option<EventId> {
+        self.head_event_id
+    }
+
+    /// Returns the number of validated registry facts.
+    #[must_use]
+    pub const fn event_count(&self) -> u64 {
+        self.event_count
+    }
+
+    /// Returns retained stable worker count.
+    #[must_use]
+    pub const fn worker_count(&self) -> u64 {
+        self.worker_count
+    }
+
+    /// Returns workers under explicit disablement.
+    #[must_use]
+    pub const fn disabled_worker_count(&self) -> u64 {
+        self.disabled_worker_count
+    }
+
+    /// Returns retained credential count.
+    #[must_use]
+    pub const fn credential_count(&self) -> u64 {
+        self.credential_count
+    }
+
+    /// Returns credentials that are effective at the audit time.
+    #[must_use]
+    pub const fn authorized_credential_count(&self) -> u64 {
+        self.authorized_credential_count
+    }
+
+    /// Returns every retained enrollment offer.
+    #[must_use]
+    pub const fn enrollment_count(&self) -> u64 {
+        self.enrollment_count
+    }
+
+    /// Returns unused, unrevoked, unexpired enrollment offers.
+    #[must_use]
+    pub const fn open_enrollment_count(&self) -> u64 {
+        self.open_enrollment_count
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WorkerDisabledPayload {
@@ -902,6 +1188,127 @@ fn history_and_registry(
         .map_err(|error| EnrollmentError::Storage(error.to_string()))?;
     let registry = project_history(&history, now)?;
     Ok((history, registry))
+}
+
+pub(crate) fn inspect_registry(
+    events: &impl EventStore,
+    now: ObservedAtUnixMillis,
+) -> Result<WorkerRegistryInspection, EnrollmentError> {
+    let (history, registry) = history_and_registry(events, now)?;
+    let event_count = count(history.len(), "registry event count")?;
+    let workers = registry
+        .worker_pools
+        .iter()
+        .map(|(worker_id, assignment)| RegistryWorkerInspection {
+            worker_id: *worker_id,
+            pool: assignment.pool.clone(),
+            pool_assignment_revision: assignment.authority_revision,
+            disabled: registry.disabled_workers.contains(worker_id),
+            credential_ids: registry
+                .credentials
+                .iter()
+                .filter_map(|(credential_id, record)| {
+                    (record.enrolled.worker_id == *worker_id).then_some(*credential_id)
+                })
+                .collect(),
+        })
+        .collect();
+    let credentials = registry
+        .credentials
+        .iter()
+        .map(|(credential_id, record)| RegistryCredentialInspection {
+            credential_id: *credential_id,
+            worker_id: record.enrolled.worker_id,
+            certificate_fingerprint: record.fingerprint,
+            status: credential_status(record, &registry),
+            provenance: match record.provenance {
+                CredentialProvenance::Issued { enrollment_id } => {
+                    RegistryCredentialProvenance::Issued { enrollment_id }
+                }
+                CredentialProvenance::ImportedStatic { event_id } => {
+                    RegistryCredentialProvenance::ImportedStatic {
+                        import_revision: event_id,
+                    }
+                }
+            },
+            predecessor_credential_id: record.predecessor,
+            successor_credential_id: record.superseded_by,
+            retire_at: record.retire_at,
+        })
+        .collect();
+    Ok(WorkerRegistryInspection {
+        schema_version: RegistryReportSchemaVersion(1),
+        observed_at: now,
+        head_event_id: registry.last_event_id,
+        event_count,
+        workers,
+        credentials,
+    })
+}
+
+pub(crate) fn audit_registry(
+    events: &impl EventStore,
+    now: ObservedAtUnixMillis,
+) -> Result<WorkerRegistryAudit, EnrollmentError> {
+    let (history, registry) = history_and_registry(events, now)?;
+    Ok(WorkerRegistryAudit {
+        schema_version: RegistryReportSchemaVersion(1),
+        observed_at: now,
+        head_event_id: registry.last_event_id,
+        event_count: count(history.len(), "registry event count")?,
+        worker_count: count(registry.worker_pools.len(), "registry worker count")?,
+        disabled_worker_count: count(registry.disabled_workers.len(), "disabled worker count")?,
+        credential_count: count(registry.credentials.len(), "registry credential count")?,
+        authorized_credential_count: count(
+            registry
+                .credentials
+                .values()
+                .filter(|record| {
+                    record.is_authorized_at(&registry.disabled_workers, registry.evaluated_at)
+                })
+                .count(),
+            "authorized credential count",
+        )?,
+        enrollment_count: count(registry.offers.len(), "registry enrollment count")?,
+        open_enrollment_count: count(
+            registry
+                .offers
+                .values()
+                .filter(|offer| {
+                    !offer.revoked
+                        && offer.issued.is_none()
+                        && registry.evaluated_at < offer.expires_at
+                })
+                .count(),
+            "open enrollment count",
+        )?,
+    })
+}
+
+fn credential_status(
+    record: &CredentialRecord,
+    registry: &EnrollmentRegistry,
+) -> RegistryCredentialStatus {
+    if record.revoked {
+        RegistryCredentialStatus::Revoked
+    } else if record
+        .retire_at
+        .is_some_and(|retire_at| registry.evaluated_at >= retire_at)
+    {
+        RegistryCredentialStatus::Retired
+    } else if registry
+        .disabled_workers
+        .contains(&record.enrolled.worker_id)
+    {
+        RegistryCredentialStatus::WorkerDisabled
+    } else {
+        RegistryCredentialStatus::Active
+    }
+}
+
+fn count(value: usize, field: &str) -> Result<u64, EnrollmentError> {
+    u64::try_from(value)
+        .map_err(|_| EnrollmentError::InvalidHistory(format!("{field} exceeds u64")))
 }
 
 fn mutation_replay<T: for<'de> Deserialize<'de> + PartialEq>(
@@ -1748,6 +2155,21 @@ mod tests {
             ),
             Err(EnrollmentError::CommandConflict)
         ));
+        let disabled_inspection =
+            inspect_registry(&events, ObservedAtUnixMillis::new(4)).expect("disabled inspection");
+        assert!(
+            disabled_inspection
+                .worker(worker_id)
+                .expect("disabled worker")
+                .is_disabled()
+        );
+        assert_eq!(
+            disabled_inspection
+                .credential(credential_id)
+                .expect("disabled credential")
+                .status(),
+            RegistryCredentialStatus::WorkerDisabled
+        );
 
         let pool = WorkerPoolName::new("moved-pool").expect("pool");
         let pool_command = CommandId::new();
@@ -1807,6 +2229,57 @@ mod tests {
         assert_eq!(enrolled.pool, pool);
         assert_eq!(enrolled.pool_assignment_revision, assigned.event_id());
 
+        let inspection =
+            inspect_registry(&events, ObservedAtUnixMillis::new(9)).expect("operator inspection");
+        let worker = inspection.worker(worker_id).expect("inspected worker");
+        assert_eq!(worker.pool(), &pool);
+        assert!(!worker.is_disabled());
+        assert_eq!(worker.credential_ids(), &[credential_id]);
+        let credential = inspection
+            .credential(credential_id)
+            .expect("inspected credential");
+        assert_eq!(credential.worker_id(), worker_id);
+        assert_eq!(credential.status(), RegistryCredentialStatus::Active);
+        assert!(matches!(
+            credential.provenance(),
+            RegistryCredentialProvenance::ImportedStatic { .. }
+        ));
+        let inspection_bytes = cairn_codec::to_vec(&inspection).expect("inspection JSON");
+        assert_eq!(
+            cairn_codec::from_slice::<WorkerRegistryInspection>(&inspection_bytes)
+                .expect("strict inspection round trip"),
+            inspection
+        );
+        let mut invalid_version = serde_json::to_value(&inspection).expect("inspection value");
+        invalid_version["schema_version"] = 2.into();
+        assert!(serde_json::from_value::<WorkerRegistryInspection>(invalid_version).is_err());
+        let mut unknown_field = serde_json::to_value(&inspection).expect("inspection value");
+        unknown_field["unknown"] = true.into();
+        assert!(serde_json::from_value::<WorkerRegistryInspection>(unknown_field).is_err());
+        let audit = audit_registry(&events, ObservedAtUnixMillis::new(9)).expect("registry audit");
+        assert_eq!(audit.event_count(), 4);
+        assert_eq!(audit.worker_count(), 1);
+        assert_eq!(audit.credential_count(), 1);
+        assert_eq!(audit.authorized_credential_count(), 1);
+
+        revoke_credential(
+            &mut events,
+            credential_id,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(10),
+        )
+        .expect("revoke credential");
+        let revoked_inspection =
+            inspect_registry(&events, ObservedAtUnixMillis::new(11)).expect("revoked inspection");
+        assert_eq!(
+            revoked_inspection
+                .credential(credential_id)
+                .expect("retained revoked credential")
+                .status(),
+            RegistryCredentialStatus::Revoked
+        );
+        let registry = project(&events, ObservedAtUnixMillis::new(11)).expect("registry head");
+
         events
             .append(
                 &stream().expect("stream"),
@@ -1816,7 +2289,7 @@ mod tests {
                     schema_name: SchemaName::new(WORKER_POOL_ASSIGNED).expect("schema"),
                     schema_version: SchemaVersion::new(1).expect("version"),
                     parent_event_id: registry.last_event_id,
-                    observed_at_unix_ms: 10,
+                    observed_at_unix_ms: 12,
                     payload: cairn_codec::to_vec(&WorkerPoolAssignedPayload {
                         worker_id,
                         previous_pool: WorkerPoolName::new("moved-pool").expect("pool"),
@@ -1827,7 +2300,7 @@ mod tests {
             )
             .expect("append forged lifecycle fact");
         assert!(matches!(
-            project(&events, ObservedAtUnixMillis::new(11)),
+            project(&events, ObservedAtUnixMillis::new(13)),
             Err(EnrollmentError::InvalidHistory(_))
         ));
     }

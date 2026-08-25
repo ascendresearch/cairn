@@ -188,3 +188,22 @@ execution projection rejects that cross-link while the predecessor session is li
 reconnect can never smuggle in an implicit pool change. If a controller died before recording the
 disconnect, reconnect waits for the configured `session_timeout_ms` boundary rather than replacing
 live authority. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+
+## Inspect and audit registry authority
+
+Read-only commands emit versioned strict JSON on stdout and diagnostics on stderr:
+
+```bash
+cairn-server registry list controller.json
+cairn-server registry show-worker controller.json worker:...
+cairn-server registry show-credential controller.json credential:...
+cairn-server registry audit controller.json
+```
+
+`list` is a canonical stable-ID-ordered snapshot. Worker entries include current pool, its exact
+authority revision, disabled state, and every retained credential identity. Credential entries
+include fingerprint evidence, issuance/static-import provenance, predecessor/successor lineage,
+retirement boundary, and effective `active`, `worker-disabled`, `retired`, or `revoked` state at the
+report observation time. `audit` validates the entire parent chain and every lifecycle invariant,
+then reports head identity and counts; contradictory history returns no report. Neither output
+contains bearer secrets, private keys, certificate bodies, or source paths.

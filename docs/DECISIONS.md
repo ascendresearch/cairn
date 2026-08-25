@@ -387,3 +387,8 @@ pool, the controller appends a typed cross-link citing the exact registry assign
 execution projector accepts it only for a disconnected or exactly expired predecessor session.
 Consequently a stale startup cache, worker hello, certificate renewal, or ordinary process restart
 cannot silently move scheduling authority between pools.
+
+The operator read surface projects these same facts on demand rather than maintaining a mutable
+administrative table. List/show reports retain strong identity and provenance links; audit succeeds
+only after complete causal replay. This keeps operational visibility from becoming a second source
+of worker or credential authority.
