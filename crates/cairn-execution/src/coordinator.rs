@@ -175,6 +175,19 @@ pub enum ExecutionCompletion {
     },
 }
 
+/// Terminal observation returned by a remote worker and independently revalidated by the
+/// controller before it can become an authoritative execution fact.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "result")]
+pub enum ReconciledExecutionResult {
+    /// Complete bounded capture material.
+    Completed { capture: ExecutionCapture },
+    /// The worker supervisor proved that the workload never started.
+    NotStarted { diagnostic: String },
+    /// The worker cannot prove the external-effect outcome.
+    Ambiguous { diagnostic: String },
+}
+
 /// Durable state reconstructed from events and verified content only.
 pub enum ExecutionJobState {
     /// No attempt authority exists.
@@ -303,6 +316,7 @@ enum ProjectedState {
     },
     Started {
         attempt_id: AttemptId,
+        event_id: EventId,
     },
     Completed {
         attempt_id: AttemptId,
@@ -565,7 +579,7 @@ pub fn recover_execution_job<E: EventStore, C: ContentStore>(
             attempt_id,
             prepared,
         })),
-        ProjectedState::Started { attempt_id } => Ok(ExecutionJobState::InDoubt { attempt_id }),
+        ProjectedState::Started { attempt_id, .. } => Ok(ExecutionJobState::InDoubt { attempt_id }),
         ProjectedState::Completed {
             attempt_id,
             receipt_id,
@@ -591,6 +605,130 @@ pub fn recover_execution_job<E: EventStore, C: ContentStore>(
             diagnostic,
         }),
     }
+}
+
+/// Publishes a remote-worker terminal observation only for the exact attempt already marked
+/// started by the controller. This reconstructs reconciliation authority, never execution
+/// authority: it cannot invoke an executor or advance an authorized-but-unstarted attempt.
+///
+/// # Errors
+///
+/// Returns an error when the job is not in doubt for `attempt_id`, the immutable contract differs,
+/// the result violates that contract, or the terminal fact cannot commit.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "stores, job, attempt, contract, result, command, and observation are independent"
+)]
+pub fn reconcile_execution_result<E: EventStore, C: ContentStore>(
+    events: &mut E,
+    content: &mut C,
+    job: &ExecutionJob,
+    attempt_id: AttemptId,
+    contract_id: ContentId<JobContractArtifact>,
+    result: ReconciledExecutionResult,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ExecutionCompletion, ExecutionCoordinatorError> {
+    let history = events.read_stream(&job.stream, None)?;
+    let projection = project(&history, job.job_id)?;
+    if projection.contract_id != contract_id {
+        return invalid_history("remote result contract identity differs from execution job");
+    }
+    let ProjectedState::Started {
+        attempt_id: active_attempt_id,
+        event_id,
+    } = projection.state
+    else {
+        return invalid_history("remote result does not reconcile an in-doubt execution");
+    };
+    if active_attempt_id != attempt_id {
+        return invalid_history("remote result attempt identity differs from active execution");
+    }
+    let last = history.last().ok_or_else(|| {
+        ExecutionCoordinatorError::InvalidHistory("missing started execution fact".into())
+    })?;
+    let prepared = recover_prepared(content, contract_id, job.job_id)?;
+    let started = StartedExecutionAttempt {
+        stream: job.stream.clone(),
+        revision: revision(last.sequence)?,
+        started_event_id: event_id,
+        attempt_id,
+        prepared,
+    };
+    match result {
+        ReconciledExecutionResult::Completed { capture } => {
+            publish_capture(events, content, &started, capture, command_id, observed_at)
+        }
+        ReconciledExecutionResult::NotStarted { diagnostic } => publish_remote_failure(
+            events,
+            &started,
+            ExecutorFailureClass::NotStarted,
+            &diagnostic,
+            command_id,
+            observed_at,
+        ),
+        ReconciledExecutionResult::Ambiguous { diagnostic } => publish_remote_failure(
+            events,
+            &started,
+            ExecutorFailureClass::Ambiguous,
+            &diagnostic,
+            command_id,
+            observed_at,
+        ),
+    }
+}
+
+fn publish_remote_failure<E: EventStore>(
+    events: &mut E,
+    started: &StartedExecutionAttempt,
+    class: ExecutorFailureClass,
+    diagnostic: &str,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ExecutionCompletion, ExecutionCoordinatorError> {
+    let diagnostic = bounded_diagnostic(
+        diagnostic,
+        started.prepared.contract.capture().diagnostic_limit(),
+    );
+    let (schema, completion) = match class {
+        ExecutorFailureClass::NotStarted => (
+            ATTEMPT_NOT_STARTED,
+            ExecutionCompletion::NotStarted {
+                attempt_id: started.attempt_id,
+                diagnostic: diagnostic.clone(),
+            },
+        ),
+        ExecutorFailureClass::Ambiguous => (
+            ATTEMPT_AMBIGUOUS,
+            ExecutionCompletion::Ambiguous {
+                attempt_id: started.attempt_id,
+                diagnostic: diagnostic.clone(),
+            },
+        ),
+    };
+    let event = fact(
+        schema,
+        Some(started.started_event_id),
+        observed_at,
+        &FailurePayload {
+            job_id: started.prepared.contract.job_id(),
+            attempt_id: started.attempt_id,
+            contract_id: started.prepared.contract_id,
+            diagnostic,
+        },
+    )?;
+    events
+        .append(
+            &started.stream,
+            ExpectedRevision::Exact(started.revision),
+            command_id,
+            &[event],
+        )
+        .map_err(|record| ExecutionCoordinatorError::UnrecordedFailure {
+            attempt_id: started.attempt_id,
+            record: record.to_string(),
+        })?;
+    Ok(completion)
 }
 
 fn publish_capture<E: EventStore, C: ContentStore>(
@@ -878,6 +1016,7 @@ fn project(
                 }
                 state = Some(ProjectedState::Started {
                     attempt_id: payload.attempt_id,
+                    event_id: event.event_id,
                 });
             }
             ATTEMPT_COMPLETED => {
@@ -890,7 +1029,7 @@ fn project(
                 )?;
                 if !matches!(
                     state,
-                    Some(ProjectedState::Started { attempt_id })
+                    Some(ProjectedState::Started { attempt_id, .. })
                         if attempt_id == payload.attempt_id
                 ) {
                     return invalid_history("attempt completion has no matching start");
@@ -910,7 +1049,7 @@ fn project(
                 )?;
                 if !matches!(
                     state,
-                    Some(ProjectedState::Started { attempt_id })
+                    Some(ProjectedState::Started { attempt_id, .. })
                         if attempt_id == payload.attempt_id
                 ) {
                     return invalid_history("executor failure has no matching start");

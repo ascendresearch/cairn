@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use cairn_protocol::{
-    AggregateId, AggregateKind, AssignmentId, AttemptId, CommandId, ContentId, EventId, JobId,
-    LeaseId, ObservedAtUnixMillis, SchemaName, SchemaVersion, StreamRevision, WorkerId,
-    WorkerIncarnationId,
+    AggregateId, AggregateKind, AssignmentId, AttemptId, CommandId, ContentId, ControlMessageId,
+    EventId, JobId, LeaseId, ObservedAtUnixMillis, SchemaName, SchemaVersion, StreamRevision,
+    WorkerId, WorkerIncarnationId,
 };
 use cairn_record::{
     ContentStore, EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId,
@@ -40,6 +40,35 @@ pub struct AssignmentBinding {
     worker_id: WorkerId,
     worker_incarnation_id: WorkerIncarnationId,
     worker_profile_id: ContentId<crate::WorkerProfileArtifact>,
+    offer_message_id: ControlMessageId,
+    start_message_id: ControlMessageId,
+}
+
+/// Stable logical message identities reserved with an assignment before either message is sent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignmentControlMessageIds {
+    offer: ControlMessageId,
+    start: ControlMessageId,
+}
+
+impl AssignmentControlMessageIds {
+    /// Reserves distinct identities for assignment admission and execution start.
+    #[must_use]
+    pub const fn new(offer: ControlMessageId, start: ControlMessageId) -> Self {
+        Self { offer, start }
+    }
+
+    /// Returns the assignment-offer message identity.
+    #[must_use]
+    pub const fn offer(self) -> ControlMessageId {
+        self.offer
+    }
+
+    /// Returns the execution-start message identity.
+    #[must_use]
+    pub const fn start(self) -> ControlMessageId {
+        self.start
+    }
 }
 
 /// Configurable liveness policy frozen by the caller for a grant or renewal decision.
@@ -81,6 +110,7 @@ impl AssignmentLeasePolicy {
 pub struct AssignmentLeaseGrant {
     assignment_id: AssignmentId,
     lease_id: LeaseId,
+    message_ids: AssignmentControlMessageIds,
     policy: AssignmentLeasePolicy,
 }
 
@@ -90,11 +120,13 @@ impl AssignmentLeaseGrant {
     pub const fn new(
         assignment_id: AssignmentId,
         lease_id: LeaseId,
+        message_ids: AssignmentControlMessageIds,
         policy: AssignmentLeasePolicy,
     ) -> Self {
         Self {
             assignment_id,
             lease_id,
+            message_ids,
             policy,
         }
     }
@@ -148,6 +180,18 @@ impl AssignmentBinding {
     pub const fn worker_profile_id(&self) -> ContentId<crate::WorkerProfileArtifact> {
         self.worker_profile_id
     }
+
+    /// Returns the durable assignment-offer logical message identity.
+    #[must_use]
+    pub const fn offer_message_id(&self) -> ControlMessageId {
+        self.offer_message_id
+    }
+
+    /// Returns the durable execution-start logical message identity.
+    #[must_use]
+    pub const fn start_message_id(&self) -> ControlMessageId {
+        self.start_message_id
+    }
 }
 
 /// Current durable timing for one assignment lease.
@@ -199,6 +243,12 @@ impl LeasedExecutionAssignment {
     pub const fn lease(&self) -> &AssignmentLeaseRecord {
         &self.lease
     }
+
+    /// Returns the immutable job contract carried by the assignment offer.
+    #[must_use]
+    pub const fn contract(&self) -> &crate::JobContract {
+        self.authority.contract()
+    }
 }
 
 /// One-shot proof that the selected worker durably accepted an assignment but has no execution
@@ -213,6 +263,12 @@ impl AcceptedExecutionAssignment {
     #[must_use]
     pub const fn lease(&self) -> &AssignmentLeaseRecord {
         &self.lease
+    }
+
+    /// Returns the immutable job contract accepted by the worker.
+    #[must_use]
+    pub const fn contract(&self) -> &crate::JobContract {
+        self.authority.contract()
     }
 }
 
@@ -396,6 +452,8 @@ pub fn grant_assignment_lease<E: EventStore, C: ContentStore>(
         worker_id: worker.worker_id(),
         worker_incarnation_id: worker.incarnation_id(),
         worker_profile_id: worker.profile_id(),
+        offer_message_id: grant.message_ids.offer,
+        start_message_id: grant.message_ids.start,
     };
     let expires_at = lease_expiry_at(observed_at, grant.policy.lease_duration)?;
     let lease = AssignmentLeaseRecord {
@@ -1052,8 +1110,8 @@ mod tests {
     use std::io::Cursor;
 
     use cairn_protocol::{
-        AssignmentId, CommandId, ContentId, ContentType, JobId, LeaseId, WorkerId,
-        WorkerIncarnationId,
+        AssignmentId, CommandId, ContentId, ContentType, ControlMessageId, JobId, LeaseId,
+        WorkerId, WorkerIncarnationId,
     };
     use cairn_record::ContentStore;
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
@@ -1216,6 +1274,10 @@ mod tests {
         )
     }
 
+    fn message_ids() -> AssignmentControlMessageIds {
+        AssignmentControlMessageIds::new(ControlMessageId::new(), ControlMessageId::new())
+    }
+
     #[test]
     fn active_assignment_is_unique_and_prestart_expiry_can_be_safely_replaced() {
         let mut fixture = Fixture::new();
@@ -1230,7 +1292,7 @@ mod tests {
             &fixture.content,
             authority,
             &worker,
-            AssignmentLeaseGrant::new(first_assignment, first_lease, lease_policy()),
+            AssignmentLeaseGrant::new(first_assignment, first_lease, message_ids(), lease_policy()),
             &CommandId::new(),
             ObservedAtUnixMillis::new(2),
         )
@@ -1260,7 +1322,12 @@ mod tests {
                 &fixture.content,
                 duplicate_authority,
                 &worker,
-                AssignmentLeaseGrant::new(AssignmentId::new(), LeaseId::new(), lease_policy()),
+                AssignmentLeaseGrant::new(
+                    AssignmentId::new(),
+                    LeaseId::new(),
+                    message_ids(),
+                    lease_policy(),
+                ),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(3),
             ),
@@ -1296,7 +1363,12 @@ mod tests {
             &fixture.content,
             authority,
             &worker,
-            AssignmentLeaseGrant::new(second_assignment, second_lease, lease_policy()),
+            AssignmentLeaseGrant::new(
+                second_assignment,
+                second_lease,
+                message_ids(),
+                lease_policy(),
+            ),
             &CommandId::new(),
             ObservedAtUnixMillis::new(13),
         )
@@ -1321,7 +1393,12 @@ mod tests {
             &fixture.content,
             authority,
             &worker,
-            AssignmentLeaseGrant::new(AssignmentId::new(), LeaseId::new(), lease_policy()),
+            AssignmentLeaseGrant::new(
+                AssignmentId::new(),
+                LeaseId::new(),
+                message_ids(),
+                lease_policy(),
+            ),
             &CommandId::new(),
             ObservedAtUnixMillis::new(2),
         )
@@ -1405,7 +1482,12 @@ mod tests {
             &fixture.content,
             authority,
             &worker,
-            AssignmentLeaseGrant::new(AssignmentId::new(), LeaseId::new(), lease_policy()),
+            AssignmentLeaseGrant::new(
+                AssignmentId::new(),
+                LeaseId::new(),
+                message_ids(),
+                lease_policy(),
+            ),
             &CommandId::new(),
             ObservedAtUnixMillis::new(2),
         )
@@ -1457,7 +1539,12 @@ mod tests {
             &fixture.content,
             authority,
             &worker,
-            AssignmentLeaseGrant::new(AssignmentId::new(), LeaseId::new(), lease_policy()),
+            AssignmentLeaseGrant::new(
+                AssignmentId::new(),
+                LeaseId::new(),
+                message_ids(),
+                lease_policy(),
+            ),
             &CommandId::new(),
             ObservedAtUnixMillis::new(2),
         )

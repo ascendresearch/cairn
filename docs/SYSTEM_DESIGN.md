@@ -544,8 +544,9 @@ capabilities; real local-process and remote-worker adapters remain target work.
 
 ### 10.2 Worker protocol
 
-**Implemented controller control plane (2026-08-24).** The domain layer now distinguishes stable
-`WorkerId`, process/boot `WorkerIncarnationId`, logical `AssignmentId`, and bounded `LeaseId`.
+**Implemented durable control kernel (2026-08-24).** The domain layer now distinguishes stable
+`WorkerId`, process/boot `WorkerIncarnationId`, logical `AssignmentId`, bounded `LeaseId`, durable
+`ControlMessageId`, short-lived `ControlConnectionId`, and connection-local `ControlSequence`.
 Authentication is a replaceable trusted capability that resolves a transport hello to a stable
 principal; the controller permanently binds that principal to the logical worker identity. Static
 protocol/binary/backend/capability/concurrency data is a canonical content-addressed profile.
@@ -574,10 +575,38 @@ reconciliation requirement. Renewal requires an unexpired accepted lease, the cu
 incarnation, and a heartbeat no older than the accepted/renewed assignment state that names the
 attempt active. Heartbeat presence never establishes start, completion, or cancellation.
 
-The network stream, connection-local sequencing/acknowledgements, controller outbox, worker-local
-durable admission journal, scheduler-wide slot reservation across different attempts, cancellation
-delivery, and remote terminal-receipt reconciliation remain adapter/application slices. Until those
-exist, this is a tested controller state machine rather than a deployable remote worker service.
+The assignment grant freezes distinct offer/start logical message identities before either can be
+sent. The controller then has a durable event-sourced outbox: enqueue precedes delivery, delivery
+mappings precede transport send, and only a valid cumulative acknowledgement removes a logical
+message. Acknowledgements normally piggyback on logical traffic; an explicitly recorded
+acknowledgement-only frame closes the peer outbox when there is no message to send. A reconnect
+creates a fresh connection sequence while retaining the same logical message identity. A crash
+after `AttemptStarted` but before start-message enqueue can therefore reconstruct
+the exact start message from the persisted assignment binding instead of inventing a second
+execution identity.
+
+The worker journal is a separate storage authority. It atomically commits immutable admission plus
+the acceptance response before acknowledging an offer, commits start before constructing one-shot
+executor authority, and atomically commits a terminal observation plus its worker outbox response.
+A restart after local start without terminal observation is explicitly in doubt and cannot invoke
+the executor again. Remote terminal observations are not authoritative on arrival: the controller
+checks the exact worker/incarnation/assignment/lease/attempt/contract binding, accepts post-start
+lease expiry only as reconciliation state, reruns all capture/receipt validation, and publishes one
+terminal execution fact. Duplicate delivery after publication is recognized without overwriting the
+receipt.
+
+V1 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
+is a typed configuration value with `None` as its disabled state. Logical outboxes and admissions
+persist storage-domain payloads rather than treating a network frame as a domain fact. A test uses
+independent controller and worker SQLite event stores, drops both directions' acknowledgements,
+reopens both stores, replays on fresh connections, executes once, reconciles the result, and proves
+both outboxes empty after another reopen.
+
+An authenticated long-lived socket/HTTP transport adapter, hello/welcome negotiation on that
+transport, scheduler-wide slot reservation across different attempts, cancellation delivery,
+artifact transfer, local process/container supervision, and the runnable `cairn-worker` binary
+remain application/adapter slices. Consequently the durable protocol is closed at the storage and
+state-machine boundary but is not yet a deployable remote worker service.
 
 Workers dial the controller. A connection establishes:
 

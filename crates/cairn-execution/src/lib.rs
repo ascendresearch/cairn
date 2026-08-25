@@ -2,15 +2,16 @@
 
 mod assignment;
 mod contract;
+mod control;
 mod coordinator;
 mod executor;
 mod worker;
 
 pub use assignment::{
     AcceptedExecutionAssignment, AssignmentBinding, AssignmentControlError,
-    AssignmentExecutionTerminal, AssignmentLeaseGrant, AssignmentLeasePolicy,
-    AssignmentLeaseRecord, ExecutionAssignmentState, ExpiredLeaseClass, LeasedExecutionAssignment,
-    accept_assignment, grant_assignment_lease, reap_expired_assignment,
+    AssignmentControlMessageIds, AssignmentExecutionTerminal, AssignmentLeaseGrant,
+    AssignmentLeasePolicy, AssignmentLeaseRecord, ExecutionAssignmentState, ExpiredLeaseClass,
+    LeasedExecutionAssignment, accept_assignment, grant_assignment_lease, reap_expired_assignment,
     recover_execution_assignment, renew_assignment_lease, start_accepted_assignment,
 };
 pub use contract::{
@@ -23,11 +24,23 @@ pub use contract::{
     JobContract, JobContractArtifact, NetworkPolicy, OutputByteLimit, OutputName,
     ResolvedProgramIdentity, ResourceRequest, SandboxPath, TrustedExecutionEvidence,
 };
+pub use control::{
+    ControlEnqueueOutcome, ControlFrame, ControlFrameByteLimit, ControlFramePolicy,
+    ControlProtocolError, ControllerControlMessage, DurableControlMessage, InboundControlSession,
+    WorkerAdmissionOutcome, WorkerControlMessage, WorkerExecutionAuthority,
+    WorkerResultReconciliation, accept_worker_assignment, acknowledge_controller_messages,
+    acknowledge_worker_messages, admit_worker_assignment, assignment_offer_message,
+    decode_control_frame, deliver_controller_acknowledgement, deliver_controller_messages,
+    deliver_worker_acknowledgement, deliver_worker_messages, encode_control_frame,
+    enqueue_controller_message, execute_worker_attempt, execution_start_message,
+    pending_controller_messages, pending_worker_messages, reconcile_worker_result,
+    record_worker_execution_start,
+};
 pub use coordinator::{
     ExecutionAttemptAuthority, ExecutionCompletion, ExecutionCoordinatorError, ExecutionJob,
-    ExecutionJobState, PreparedExecutionJob, StartedExecutionAttempt, authorize_execution_attempt,
-    begin_execution_attempt, execute_execution_attempt, prepare_execution_job,
-    recover_execution_job,
+    ExecutionJobState, PreparedExecutionJob, ReconciledExecutionResult, StartedExecutionAttempt,
+    authorize_execution_attempt, begin_execution_attempt, execute_execution_attempt,
+    prepare_execution_job, reconcile_execution_result, recover_execution_job,
 };
 pub use executor::{
     CapturedOutput, ExecutionCapture, ExecutionInput, Executor, ExecutorError,

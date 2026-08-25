@@ -634,6 +634,10 @@ lifecycle_id!(/// One controller-to-worker assignment identity.
 AssignmentId, "assignment");
 lifecycle_id!(/// One bounded assignment-lease identity.
 LeaseId, "lease");
+lifecycle_id!(/// One durable logical worker-control message identity.
+ControlMessageId, "control-message");
+lifecycle_id!(/// One short-lived bidirectional worker-control connection identity.
+ControlConnectionId, "control-connection");
 lifecycle_id!(/// Idempotent command identity.
 CommandId, "command");
 lifecycle_id!(/// Counterfactual/replay branch identity.

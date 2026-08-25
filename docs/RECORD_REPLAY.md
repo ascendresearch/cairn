@@ -312,13 +312,34 @@ The implemented worker/assignment subset now also uses:
 - `execution.assignment-lease-expired` with `before-execution-start` or `execution-in-doubt`
   classification derived against the authoritative execution stream.
 
+The durable bidirectional control subset adds storage-domain facts rather than persisting wire
+frames wholesale:
+
+- `control.controller-message-enqueued`, `control.controller-delivery-recorded`, and
+  `control.controller-acknowledged` separate a stable logical message from every connection mapping;
+- `control.worker-assignment-admitted` atomically records immutable admission and its acceptance
+  outbox response;
+- `control.worker-execution-started` records local start before executor invocation;
+- `control.worker-result-enqueued` atomically records the terminal observation and its logical
+  result response;
+- `control.worker-delivery-recorded` and `control.worker-acknowledged` preserve terminal replay until
+  controller domain processing succeeds.
+
+`ControlMessageId` is stable across reconnect, while `ControlConnectionId` and `ControlSequence`
+name only a delivery attempt. Rebuilding either side checks causal event chains, exact assignment
+bindings, non-regressing/in-bounds cumulative acknowledgements, and delivery mappings. Canonical
+JSON is an isolated V1 frame codec. A recorded delivery may intentionally have no logical message
+when it is an acknowledgement-only frame; such a frame advances connection sequence but never
+creates domain truth or a replay obligation. Replay authority comes from the storage-domain facts
+above, not from treating decoded transport envelopes as execution truth.
+
 Worker profile and availability artifacts are reloaded and validated on restart. Assignment streams
 are keyed by `AttemptId`, while assignment and lease identities remain explicit payload identities;
 this makes two concurrent live placements for one attempt a stream conflict rather than a scheduler
 convention. Recovered acceptance can reconstruct start authority only while its worker incarnation
 is independently live. A recovered started attempt never reconstructs execution authority.
 
-The remaining transport/worker-journal vocabulary is target design:
+The remaining runnable transport/executor vocabulary is target design:
 
 - `JobDeclared`
 - `AssignmentLeased`

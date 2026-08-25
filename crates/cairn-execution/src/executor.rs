@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use cairn_protocol::{AttemptId, ContentId, JobId};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -9,7 +10,8 @@ use crate::{
 };
 
 /// Exact bytes ingested for one declared output after execution.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapturedOutput {
     /// Logical name declared by the immutable job contract.
     pub name: OutputName,
@@ -18,7 +20,8 @@ pub struct CapturedOutput {
 }
 
 /// Complete terminal observation returned by a trusted executor capability.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionCapture {
     pub(crate) outcome: ExecutionOutcome,
     pub(crate) exit_code: Option<i32>,
