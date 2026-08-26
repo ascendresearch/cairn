@@ -71,6 +71,12 @@ identities. The controller recovers an existing assignment phase rather than gra
 lease; a still-leased offer is safely re-enqueued if response or acknowledgement ordering made that
 necessary.
 
+Live heartbeat and control-outbox writers may advance an optimistic stream revision between those
+steps. `optimistic_retry_limit` is a positive exact-ID retry count, or `null` to disable automatic
+retry; `optimistic_retry_delay_ms` is an independently optional positive delay. Only an explicit
+expected-revision conflict is retried. Every retry reuses the complete identity set, so it recovers
+already committed steps and cannot manufacture a second placement, lease, or message.
+
 When the authenticated worker durably accepts an offer, the controller commits authoritative
 execution start before enqueueing the stable `StartExecution` message. A crash after acceptance is
 recovered from the accepted assignment; a crash after the start fact but before outbox enqueue is
@@ -97,10 +103,10 @@ scheduling; there is no static credential fallback or import gate.
 
 `scheduler` is an optional controller configuration object. Omitting it or setting it to `null`
 disables new placement without disabling worker control or reconciliation. When enabled, the policy
-version, reservation-claim timeout, assignment-lease duration, and assignment-material limit are
-explicit; session liveness uses the independently configured controller session timeout. Enabled
-durations and byte limits are positive strong types and zero is rejected during configuration
-decoding.
+version, reservation-claim timeout, assignment-lease duration, assignment-material limit, and
+optimistic conflict retry policy are explicit; session liveness uses the independently configured
+controller session timeout. Enabled durations, counts, and byte limits are positive strong types
+and zero is rejected during configuration decoding.
 
 ## Migration translation boundary
 

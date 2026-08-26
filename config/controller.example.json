@@ -38,6 +38,8 @@
     "assignment_lease_duration_ms": 120000,
     "assignment_material_byte_limit": 536870912,
     "assignment_material_chunk_size": 262144,
+    "optimistic_retry_delay_ms": 10,
+    "optimistic_retry_limit": 8,
     "policy_version": "stable-worker-id-quantitative-v1",
     "reservation_claim_timeout_ms": 30000
   },

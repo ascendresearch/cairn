@@ -366,6 +366,7 @@ pub struct InboundControlSession {
     protocol_version: crate::WorkerProtocolVersion,
     connection_id: ControlConnectionId,
     last_received: Option<ControlSequence>,
+    last_message_received: Option<ControlSequence>,
     last_peer_ack: Option<ControlSequence>,
 }
 
@@ -380,6 +381,7 @@ impl InboundControlSession {
             protocol_version,
             connection_id,
             last_received: None,
+            last_message_received: None,
             last_peer_ack: None,
         }
     }
@@ -419,6 +421,9 @@ impl InboundControlSession {
             highest_peer_sequence_sent,
         )?;
         self.last_received = Some(frame.sequence);
+        if frame.message.is_some() {
+            self.last_message_received = Some(frame.sequence);
+        }
         self.last_peer_ack = frame.acknowledges_peer_through;
         Ok(())
     }
@@ -427,6 +432,15 @@ impl InboundControlSession {
     #[must_use]
     pub const fn received_through(&self) -> Option<ControlSequence> {
         self.last_received
+    }
+
+    /// Returns the highest logical-message sequence that needs a peer acknowledgement.
+    ///
+    /// Acknowledgement-only frames still participate in gap detection but do not themselves ask
+    /// for another acknowledgement, preventing an infinite acknowledgement ping-pong.
+    #[must_use]
+    pub const fn acknowledge_through(&self) -> Option<ControlSequence> {
+        self.last_message_received
     }
 }
 
@@ -3077,5 +3091,44 @@ mod tests {
             cursor.accept(&empty, Some(ControlSequence::new(1).expect("sent"))),
             Err(ControlProtocolError::EmptyFrame)
         ));
+    }
+
+    #[test]
+    fn acknowledgement_only_frame_does_not_advance_acknowledgement_watermark() {
+        let connection_id = ControlConnectionId::new();
+        let mut cursor = InboundControlSession::new(protocol_version(), connection_id);
+        let message = ControlFrame {
+            protocol_version: protocol_version(),
+            connection_id,
+            sequence: ControlSequence::new(1).expect("message sequence"),
+            acknowledges_peer_through: None,
+            message: Some(DurableControlMessage {
+                message_id: ControlMessageId::new(),
+                payload: (),
+            }),
+        };
+        cursor.accept(&message, None).expect("message frame");
+        let acknowledgement_only = ControlFrame::<ControllerControlMessage> {
+            protocol_version: protocol_version(),
+            connection_id,
+            sequence: ControlSequence::new(2).expect("acknowledgement sequence"),
+            acknowledges_peer_through: Some(ControlSequence::new(1).expect("peer sequence")),
+            message: None,
+        };
+        cursor
+            .accept(
+                &acknowledgement_only,
+                Some(ControlSequence::new(1).expect("sent sequence")),
+            )
+            .expect("acknowledgement-only frame");
+
+        assert_eq!(
+            cursor.received_through(),
+            Some(ControlSequence::new(2).expect("received sequence"))
+        );
+        assert_eq!(
+            cursor.acknowledge_through(),
+            Some(ControlSequence::new(1).expect("message sequence"))
+        );
     }
 }

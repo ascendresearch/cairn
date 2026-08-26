@@ -873,6 +873,20 @@ unavailable/draining until the operator activates one explicit accelerator polic
 inferring exposure from host inventory. Activation on a shared host additionally requires an
 actually free device; static policy never claims or evicts another process's device.
 
+The GB10 worker is now activated as `docker-v1`, ready with one slot, and declares exact NVIDIA
+device-0 capabilities. Two consecutive live scheduler runs transferred a content-addressed probe,
+executed it in the remote GPU container, recovered stdout `NVIDIA GB10` plus trusted
+`docker:accelerator:nvidia:0` evidence, and released each terminal reservation. The Ascend worker
+remains unavailable/draining because all seven shared devices were observed carrying other
+processes; Cairn did not claim or disturb one for this gate.
+
+The same live run exposed acknowledgement-only ping-pong: treating an acknowledgement-only frame
+as requiring another acknowledgement grew both durable outboxes continuously and starved
+optimistic scheduling writes. Connection sequence validation still observes every frame, but the
+cumulative acknowledgement watermark now advances only for frames containing a logical message.
+This terminates the exchange without weakening gap detection; the live outbox remained unchanged
+while idle after deployment.
+
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
 builds `cairn-server` and `cairn-worker` for both `x86_64-unknown-linux-gnu` and

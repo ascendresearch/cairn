@@ -706,7 +706,7 @@ async fn run_session(
             config,
             identity.worker_id,
             &connection_id,
-            inbound.received_through(),
+            inbound.acknowledge_through(),
             &mut highest_sent,
             &mut acknowledgement_sent,
         )

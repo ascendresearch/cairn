@@ -87,6 +87,11 @@ Stdout, stderr, and declared output files are checked against the job's configur
 bounds. The terminal observation and outbox message are committed to SQLite before the worker
 removes the container and attempt directory. A cleanup failure never causes another execution.
 
+After terminal reconciliation, orchestration releases the exact scheduler reservation through
+`cairn-server reservation release <controller.json> <reservation-id> <command-id>`. The command
+reconstructs assignment state and fails closed for live, accepted, running, or in-doubt work; it is
+not a direct scheduler-ledger edit.
+
 ## Real Hello World gate
 
 Use any already-pulled image whose full ID is available locally:
@@ -100,9 +105,24 @@ The smoke test runs an executable from the content-addressed input bundle, check
 stdout and a declared output artifact, then asks the executor for the same exited attempt again and
 requires a byte-identical terminal capture. Ordinary CI leaves this host-dependent test ignored.
 
+## Real managed GPU worker gate
+
+With the controller running and an enrolled ready GB10 worker, run:
+
+```bash
+scripts/real-gpu-worker-smoke.sh controller.json sha256:<64-hex-GPU-image-id>
+```
+
+The gate archives a content-addressed executable and Docker environment, schedules through the live
+registry and worker-control protocol, executes `nvidia-smi` in the remote device-bound container,
+then reconstructs the terminal receipt from controller SQLite/CAS. It requires stdout `NVIDIA GB10`
+and trusted evidence `docker:accelerator:nvidia:0`, then releases the exact terminal reservation.
+The test is ignored in ordinary CI and is safe to run consecutively; two immediate passes are the
+repeatability gate for reservation cleanup and control-message quiescence.
+
 ## F2 boundary
 
 F2 is complete when a worker can receive verified materials, durably start a real Docker job,
 publish its bounded result, and recover the same attempt after restart. Service managers,
-multi-worker orchestration, accelerator device exposure, richer network policies, and stronger
-container isolation are separate product slices justified by actual migration needs.
+dynamic shared-device selection, richer network policies, and stronger container isolation are
+separate product slices justified by actual migration needs.

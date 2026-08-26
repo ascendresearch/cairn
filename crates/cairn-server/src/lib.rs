@@ -46,7 +46,7 @@ use cairn_execution::{
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
-    ObservedAtUnixMillis, WorkerId,
+    ObservedAtUnixMillis, ReservationId, WorkerId,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Serialize};
@@ -152,7 +152,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id>"
+        "usage: cairn-server <config.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -187,6 +187,25 @@ pub async fn run_from_arguments(
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let first = arguments.next().ok_or(ServerError::Usage)?;
+    if first == "reservation" {
+        let action = arguments.next().ok_or(ServerError::Usage)?;
+        if action != "release" {
+            return Err(ServerError::Usage);
+        }
+        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let reservation_id = parse_argument::<ReservationId>(arguments.next())?;
+        let command_id = parse_argument::<CommandId>(arguments.next())?;
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let reason = release_execution_reservation(
+            &load_config(&config_path)?,
+            reservation_id,
+            &command_id,
+        )?;
+        eprintln!("released reservation {reservation_id}: {reason:?}");
+        return Ok(());
+    }
     if first == "registry" {
         return run_registry_command(&mut arguments);
     }
@@ -1159,7 +1178,7 @@ async fn controller_session_loop(
             config,
             connection_id,
             session.worker_id(),
-            inbound.received_through(),
+            inbound.acknowledge_through(),
             highest_sent,
             acknowledgement_sent,
         )
@@ -1250,7 +1269,7 @@ async fn controller_session_loop(
                     config,
                     connection_id,
                     session.worker_id(),
-                    inbound.received_through(),
+                    inbound.acknowledge_through(),
                     highest_sent,
                     acknowledgement_sent,
                 )
@@ -1678,6 +1697,12 @@ mod tests {
                 .expect("documented JSON");
         invalid["scheduler"]["assignment_lease_duration_ms"] = 0.into();
         assert!(serde_json::from_value::<ServerConfig>(invalid).is_err());
+
+        let mut invalid_retry: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented JSON");
+        invalid_retry["scheduler"]["optimistic_retry_limit"] = 0.into();
+        assert!(serde_json::from_value::<ServerConfig>(invalid_retry).is_err());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{num::NonZeroU16, path::PathBuf, thread, time::Duration};
 
 use cairn_execution::{
     AssignmentBinding, AssignmentControlMessageIds, AssignmentLeaseDurationMillis,
@@ -31,6 +31,10 @@ pub struct SchedulerServiceConfig {
     pub assignment_material_byte_limit: Option<AssignmentMaterialByteLimit>,
     /// Positive maximum raw bytes returned in one resumable chunk.
     pub assignment_material_chunk_size: AssignmentMaterialChunkSize,
+    /// Exact-ID retries after an optimistic event-stream revision conflict; `null` disables them.
+    pub optimistic_retry_limit: Option<NonZeroU16>,
+    /// Delay between enabled optimistic retries; `null` retries immediately.
+    pub optimistic_retry_delay_ms: Option<std::num::NonZeroU64>,
 }
 
 /// Stable command identities for each independently committed scheduling boundary.
@@ -122,7 +126,25 @@ pub fn schedule_execution_contract(
     contract: &JobContract,
     ids: ControllerScheduleIds,
 ) -> Result<ControllerSchedulingOutcome, ServerError> {
-    schedule_execution_contract_at(config, contract, ids, observed_now()?)
+    let scheduler = config.scheduler.ok_or_else(|| {
+        ServerError::Configuration("scheduler is disabled in controller configuration".into())
+    })?;
+    let mut retries = scheduler.optimistic_retry_limit.map_or(0, NonZeroU16::get);
+    loop {
+        match schedule_execution_contract_at(config, contract, ids, observed_now()?) {
+            Err(error) if retries > 0 && is_optimistic_revision_conflict(&error) => {
+                retries -= 1;
+                if let Some(delay) = scheduler.optimistic_retry_delay_ms {
+                    thread::sleep(Duration::from_millis(delay.get()));
+                }
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
+fn is_optimistic_revision_conflict(error: &ServerError) -> bool {
+    matches!(error, ServerError::Scheduling(diagnostic) if diagnostic.starts_with("expected revision "))
 }
 
 /// Deterministic-time form of [`schedule_execution_contract`] for orchestration and replay.

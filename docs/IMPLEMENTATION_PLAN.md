@@ -349,6 +349,13 @@ device, or one indexed Ascend device with fixed manager/driver bindings. The nex
 gate is operational: activate the dedicated GB10, wait for one genuinely free shared Ascend device,
 and prove device-visible CUDA and Ascend containers before scheduling migration work to either pool.
 
+The GB10 half of that gate is complete: the live scheduler selected the managed ready worker twice
+consecutively, device-visible execution returned a terminal receipt with trusted NVIDIA-device
+evidence, and both reservations were safely released. ACK-only control frames no longer acknowledge
+one another, removing the live outbox write loop found by this gate. The Ascend half remains gated
+only by shared-host capacity: all seven devices were occupied at the observation point, so its
+current worker correctly remains unavailable/draining.
+
 ## Cross-cutting gates
 
 Every phase must keep strong domain IDs, strict versioned JSON, append-only causal facts, secret-free
