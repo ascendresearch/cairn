@@ -356,6 +356,14 @@ one another, removing the live outbox write loop found by this gate. The Ascend 
 only by shared-host capacity: all seven devices were occupied at the observation point, so its
 current worker correctly remains unavailable/draining.
 
+The source reference has now crossed that same boundary. Cairn archived the exact five-file
+Alloyport `cuda-reduction-v1` intake plus a fixed `sm_121` build adapter, selected the capability-
+matched GB10 worker, compiled and linked the CUDA implementation inside the immutable CUDA 13
+image, and executed all nine release cases twice consecutively. Both authoritative receipts carry
+the exact expected input checksum and trusted NVIDIA device-0 evidence, and both terminal
+reservations were released. This completes real source-side reference execution; target-side Ascend
+build and device execution remain the next production-adapter work.
+
 ## Cross-cutting gates
 
 Every phase must keep strong domain IDs, strict versioned JSON, append-only causal facts, secret-free

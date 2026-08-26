@@ -120,6 +120,29 @@ and trusted evidence `docker:accelerator:nvidia:0`, then releases the exact term
 The test is ignored in ordinary CI and is safe to run consecutively; two immediate passes are the
 repeatability gate for reservation cleanup and control-message quiescence.
 
+## Real CUDA reduction gate
+
+The source-side product gate uses Alloyport's original `cuda-reduction-v1` intake rather than a
+prepared Cairn fixture:
+
+```bash
+scripts/real-cuda-reduction-smoke.sh \
+  controller.json \
+  sha256:<64-hex-GPU-image-id> \
+  /path/to/alloyport/fixtures/migrations/cuda-reduction-v1/input
+```
+
+The gate accepts exactly the fixture's CMake file, public header, two CUDA sources, and reference
+driver. Those bytes, the fixed offline build runner, immutable image ID, `sm_121` build adaptation,
+placement requirements, and command are all content-addressed. The managed worker must advertise
+the matching NVIDIA architecture, vendor, and device index. It configures and builds with CUDA 13,
+runs all nine release cases, and requires the exact deterministic checksum plus trusted device-0
+evidence from the terminal receipt. Two consecutive live passes are recorded for the GB10.
+
+Docker mounts `/cairn/work` as an explicitly executable writable tmpfs because compiler jobs must
+run the products they just linked. `/tmp` remains explicitly `noexec`; both mounts retain the
+configured byte ceiling, non-root ownership, `nosuid`, and `nodev`.
+
 ## F2 boundary
 
 F2 is complete when a worker can receive verified materials, durably start a real Docker job,

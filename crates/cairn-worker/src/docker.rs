@@ -321,9 +321,13 @@ impl<'a> DockerExecutor<'a> {
             "--mount".to_owned(),
             format!("type=bind,src={},dst={OUTPUT}", output.display()),
             "--tmpfs".to_owned(),
-            tmpfs(WORK, self.writable_byte_limit),
+            tmpfs(WORK, self.writable_byte_limit, TmpfsExecution::Executable),
             "--tmpfs".to_owned(),
-            tmpfs("/tmp", self.writable_byte_limit),
+            tmpfs(
+                "/tmp",
+                self.writable_byte_limit,
+                TmpfsExecution::NonExecutable,
+            ),
             "--workdir".to_owned(),
             WORK.to_owned(),
         ]);
@@ -650,9 +654,19 @@ fn optional_limit<T: std::fmt::Display>(arguments: &mut Vec<String>, flag: &str,
     }
 }
 
-fn tmpfs(path: &str, limit: Option<NonZeroU64>) -> String {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TmpfsExecution {
+    Executable,
+    NonExecutable,
+}
+
+fn tmpfs(path: &str, limit: Option<NonZeroU64>, execution: TmpfsExecution) -> String {
     let size = limit.map_or_else(String::new, |value| format!(",size={}", value.get()));
-    format!("{path}:rw,nosuid,nodev,mode=0770,uid=65532,gid=65532{size}")
+    let execution = match execution {
+        TmpfsExecution::Executable => "exec",
+        TmpfsExecution::NonExecutable => "noexec",
+    };
+    format!("{path}:rw,{execution},nosuid,nodev,mode=0770,uid=65532,gid=65532{size}")
 }
 
 fn require_success(output: Output, operation: &str) -> Result<String, ExecutorError> {
@@ -946,6 +960,19 @@ mod tests {
                 device_index: AscendDeviceIndex::new(3).expect("Ascend index"),
             }),
             "docker:accelerator:ascend:3"
+        );
+    }
+
+    #[test]
+    fn work_mount_executes_build_products_while_temporary_files_remain_noexec() {
+        let limit = NonZeroU64::new(16 * 1024 * 1024);
+        assert_eq!(
+            tmpfs(WORK, limit, TmpfsExecution::Executable),
+            "/cairn/work:rw,exec,nosuid,nodev,mode=0770,uid=65532,gid=65532,size=16777216"
+        );
+        assert_eq!(
+            tmpfs("/tmp", limit, TmpfsExecution::NonExecutable),
+            "/tmp:rw,noexec,nosuid,nodev,mode=0770,uid=65532,gid=65532,size=16777216"
         );
     }
 

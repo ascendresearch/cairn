@@ -887,6 +887,19 @@ cumulative acknowledgement watermark now advances only for frames containing a l
 This terminates the exchange without weakening gap detection; the live outbox remained unchanged
 while idle after deployment.
 
+The first real source fixture now traverses the same managed path. The integration gate accepts a
+closed inventory of five files from Alloyport's original `cuda-reduction-v1` intake, archives them
+with a fixed build runner and immutable environment, and requires worker capabilities for
+`sm_121`, NVIDIA, and device 0. The GB10 worker compiled the fixture with CUDA 13 and executed its
+nine-case release corpus twice, producing the exact deterministic checksum and trusted device
+binding in both authoritative receipts. The `sm_121` CMake adaptation is explicit input to the
+content-addressed job rather than an ambient host inference.
+
+Compiler jobs exposed one necessary sandbox distinction: linked products in `/cairn/work` must be
+executable. That dedicated bounded tmpfs is now explicitly `exec`; the general `/tmp` mount remains
+explicitly `noexec`. Both stay non-root, `nosuid`, `nodev`, and independently visible in the fixed
+Docker argument construction.
+
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
 builds `cairn-server` and `cairn-worker` for both `x86_64-unknown-linux-gnu` and
