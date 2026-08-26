@@ -68,8 +68,10 @@ short-capacity, exact-alias, or partial-overlap layout. Unknown and excluded con
 non-executable, and actual unsafe address realization stays inside the pending isolated call
 adapter. The first adapter-process slice now binds any assembled case to bounded executable bytes,
 a typed manifest identity, and a strict one-process/one-invocation request inside a canonical input
-bundle, with a fixed non-shell command and sandbox roots. Adapter result observations and complete
-corpus orchestration remain unfinished.
+bundle, with a fixed non-shell command and sandbox roots. The strict result side now binds
+request/invocation identity, pre-invocation rejection versus actual void/status return, and exact
+successful output bytes. Invalid-input cases never promote unspecified output buffers into evidence.
+Job composition, real CUDA/Ascend C adapters, and complete corpus orchestration remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

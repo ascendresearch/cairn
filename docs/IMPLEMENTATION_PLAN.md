@@ -238,7 +238,12 @@ The remaining G slices, in dependency order, are:
    executable bytes receive a separate content identity, a strict V1 request binds the exact source
    bundle and typed case-manifest identity, and the final canonical bundle carries the executable
    bit plus a fixed no-shell command using Cairn input/work/output roots. The result/observation side
-   of this process protocol is the next slice.
+   is now implemented as a strict V1 adapter report. Successful cases freeze output-capable ABI
+   arguments, paths, and exact lengths in the request; captures bind the request and typed invocation
+   identity plus every raw-output identity. Invalid cases capture only completion because their
+   output buffers are unspecified. Reject-before-invocation, void return, and typed status return
+   remain distinct, and a required error status is checked exactly. Job-contract composition and
+   real vendor adapters remain pending.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

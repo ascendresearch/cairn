@@ -1039,8 +1039,20 @@ only the request plus executable under explicit parents. Its `CommandContract` u
 freezes the one-process/one-invocation CLI over Cairn's `/cairn/input`, `/cairn/work`, and
 `/cairn/output` sandbox roots. CUDA, Ascend C, or another adapter may implement that executable; the
 worker remains vendor-neutral. This slice grants no semantic authority to process exit or
-candidate-writable bytes. The strict result manifest, trusted invocation observation, declared
-output capture, and comparison remain pending.
+candidate-writable bytes.
+
+**Implemented call-adapter result and capture-validation slice (2026-08-25).** Successful requests
+now freeze every output/output-input ABI argument, canonical output path, and exact byte length.
+The strict V1 result binds the request identity and typed invocation identity, distinguishes
+rejection before candidate invocation from an actual void or typed-status return, and commits each
+reported output's ABI metadata and raw-byte content identity. Validation requires the generic
+executor capture to contain exactly the result plus all successful-case ABI outputs, recomputes
+lengths and identities, and rejects missing, duplicate, extra, or changed material.
+`RejectBeforeExecution` requires the non-invocation completion; `ReturnStatus` requires the exact
+declared status. Invalid cases deliberately declare no ABI output capture because those buffers are
+unspecified and cannot support evidence. A structurally valid adapter report remains an observation,
+not automatic semantic authority; adapter admission, generic `JobContract` composition, execution
+receipts, and oracle comparison remain pending.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

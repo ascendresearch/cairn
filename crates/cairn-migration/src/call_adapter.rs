@@ -1,17 +1,20 @@
-//! Language-neutral isolated-process input protocol for operator call adapters.
+//! Language-neutral isolated-process protocol for operator call adapters.
+
+use std::collections::BTreeSet;
 
 use cairn_execution::{
-    CommandArgument, CommandContract, InputBundleArtifact, InputBundleEntry, InputBundleV1,
-    InputFileMode, SandboxPath,
+    CapturedOutput, CommandArgument, CommandContract, ExpectedOutput, InputBundleArtifact,
+    InputBundleEntry, InputBundleV1, InputFileMode, OutputByteLimit, OutputName, SandboxPath,
 };
 use cairn_protocol::{ContentId, ContentType};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::{
-    AssembledBoundaryCaseInput, AssembledInputValueCaseInput, AssembledMemorySurfaceCaseInput,
-    MaterializedBoundaryCaseArtifact, MaterializedInputValueCaseArtifact,
-    MaterializedMemorySurfaceCaseArtifact,
+    ArgumentIndex, AssembledBoundaryCaseInput, AssembledInputValueCaseInput,
+    AssembledMemorySurfaceCaseInput, BufferName, CaseExpectedOutcome, CorpusBufferByteLength,
+    InvalidInputBehavior, MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact,
+    MaterializedInputValueCaseArtifact, MaterializedMemorySurfaceCaseArtifact, StatusCode,
 };
 
 const ADAPTER_DIRECTORY: &str = "cairn/bin";
@@ -41,6 +44,12 @@ pub enum CallAdapterProtocolError {
     /// Persisted request fields contradict the fixed process protocol.
     #[error("call-adapter request is inconsistent")]
     InconsistentRequest,
+    /// The result file or declared ABI outputs are absent, duplicated, extra, or contradictory.
+    #[error("call-adapter capture is inconsistent")]
+    InconsistentCapture,
+    /// Adapter completion contradicts the caller-declared expected outcome.
+    #[error("call-adapter completion contradicts the case expectation")]
+    UnexpectedCompletion,
     /// Canonical encoding, path, command, or bundle construction failed.
     #[error("call-adapter protocol codec error: {message}")]
     Codec { message: String },
@@ -132,6 +141,7 @@ pub struct CallAdapterRequestV1 {
     executable: ContentId<CallAdapterExecutableArtifact>,
     invocation_path: SandboxPath,
     result_path: SandboxPath,
+    expected_outputs: Vec<CallAdapterExpectedOutputV1>,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +153,39 @@ struct CallAdapterRequestWire {
     executable: ContentId<CallAdapterExecutableArtifact>,
     invocation_path: SandboxPath,
     result_path: SandboxPath,
+    expected_outputs: Vec<CallAdapterExpectedOutputV1>,
+}
+
+/// One ABI buffer file the adapter must write after an actual invocation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallAdapterExpectedOutputV1 {
+    argument_index: ArgumentIndex,
+    buffer: BufferName,
+    byte_length: CorpusBufferByteLength,
+    path: SandboxPath,
+}
+
+impl CallAdapterExpectedOutputV1 {
+    #[must_use]
+    pub const fn argument_index(&self) -> ArgumentIndex {
+        self.argument_index
+    }
+
+    #[must_use]
+    pub const fn buffer(&self) -> &BufferName {
+        &self.buffer
+    }
+
+    #[must_use]
+    pub const fn byte_length(&self) -> CorpusBufferByteLength {
+        self.byte_length
+    }
+
+    #[must_use]
+    pub const fn path(&self) -> &SandboxPath {
+        &self.path
+    }
 }
 
 impl CallAdapterRequestV1 {
@@ -150,7 +193,19 @@ impl CallAdapterRequestV1 {
         source_input_bundle: ContentId<InputBundleArtifact>,
         invocation: CorpusInvocationIdentityV1,
         executable: ContentId<CallAdapterExecutableArtifact>,
+        expected_outputs: Vec<CallAdapterExpectedOutputV1>,
     ) -> Result<Self, CallAdapterProtocolError> {
+        let mut buffers = BTreeSet::new();
+        if expected_outputs.windows(2).any(|pair| {
+            pair[0].argument_index >= pair[1].argument_index || pair[0].path >= pair[1].path
+        }) || expected_outputs.iter().any(|output| {
+            (match output_path(output.argument_index) {
+                Ok(expected) => expected != output.path,
+                Err(_) => true,
+            }) || !buffers.insert(&output.buffer)
+        }) {
+            return Err(CallAdapterProtocolError::InconsistentRequest);
+        }
         Ok(Self {
             schema_version: CallAdapterSchemaV1,
             source_input_bundle,
@@ -158,6 +213,7 @@ impl CallAdapterRequestV1 {
             executable,
             invocation_path: path(INVOCATION_PATH)?,
             result_path: path(RESULT_PATH)?,
+            expected_outputs,
         })
     }
 
@@ -190,6 +246,12 @@ impl CallAdapterRequestV1 {
     pub const fn result_path(&self) -> &SandboxPath {
         &self.result_path
     }
+
+    /// Returns ABI output files in strict argument order.
+    #[must_use]
+    pub fn expected_outputs(&self) -> &[CallAdapterExpectedOutputV1] {
+        &self.expected_outputs
+    }
 }
 
 impl TryFrom<CallAdapterRequestWire> for CallAdapterRequestV1 {
@@ -197,7 +259,12 @@ impl TryFrom<CallAdapterRequestWire> for CallAdapterRequestV1 {
 
     fn try_from(wire: CallAdapterRequestWire) -> Result<Self, Self::Error> {
         let _ = wire.schema_version;
-        let request = Self::new(wire.source_input_bundle, wire.invocation, wire.executable)?;
+        let request = Self::new(
+            wire.source_input_bundle,
+            wire.invocation,
+            wire.executable,
+            wire.expected_outputs,
+        )?;
         if request.invocation_path != wire.invocation_path
             || request.result_path != wire.result_path
         {
@@ -212,6 +279,172 @@ pub enum CallAdapterRequestArtifact {}
 
 impl ContentType for CallAdapterRequestArtifact {
     const DOMAIN: &'static str = "migration.call-adapter-request.v1";
+}
+
+/// Process-level completion reported by the exact adapter executable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CallAdapterCompletionV1 {
+    /// Trusted input validation rejected the case before calling candidate code.
+    RejectedBeforeInvocation,
+    /// Candidate code was called and returned through a void ABI.
+    InvokedVoid,
+    /// Candidate code was called and returned a typed operator status.
+    InvokedStatus { status: StatusCode },
+}
+
+/// Content domain for exact bytes captured from one output-capable ABI argument.
+pub enum CallAdapterOutputBytesArtifact {}
+
+impl ContentType for CallAdapterOutputBytesArtifact {
+    const DOMAIN: &'static str = "migration.call-adapter-output-bytes.v1";
+}
+
+/// One output identity reported by an adapter result manifest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallAdapterObservedOutputV1 {
+    argument_index: ArgumentIndex,
+    buffer: BufferName,
+    byte_length: CorpusBufferByteLength,
+    bytes: ContentId<CallAdapterOutputBytesArtifact>,
+}
+
+impl CallAdapterObservedOutputV1 {
+    /// Creates metadata for exact output bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if byte length or content identity cannot be represented.
+    pub fn from_bytes(
+        argument_index: ArgumentIndex,
+        buffer: BufferName,
+        bytes: &[u8],
+    ) -> Result<Self, CallAdapterProtocolError> {
+        Ok(Self {
+            argument_index,
+            buffer,
+            byte_length: CorpusBufferByteLength::new(u64::try_from(bytes.len()).map_err(codec)?),
+            bytes: ContentId::<CallAdapterOutputBytesArtifact>::derive(bytes).map_err(codec)?,
+        })
+    }
+
+    #[must_use]
+    pub const fn argument_index(&self) -> ArgumentIndex {
+        self.argument_index
+    }
+
+    #[must_use]
+    pub const fn buffer(&self) -> &BufferName {
+        &self.buffer
+    }
+
+    #[must_use]
+    pub const fn byte_length(&self) -> CorpusBufferByteLength {
+        self.byte_length
+    }
+
+    #[must_use]
+    pub const fn bytes(&self) -> ContentId<CallAdapterOutputBytesArtifact> {
+        self.bytes
+    }
+}
+
+/// Strict V1 adapter-reported result. Validation against captured files and case expectation is
+/// separate; decoding this structure alone grants no semantic authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "CallAdapterResultWire")]
+pub struct CallAdapterResultV1 {
+    schema_version: CallAdapterSchemaV1,
+    request: ContentId<CallAdapterRequestArtifact>,
+    invocation: CorpusInvocationIdentityV1,
+    completion: CallAdapterCompletionV1,
+    outputs: Vec<CallAdapterObservedOutputV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallAdapterResultWire {
+    schema_version: CallAdapterSchemaV1,
+    request: ContentId<CallAdapterRequestArtifact>,
+    invocation: CorpusInvocationIdentityV1,
+    completion: CallAdapterCompletionV1,
+    outputs: Vec<CallAdapterObservedOutputV1>,
+}
+
+impl CallAdapterResultV1 {
+    /// Creates a canonical adapter-reported result.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate, unordered, or contradictory output metadata.
+    pub fn new(
+        request: ContentId<CallAdapterRequestArtifact>,
+        invocation: CorpusInvocationIdentityV1,
+        completion: CallAdapterCompletionV1,
+        outputs: Vec<CallAdapterObservedOutputV1>,
+    ) -> Result<Self, CallAdapterProtocolError> {
+        if outputs
+            .windows(2)
+            .any(|pair| pair[0].argument_index >= pair[1].argument_index)
+            || (completion == CallAdapterCompletionV1::RejectedBeforeInvocation
+                && !outputs.is_empty())
+        {
+            return Err(CallAdapterProtocolError::InconsistentCapture);
+        }
+        Ok(Self {
+            schema_version: CallAdapterSchemaV1,
+            request,
+            invocation,
+            completion,
+            outputs,
+        })
+    }
+
+    #[must_use]
+    pub const fn completion(&self) -> &CallAdapterCompletionV1 {
+        &self.completion
+    }
+
+    #[must_use]
+    pub fn outputs(&self) -> &[CallAdapterObservedOutputV1] {
+        &self.outputs
+    }
+}
+
+impl TryFrom<CallAdapterResultWire> for CallAdapterResultV1 {
+    type Error = CallAdapterProtocolError;
+
+    fn try_from(wire: CallAdapterResultWire) -> Result<Self, Self::Error> {
+        let _ = wire.schema_version;
+        Self::new(wire.request, wire.invocation, wire.completion, wire.outputs)
+    }
+}
+
+/// Content identity domain for one validated adapter-reported result manifest.
+pub enum CallAdapterResultArtifact {}
+
+impl ContentType for CallAdapterResultArtifact {
+    const DOMAIN: &'static str = "migration.call-adapter-result.v1";
+}
+
+/// Adapter result after exact captured files and caller-declared completion have been checked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedCallAdapterObservation {
+    result: CallAdapterResultV1,
+    result_id: ContentId<CallAdapterResultArtifact>,
+}
+
+impl ValidatedCallAdapterObservation {
+    #[must_use]
+    pub const fn result(&self) -> &CallAdapterResultV1 {
+        &self.result
+    }
+
+    #[must_use]
+    pub const fn result_id(&self) -> ContentId<CallAdapterResultArtifact> {
+        self.result_id
+    }
 }
 
 /// Complete process input ready for execution-job composition.
@@ -255,6 +488,32 @@ impl PreparedCallAdapterInput {
     pub const fn command(&self) -> &CommandContract {
         &self.command
     }
+
+    /// Builds the exact executor capture declarations for the result manifest and ABI outputs.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid result-manifest limit or an output length not representable by the
+    /// generic positive capture bound.
+    pub fn declared_outputs(
+        &self,
+        result_limit: OutputByteLimit,
+    ) -> Result<Vec<ExpectedOutput>, CallAdapterProtocolError> {
+        let mut outputs = vec![ExpectedOutput {
+            name: output_name("call-adapter-result")?,
+            path: self.request.result_path.clone(),
+            byte_limit: result_limit,
+        }];
+        for output in &self.request.expected_outputs {
+            outputs.push(ExpectedOutput {
+                name: output_name_for_argument(output.argument_index)?,
+                path: output.path.clone(),
+                byte_limit: OutputByteLimit::new(output.byte_length.get().max(1)).map_err(codec)?,
+            });
+        }
+        outputs.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(outputs)
+    }
 }
 
 /// Binds a quantitative boundary case to one exact isolated adapter executable.
@@ -275,6 +534,8 @@ pub fn prepare_boundary_call_adapter_input(
         CorpusInvocationIdentityV1::Boundary {
             manifest: case.manifest_id(),
         },
+        case.manifest().expected_outcome(),
+        case.manifest().arguments(),
         executable,
         limit,
     )
@@ -298,6 +559,8 @@ pub fn prepare_input_value_call_adapter_input(
         CorpusInvocationIdentityV1::InputValue {
             manifest: case.manifest_id(),
         },
+        case.manifest().expected_outcome(),
+        case.manifest().arguments(),
         executable,
         limit,
     )
@@ -321,16 +584,175 @@ pub fn prepare_memory_surface_call_adapter_input(
         CorpusInvocationIdentityV1::MemorySurface {
             manifest: case.manifest_id(),
         },
+        case.manifest().expected_outcome(),
+        case.manifest().arguments(),
         executable,
         limit,
     )
 }
 
+/// Validates a boundary-case adapter capture against its exact request and expected outcome.
+///
+/// # Errors
+///
+/// Rejects a request/case mismatch, missing/extra/tampered captured files, or completion that
+/// contradicts the case expectation.
+pub fn validate_boundary_call_adapter_capture(
+    case: &AssembledBoundaryCaseInput,
+    prepared: &PreparedCallAdapterInput,
+    captured: &[CapturedOutput],
+) -> Result<ValidatedCallAdapterObservation, CallAdapterProtocolError> {
+    validate_capture(
+        prepared,
+        CorpusInvocationIdentityV1::Boundary {
+            manifest: case.manifest_id(),
+        },
+        case.manifest().expected_outcome(),
+        captured,
+    )
+}
+
+/// Validates a dtype-case adapter capture against its exact request and expected outcome.
+///
+/// # Errors
+///
+/// Rejects a request/case mismatch, missing/extra/tampered captured files, or completion that
+/// contradicts the case expectation.
+pub fn validate_input_value_call_adapter_capture(
+    case: &AssembledInputValueCaseInput,
+    prepared: &PreparedCallAdapterInput,
+    captured: &[CapturedOutput],
+) -> Result<ValidatedCallAdapterObservation, CallAdapterProtocolError> {
+    validate_capture(
+        prepared,
+        CorpusInvocationIdentityV1::InputValue {
+            manifest: case.manifest_id(),
+        },
+        case.manifest().expected_outcome(),
+        captured,
+    )
+}
+
+/// Validates a memory-surface adapter capture against its exact request and expected outcome.
+///
+/// # Errors
+///
+/// Rejects a request/case mismatch, missing/extra/tampered captured files, or completion that
+/// contradicts the case expectation.
+pub fn validate_memory_surface_call_adapter_capture(
+    case: &AssembledMemorySurfaceCaseInput,
+    prepared: &PreparedCallAdapterInput,
+    captured: &[CapturedOutput],
+) -> Result<ValidatedCallAdapterObservation, CallAdapterProtocolError> {
+    validate_capture(
+        prepared,
+        CorpusInvocationIdentityV1::MemorySurface {
+            manifest: case.manifest_id(),
+        },
+        case.manifest().expected_outcome(),
+        captured,
+    )
+}
+
+fn validate_capture(
+    prepared: &PreparedCallAdapterInput,
+    invocation: CorpusInvocationIdentityV1,
+    expected_outcome: &CaseExpectedOutcome,
+    captured: &[CapturedOutput],
+) -> Result<ValidatedCallAdapterObservation, CallAdapterProtocolError> {
+    if prepared.request.invocation != invocation {
+        return Err(CallAdapterProtocolError::InconsistentCapture);
+    }
+    let result_name = output_name("call-adapter-result")?;
+    let mut names = BTreeSet::new();
+    if captured.iter().any(|output| !names.insert(&output.name)) {
+        return Err(CallAdapterProtocolError::InconsistentCapture);
+    }
+    let result_bytes = captured
+        .iter()
+        .find(|output| output.name == result_name)
+        .map(|output| output.bytes.as_slice())
+        .ok_or(CallAdapterProtocolError::InconsistentCapture)?;
+    let result: CallAdapterResultV1 = cairn_codec::from_slice(result_bytes).map_err(codec)?;
+    if result.request != prepared.request_id || result.invocation != invocation {
+        return Err(CallAdapterProtocolError::InconsistentCapture);
+    }
+    validate_completion(expected_outcome, &result.completion)?;
+    let invoked = result.completion != CallAdapterCompletionV1::RejectedBeforeInvocation;
+    let expected_outputs = if invoked {
+        prepared.request.expected_outputs.as_slice()
+    } else {
+        &[]
+    };
+    if result.outputs.len() != expected_outputs.len()
+        || captured.len() != expected_outputs.len().saturating_add(1)
+    {
+        return Err(CallAdapterProtocolError::InconsistentCapture);
+    }
+    for (expected, observed) in expected_outputs.iter().zip(&result.outputs) {
+        if observed.argument_index != expected.argument_index
+            || observed.buffer != expected.buffer
+            || observed.byte_length != expected.byte_length
+        {
+            return Err(CallAdapterProtocolError::InconsistentCapture);
+        }
+        let name = output_name_for_argument(expected.argument_index)?;
+        let bytes = captured
+            .iter()
+            .find(|output| output.name == name)
+            .map(|output| output.bytes.as_slice())
+            .ok_or(CallAdapterProtocolError::InconsistentCapture)?;
+        if u64::try_from(bytes.len()).ok() != Some(expected.byte_length.get())
+            || ContentId::<CallAdapterOutputBytesArtifact>::derive(bytes).map_err(codec)?
+                != observed.bytes
+        {
+            return Err(CallAdapterProtocolError::InconsistentCapture);
+        }
+    }
+    let result_id = ContentId::<CallAdapterResultArtifact>::derive(result_bytes).map_err(codec)?;
+    Ok(ValidatedCallAdapterObservation { result, result_id })
+}
+
+fn validate_completion(
+    expected: &CaseExpectedOutcome,
+    observed: &CallAdapterCompletionV1,
+) -> Result<(), CallAdapterProtocolError> {
+    let matches = match expected {
+        CaseExpectedOutcome::Success => matches!(
+            observed,
+            CallAdapterCompletionV1::InvokedVoid | CallAdapterCompletionV1::InvokedStatus { .. }
+        ),
+        CaseExpectedOutcome::Invalid {
+            behavior: InvalidInputBehavior::RejectBeforeExecution,
+        } => observed == &CallAdapterCompletionV1::RejectedBeforeInvocation,
+        CaseExpectedOutcome::Invalid {
+            behavior: InvalidInputBehavior::ReturnStatus { status },
+        } => matches!(
+            observed,
+            CallAdapterCompletionV1::InvokedStatus { status: actual } if actual == status
+        ),
+        CaseExpectedOutcome::Invalid {
+            behavior: InvalidInputBehavior::ExplicitlyExcluded,
+        } => false,
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(CallAdapterProtocolError::UnexpectedCompletion)
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source bytes/identity, typed invocation, expectation, arguments, and executable bound are independent trust inputs"
+)]
 fn prepare(
     source: &InputBundleV1,
     source_bytes: &[u8],
     source_id: ContentId<InputBundleArtifact>,
     invocation: CorpusInvocationIdentityV1,
+    expected_outcome: &CaseExpectedOutcome,
+    arguments: &[MaterializedAbiArgumentV1],
     executable: &[u8],
     limit: CallAdapterExecutableByteLimit,
 ) -> Result<PreparedCallAdapterInput, CallAdapterProtocolError> {
@@ -347,7 +769,12 @@ fn prepare(
     }
     let executable_id =
         ContentId::<CallAdapterExecutableArtifact>::derive(executable).map_err(codec)?;
-    let request = CallAdapterRequestV1::new(source_id, invocation, executable_id)?;
+    let outputs = if expected_outcome == &CaseExpectedOutcome::Success {
+        expected_outputs(arguments)?
+    } else {
+        Vec::new()
+    };
+    let request = CallAdapterRequestV1::new(source_id, invocation, executable_id, outputs)?;
     let request_bytes = cairn_codec::to_vec(&request).map_err(codec)?;
     let request_id =
         ContentId::<CallAdapterRequestArtifact>::derive(&request_bytes).map_err(codec)?;
@@ -391,6 +818,50 @@ fn prepare(
     })
 }
 
+fn expected_outputs(
+    arguments: &[MaterializedAbiArgumentV1],
+) -> Result<Vec<CallAdapterExpectedOutputV1>, CallAdapterProtocolError> {
+    arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            MaterializedAbiArgumentV1::OutputBuffer {
+                argument_index,
+                buffer,
+                byte_length,
+                ..
+            }
+            | MaterializedAbiArgumentV1::InputOutputBuffer {
+                argument_index,
+                buffer,
+                byte_length,
+                ..
+            } => Some((*argument_index, buffer.clone(), *byte_length)),
+            MaterializedAbiArgumentV1::InputBuffer { .. }
+            | MaterializedAbiArgumentV1::Scalar { .. } => None,
+        })
+        .map(|(argument_index, buffer, byte_length)| {
+            Ok(CallAdapterExpectedOutputV1 {
+                argument_index,
+                buffer,
+                byte_length,
+                path: output_path(argument_index)?,
+            })
+        })
+        .collect()
+}
+
+fn output_path(index: ArgumentIndex) -> Result<SandboxPath, CallAdapterProtocolError> {
+    path(&format!("cairn/abi/arg-{:05}.bin", index.get()))
+}
+
+fn output_name_for_argument(index: ArgumentIndex) -> Result<OutputName, CallAdapterProtocolError> {
+    output_name(&format!("abi-output-{:05}", index.get()))
+}
+
+fn output_name(value: &str) -> Result<OutputName, CallAdapterProtocolError> {
+    OutputName::new(value).map_err(codec)
+}
+
 fn path(value: &str) -> Result<SandboxPath, CallAdapterProtocolError> {
     SandboxPath::new(value).map_err(codec)
 }
@@ -407,16 +878,22 @@ fn codec(error: impl std::fmt::Display) -> CallAdapterProtocolError {
 
 #[cfg(test)]
 mod tests {
-    use cairn_execution::{InputBundleEntry, InputFileMode};
+    use cairn_execution::{CapturedOutput, InputBundleEntry, InputFileMode};
     use cairn_protocol::{ContentId, ContentType};
     use serde_json::json;
 
     use super::{
-        ADAPTER_PATH, CallAdapterExecutableArtifact, CallAdapterExecutableByteLimit,
-        CallAdapterProtocolError, CallAdapterRequestArtifact, CallAdapterRequestV1,
-        CorpusInvocationIdentityV1, INVOCATION_PATH, REQUEST_PATH, path, prepare,
+        ADAPTER_PATH, CallAdapterCompletionV1, CallAdapterExecutableArtifact,
+        CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1, CallAdapterProtocolError,
+        CallAdapterRequestArtifact, CallAdapterRequestV1, CallAdapterResultV1,
+        CorpusInvocationIdentityV1, INVOCATION_PATH, REQUEST_PATH, output_name,
+        output_name_for_argument, path, prepare, validate_capture,
     };
-    use crate::MaterializedBoundaryCaseArtifact;
+    use crate::{
+        ArgumentIndex, BufferName, CaseExpectedOutcome, CorpusBufferByteLength, CorpusElementCount,
+        DataType, ExtentValue, InvalidInputBehavior, MaterializedAbiArgumentV1,
+        MaterializedBoundaryCaseArtifact, StatusCode,
+    };
 
     fn id<T: ContentType>(bytes: &[u8]) -> ContentId<T> {
         ContentId::<T>::derive(bytes).expect("content identity")
@@ -458,6 +935,8 @@ mod tests {
             &source_bytes,
             source_id,
             invocation,
+            &CaseExpectedOutcome::Success,
+            &[],
             executable,
             CallAdapterExecutableByteLimit::new(64).expect("limit"),
         )
@@ -535,7 +1014,16 @@ mod tests {
         };
         let limit = CallAdapterExecutableByteLimit::new(4).expect("limit");
         assert_eq!(
-            prepare(&source, &source_bytes, source_id, invocation, b"", limit),
+            prepare(
+                &source,
+                &source_bytes,
+                source_id,
+                invocation,
+                &CaseExpectedOutcome::Success,
+                &[],
+                b"",
+                limit
+            ),
             Err(CallAdapterProtocolError::EmptyExecutable)
         );
         assert_eq!(
@@ -544,6 +1032,8 @@ mod tests {
                 &source_bytes,
                 source_id,
                 invocation,
+                &CaseExpectedOutcome::Success,
+                &[],
                 b"12345",
                 limit,
             ),
@@ -555,14 +1045,25 @@ mod tests {
                 &source_bytes,
                 id(b"wrong bundle"),
                 invocation,
+                &CaseExpectedOutcome::Success,
+                &[],
                 b"ELF",
                 limit,
             ),
             Err(CallAdapterProtocolError::SourceBundleMismatch)
         );
 
-        let prepared =
-            prepare(&source, &source_bytes, source_id, invocation, b"ELF", limit).expect("prepare");
+        let prepared = prepare(
+            &source,
+            &source_bytes,
+            source_id,
+            invocation,
+            &CaseExpectedOutcome::Success,
+            &[],
+            b"ELF",
+            limit,
+        )
+        .expect("prepare");
         let value = serde_json::to_value(prepared.request()).expect("request json");
         let mut wrong_version = value.clone();
         wrong_version["schema_version"] = json!(2);
@@ -573,5 +1074,171 @@ mod tests {
         let mut unknown = value;
         unknown["fallback_python"] = json!(true);
         assert!(serde_json::from_value::<CallAdapterRequestV1>(unknown).is_err());
+    }
+
+    #[test]
+    fn captured_result_binds_invocation_completion_and_exact_output_bytes() {
+        let (source, source_bytes, source_id) = source_bundle();
+        let invocation = CorpusInvocationIdentityV1::Boundary {
+            manifest: id::<MaterializedBoundaryCaseArtifact>(b"boundary"),
+        };
+        let output_argument = MaterializedAbiArgumentV1::OutputBuffer {
+            argument_index: ArgumentIndex::new(2),
+            buffer: BufferName::new("output").expect("buffer"),
+            data_type: DataType::F32,
+            extents: vec![ExtentValue::new(2)],
+            element_count: CorpusElementCount::new(2),
+            byte_length: CorpusBufferByteLength::new(8),
+        };
+        let prepared = prepare(
+            &source,
+            &source_bytes,
+            source_id,
+            invocation,
+            &CaseExpectedOutcome::Success,
+            &[output_argument],
+            b"ELF",
+            CallAdapterExecutableByteLimit::new(4).expect("limit"),
+        )
+        .expect("prepare");
+        let output_bytes = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        let observed = CallAdapterObservedOutputV1::from_bytes(
+            ArgumentIndex::new(2),
+            BufferName::new("output").expect("buffer"),
+            &output_bytes,
+        )
+        .expect("observed output");
+        let result = CallAdapterResultV1::new(
+            prepared.request_id(),
+            invocation,
+            CallAdapterCompletionV1::InvokedVoid,
+            vec![observed],
+        )
+        .expect("result");
+        let result_bytes = cairn_codec::to_vec(&result).expect("result bytes");
+        let captured = vec![
+            CapturedOutput {
+                name: output_name("call-adapter-result").expect("result name"),
+                bytes: result_bytes.clone(),
+            },
+            CapturedOutput {
+                name: output_name_for_argument(ArgumentIndex::new(2)).expect("output name"),
+                bytes: output_bytes.to_vec(),
+            },
+        ];
+        let validated = validate_capture(
+            &prepared,
+            invocation,
+            &CaseExpectedOutcome::Success,
+            &captured,
+        )
+        .expect("validated capture");
+        assert_eq!(validated.result(), &result);
+        assert_eq!(
+            validated.result_id(),
+            id::<super::CallAdapterResultArtifact>(&result_bytes)
+        );
+
+        let mut tampered = captured.clone();
+        tampered[1].bytes[0] ^= 1;
+        assert_eq!(
+            validate_capture(
+                &prepared,
+                invocation,
+                &CaseExpectedOutcome::Success,
+                &tampered,
+            ),
+            Err(CallAdapterProtocolError::InconsistentCapture)
+        );
+        assert_eq!(
+            validate_capture(
+                &prepared,
+                invocation,
+                &CaseExpectedOutcome::Invalid {
+                    behavior: InvalidInputBehavior::RejectBeforeExecution,
+                },
+                &captured,
+            ),
+            Err(CallAdapterProtocolError::UnexpectedCompletion)
+        );
+    }
+
+    #[test]
+    fn reject_before_invocation_requires_no_abi_outputs() {
+        let (source, source_bytes, source_id) = source_bundle();
+        let invocation = CorpusInvocationIdentityV1::Boundary {
+            manifest: id::<MaterializedBoundaryCaseArtifact>(b"boundary"),
+        };
+        let prepared = prepare(
+            &source,
+            &source_bytes,
+            source_id,
+            invocation,
+            &CaseExpectedOutcome::Invalid {
+                behavior: InvalidInputBehavior::RejectBeforeExecution,
+            },
+            &[],
+            b"ELF",
+            CallAdapterExecutableByteLimit::new(4).expect("limit"),
+        )
+        .expect("prepare");
+        let result = CallAdapterResultV1::new(
+            prepared.request_id(),
+            invocation,
+            CallAdapterCompletionV1::RejectedBeforeInvocation,
+            Vec::new(),
+        )
+        .expect("rejected result");
+        let captured = [CapturedOutput {
+            name: output_name("call-adapter-result").expect("result name"),
+            bytes: cairn_codec::to_vec(&result).expect("result bytes"),
+        }];
+        validate_capture(
+            &prepared,
+            invocation,
+            &CaseExpectedOutcome::Invalid {
+                behavior: InvalidInputBehavior::RejectBeforeExecution,
+            },
+            &captured,
+        )
+        .expect("validated rejection");
+
+        let status_result = CallAdapterResultV1::new(
+            prepared.request_id(),
+            invocation,
+            CallAdapterCompletionV1::InvokedStatus {
+                status: StatusCode::new(-7),
+            },
+            Vec::new(),
+        )
+        .expect("status result");
+        let status_capture = [CapturedOutput {
+            name: output_name("call-adapter-result").expect("result name"),
+            bytes: cairn_codec::to_vec(&status_result).expect("result bytes"),
+        }];
+        validate_capture(
+            &prepared,
+            invocation,
+            &CaseExpectedOutcome::Invalid {
+                behavior: InvalidInputBehavior::ReturnStatus {
+                    status: StatusCode::new(-7),
+                },
+            },
+            &status_capture,
+        )
+        .expect("validated status");
+        assert_eq!(
+            validate_capture(
+                &prepared,
+                invocation,
+                &CaseExpectedOutcome::Invalid {
+                    behavior: InvalidInputBehavior::ReturnStatus {
+                        status: StatusCode::new(-8),
+                    },
+                },
+                &status_capture,
+            ),
+            Err(CallAdapterProtocolError::UnexpectedCompletion)
+        );
     }
 }
