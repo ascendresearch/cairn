@@ -1029,6 +1029,19 @@ and baseline-inapplicable conditions fail closed. This stage deliberately does n
 dereference unsafe addresses; actual pointer/capacity realization remains the isolated call
 adapter's responsibility.
 
+**Implemented isolated call-adapter process-input slice (2026-08-25).** Quantitative, dtype, and
+memory-surface case bundles can now be bound to exact operator-specific adapter executable bytes
+without loading a vendor ABI into the Rust control process. Executable bytes are non-empty,
+caller-bounded, executable-mode material with their own content identity. A strict V1 request binds
+the unmodified source bundle identity, the appropriately typed case-manifest identity, executable
+identity, invocation path, and result path. The composed bundle retains all source files and adds
+only the request plus executable under explicit parents. Its `CommandContract` uses no shell and
+freezes the one-process/one-invocation CLI over Cairn's `/cairn/input`, `/cairn/work`, and
+`/cairn/output` sandbox roots. CUDA, Ascend C, or another adapter may implement that executable; the
+worker remains vendor-neutral. This slice grants no semantic authority to process exit or
+candidate-writable bytes. The strict result manifest, trusted invocation observation, declared
+output capture, and comparison remain pending.
+
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
 valid non-empty shapes. Required alignment, misalignment offset, capacity shortfall, overlap offset,

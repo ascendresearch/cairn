@@ -233,7 +233,12 @@ The remaining G slices, in dependency order, are:
    exact-alias, or partial-overlap layout. Required/accessible lengths, alignment/offset quantities,
    ABI positions, and shared allocation extent are cross-validated against baseline arguments;
    unknown and excluded conditions are rejected. Actual pointer construction, call-adapter
-   execution, observations, and complete corpus orchestration are still pending.
+   execution, observations, and complete corpus orchestration are still pending. The isolated
+   process input boundary is now implemented for all three assembled case categories: caller-bounded
+   executable bytes receive a separate content identity, a strict V1 request binds the exact source
+   bundle and typed case-manifest identity, and the final canonical bundle carries the executable
+   bit plus a fixed no-shell command using Cairn input/work/output roots. The result/observation side
+   of this process protocol is the next slice.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

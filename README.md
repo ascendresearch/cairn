@@ -66,7 +66,10 @@ inherit only their declared behavior. Executable memory-surface obligations now 
 trusted successful baseline and emit a distinct typed manifest for one null, misaligned,
 short-capacity, exact-alias, or partial-overlap layout. Unknown and excluded conditions remain
 non-executable, and actual unsafe address realization stays inside the pending isolated call
-adapter. Call-adapter execution, observations, and complete corpus orchestration remain unfinished.
+adapter. The first adapter-process slice now binds any assembled case to bounded executable bytes,
+a typed manifest identity, and a strict one-process/one-invocation request inside a canonical input
+bundle, with a fixed non-shell command and sandbox roots. Adapter result observations and complete
+corpus orchestration remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

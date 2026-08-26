@@ -1,6 +1,7 @@
 //! Operator-migration product semantics and translation into domain-neutral execution requests.
 
 mod assemble;
+mod call_adapter;
 mod domain;
 mod historical;
 mod input_values;
@@ -14,6 +15,12 @@ pub use assemble::{
     MaterializedMemorySurfaceCaseArtifact, MaterializedMemorySurfaceCaseV1,
     MaterializedScalarArgumentBytesArtifact, MemorySurfaceLayoutV1, assemble_boundary_case_input,
     assemble_input_value_case_input, assemble_memory_surface_case_input,
+};
+pub use call_adapter::{
+    CallAdapterExecutableArtifact, CallAdapterExecutableByteLimit, CallAdapterProtocolError,
+    CallAdapterRequestArtifact, CallAdapterRequestV1, CorpusInvocationIdentityV1,
+    PreparedCallAdapterInput, prepare_boundary_call_adapter_input,
+    prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
 };
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,
