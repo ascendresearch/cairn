@@ -364,6 +364,15 @@ the exact expected input checksum and trusted NVIDIA device-0 evidence, and both
 reservations were released. This completes real source-side reference execution; target-side Ascend
 build and device execution remain the next production-adapter work.
 
+The target toolchain prerequisite is also complete without waiting for a shared card. A distinct
+managed `npu-build` identity advertises exact build-role, Ascend, CANN 9.1.0-beta.1, and dav-3510
+capabilities while its closed Docker accelerator policy is `none`. Twice consecutively, the live
+scheduler sent the same content-addressed Alloyport `ascend-add-v1` source/header/CMake bundle to
+that worker; CMake selected `bisheng`, compiled the Ascend C source, linked `libadd_custom.a`, and
+returned a terminal receipt with trusted `docker:accelerator:none` evidence. This is a real CANN
+toolchain gate, not reduction-candidate build evidence or device correctness. The device worker
+remains unavailable/draining until a shared card is genuinely free.
+
 ## Cross-cutting gates
 
 Every phase must keep strong domain IDs, strict versioned JSON, append-only causal facts, secret-free

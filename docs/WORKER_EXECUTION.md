@@ -143,6 +143,28 @@ Docker mounts `/cairn/work` as an explicitly executable writable tmpfs because c
 run the products they just linked. `/tmp` remains explicitly `noexec`; both mounts retain the
 configured byte ceiling, non-root ownership, `nosuid`, and `nodev`.
 
+## Real no-device Ascend build gate
+
+The shared Ascend host runs a separate `npu-build` worker identity. Its V1 profile advertises only
+the build role and exact `ascend`, `9.1.0-beta.1`, and `dav-3510` toolchain capabilities. Its Docker
+policy is `accelerator: none`; it has no device nodes or driver mount and remains independent of the
+device worker, which is unavailable and draining while the shared cards are occupied.
+
+Run the toolchain gate with:
+
+```bash
+scripts/real-ascend-build-smoke.sh \
+  controller.json \
+  sha256:<64-hex-Ascend-build-image-id> \
+  /path/to/alloyport/fixtures/ascend-add-v1
+```
+
+The content-addressed job copies the frozen `add_custom.cpp` and tiling header into bounded work
+storage, selects CMake's ASC language with `--npu-arch=dav-3510`, and requires `bisheng` compilation
+plus ASC static-library linkage. The receipt must report the exact success line and trusted
+`docker:accelerator:none` evidence. This proves the real target toolchain without claiming target
+device correctness or compiling a generated reduction candidate.
+
 ## F2 boundary
 
 F2 is complete when a worker can receive verified materials, durably start a real Docker job,

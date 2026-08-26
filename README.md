@@ -41,6 +41,12 @@ scripts/docker-hello-smoke.sh sha256:<64-hex-local-image-id>
 It executes content-addressed input in Docker and proves that replaying the same exited attempt
 returns a byte-identical capture. See [`docs/WORKER_EXECUTION.md`](docs/WORKER_EXECUTION.md).
 
+The managed live deployment also has opt-in gates for Alloyport's original CUDA reduction intake
+and a no-device Ascend C toolchain fixture. The CUDA gate compiles and executes all nine release
+cases on the GB10 twice; the Ascend gate compiles and links `dav-3510` code twice through a separate
+device-free build worker. These are authoritative execution receipts for the source reference and
+target compiler substrate, not yet a generated target reduction candidate or device verdict.
+
 M2 has begun in `cairn-verification`. Its current V1 foundation keeps admission-policy counts,
 the exact trusted generic-mutant set, required construction/fault classes, execution scope, and
 budget-exhaustion behavior in immutable configuration. Numerical allowance provenance and assurance
@@ -51,8 +57,8 @@ refinement, corpus, authorship, construction-claim, correct/wrong-variant, and o
 manifests with separate typed identity domains. The first immutable admitted-oracle receipt is now
 implemented for the hardware-free historical reduction control. That frozen oracle can judge
 candidate-role host reduction executions and emit recomputable pass/fail receipts; general
-candidate search, real CUDA/Ascend execution, and the first unified migration are not implemented
-yet.
+candidate search, production CUDA/Ascend call adapters, target-device judgment, and the first
+unified migration are not implemented yet.
 `cairn-migration` now supplies the first strongly typed operator-domain
 body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivation. Floating
 special-value and memory conditions retain explicit supported/invalid/excluded/unknown
@@ -115,8 +121,8 @@ than a compiler, and the complete corpus uses deterministic execution captures a
 exercising the real build and representative adapter processes. The historical reduction adapter
 now provides the first actual mutation composition: it binds closed drop-last, unit-offset, and
 zero-output mutant kinds to the exact wrong implementations, fault evidence, builds, and real runs,
-then derives a complete 3-by-2 grid from exact per-case ULP comparisons. CUDA/Ascend C compilation
-and full device execution through vendor adapters remain unfinished. The first
+then derives a complete 3-by-2 grid from exact per-case ULP comparisons. Product candidate compiler
+composition and full device execution through vendor adapters remain unfinished. The first
 hardware-free historical reduction control now loads the domain/reference/corpus through ordinary
 proposal artifacts, builds and executes two distinct correct and three distinct wrong compiled host
 variants through authoritative generic receipts, and records exact finite-f32 bits plus recomputed

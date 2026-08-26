@@ -900,6 +900,18 @@ executable. That dedicated bounded tmpfs is now explicitly `exec`; the general `
 explicitly `noexec`. Both stay non-root, `nosuid`, `nodev`, and independently visible in the fixed
 Docker argument construction.
 
+The Ascend host therefore has two deliberately separate worker identities. The device identity
+stays `transport-only`, unavailable, draining, and zero-slot while every shared accelerator is
+occupied. The build identity is ready in pool `npu-build`, has the closed `accelerator: none`
+policy, and advertises exact build-role, CANN 9.1.0-beta.1, and dav-3510 toolchain capabilities.
+It never inherits device availability from the co-located device worker.
+
+Two consecutive live build jobs archived the same fixed Alloyport `ascend-add-v1` source, tiling
+header, CMake project, runner, and immutable build image. The worker selected CMake's ASC language,
+compiled with `bisheng`, linked `libadd_custom.a`, and returned trusted
+`docker:accelerator:none` evidence. This establishes the no-device target compiler substrate only;
+it does not stand in for a generated reduction candidate, ABI adapter, or Ascend device receipt.
+
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
 builds `cairn-server` and `cairn-worker` for both `x86_64-unknown-linux-gnu` and
