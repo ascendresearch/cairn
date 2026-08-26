@@ -964,7 +964,7 @@ maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid 
 first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
 typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
 rather than inventing an expected status. Dtype and memory-surface patterns are derived by separate
-typed policies described below; complete executable case assembly remains target work.
+typed policies described below; complete corpus orchestration and execution remain target work.
 
 Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
 integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
@@ -1011,8 +1011,23 @@ dtype-case manifest uses a content-identity domain distinct from quantitative bo
 binds the domain, successful baseline, dtype obligation, target materialization, copied typed
 target/outcome, and complete ABI argument set, and cross-validates the canonical bundle files.
 Supported recipes expect success; invalid recipes retain their caller-declared behavior. Unknown,
-excluded, underived, wrong-target, and multi-invalid compositions fail closed. Isolated
-pointer/capacity/aliasing layouts, a call adapter, observations, and execution remain target work.
+excluded, underived, wrong-target, and multi-invalid compositions fail closed. A call adapter,
+observations, and execution remain target work.
+
+**Implemented memory-surface layout assembly slice (2026-08-25).** An executable null-pointer,
+misalignment, capacity-shortfall, exact-alias, or partial-overlap obligation can now be composed only
+over a trusted successful quantitative case with supported deterministic bytes for every
+input-capable buffer. A distinct strict V1 manifest binds the domain, quantitative baseline,
+memory-surface obligation, copied disposition/outcome, complete ABI argument set, and exactly one
+adapter-neutral layout. The layout records target ABI positions and required byte lengths; relevant
+variants additionally record required alignment and offset, accessible short capacity, or both
+regions and their checked shared allocation extent. Aliased storage has a deterministic preparation
+rule: zero initialize, then overlay input-capable bytes in canonical buffer-pair order. Persisted
+layout fields are recomputed from the typed obligation and ABI arguments, and the canonical bundle
+is cross-validated exactly as for other assembled cases. Unknown, excluded, underived, zero-length,
+and baseline-inapplicable conditions fail closed. This stage deliberately does not construct or
+dereference unsafe addresses; actual pointer/capacity realization remains the isolated call
+adapter's responsibility.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
@@ -1021,8 +1036,8 @@ and canonical buffer pair remain distinct Rust types. The domain must classify e
 condition as supported, invalid with explicit behavior, explicitly excluded with a content identity,
 or unknown, and it must declare every distinct ABI buffer pair exactly once. The derivation omits
 non-empty pointer cases for zero-only buffers and does not claim partial overlap for two one-byte
-regions. These obligations still require isolated byte materialization and execution before they
-become observations.
+regions. Executable obligations now have deterministic baseline bytes and adapter-neutral layouts,
+but still require isolated pointer realization and execution before they become observations.
 
 **Implemented historical-regression contract slice (2026-08-25).** Historical records now preserve
 a validated failure class, migration-domain family, target-mechanism or oracle-mechanism scope,

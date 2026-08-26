@@ -62,8 +62,11 @@ an ABI-ordered canonical `InputBundleV1`; bundle/manifest/source identities and 
 cross-validated. Supported and explicitly-invalid dtype obligations now share one composition path
 over a separately proven successful quantitative baseline, vary exactly one input buffer, and bind
 that buffer's exact materialization identity. Supported recipes expect success; invalid recipes
-inherit only their declared behavior. Memory-surface realization, call-adapter execution, and
-complete corpus orchestration remain unfinished.
+inherit only their declared behavior. Executable memory-surface obligations now assemble over a
+trusted successful baseline and emit a distinct typed manifest for one null, misaligned,
+short-capacity, exact-alias, or partial-overlap layout. Unknown and excluded conditions remain
+non-executable, and actual unsafe address realization stays inside the pending isolated call
+adapter. Call-adapter execution, observations, and complete corpus orchestration remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

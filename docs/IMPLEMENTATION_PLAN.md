@@ -218,8 +218,8 @@ The remaining G slices, in dependency order, are:
    min/max/zero/one/interiors, invalid neighbors, first/last tile tails, dtype extrema, signed zero,
    non-finite/subnormal inputs, cancellation, mixed finite scales, null/misaligned pointers,
    insufficient capacity, exact aliasing, and applicable partial overlap. Remaining mandatory work
-   includes populating/reproducing historical fixtures and completing executable corpus-case
-   assembly. Exact dtype recipes now materialize into caller-bounded deterministic bytes with
+   includes populating/reproducing historical fixtures and completing executable corpus
+   orchestration. Exact dtype recipes now materialize into caller-bounded deterministic bytes with
    typed element/byte quantities, checked overflow/allocation, and source/byte content identities;
    trusted quantitative boundary cases now rederive exact domain membership, resolve buffer shapes,
    encode scalar ABI files, describe output allocation lengths, and emit canonical ABI-ordered
@@ -227,8 +227,13 @@ The remaining G slices, in dependency order, are:
    supported and explicitly-invalid dtype obligations now share one manifest/assembly path, require
    a trusted successful quantitative baseline, vary exactly one input buffer, bind that target's
    materialization identity, and derive success or the caller-declared invalid outcome directly from
-   the obligation. Memory-surface realization, call-adapter execution, and complete corpus
-   orchestration are still pending.
+   the obligation. The adapter-neutral part of memory-surface realization is also implemented: an
+   executable obligation requires a trusted successful quantitative baseline and supported input
+   bytes, then emits a distinct manifest with one exact null, misalignment, capacity-shortfall,
+   exact-alias, or partial-overlap layout. Required/accessible lengths, alignment/offset quantities,
+   ABI positions, and shared allocation extent are cross-validated against baseline arguments;
+   unknown and excluded conditions are rejected. Actual pointer construction, call-adapter
+   execution, observations, and complete corpus orchestration are still pending.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

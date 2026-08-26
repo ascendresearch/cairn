@@ -8,11 +8,12 @@ mod materialize;
 mod memory_surface;
 
 pub use assemble::{
-    AssembledBoundaryCaseInput, AssembledInputValueCaseInput, CorpusCaseAssemblyError,
-    MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact, MaterializedBoundaryCaseV1,
-    MaterializedInputValueCaseArtifact, MaterializedInputValueCaseV1,
-    MaterializedScalarArgumentBytesArtifact, assemble_boundary_case_input,
-    assemble_input_value_case_input,
+    AssembledBoundaryCaseInput, AssembledInputValueCaseInput, AssembledMemorySurfaceCaseInput,
+    CorpusCaseAssemblyError, MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact,
+    MaterializedBoundaryCaseV1, MaterializedInputValueCaseArtifact, MaterializedInputValueCaseV1,
+    MaterializedMemorySurfaceCaseArtifact, MaterializedMemorySurfaceCaseV1,
+    MaterializedScalarArgumentBytesArtifact, MemorySurfaceLayoutV1, assemble_boundary_case_input,
+    assemble_input_value_case_input, assemble_memory_surface_case_input,
 };
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,

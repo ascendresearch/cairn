@@ -11,13 +11,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::{
-    ArgumentIndex, BufferContractV1, BufferName, BufferRole, CaseExpectedOutcome, DataType,
-    DimensionSpec, ExtentValue, InputValueCaseTarget, InputValueDisposition, IntegerValue,
-    MandatoryInputValueCaseArtifact, MandatoryInputValueCaseV1, MaterializedCorpusBuffer,
-    MaterializedCorpusBufferArtifact, MaterializedCorpusBufferBytesArtifact,
-    MaterializedCorpusBufferV1, MigrationDomainCaseArtifact, MigrationDomainCaseV1,
-    MigrationDomainContractV1, ScalarParameterName, derive_mandatory_base_cases,
-    derive_mandatory_input_value_cases,
+    ArgumentIndex, BufferAliasingPattern, BufferContractV1, BufferMemoryPattern, BufferName,
+    BufferPairV1, BufferRole, CapacityShortfallBytes, CaseExpectedOutcome, DataType, DimensionSpec,
+    ExtentValue, InputValueCaseTarget, InputValueDisposition, IntegerValue,
+    MandatoryInputValueCaseArtifact, MandatoryInputValueCaseV1, MandatoryMemorySurfaceCaseArtifact,
+    MandatoryMemorySurfaceCaseV1, MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
+    MaterializedCorpusBufferBytesArtifact, MaterializedCorpusBufferV1, MemoryConditionDisposition,
+    MemorySurfaceCaseTarget, MigrationDomainCaseArtifact, MigrationDomainCaseV1,
+    MigrationDomainContractV1, MisalignmentOffsetBytes, PartialOverlapOffsetBytes,
+    RequiredAlignmentBytes, ScalarParameterName, derive_mandatory_base_cases,
+    derive_mandatory_input_value_cases, derive_mandatory_memory_surface_cases,
 };
 use crate::{CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount};
 
@@ -38,11 +41,17 @@ pub enum CorpusCaseAssemblyError {
     #[error("explicitly excluded boundary case is not executable")]
     ExcludedBoundaryCase,
     /// The quantitative baseline is not a trusted successful case for this caller domain.
-    #[error("input-value case requires a trusted successful quantitative baseline")]
+    #[error("case assembly requires a trusted successful quantitative baseline")]
     InvalidQuantitativeBaseline,
     /// The input-value case is absent from trusted derivation or is unknown/excluded.
     #[error("input-value case is not a trusted executable dtype obligation")]
     UntrustedInputValueCase,
+    /// The memory-surface case is absent from trusted derivation or is unknown/excluded.
+    #[error("memory-surface case is not a trusted executable memory obligation")]
+    UntrustedMemorySurfaceCase,
+    /// The successful quantitative baseline does not make the selected memory target applicable.
+    #[error("memory-surface case is not applicable to the selected quantitative baseline")]
+    InapplicableMemorySurfaceCase,
     /// Input-capable domain buffers and supplied materialized values do not match exactly.
     #[error("materialized input buffers do not exactly cover the input ABI")]
     InputCoverageMismatch,
@@ -571,6 +580,266 @@ impl TryFrom<MaterializedInputValueCaseWire> for MaterializedInputValueCaseV1 {
     }
 }
 
+/// Adapter-neutral layout for the one deliberately perturbed memory relationship.
+///
+/// Buffer lengths describe the ordinary successful baseline. The later isolated call adapter is
+/// responsible for realizing the address/capacity relationship. For aliasing layouts, shared
+/// storage is zero-initialized and input-capable argument bytes are overlaid in canonical pair
+/// order before the call; this makes even two-input aliasing deterministic.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum MemorySurfaceLayoutV1 {
+    /// Pass a null address for one logically non-empty buffer.
+    NullPointer {
+        /// Exact ABI position receiving the null address.
+        argument_index: ArgumentIndex,
+        /// Exact domain buffer being perturbed.
+        buffer: BufferName,
+        /// Bytes required by the successful baseline.
+        required_byte_length: CorpusBufferByteLength,
+    },
+    /// Pass an address at a known offset from a correctly aligned base.
+    MisalignedPointer {
+        /// Exact ABI position receiving the misaligned address.
+        argument_index: ArgumentIndex,
+        /// Exact domain buffer being perturbed.
+        buffer: BufferName,
+        /// Bytes required by the successful baseline.
+        required_byte_length: CorpusBufferByteLength,
+        /// Alignment deliberately violated.
+        required_alignment: RequiredAlignmentBytes,
+        /// Non-zero byte offset from the aligned base.
+        offset: MisalignmentOffsetBytes,
+    },
+    /// Expose fewer addressable bytes than the successful baseline requires.
+    InsufficientCapacity {
+        /// Exact ABI position receiving the short allocation.
+        argument_index: ArgumentIndex,
+        /// Exact domain buffer being perturbed.
+        buffer: BufferName,
+        /// Bytes required by the successful baseline.
+        required_byte_length: CorpusBufferByteLength,
+        /// Bytes the isolated adapter may expose at the passed address.
+        accessible_byte_length: CorpusBufferByteLength,
+        /// Exact difference between required and accessible bytes.
+        shortfall: CapacityShortfallBytes,
+    },
+    /// Give two non-empty buffer arguments the same base address.
+    ExactAlias {
+        /// Canonical domain buffer pair.
+        pair: BufferPairV1,
+        /// ABI position of the pair's first named buffer.
+        first_argument_index: ArgumentIndex,
+        /// ABI position of the pair's second named buffer.
+        second_argument_index: ArgumentIndex,
+        /// First buffer's required baseline bytes.
+        first_byte_length: CorpusBufferByteLength,
+        /// Second buffer's required baseline bytes.
+        second_byte_length: CorpusBufferByteLength,
+        /// Total shared storage required to contain either region.
+        shared_allocation_byte_length: CorpusBufferByteLength,
+    },
+    /// Place the second non-empty region at a positive offset inside the first region's span.
+    PartialOverlap {
+        /// Canonical domain buffer pair.
+        pair: BufferPairV1,
+        /// ABI position of the pair's first named buffer.
+        first_argument_index: ArgumentIndex,
+        /// ABI position of the pair's second named buffer.
+        second_argument_index: ArgumentIndex,
+        /// First buffer's required baseline bytes.
+        first_byte_length: CorpusBufferByteLength,
+        /// Second buffer's required baseline bytes.
+        second_byte_length: CorpusBufferByteLength,
+        /// Positive address offset of the second region from the first.
+        second_offset: PartialOverlapOffsetBytes,
+        /// Total shared storage covering both overlapping regions.
+        shared_allocation_byte_length: CorpusBufferByteLength,
+    },
+}
+
+/// Content identity domain for one materialized memory-surface invocation manifest.
+///
+/// ```compile_fail
+/// use cairn_migration::{MaterializedBoundaryCaseArtifact, MaterializedMemorySurfaceCaseArtifact};
+/// use cairn_protocol::ContentId;
+///
+/// fn require_memory(_: Option<ContentId<MaterializedMemorySurfaceCaseArtifact>>) {}
+/// let boundary: Option<ContentId<MaterializedBoundaryCaseArtifact>> = None;
+/// require_memory(boundary);
+/// ```
+pub enum MaterializedMemorySurfaceCaseArtifact {}
+
+impl ContentType for MaterializedMemorySurfaceCaseArtifact {
+    const DOMAIN: &'static str = "migration.materialized-memory-surface-case.v1";
+}
+
+/// Strict V1 invocation manifest for one executable pointer/capacity/aliasing obligation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "MaterializedMemorySurfaceCaseWire")]
+pub struct MaterializedMemorySurfaceCaseV1 {
+    schema_version: MaterializedCaseSchemaV1,
+    domain: ContentId<CallerDomainBodyArtifact>,
+    quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
+    memory_surface_case: ContentId<MandatoryMemorySurfaceCaseArtifact>,
+    disposition: MemoryConditionDisposition,
+    expected_outcome: CaseExpectedOutcome,
+    layout: MemorySurfaceLayoutV1,
+    arguments: Vec<MaterializedAbiArgumentV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaterializedMemorySurfaceCaseWire {
+    schema_version: MaterializedCaseSchemaV1,
+    domain: ContentId<CallerDomainBodyArtifact>,
+    quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
+    memory_surface_case: ContentId<MandatoryMemorySurfaceCaseArtifact>,
+    disposition: MemoryConditionDisposition,
+    expected_outcome: CaseExpectedOutcome,
+    layout: MemorySurfaceLayoutV1,
+    arguments: Vec<MaterializedAbiArgumentV1>,
+}
+
+impl MaterializedMemorySurfaceCaseV1 {
+    fn new(
+        domain: ContentId<CallerDomainBodyArtifact>,
+        quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
+        memory_surface_case: ContentId<MandatoryMemorySurfaceCaseArtifact>,
+        disposition: MemoryConditionDisposition,
+        expected_outcome: CaseExpectedOutcome,
+        layout: MemorySurfaceLayoutV1,
+        arguments: Vec<MaterializedAbiArgumentV1>,
+    ) -> Result<Self, CorpusCaseAssemblyError> {
+        if !argument_collection_is_consistent(&arguments)
+            || arguments
+                .iter()
+                .filter_map(argument_input_disposition)
+                .any(|candidate| candidate != &InputValueDisposition::Supported)
+            || memory_surface_outcome(&disposition).as_ref() != Some(&expected_outcome)
+            || !layout_matches_arguments(&layout, &arguments)
+        {
+            return Err(BoundaryCaseAssemblyError::InconsistentManifest);
+        }
+        Ok(Self {
+            schema_version: MaterializedCaseSchemaV1,
+            domain,
+            quantitative_baseline,
+            memory_surface_case,
+            disposition,
+            expected_outcome,
+            layout,
+            arguments,
+        })
+    }
+
+    /// Returns the exact caller-domain identity.
+    #[must_use]
+    pub const fn domain(&self) -> ContentId<CallerDomainBodyArtifact> {
+        self.domain
+    }
+
+    /// Returns the trusted successful quantitative baseline identity.
+    #[must_use]
+    pub const fn quantitative_baseline(&self) -> ContentId<MigrationDomainCaseArtifact> {
+        self.quantitative_baseline
+    }
+
+    /// Returns the exact derived memory-surface obligation identity.
+    #[must_use]
+    pub const fn memory_surface_case(&self) -> ContentId<MandatoryMemorySurfaceCaseArtifact> {
+        self.memory_surface_case
+    }
+
+    /// Returns the caller-declared disposition for the perturbed memory relationship.
+    #[must_use]
+    pub const fn disposition(&self) -> &MemoryConditionDisposition {
+        &self.disposition
+    }
+
+    /// Returns success or the caller-declared invalid-memory outcome.
+    #[must_use]
+    pub const fn expected_outcome(&self) -> &CaseExpectedOutcome {
+        &self.expected_outcome
+    }
+
+    /// Returns the isolated call adapter's exact memory layout instruction.
+    #[must_use]
+    pub const fn layout(&self) -> &MemorySurfaceLayoutV1 {
+        &self.layout
+    }
+
+    /// Returns the complete successful-baseline arguments in strict ABI order.
+    #[must_use]
+    pub fn arguments(&self) -> &[MaterializedAbiArgumentV1] {
+        &self.arguments
+    }
+
+    /// Recomputes every source identity, trusted membership, and derived memory layout.
+    ///
+    /// # Errors
+    ///
+    /// Rejects another domain/baseline/obligation or copied metadata that contradicts those
+    /// sources and the ABI argument lengths.
+    pub fn validate_sources(
+        &self,
+        domain: &MigrationDomainContractV1,
+        baseline: &MigrationDomainCaseV1,
+        memory_case: &MandatoryMemorySurfaceCaseV1,
+    ) -> Result<(), CorpusCaseAssemblyError> {
+        let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
+        let baseline_id = canonical_id::<MigrationDomainCaseArtifact, _>(baseline)?;
+        let memory_case_id = canonical_id::<MandatoryMemorySurfaceCaseArtifact, _>(memory_case)?;
+        let quantitative = derive_mandatory_base_cases(domain).map_err(codec_error)?;
+        let memory_cases = derive_mandatory_memory_surface_cases(domain).map_err(codec_error)?;
+        let expected_layout = derive_memory_layout(memory_case.target(), &self.arguments)?;
+        if domain_id != self.domain
+            || baseline_id != self.quantitative_baseline
+            || memory_case_id != self.memory_surface_case
+            || baseline.expected_outcome() != &CaseExpectedOutcome::Success
+            || !quantitative.cases().contains(baseline)
+            || !memory_cases.cases().contains(memory_case)
+            || memory_case.disposition() != &self.disposition
+            || memory_surface_outcome(memory_case.disposition()).as_ref()
+                != Some(&self.expected_outcome)
+            || expected_layout != self.layout
+            || !arguments_match_domain(&self.arguments, domain, baseline)
+        {
+            return Err(BoundaryCaseAssemblyError::UntrustedMemorySurfaceCase);
+        }
+        Ok(())
+    }
+
+    /// Verifies the canonical bundle against this manifest and every committed baseline file.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, extra, executable, length-mismatched, or identity-mismatched files.
+    pub fn validate_input_bundle(
+        &self,
+        bundle: &InputBundleV1,
+    ) -> Result<(), CorpusCaseAssemblyError> {
+        validate_manifest_bundle(self, &self.arguments, bundle)
+    }
+}
+
+impl TryFrom<MaterializedMemorySurfaceCaseWire> for MaterializedMemorySurfaceCaseV1 {
+    type Error = CorpusCaseAssemblyError;
+
+    fn try_from(wire: MaterializedMemorySurfaceCaseWire) -> Result<Self, Self::Error> {
+        let _ = wire.schema_version;
+        Self::new(
+            wire.domain,
+            wire.quantitative_baseline,
+            wire.memory_surface_case,
+            wire.disposition,
+            wire.expected_outcome,
+            wire.layout,
+            wire.arguments,
+        )
+    }
+}
+
 /// Complete transient product ready to archive in the execution input-bundle content domain.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssembledBoundaryCaseInput {
@@ -633,6 +902,48 @@ impl AssembledInputValueCaseInput {
     /// Returns the typed identity of the dtype-case invocation manifest.
     #[must_use]
     pub const fn manifest_id(&self) -> ContentId<MaterializedInputValueCaseArtifact> {
+        self.manifest_id
+    }
+
+    /// Returns the canonical execution input bundle.
+    #[must_use]
+    pub const fn input_bundle(&self) -> &InputBundleV1 {
+        &self.input_bundle
+    }
+
+    /// Returns canonical bundle bytes ready for CAS archival.
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> &[u8] {
+        &self.input_bundle_bytes
+    }
+
+    /// Returns the exact execution input-bundle identity.
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
+    }
+}
+
+/// Complete memory-surface invocation ready for input-bundle archival and isolated realization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssembledMemorySurfaceCaseInput {
+    manifest: MaterializedMemorySurfaceCaseV1,
+    manifest_id: ContentId<MaterializedMemorySurfaceCaseArtifact>,
+    input_bundle: InputBundleV1,
+    input_bundle_bytes: Vec<u8>,
+    input_bundle_id: ContentId<InputBundleArtifact>,
+}
+
+impl AssembledMemorySurfaceCaseInput {
+    /// Returns the immutable memory-surface invocation manifest embedded in the bundle.
+    #[must_use]
+    pub const fn manifest(&self) -> &MaterializedMemorySurfaceCaseV1 {
+        &self.manifest
+    }
+
+    /// Returns the typed identity of the memory-surface invocation manifest.
+    #[must_use]
+    pub const fn manifest_id(&self) -> ContentId<MaterializedMemorySurfaceCaseArtifact> {
         self.manifest_id
     }
 
@@ -793,6 +1104,77 @@ pub fn assemble_input_value_case_input(
         build_input_bundle(manifest_bytes, argument_files)?;
     manifest.validate_input_bundle(&input_bundle)?;
     Ok(AssembledInputValueCaseInput {
+        manifest,
+        manifest_id,
+        input_bundle,
+        input_bundle_bytes,
+        input_bundle_id,
+    })
+}
+
+/// Assembles one executable memory-surface obligation over a trusted successful baseline.
+///
+/// Every input-capable buffer retains supported deterministic bytes. The returned manifest changes
+/// only one pointer/capacity/aliasing relationship and leaves dangerous address construction to a
+/// later isolated call adapter.
+///
+/// # Errors
+///
+/// Rejects an underived/non-successful baseline, an unknown/excluded/underived memory obligation,
+/// a baseline where the selected non-empty layout is inapplicable, incomplete supported input
+/// material, checked size/limit failures, and canonical bundle or identity failures.
+pub fn assemble_memory_surface_case_input(
+    domain: &MigrationDomainContractV1,
+    quantitative_baseline: &MigrationDomainCaseV1,
+    memory_case: &MandatoryMemorySurfaceCaseV1,
+    materialized_inputs: &[MaterializedCorpusBuffer],
+    per_buffer_limit: CorpusBufferByteLimit,
+) -> Result<AssembledMemorySurfaceCaseInput, CorpusCaseAssemblyError> {
+    let quantitative = derive_mandatory_base_cases(domain).map_err(codec_error)?;
+    if quantitative_baseline.expected_outcome() != &CaseExpectedOutcome::Success
+        || !quantitative.cases().contains(quantitative_baseline)
+    {
+        return Err(BoundaryCaseAssemblyError::InvalidQuantitativeBaseline);
+    }
+    let memory_cases = derive_mandatory_memory_surface_cases(domain).map_err(codec_error)?;
+    let expected_outcome = memory_surface_outcome(memory_case.disposition())
+        .filter(|_| memory_cases.cases().contains(memory_case))
+        .ok_or(BoundaryCaseAssemblyError::UntrustedMemorySurfaceCase)?;
+
+    let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
+    let baseline_id = canonical_id::<MigrationDomainCaseArtifact, _>(quantitative_baseline)?;
+    let memory_case_id = canonical_id::<MandatoryMemorySurfaceCaseArtifact, _>(memory_case)?;
+    let (mut arguments, argument_files) = assemble_buffer_arguments(
+        domain,
+        quantitative_baseline,
+        materialized_inputs,
+        per_buffer_limit,
+        InputComposition::SupportedOnly,
+    )?;
+    let (scalar_arguments, scalar_files) =
+        assemble_scalar_arguments(domain, quantitative_baseline)?;
+    arguments.extend(scalar_arguments);
+    let mut argument_files = argument_files;
+    argument_files.extend(scalar_files);
+    arguments.sort_by_key(MaterializedAbiArgumentV1::argument_index);
+    let layout = derive_memory_layout(memory_case.target(), &arguments)?;
+
+    let manifest = MaterializedMemorySurfaceCaseV1::new(
+        domain_id,
+        baseline_id,
+        memory_case_id,
+        memory_case.disposition().clone(),
+        expected_outcome,
+        layout,
+        arguments,
+    )?;
+    let manifest_bytes = cairn_codec::to_vec(&manifest).map_err(codec_error)?;
+    let manifest_id = ContentId::<MaterializedMemorySurfaceCaseArtifact>::derive(&manifest_bytes)
+        .map_err(codec_error)?;
+    let (input_bundle, input_bundle_bytes, input_bundle_id) =
+        build_input_bundle(manifest_bytes, argument_files)?;
+    manifest.validate_input_bundle(&input_bundle)?;
+    Ok(AssembledMemorySurfaceCaseInput {
         manifest,
         manifest_id,
         input_bundle,
@@ -1030,6 +1412,221 @@ fn input_value_outcome(disposition: &InputValueDisposition) -> Option<CaseExpect
             behavior: behavior.clone(),
         }),
         InputValueDisposition::ExplicitlyExcluded { .. } | InputValueDisposition::Unknown => None,
+    }
+}
+
+fn memory_surface_outcome(disposition: &MemoryConditionDisposition) -> Option<CaseExpectedOutcome> {
+    match disposition {
+        MemoryConditionDisposition::Supported => Some(CaseExpectedOutcome::Success),
+        MemoryConditionDisposition::Invalid { behavior }
+            if behavior != &crate::InvalidInputBehavior::ExplicitlyExcluded =>
+        {
+            Some(CaseExpectedOutcome::Invalid {
+                behavior: behavior.clone(),
+            })
+        }
+        MemoryConditionDisposition::Invalid { .. }
+        | MemoryConditionDisposition::ExplicitlyExcluded { .. }
+        | MemoryConditionDisposition::Unknown => None,
+    }
+}
+
+fn derive_memory_layout(
+    target: &MemorySurfaceCaseTarget,
+    arguments: &[MaterializedAbiArgumentV1],
+) -> Result<MemorySurfaceLayoutV1, CorpusCaseAssemblyError> {
+    match target {
+        MemorySurfaceCaseTarget::Buffer { buffer, pattern } => {
+            let (argument_index, required_byte_length) =
+                buffer_argument_metadata(arguments, buffer)
+                    .ok_or(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase)?;
+            if required_byte_length.get() == 0 {
+                return Err(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase);
+            }
+            match pattern {
+                BufferMemoryPattern::NullPointerNonEmpty => {
+                    Ok(MemorySurfaceLayoutV1::NullPointer {
+                        argument_index,
+                        buffer: buffer.clone(),
+                        required_byte_length,
+                    })
+                }
+                BufferMemoryPattern::MisalignedPointerNonEmpty {
+                    required_alignment,
+                    offset,
+                } => Ok(MemorySurfaceLayoutV1::MisalignedPointer {
+                    argument_index,
+                    buffer: buffer.clone(),
+                    required_byte_length,
+                    required_alignment: *required_alignment,
+                    offset: *offset,
+                }),
+                BufferMemoryPattern::InsufficientCapacityNonEmpty { shortfall } => {
+                    let accessible = required_byte_length
+                        .get()
+                        .checked_sub(shortfall.get())
+                        .ok_or(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase)?;
+                    Ok(MemorySurfaceLayoutV1::InsufficientCapacity {
+                        argument_index,
+                        buffer: buffer.clone(),
+                        required_byte_length,
+                        accessible_byte_length: CorpusBufferByteLength::new(accessible),
+                        shortfall: *shortfall,
+                    })
+                }
+            }
+        }
+        MemorySurfaceCaseTarget::Aliasing { pair, pattern } => {
+            let (first_argument_index, first_byte_length) =
+                buffer_argument_metadata(arguments, pair.first())
+                    .ok_or(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase)?;
+            let (second_argument_index, second_byte_length) =
+                buffer_argument_metadata(arguments, pair.second())
+                    .ok_or(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase)?;
+            if first_byte_length.get() == 0 || second_byte_length.get() == 0 {
+                return Err(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase);
+            }
+            match pattern {
+                BufferAliasingPattern::ExactAlias => Ok(MemorySurfaceLayoutV1::ExactAlias {
+                    pair: pair.clone(),
+                    first_argument_index,
+                    second_argument_index,
+                    first_byte_length,
+                    second_byte_length,
+                    shared_allocation_byte_length: CorpusBufferByteLength::new(
+                        first_byte_length.get().max(second_byte_length.get()),
+                    ),
+                }),
+                BufferAliasingPattern::PartialOverlap { second_offset } => {
+                    if second_offset.get() >= first_byte_length.get() {
+                        return Err(BoundaryCaseAssemblyError::InapplicableMemorySurfaceCase);
+                    }
+                    let second_end = second_offset
+                        .get()
+                        .checked_add(second_byte_length.get())
+                        .ok_or(BoundaryCaseAssemblyError::ByteLengthOverflow)?;
+                    Ok(MemorySurfaceLayoutV1::PartialOverlap {
+                        pair: pair.clone(),
+                        first_argument_index,
+                        second_argument_index,
+                        first_byte_length,
+                        second_byte_length,
+                        second_offset: *second_offset,
+                        shared_allocation_byte_length: CorpusBufferByteLength::new(
+                            first_byte_length.get().max(second_end),
+                        ),
+                    })
+                }
+            }
+        }
+    }
+}
+
+fn buffer_argument_metadata(
+    arguments: &[MaterializedAbiArgumentV1],
+    target: &BufferName,
+) -> Option<(ArgumentIndex, CorpusBufferByteLength)> {
+    arguments.iter().find_map(|argument| match argument {
+        MaterializedAbiArgumentV1::InputBuffer {
+            argument_index,
+            buffer,
+            byte_length,
+            ..
+        }
+        | MaterializedAbiArgumentV1::OutputBuffer {
+            argument_index,
+            buffer,
+            byte_length,
+            ..
+        }
+        | MaterializedAbiArgumentV1::InputOutputBuffer {
+            argument_index,
+            buffer,
+            byte_length,
+            ..
+        } if buffer == target => Some((*argument_index, *byte_length)),
+        MaterializedAbiArgumentV1::InputBuffer { .. }
+        | MaterializedAbiArgumentV1::OutputBuffer { .. }
+        | MaterializedAbiArgumentV1::InputOutputBuffer { .. }
+        | MaterializedAbiArgumentV1::Scalar { .. } => None,
+    })
+}
+
+fn layout_matches_arguments(
+    layout: &MemorySurfaceLayoutV1,
+    arguments: &[MaterializedAbiArgumentV1],
+) -> bool {
+    let metadata_matches = |buffer: &BufferName,
+                            argument_index: ArgumentIndex,
+                            byte_length: CorpusBufferByteLength| {
+        buffer_argument_metadata(arguments, buffer) == Some((argument_index, byte_length))
+    };
+    match layout {
+        MemorySurfaceLayoutV1::NullPointer {
+            argument_index,
+            buffer,
+            required_byte_length,
+        } => {
+            required_byte_length.get() > 0
+                && metadata_matches(buffer, *argument_index, *required_byte_length)
+        }
+        MemorySurfaceLayoutV1::MisalignedPointer {
+            argument_index,
+            buffer,
+            required_byte_length,
+            required_alignment,
+            offset,
+        } => {
+            required_byte_length.get() > 0
+                && offset.get() < required_alignment.get()
+                && metadata_matches(buffer, *argument_index, *required_byte_length)
+        }
+        MemorySurfaceLayoutV1::InsufficientCapacity {
+            argument_index,
+            buffer,
+            required_byte_length,
+            accessible_byte_length,
+            shortfall,
+        } => {
+            required_byte_length.get() > 0
+                && accessible_byte_length.get().checked_add(shortfall.get())
+                    == Some(required_byte_length.get())
+                && metadata_matches(buffer, *argument_index, *required_byte_length)
+        }
+        MemorySurfaceLayoutV1::ExactAlias {
+            pair,
+            first_argument_index,
+            second_argument_index,
+            first_byte_length,
+            second_byte_length,
+            shared_allocation_byte_length,
+        } => {
+            first_byte_length.get() > 0
+                && second_byte_length.get() > 0
+                && shared_allocation_byte_length.get()
+                    == first_byte_length.get().max(second_byte_length.get())
+                && metadata_matches(pair.first(), *first_argument_index, *first_byte_length)
+                && metadata_matches(pair.second(), *second_argument_index, *second_byte_length)
+        }
+        MemorySurfaceLayoutV1::PartialOverlap {
+            pair,
+            first_argument_index,
+            second_argument_index,
+            first_byte_length,
+            second_byte_length,
+            second_offset,
+            shared_allocation_byte_length,
+        } => {
+            let second_end = second_offset.get().checked_add(second_byte_length.get());
+            first_byte_length.get() > 0
+                && second_byte_length.get() > 0
+                && second_offset.get() < first_byte_length.get()
+                && second_end.is_some_and(|end| {
+                    shared_allocation_byte_length.get() == first_byte_length.get().max(end)
+                })
+                && metadata_matches(pair.first(), *first_argument_index, *first_byte_length)
+                && metadata_matches(pair.second(), *second_argument_index, *second_byte_length)
+        }
     }
 }
 
@@ -1464,22 +2061,25 @@ mod tests {
 
     use super::{
         BoundaryCaseAssemblyError, MaterializedAbiArgumentV1, MaterializedBoundaryCaseV1,
-        MaterializedInputValueCaseV1, assemble_boundary_case_input,
-        assemble_input_value_case_input,
+        MaterializedInputValueCaseV1, MaterializedMemorySurfaceCaseV1, MemorySurfaceLayoutV1,
+        assemble_boundary_case_input, assemble_input_value_case_input,
+        assemble_memory_surface_case_input,
     };
     use crate::{
         ArgumentIndex, BufferAccessV1, BufferAliasingContractInput, BufferAliasingContractV1,
-        BufferContractInput, BufferContractV1, BufferMemoryContractInput, BufferMemoryContractV1,
-        BufferName, BufferPairV1, CaseExpectedOutcome, CaseTarget, CorpusBufferByteLimit,
-        CorpusElementCount, DataType, DimensionSpec, EntryPointName, ExtentValue, FloatingDataType,
-        FloatingInputPattern, FloatingInputValueDomainInput, FloatingInputValueDomainV1,
-        InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition,
-        InputValueDomainV1, IntegerValue, InvalidInputBehavior, MandatoryInputValueCaseV1,
-        MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
-        PointerAlignmentContractV1, RequestedSemanticsArtifact, ScalarParameterContractInput,
-        ScalarParameterContractV1, ScalarParameterName, ScalarParameterRole, SemanticClaimKind,
-        ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
-        derive_mandatory_base_cases, derive_mandatory_input_value_cases,
+        BufferAliasingPattern, BufferContractInput, BufferContractV1, BufferMemoryContractInput,
+        BufferMemoryContractV1, BufferMemoryPattern, BufferName, BufferPairV1, CaseExpectedOutcome,
+        CaseTarget, CorpusBufferByteLimit, CorpusElementCount, DataType, DimensionSpec,
+        EntryPointName, ExtentValue, FloatingDataType, FloatingInputPattern,
+        FloatingInputValueDomainInput, FloatingInputValueDomainV1, InclusiveExtentRange,
+        InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition, InputValueDomainV1,
+        IntegerValue, InvalidInputBehavior, MandatoryInputValueCaseV1, MemoryConditionDisposition,
+        MemorySurfaceCaseTarget, MigrationDomainContractInput, MigrationDomainContractV1,
+        PointerAlignmentContractV1, RequestedSemanticsArtifact, RequiredAlignmentBytes,
+        ScalarParameterContractInput, ScalarParameterContractV1, ScalarParameterName,
+        ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1,
+        ShapeSymbolName, ShapeSymbolSource, derive_mandatory_base_cases,
+        derive_mandatory_input_value_cases, derive_mandatory_memory_surface_cases,
         materialize_input_value_case,
     };
 
@@ -1489,9 +2089,18 @@ mod tests {
 
     fn memory_contract() -> BufferMemoryContractV1 {
         BufferMemoryContractV1::new(BufferMemoryContractInput {
-            null_non_empty: MemoryConditionDisposition::Unknown,
-            alignment: PointerAlignmentContractV1::ByteAligned,
-            insufficient_capacity_non_empty: MemoryConditionDisposition::Unknown,
+            null_non_empty: MemoryConditionDisposition::Invalid {
+                behavior: InvalidInputBehavior::RejectBeforeExecution,
+            },
+            alignment: PointerAlignmentContractV1::Required {
+                bytes: RequiredAlignmentBytes::new(8).expect("alignment"),
+                misaligned_non_empty: MemoryConditionDisposition::Invalid {
+                    behavior: InvalidInputBehavior::RejectBeforeExecution,
+                },
+            },
+            insufficient_capacity_non_empty: MemoryConditionDisposition::Invalid {
+                behavior: InvalidInputBehavior::RejectBeforeExecution,
+            },
         })
     }
 
@@ -1573,7 +2182,7 @@ mod tests {
             ],
             buffer_aliasing: vec![BufferAliasingContractV1::new(BufferAliasingContractInput {
                 pair: BufferPairV1::new(input, output).expect("buffer pair"),
-                exact_alias: MemoryConditionDisposition::Unknown,
+                exact_alias: MemoryConditionDisposition::Supported,
                 partial_overlap: MemoryConditionDisposition::Invalid {
                     behavior: InvalidInputBehavior::RejectBeforeExecution,
                 },
@@ -1653,6 +2262,88 @@ mod tests {
             CorpusBufferByteLimit::new(128).expect("limit"),
         )
         .expect("assemble")
+    }
+
+    fn assert_memory_layout(
+        memory_case: &crate::MandatoryMemorySurfaceCaseV1,
+        manifest: &MaterializedMemorySurfaceCaseV1,
+    ) -> u8 {
+        match (memory_case.target(), manifest.layout()) {
+            (
+                MemorySurfaceCaseTarget::Buffer {
+                    pattern: BufferMemoryPattern::NullPointerNonEmpty,
+                    ..
+                },
+                MemorySurfaceLayoutV1::NullPointer {
+                    required_byte_length,
+                    ..
+                },
+            ) if required_byte_length.get() == 8 => 1,
+            (
+                MemorySurfaceCaseTarget::Buffer {
+                    pattern: BufferMemoryPattern::MisalignedPointerNonEmpty { .. },
+                    ..
+                },
+                MemorySurfaceLayoutV1::MisalignedPointer {
+                    required_byte_length,
+                    required_alignment,
+                    offset,
+                    ..
+                },
+            ) if required_byte_length.get() == 8
+                && required_alignment.get() == 8
+                && offset.get() == 1 =>
+            {
+                2
+            }
+            (
+                MemorySurfaceCaseTarget::Buffer {
+                    pattern: BufferMemoryPattern::InsufficientCapacityNonEmpty { .. },
+                    ..
+                },
+                MemorySurfaceLayoutV1::InsufficientCapacity {
+                    required_byte_length,
+                    accessible_byte_length,
+                    shortfall,
+                    ..
+                },
+            ) if required_byte_length.get() == 8
+                && accessible_byte_length.get() == 7
+                && shortfall.get() == 1 =>
+            {
+                4
+            }
+            (
+                MemorySurfaceCaseTarget::Aliasing {
+                    pattern: BufferAliasingPattern::ExactAlias,
+                    ..
+                },
+                MemorySurfaceLayoutV1::ExactAlias {
+                    first_argument_index,
+                    second_argument_index,
+                    shared_allocation_byte_length,
+                    ..
+                },
+            ) if first_argument_index.get() == 0
+                && second_argument_index.get() == 2
+                && shared_allocation_byte_length.get() == 8 =>
+            {
+                assert_eq!(manifest.expected_outcome(), &CaseExpectedOutcome::Success);
+                8
+            }
+            (
+                MemorySurfaceCaseTarget::Aliasing {
+                    pattern: BufferAliasingPattern::PartialOverlap { .. },
+                    ..
+                },
+                MemorySurfaceLayoutV1::PartialOverlap {
+                    second_offset,
+                    shared_allocation_byte_length,
+                    ..
+                },
+            ) if second_offset.get() == 1 && shared_allocation_byte_length.get() == 9 => 16,
+            _ => panic!("memory target and realized layout diverged"),
+        }
     }
 
     #[test]
@@ -2069,5 +2760,123 @@ mod tests {
         let mut wrong_outcome = value;
         wrong_outcome["expected_outcome"] = json!({"kind": "success"});
         assert!(serde_json::from_value::<MaterializedInputValueCaseV1>(wrong_outcome).is_err());
+    }
+
+    #[test]
+    fn memory_surface_assembly_realizes_every_typed_layout_over_one_safe_baseline() {
+        let domain = domain(InvalidInputBehavior::RejectBeforeExecution);
+        let baseline = boundary_case(&domain, 2);
+        let limit = CorpusBufferByteLimit::new(128).expect("limit");
+        let input = materialize_input_value_case(&input_case(), CorpusElementCount::new(2), limit)
+            .expect("supported baseline input");
+        let cases = derive_mandatory_memory_surface_cases(&domain).expect("memory cases");
+        let mut observed_layouts = 0;
+
+        for memory_case in cases.cases() {
+            let assembled = assemble_memory_surface_case_input(
+                &domain,
+                &baseline,
+                memory_case,
+                std::slice::from_ref(&input),
+                limit,
+            )
+            .expect("assemble memory layout");
+            assembled
+                .manifest()
+                .validate_sources(&domain, &baseline, memory_case)
+                .expect("memory source graph");
+            assembled
+                .manifest()
+                .validate_input_bundle(assembled.input_bundle())
+                .expect("memory bundle graph");
+            assert_eq!(
+                assembled.input_bundle_id(),
+                ContentId::<InputBundleArtifact>::derive(assembled.input_bundle_bytes())
+                    .expect("bundle identity")
+            );
+            assert_eq!(
+                assembled.manifest_id(),
+                ContentId::<super::MaterializedMemorySurfaceCaseArtifact>::derive(
+                    &cairn_codec::to_vec(assembled.manifest()).expect("manifest bytes")
+                )
+                .expect("manifest identity")
+            );
+
+            observed_layouts |= assert_memory_layout(memory_case, assembled.manifest());
+        }
+        assert_eq!(observed_layouts, 31);
+    }
+
+    #[test]
+    fn memory_surface_unknown_and_persisted_layout_tampering_fail_closed() {
+        let domain = domain(InvalidInputBehavior::RejectBeforeExecution);
+        let baseline = boundary_case(&domain, 2);
+        let limit = CorpusBufferByteLimit::new(128).expect("limit");
+        let input = materialize_input_value_case(&input_case(), CorpusElementCount::new(2), limit)
+            .expect("supported baseline input");
+        let memory_case = derive_mandatory_memory_surface_cases(&domain)
+            .expect("memory cases")
+            .cases()
+            .iter()
+            .find(|case| {
+                matches!(
+                    case.target(),
+                    MemorySurfaceCaseTarget::Buffer {
+                        buffer,
+                        pattern: BufferMemoryPattern::NullPointerNonEmpty,
+                    } if buffer.as_str() == "input"
+                )
+            })
+            .cloned()
+            .expect("input null case");
+        let assembled = assemble_memory_surface_case_input(
+            &domain,
+            &baseline,
+            &memory_case,
+            std::slice::from_ref(&input),
+            limit,
+        )
+        .expect("assemble null case");
+        let value = serde_json::to_value(assembled.manifest()).expect("manifest json");
+        assert!(serde_json::from_value::<MaterializedMemorySurfaceCaseV1>(value.clone()).is_ok());
+
+        let mut wrong_version = value.clone();
+        wrong_version["schema_version"] = json!(2);
+        assert!(serde_json::from_value::<MaterializedMemorySurfaceCaseV1>(wrong_version).is_err());
+
+        let mut wrong_length = value;
+        wrong_length["layout"]["required_byte_length"] = json!(7);
+        assert!(serde_json::from_value::<MaterializedMemorySurfaceCaseV1>(wrong_length).is_err());
+
+        let mut unknown_domain_value = serde_json::to_value(&domain).expect("domain json");
+        unknown_domain_value["buffers"][0]["memory"]["null_non_empty"] = json!({"kind": "unknown"});
+        let unknown_domain: MigrationDomainContractV1 =
+            serde_json::from_value(unknown_domain_value).expect("unknown memory domain");
+        let unknown_baseline = boundary_case(&unknown_domain, 2);
+        let unknown_case = derive_mandatory_memory_surface_cases(&unknown_domain)
+            .expect("unknown memory cases")
+            .cases()
+            .iter()
+            .find(|case| {
+                matches!(
+                    case.target(),
+                    MemorySurfaceCaseTarget::Buffer {
+                        buffer,
+                        pattern: BufferMemoryPattern::NullPointerNonEmpty,
+                    } if buffer.as_str() == "input"
+                )
+            })
+            .cloned()
+            .expect("unknown input null case");
+        assert_eq!(
+            assemble_memory_surface_case_input(
+                &unknown_domain,
+                &unknown_baseline,
+                &unknown_case,
+                &[input],
+                limit,
+            ),
+            Err(BoundaryCaseAssemblyError::UntrustedMemorySurfaceCase)
+        );
     }
 }
