@@ -17,11 +17,12 @@ pub use assemble::{
     assemble_input_value_case_input, assemble_memory_surface_case_input,
 };
 pub use call_adapter::{
-    CallAdapterCompletionV1, CallAdapterExecutableArtifact, CallAdapterExecutableByteLimit,
-    CallAdapterExpectedOutputV1, CallAdapterObservedOutputV1, CallAdapterOutputBytesArtifact,
-    CallAdapterProtocolError, CallAdapterRequestArtifact, CallAdapterRequestV1,
-    CallAdapterResultArtifact, CallAdapterResultV1, CorpusInvocationIdentityV1,
-    PreparedCallAdapterInput, ValidatedCallAdapterObservation, prepare_boundary_call_adapter_input,
+    CallAdapterCaptureLimits, CallAdapterCompletionV1, CallAdapterExecutableArtifact,
+    CallAdapterExecutableByteLimit, CallAdapterExpectedOutputV1, CallAdapterObservedOutputV1,
+    CallAdapterOutputBytesArtifact, CallAdapterProtocolError, CallAdapterRequestArtifact,
+    CallAdapterRequestV1, CallAdapterResultArtifact, CallAdapterResultV1,
+    CorpusInvocationIdentityV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
+    ValidatedCallAdapterObservation, compose_call_adapter_job, prepare_boundary_call_adapter_input,
     prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
     validate_boundary_call_adapter_capture, validate_input_value_call_adapter_capture,
     validate_memory_surface_call_adapter_capture,

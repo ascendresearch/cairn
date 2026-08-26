@@ -1051,8 +1051,20 @@ lengths and identities, and rejects missing, duplicate, extra, or changed materi
 `RejectBeforeExecution` requires the non-invocation completion; `ReturnStatus` requires the exact
 declared status. Invalid cases deliberately declare no ABI output capture because those buffers are
 unspecified and cannot support evidence. A structurally valid adapter report remains an observation,
-not automatic semantic authority; adapter admission, generic `JobContract` composition, execution
-receipts, and oracle comparison remain pending.
+not automatic semantic authority; adapter admission, execution receipts, and oracle comparison
+remain pending.
+
+**Implemented generic call-adapter job-composition slice (2026-08-25).** A prepared adapter process,
+exact execution-environment identity, product execution need, stable `JobId`, and independent
+stdout/stderr/result/diagnostic/evidence limits now produce the existing domain-neutral
+`JobContract`. Composition translates placement and resource intent, reuses the fixed no-shell
+command, disables network access, declares exactly the result and applicable successful ABI output
+captures, and derives canonical contract bytes plus typed identity before archival. The migration
+validation tier remains only in a transient product wrapper: changing V1 source-accelerator to V3
+target-device while every generic constraint stays equal does not change worker-facing contract
+bytes or identity. The normal execution coordinator can therefore verify/archive the input bundle,
+environment, and contract without learning migration stages or vendor runtimes. Real adapter
+execution, receipt-to-result loading, and oracle comparison remain pending.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

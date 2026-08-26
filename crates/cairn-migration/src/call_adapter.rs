@@ -3,10 +3,12 @@
 use std::collections::BTreeSet;
 
 use cairn_execution::{
-    CapturedOutput, CommandArgument, CommandContract, ExpectedOutput, InputBundleArtifact,
-    InputBundleEntry, InputBundleV1, InputFileMode, OutputByteLimit, OutputName, SandboxPath,
+    CapturePolicy, CapturedOutput, CommandArgument, CommandContract, DiagnosticByteLimit,
+    EvidenceByteLimit, ExecutionEnvironmentArtifact, ExpectedOutput, InputBundleArtifact,
+    InputBundleEntry, InputBundleV1, InputFileMode, JobContract, JobContractArtifact,
+    NetworkPolicy, OutputByteLimit, OutputName, SandboxPath,
 };
-use cairn_protocol::{ContentId, ContentType};
+use cairn_protocol::{ContentId, ContentType, JobId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
@@ -14,7 +16,8 @@ use crate::{
     ArgumentIndex, AssembledBoundaryCaseInput, AssembledInputValueCaseInput,
     AssembledMemorySurfaceCaseInput, BufferName, CaseExpectedOutcome, CorpusBufferByteLength,
     InvalidInputBehavior, MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact,
-    MaterializedInputValueCaseArtifact, MaterializedMemorySurfaceCaseArtifact, StatusCode,
+    MaterializedInputValueCaseArtifact, MaterializedMemorySurfaceCaseArtifact,
+    MigrationExecutionNeed, MigrationValidationTier, StatusCode,
 };
 
 const ADAPTER_DIRECTORY: &str = "cairn/bin";
@@ -50,6 +53,9 @@ pub enum CallAdapterProtocolError {
     /// Adapter completion contradicts the caller-declared expected outcome.
     #[error("call-adapter completion contradicts the case expectation")]
     UnexpectedCompletion,
+    /// Product execution intent could not become one canonical generic job contract.
+    #[error("call-adapter job composition failed: {message}")]
+    JobComposition { message: String },
     /// Canonical encoding, path, command, or bundle construction failed.
     #[error("call-adapter protocol codec error: {message}")]
     Codec { message: String },
@@ -447,6 +453,56 @@ impl ValidatedCallAdapterObservation {
     }
 }
 
+/// Independent bounds used when the generic executor captures one adapter process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallAdapterCaptureLimits {
+    /// Maximum untrusted stdout bytes.
+    pub stdout: OutputByteLimit,
+    /// Maximum untrusted stderr bytes.
+    pub stderr: OutputByteLimit,
+    /// Maximum strict result-manifest bytes.
+    pub result: OutputByteLimit,
+    /// Maximum durable executor diagnostic bytes.
+    pub diagnostic: DiagnosticByteLimit,
+    /// Maximum trusted supervisor-evidence bytes.
+    pub evidence: EvidenceByteLimit,
+}
+
+/// Canonical generic execution contract plus its pre-archival typed identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedCallAdapterJob {
+    tier: MigrationValidationTier,
+    contract: JobContract,
+    contract_bytes: Vec<u8>,
+    contract_id: ContentId<JobContractArtifact>,
+}
+
+impl PreparedCallAdapterJob {
+    /// Returns product-owned orchestration position, absent from the generic contract bytes.
+    #[must_use]
+    pub const fn tier(&self) -> MigrationValidationTier {
+        self.tier
+    }
+
+    /// Returns the domain-neutral worker job contract.
+    #[must_use]
+    pub const fn contract(&self) -> &JobContract {
+        &self.contract
+    }
+
+    /// Returns canonical contract bytes ready for content archival.
+    #[must_use]
+    pub fn contract_bytes(&self) -> &[u8] {
+        &self.contract_bytes
+    }
+
+    /// Returns the exact generic execution-contract identity.
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.contract_id
+    }
+}
+
 /// Complete process input ready for execution-job composition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedCallAdapterInput {
@@ -514,6 +570,53 @@ impl PreparedCallAdapterInput {
         outputs.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(outputs)
     }
+}
+
+/// Composes one prepared adapter process into the existing vendor-neutral worker contract.
+///
+/// The product validation tier is retained only by the returned migration wrapper. It is not copied
+/// into `JobContract`, worker profiles, placement selectors, or capture material.
+///
+/// # Errors
+///
+/// Rejects contradictory migration execution intent, invalid output declarations, or canonical
+/// contract encoding/identity failure.
+pub fn compose_call_adapter_job(
+    job_id: JobId,
+    input: &PreparedCallAdapterInput,
+    environment: ContentId<ExecutionEnvironmentArtifact>,
+    need: &MigrationExecutionNeed,
+    limits: CallAdapterCaptureLimits,
+) -> Result<PreparedCallAdapterJob, CallAdapterProtocolError> {
+    let resources = need.to_resource_request().map_err(job_composition_error)?;
+    let expected_outputs = input.declared_outputs(limits.result)?;
+    let capture = CapturePolicy::new(
+        limits.stdout,
+        limits.stderr,
+        limits.diagnostic,
+        limits.evidence,
+        expected_outputs,
+    )
+    .map_err(job_composition_error)?;
+    let contract = JobContract::new(
+        job_id,
+        input.input_bundle_id,
+        environment,
+        need.backend().clone(),
+        input.command.clone(),
+        resources,
+        NetworkPolicy::Disabled,
+        capture,
+    );
+    let contract_bytes = cairn_codec::to_vec(&contract).map_err(job_composition_error)?;
+    let contract_id =
+        ContentId::<JobContractArtifact>::derive(&contract_bytes).map_err(job_composition_error)?;
+    Ok(PreparedCallAdapterJob {
+        tier: need.tier(),
+        contract,
+        contract_bytes,
+        contract_id,
+    })
 }
 
 /// Binds a quantitative boundary case to one exact isolated adapter executable.
@@ -876,23 +979,35 @@ fn codec(error: impl std::fmt::Display) -> CallAdapterProtocolError {
     }
 }
 
+fn job_composition_error(error: impl std::fmt::Display) -> CallAdapterProtocolError {
+    CallAdapterProtocolError::JobComposition {
+        message: error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use cairn_execution::{CapturedOutput, InputBundleEntry, InputFileMode};
-    use cairn_protocol::{ContentId, ContentType};
+    use cairn_execution::{
+        CapturedOutput, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend,
+        ExecutionEnvironmentArtifact, ExecutionTimeoutMillis, InputBundleEntry, InputFileMode,
+        JobContractArtifact, NetworkPolicy, OutputByteLimit,
+    };
+    use cairn_protocol::{ContentId, ContentType, JobId};
     use serde_json::json;
 
     use super::{
-        ADAPTER_PATH, CallAdapterCompletionV1, CallAdapterExecutableArtifact,
-        CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1, CallAdapterProtocolError,
-        CallAdapterRequestArtifact, CallAdapterRequestV1, CallAdapterResultV1,
-        CorpusInvocationIdentityV1, INVOCATION_PATH, REQUEST_PATH, output_name,
-        output_name_for_argument, path, prepare, validate_capture,
+        ADAPTER_PATH, CallAdapterCaptureLimits, CallAdapterCompletionV1,
+        CallAdapterExecutableArtifact, CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1,
+        CallAdapterProtocolError, CallAdapterRequestArtifact, CallAdapterRequestV1,
+        CallAdapterResultV1, CorpusInvocationIdentityV1, INVOCATION_PATH, REQUEST_PATH,
+        compose_call_adapter_job, output_name, output_name_for_argument, path, prepare,
+        validate_capture,
     };
     use crate::{
         ArgumentIndex, BufferName, CaseExpectedOutcome, CorpusBufferByteLength, CorpusElementCount,
         DataType, ExtentValue, InvalidInputBehavior, MaterializedAbiArgumentV1,
-        MaterializedBoundaryCaseArtifact, StatusCode,
+        MaterializedBoundaryCaseArtifact, MigrationExecutionNeed, MigrationValidationTier,
+        StatusCode,
     };
 
     fn id<T: ContentType>(bytes: &[u8]) -> ContentId<T> {
@@ -1240,5 +1355,82 @@ mod tests {
             ),
             Err(CallAdapterProtocolError::UnexpectedCompletion)
         );
+    }
+
+    #[test]
+    fn job_composition_keeps_migration_tier_out_of_generic_worker_contract() {
+        let (source, source_bytes, source_id) = source_bundle();
+        let invocation = CorpusInvocationIdentityV1::Boundary {
+            manifest: id::<MaterializedBoundaryCaseArtifact>(b"boundary"),
+        };
+        let input = prepare(
+            &source,
+            &source_bytes,
+            source_id,
+            invocation,
+            &CaseExpectedOutcome::Success,
+            &[],
+            b"ELF",
+            CallAdapterExecutableByteLimit::new(4).expect("executable limit"),
+        )
+        .expect("adapter input");
+        let execution_need = |tier| {
+            MigrationExecutionNeed::new(
+                tier,
+                ExecutionBackend::new("docker-v1").expect("backend"),
+                ExecutionTimeoutMillis::new(30_000).expect("timeout"),
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("execution need")
+        };
+        let limits = CallAdapterCaptureLimits {
+            stdout: OutputByteLimit::new(1024).expect("stdout"),
+            stderr: OutputByteLimit::new(2048).expect("stderr"),
+            result: OutputByteLimit::new(4096).expect("result"),
+            diagnostic: DiagnosticByteLimit::new(512).expect("diagnostic"),
+            evidence: EvidenceByteLimit::new(1024).expect("evidence"),
+        };
+        let job_id = JobId::new();
+        let environment = id::<ExecutionEnvironmentArtifact>(b"environment");
+        let v3 = compose_call_adapter_job(
+            job_id,
+            &input,
+            environment,
+            &execution_need(MigrationValidationTier::V3TargetDevice),
+            limits,
+        )
+        .expect("compose V3 job");
+        let v1 = compose_call_adapter_job(
+            job_id,
+            &input,
+            environment,
+            &execution_need(MigrationValidationTier::V1SourceAccelerator),
+            limits,
+        )
+        .expect("compose V1 job");
+
+        assert_eq!(v3.tier(), MigrationValidationTier::V3TargetDevice);
+        assert_eq!(v3.contract(), v1.contract());
+        assert_eq!(v3.contract_id(), v1.contract_id());
+        assert_eq!(v3.contract().input_bundle_id(), input.input_bundle_id());
+        assert_eq!(v3.contract().environment_id(), environment);
+        assert_eq!(v3.contract().network(), NetworkPolicy::Disabled);
+        assert_eq!(v3.contract().capture().expected_outputs().len(), 1);
+        assert_eq!(
+            v3.contract().capture().expected_outputs()[0].name.as_str(),
+            "call-adapter-result"
+        );
+        assert_eq!(
+            v3.contract_id(),
+            id::<JobContractArtifact>(v3.contract_bytes())
+        );
+        let generic_wire = String::from_utf8(v3.contract_bytes().to_vec()).expect("JSON");
+        assert!(!generic_wire.contains("target-device"));
+        assert!(!generic_wire.contains("source-accelerator"));
+        assert!(!generic_wire.contains("migration"));
     }
 }

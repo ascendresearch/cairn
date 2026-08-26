@@ -71,7 +71,10 @@ a typed manifest identity, and a strict one-process/one-invocation request insid
 bundle, with a fixed non-shell command and sandbox roots. The strict result side now binds
 request/invocation identity, pre-invocation rejection versus actual void/status return, and exact
 successful output bytes. Invalid-input cases never promote unspecified output buffers into evidence.
-Job composition, real CUDA/Ascend C adapters, and complete corpus orchestration remain unfinished.
+Prepared adapter processes now compose into the existing vendor-neutral `JobContract` with explicit
+environment, resources, disabled network, capture bounds, canonical bytes, and typed contract
+identity; migration tiers remain outside worker records. Real CUDA/Ascend C adapters, execution
+receipt ingestion, and complete corpus orchestration remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

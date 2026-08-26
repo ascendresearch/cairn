@@ -242,8 +242,13 @@ The remaining G slices, in dependency order, are:
    arguments, paths, and exact lengths in the request; captures bind the request and typed invocation
    identity plus every raw-output identity. Invalid cases capture only completion because their
    output buffers are unspecified. Reject-before-invocation, void return, and typed status return
-   remain distinct, and a required error status is checked exactly. Job-contract composition and
-   real vendor adapters remain pending.
+   remain distinct, and a required error status is checked exactly. Generic job composition is now
+   implemented: caller-supplied
+   stream/result/diagnostic/evidence limits, exact adapter input identity, environment identity,
+   no-shell command, disabled network, translated placement/resources, and declared outputs produce
+   canonical `JobContract` bytes and identity ready for normal execution preparation. The migration
+   validation tier stays only in the product wrapper and is absent from worker-facing bytes. Real
+   vendor adapters and execution-receipt ingestion remain pending.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;
