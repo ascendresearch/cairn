@@ -17,16 +17,17 @@ use cairn_migration::{
     HistoricalDetectionRequirement, HistoricalFailureClassName, HistoricalFailureCoverageV1,
     HistoricalFailureEvidenceArtifact, HistoricalFailureObligationV1, HistoricalFailureRecordInput,
     HistoricalFailureRecordV1, HistoricalFailureScope, HistoricalObservedFailureArtifact,
-    HistoricalReductionAlgorithm, HistoricalReductionCaptureLimits,
-    HistoricalReductionCaseArtifact, HistoricalReductionCaseV1, HistoricalReductionControlArtifact,
-    HistoricalReductionControlError, HistoricalReductionCorrectVariantEvidence,
-    HistoricalReductionWrongVariantEvidence, HistoricalReproductionArtifact,
-    HistoricalValidationStage, InputValueDomainV1, MemoryConditionDisposition,
-    MigrationDomainContractInput, MigrationDomainContractV1, MigrationDomainFamilyName,
-    MigrationExecutionNeed, MigrationValidationTier, OracleFailureMechanismName,
-    PointerAlignmentContractV1, PreparedHistoricalReductionJob, RequestedSemanticsArtifact,
-    SemanticClaimKind, ValidatedHistoricalReductionRun, ValidatedVariantBuild,
-    VariantBuildCaptureLimits, VariantBuildDriverByteLimit, VariantImplementationByteLimit,
+    HistoricalReductionAdmissionInputs, HistoricalReductionAlgorithm,
+    HistoricalReductionCaptureLimits, HistoricalReductionCaseArtifact, HistoricalReductionCaseV1,
+    HistoricalReductionControlArtifact, HistoricalReductionControlError,
+    HistoricalReductionCorrectVariantEvidence, HistoricalReductionWrongVariantEvidence,
+    HistoricalReproductionArtifact, HistoricalValidationStage, InputValueDomainV1,
+    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
+    MigrationDomainFamilyName, MigrationExecutionNeed, MigrationValidationTier,
+    OracleFailureMechanismName, PointerAlignmentContractV1, PreparedHistoricalReductionJob,
+    RequestedSemanticsArtifact, SemanticClaimKind, ValidatedHistoricalReductionRun,
+    ValidatedVariantBuild, VariantBuildCaptureLimits, VariantBuildDriverByteLimit,
+    VariantImplementationByteLimit, compose_historical_reduction_admission,
     compose_historical_reduction_control, prepare_historical_reduction_corpus,
     prepare_historical_reduction_reference_job, prepare_historical_reduction_variant_job,
     prepare_variant_build_job, validate_historical_reduction_receipt,
@@ -39,8 +40,11 @@ use cairn_record::ContentStore;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_verification::{
     AdmissionCorpusArtifact, AdmissionExecutionScope, AdmissionPolicyInput, AdmissionPolicyV1,
-    AllowanceAssurance, AllowanceMagnitude, AllowanceProvenance, ArtifactAuthorId,
-    ArtifactAuthorshipV1, AuthorshipOrigin, BudgetExhaustionOutcome, CallerDomainEvidenceArtifact,
+    AdmissionReceiptArtifact, AdmissionReceiptV1, AdmissionRevalidationPolicyV1,
+    AdmissionRevalidationTriggerV1, AdmissionSaturationEvidenceArtifact,
+    AdmissionSaturationRoundV1, AdmittedOracleArtifact, AdmittedOracleV1, AllowanceAssurance,
+    AllowanceMagnitude, AllowanceProvenance, ArtifactAuthorId, ArtifactAuthorshipV1,
+    AuthorshipOrigin, BudgetExhaustionOutcome, CallerDomainEvidenceArtifact,
     ConstructionClaimArtifact, ConstructionClaimInput, ConstructionClaimV1, ConstructionClassName,
     ConstructionEvidenceArtifact, ConstructionJustification, ConstructionPrerequisiteArtifact,
     CorpusCaseArtifact, CorpusCaseEntryV1, CorpusCaseProvenanceArtifact, CorpusCaseSource,
@@ -238,6 +242,139 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         )
         .expect("recomputed control");
 
+    let saturation_rounds = vec![
+        AdmissionSaturationRoundV1::new(
+            1,
+            id::<AdmissionSaturationEvidenceArtifact>(b"reduction saturation round one"),
+            0,
+        )
+        .expect("first saturation round"),
+        AdmissionSaturationRoundV1::new(
+            2,
+            id::<AdmissionSaturationEvidenceArtifact>(b"reduction saturation round two"),
+            0,
+        )
+        .expect("second saturation round"),
+    ];
+    let revalidation = AdmissionRevalidationPolicyV1::new(
+        None,
+        vec![
+            AdmissionRevalidationTriggerV1::ProposalChanged,
+            AdmissionRevalidationTriggerV1::PolicyChanged,
+            AdmissionRevalidationTriggerV1::DomainChanged,
+            AdmissionRevalidationTriggerV1::CorpusChanged,
+            AdmissionRevalidationTriggerV1::AllowanceChanged,
+            AdmissionRevalidationTriggerV1::ObservationPathChanged,
+            AdmissionRevalidationTriggerV1::ExecutionEnvironmentChanged,
+        ],
+    )
+    .expect("revalidation policy");
+    let admission = compose_historical_reduction_admission(&HistoricalReductionAdmissionInputs {
+        control: &prepared,
+        domain: &domain,
+        declared_domain: &declared,
+        corpus_proposal: &corpus_proposal,
+        proposal: &proposal,
+        historical_record: &historical,
+        historical_obligation: &obligation,
+        historical_coverage: &coverage,
+        policy: &policy_mutation.policy,
+        allowance: &allowance,
+        corpus: &corpus,
+        old_sample_case,
+        old_baseline_variant: sequential_id,
+        reference_job: &reference.job,
+        reference_run: &reference.run,
+        correct: &correct,
+        wrong: &wrong,
+        mutant_set: &policy_mutation.mutants,
+        mutation_grid: &policy_mutation.grid,
+        mutation_proof: policy_mutation.proof.proof(),
+        saturation_rounds: &saturation_rounds,
+        revalidation: &revalidation,
+    })
+    .expect("complete admitted oracle graph");
+    assert_eq!(
+        ContentId::<AdmissionReceiptArtifact>::derive(admission.receipt().receipt_bytes())
+            .expect("receipt identity"),
+        admission.receipt().receipt_id()
+    );
+    assert_eq!(
+        ContentId::<AdmittedOracleArtifact>::derive(admission.oracle().oracle_bytes())
+            .expect("oracle identity"),
+        admission.oracle().oracle_id()
+    );
+    admission
+        .oracle()
+        .oracle()
+        .validate_receipt(admission.receipt())
+        .expect("oracle mirrors exact admitted receipt");
+    assert_strict_admission_artifacts(&admission);
+
+    assert!(
+        compose_historical_reduction_admission(&HistoricalReductionAdmissionInputs {
+            control: &prepared,
+            domain: &domain,
+            declared_domain: &declared,
+            corpus_proposal: &corpus_proposal,
+            proposal: &proposal,
+            historical_record: &historical,
+            historical_obligation: &obligation,
+            historical_coverage: &coverage,
+            policy: &policy_mutation.policy,
+            allowance: &allowance,
+            corpus: &corpus,
+            old_sample_case,
+            old_baseline_variant: sequential_id,
+            reference_job: &reference.job,
+            reference_run: &reference.run,
+            correct: &correct,
+            wrong: &wrong,
+            mutant_set: &policy_mutation.mutants,
+            mutation_grid: &policy_mutation.grid,
+            mutation_proof: policy_mutation.proof.proof(),
+            saturation_rounds: &saturation_rounds[..1],
+            revalidation: &revalidation,
+        })
+        .is_err()
+    );
+    let unsaturated_rounds = vec![
+        saturation_rounds[0],
+        AdmissionSaturationRoundV1::new(
+            2,
+            id::<AdmissionSaturationEvidenceArtifact>(b"new class in terminal round"),
+            1,
+        )
+        .expect("unsaturated terminal round"),
+    ];
+    assert!(
+        compose_historical_reduction_admission(&HistoricalReductionAdmissionInputs {
+            control: &prepared,
+            domain: &domain,
+            declared_domain: &declared,
+            corpus_proposal: &corpus_proposal,
+            proposal: &proposal,
+            historical_record: &historical,
+            historical_obligation: &obligation,
+            historical_coverage: &coverage,
+            policy: &policy_mutation.policy,
+            allowance: &allowance,
+            corpus: &corpus,
+            old_sample_case,
+            old_baseline_variant: sequential_id,
+            reference_job: &reference.job,
+            reference_run: &reference.run,
+            correct: &correct,
+            wrong: &wrong,
+            mutant_set: &policy_mutation.mutants,
+            mutation_grid: &policy_mutation.grid,
+            mutation_proof: policy_mutation.proof.proof(),
+            saturation_rounds: &unsaturated_rounds,
+            revalidation: &revalidation,
+        })
+        .is_err()
+    );
+
     assert_asserted_allowance_and_passed_tampering_fail(
         &prepared,
         &domain,
@@ -255,6 +392,32 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         &correct,
         &wrong,
     );
+}
+
+fn assert_strict_admission_artifacts(
+    admission: &cairn_migration::PreparedHistoricalReductionAdmission,
+) {
+    let mut receipt =
+        serde_json::to_value(admission.receipt().receipt()).expect("admission receipt JSON");
+    receipt["passed"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<AdmissionReceiptV1>(receipt).is_err());
+
+    let mut receipt =
+        serde_json::to_value(admission.receipt().receipt()).expect("admission receipt JSON");
+    receipt["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<AdmissionReceiptV1>(receipt).is_err());
+
+    let mut oracle = serde_json::to_value(admission.oracle().oracle()).expect("oracle JSON");
+    oracle["unknown"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<AdmittedOracleV1>(oracle).is_err());
+
+    let mut oracle = serde_json::to_value(admission.oracle().oracle()).expect("oracle JSON");
+    oracle["frozen_corpus"] =
+        serde_json::to_value(id::<AdmissionCorpusArtifact>(b"tampered frozen corpus"))
+            .expect("tampered corpus identity JSON");
+    let oracle = serde_json::from_value::<AdmittedOracleV1>(oracle)
+        .expect("locally shaped but graph-inconsistent oracle");
+    assert!(oracle.validate_receipt(admission.receipt()).is_err());
 }
 
 struct MutationControl {

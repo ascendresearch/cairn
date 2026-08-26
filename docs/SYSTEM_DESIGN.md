@@ -929,10 +929,10 @@ trusted classification boundary prevents asserted or external-prior-only values 
 upgraded by assurance metadata. Only proven-bound or exhaustive-finite assurance can reach the
 unqualified-domain-wide class; held-out evidence reaches empirical at most.
 
-This foundation alone does not claim executed admission. Admitted-domain/frozen-corpus artifacts,
-receipt lifecycles, candidate judgment, and complete evidence-graph validation remain target work
-for M2; later implemented slices below now cover host variant execution, mutation proof, and the
-hardware-free historical reduction control.
+This foundation alone does not claim executed admission. Later implemented slices below now cover
+host variant execution, mutation proof, the hardware-free historical reduction control, and its
+first complete admitted-domain/receipt/oracle graph. Candidate judgment and broader receipt
+lifecycle integration remain target work for M2.
 
 **Implemented proposal artifact graph (2026-08-25).** Strict V1 manifests now preserve the caller
 domain and its explicit unknowns separately from evidence-citing refinements; corpus cases retain
@@ -1211,8 +1211,22 @@ observation-pipeline scopes are rechecked. The mutation proof must cover the sam
 mutate an implementation from this correct family, have no fatal failure, and retain at least one
 case-dependent blind spot. Asserted allowance, empty applicable grids, relabeling, changed
 receipt/content identities, stored `passed`, and non-V1 artifacts fail closed. The resulting control
-is complete evidence for the first nine requirements of `ORACLE_ADMISSION.md` section 18; immutable
-admitted-oracle emission and full identity-graph validation remain the next receipt slice.
+is the recomputed evidence base for the first nine requirements of `ORACLE_ADMISSION.md` section 18.
+
+**Implemented historical reduction admission receipt (2026-08-26).** Promotion re-runs the entire
+product control rather than trusting its identity alone, then freezes the caller declaration,
+proposal refinements, and explicit exclusions in an admitted-domain manifest. A domain-neutral
+receipt binds the exact task/proposal, policy, empirical reference strength, admission corpus,
+measured allowance, host environment, source/reference observation, correct and wrong variant
+trials, mutant set/grid/proof, configured consecutive saturation evidence, historical coverage,
+blind and non-injectable cells, and an explicit no-disagreement disposition. Assumptions and the
+unverified source-accelerator, target-build, target-device, target-specific-coverage, and runner
+attestation claims are closed typed values carried into the immutable oracle rather than omitted.
+The oracle also freezes an explicit no-time-expiry/revalidation-trigger policy. Receipt and oracle
+identities are content-derived, critical edges are mirrored and revalidated, and there is no stored
+`passed` bit. Missing saturation, a changed frozen corpus, unknown fields, or a non-V1 schema fails
+closed. This completes all ten first-implementation controls in `ORACLE_ADMISSION.md` section 18;
+candidate-verdict composition remains the next receipt slice.
 
 Its core modules are expected to include:
 

@@ -747,6 +747,12 @@ impl HistoricalReductionExecutionPlanV1 {
     pub const fn algorithm(&self) -> HistoricalReductionAlgorithm {
         self.algorithm
     }
+
+    /// Returns the exact execution environment exercised by this plan.
+    #[must_use]
+    pub const fn environment(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.environment
+    }
 }
 
 impl TryFrom<HistoricalReductionExecutionPlanWire> for HistoricalReductionExecutionPlanV1 {

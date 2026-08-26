@@ -302,7 +302,7 @@ The remaining G slices, in dependency order, are:
    and representative built adapters, while deterministic generic captures keep the complete host
    corpus gate bounded. It emits no admission verdict. Real compiler/vendor/device adapters,
    production numerical/property variants, and mutation injection remain pending;
-5. **Implemented 2026-08-26 except for final admitted-oracle emission:** the hardware-free
+5. **Implemented 2026-08-26:** the hardware-free
    historical reduction control loads an ordinary proposal graph, builds and executes two distinct
    correct and three distinct wrong compiled host implementations through generic authoritative
    receipts, stores finite-f32 bits rather than JSON floats, and recomputes every per-case ULP
@@ -310,14 +310,21 @@ The remaining G slices, in dependency order, are:
    balanced tree; measured family spread derives one ULP and accepts both correct variants while all
    wrong variants are red. The selected mutation proof must retain a case-dependent blind spot and
    exercise one of the correct implementations. Asserted allowance, an empty applicable grid,
-   relabeling, changed content, stored `passed`, and non-V1 input fail closed. This artifact is
-   control evidence for step 6, not an admission receipt;
-6. immutable admitted-oracle and candidate-verdict receipts with complete identity-graph audit.
+   relabeling, changed content, stored `passed`, and non-V1 input fail closed;
+6. **Admitted-oracle receipt implemented 2026-08-26; candidate verdict pending:** the reduction
+   control now recomputes all product evidence before emitting a frozen admitted-domain manifest,
+   complete admission receipt, and immutable `AdmittedOracle`. The graph binds proposal, task,
+   policy, empirical reference strength, corpus, measured allowance, host environment, source
+   observation, correct/wrong trials, mutant set/grid/proof, two no-new-class saturation rounds,
+   historical coverage, blind spots, assumptions, explicit unverified target/device claims, and
+   revalidation triggers. Receipt/oracle identities and mirrored edges are recomputed; missing
+   saturation, changed frozen corpus, stored `passed`, unknown fields, and non-V1 schemas fail
+   closed. Candidate-verdict receipt composition remains pending.
 
-Phase G is incomplete until step 6 emits a complete admitted-oracle graph from the now-executed
-historical control. Open questions OQ-004 and OQ-007 remain unresolved; implementation must preserve
-derivation and disagreement evidence rather than selecting an independence or automatic disagreement
-policy.
+Phase G is incomplete until step 6 also emits and validates candidate-verdict receipts against the
+now-admitted frozen oracle. Open questions OQ-004 and OQ-007 remain unresolved; implementation must
+preserve derivation and disagreement evidence rather than selecting an independence or automatic
+disagreement policy.
 
 ## Cross-cutting gates
 

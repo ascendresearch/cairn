@@ -10,6 +10,7 @@ mod historical;
 mod input_values;
 mod materialize;
 mod memory_surface;
+mod reduction_admission;
 mod reduction_control;
 mod variant_execution;
 
@@ -94,6 +95,10 @@ pub use memory_surface::{
     MemorySurfaceCaseTarget, MemorySurfaceDerivationPolicy, MisalignmentOffsetBytes,
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
+};
+pub use reduction_admission::{
+    HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,
+    compose_historical_reduction_admission,
 };
 pub use reduction_control::{
     FiniteF32Bits, HistoricalReductionAlgorithm, HistoricalReductionCaptureLimits,

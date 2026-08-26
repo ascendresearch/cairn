@@ -824,8 +824,23 @@ impl ContentType for NumericalAllowanceArtifact {
     const DOMAIN: &'static str = "verification.numerical-allowance.v1";
 }
 
+mod admission;
 mod mutation;
 mod proposal;
+
+pub use admission::{
+    AdmissionAdjudicationArtifact, AdmissionAssumptionV1, AdmissionControlArtifact,
+    AdmissionCoverageArtifact, AdmissionDecisionV1, AdmissionDisagreementArtifact,
+    AdmissionDisagreementDispositionV1, AdmissionEnvironmentArtifact,
+    AdmissionProofFailureArtifact, AdmissionReceiptArtifact, AdmissionReceiptV1,
+    AdmissionRevalidationPolicyV1, AdmissionRevalidationTriggerV1,
+    AdmissionSaturationEvidenceArtifact, AdmissionSaturationRoundV1, AdmissionUnverifiedClaimV1,
+    AdmissionVariantTrialArtifact, AdmittedDomainArtifact, AdmittedDomainExclusionArtifact,
+    AdmittedDomainV1, AdmittedOracleArtifact, AdmittedOracleV1, AdmittedReceiptInput,
+    PreparedAdmissionReceipt, PreparedAdmittedDomain, PreparedAdmittedOracle,
+    SourceAdmissionObservationArtifact, prepare_admission_receipt, prepare_admitted_domain,
+    prepare_admitted_oracle,
+};
 
 pub use mutation::{
     GenericMutantSetArtifact, GenericMutantSetV1, MutationCaseArtifact, MutationComparisonArtifact,

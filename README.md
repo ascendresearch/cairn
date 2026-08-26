@@ -48,8 +48,9 @@ are independent typed facts;
 held-out evidence requires identity-disjoint corpora, and asserted or external-prior-only values
 cannot be promoted by assurance metadata. The proposal side now has immutable caller-domain,
 refinement, corpus, authorship, construction-claim, correct/wrong-variant, and oracle-proposal
-manifests with separate typed identity domains. Immutable admitted-oracle receipts, candidate
-judgment, real CUDA/Ascend execution, and the first unified migration are not implemented yet.
+manifests with separate typed identity domains. The first immutable admitted-oracle receipt is now
+implemented for the hardware-free historical reduction control; candidate judgment, real
+CUDA/Ascend execution, and the first unified migration are not implemented yet.
 `cairn-migration` now supplies the first strongly typed operator-domain
 body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivation. Floating
 special-value and memory conditions retain explicit supported/invalid/excluded/unknown
@@ -117,8 +118,12 @@ variants through authoritative generic receipts, and records exact finite-f32 bi
 ULP distances. It reproduces the old zero-ULP single-sample false reject, derives a one-ULP
 measured-family allowance that accepts the correct balanced tree, makes all three wrong variants red,
 and retains a case-dependent mutation blind spot. Asserted allowance, an empty applicable mutation
-grid, changed receipt/output identities, a stored `passed` field, and non-V1 input fail closed. This
-is admission-control evidence, not yet an `AdmittedOracle` receipt.
+grid, changed receipt/output identities, a stored `passed` field, and non-V1 input fail closed. The
+validated control now emits a strict admitted-domain manifest, complete admission receipt, and
+immutable `AdmittedOracle`. These artifacts freeze the proposal, policy, empirical reference
+strength, corpus, allowance, environments, variant and mutation evidence, historical coverage,
+case-dependent blind spot, assumptions, target/device claims left unverified, and explicit
+revalidation triggers. Missing saturation rounds or any changed receipt/oracle edge fail closed.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
