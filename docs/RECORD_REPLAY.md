@@ -244,10 +244,13 @@ step boundary; authority lost before step preparation can be reconstructed but c
 after the step has consumed it.
 
 `ModelResponseReceived` may carry a validated provider usage receipt containing input and output
-token counts. The receipt and raw response identity commit atomically. Cairn does not infer provider
-tokens from byte length, a local tokenizer, or a later adapter pass. Recorded transports replay the
-captured receipt through the same transport seam as live providers; recovery rejects an
-unrepresentable total or a usage field attached to a failure outcome.
+token counts plus optional provider-reported cache-read, cache-write, and cache-miss counts. Missing
+cache dimensions remain unknown, not zero. Cache details are attribution observations and do not
+change episode token-budget accounting, semantic replay, or authority. The receipt and raw response
+identity commit atomically. Cairn does not infer provider tokens from byte length, a local tokenizer,
+or a later adapter pass. Recorded transports replay the captured receipt through the same transport
+seam as live providers; recovery rejects an unrepresentable total, cache detail above total logical
+input, or a usage field attached to a failure outcome.
 
 `EpisodeOperationsAdmitted` is the pre-authority budget reservation for an ordered, non-empty set
 of logical tool operations. It records each stable `OperationId` plus the trusted tool name,

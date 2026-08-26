@@ -2,6 +2,7 @@ use std::{
     ffi::OsString, fs, io::Cursor, os::unix::fs::PermissionsExt as _, path::Path, process::Command,
 };
 
+use cairn_agent::{ContextBlock, EpisodeBudget, InstructionBlock, ResolvedRuntimeModelArtifact};
 use cairn_execution::{
     CapturedOutput, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionCapture,
     ExecutionCompletion, ExecutionElapsedMillis, ExecutionEnvironmentArtifact, ExecutionInput,
@@ -26,8 +27,9 @@ use cairn_migration::{
     HistoricalReductionWrongVariantEvidence, HistoricalReproductionArtifact,
     HistoricalValidationStage, InputValueDomainV1, MemoryConditionDisposition,
     MigrationDomainContractInput, MigrationDomainContractV1, MigrationDomainFamilyName,
-    MigrationExecutionNeed, MigrationValidationTier, OracleFailureMechanismName,
-    PointerAlignmentContractV1, PreparedHistoricalReductionJob,
+    MigrationExecutionNeed, MigrationValidationTier, OracleAgentRole, OracleAttackInput,
+    OracleFailureMechanismName, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleSearchPlanInput,
+    OracleSearchPlanV1, PointerAlignmentContractV1, PreparedHistoricalReductionJob,
     PreparedHistoricalReductionMutationGrid, RequestedSemanticsArtifact, SemanticClaimKind,
     ValidatedHistoricalReductionRun, ValidatedVariantBuild, VariantBuildCaptureLimits,
     VariantBuildDriverByteLimit, VariantImplementationByteLimit,
@@ -35,11 +37,12 @@ use cairn_migration::{
     compose_historical_reduction_control, compose_historical_reduction_mutation_grid,
     prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
     prepare_historical_reduction_mutant_set, prepare_historical_reduction_reference_job,
-    prepare_historical_reduction_variant_job, prepare_variant_build_job,
+    prepare_historical_reduction_variant_job, prepare_oracle_attack,
+    prepare_oracle_proposal_revision, prepare_oracle_role_episode, prepare_variant_build_job,
     validate_historical_reduction_receipt, validate_variant_build_receipt,
 };
 use cairn_protocol::{
-    AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis, TaskId,
+    AttemptId, CommandId, ContentId, ContentType, EpisodeId, JobId, ObservedAtUnixMillis, TaskId,
 };
 use cairn_record::ContentStore;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
@@ -47,22 +50,23 @@ use cairn_verification::{
     AdmissionCorpusArtifact, AdmissionExecutionScope, AdmissionPolicyInput, AdmissionPolicyV1,
     AdmissionReceiptArtifact, AdmissionReceiptV1, AdmissionRevalidationPolicyV1,
     AdmissionRevalidationTriggerV1, AdmissionSaturationEvidenceArtifact,
-    AdmissionSaturationRoundV1, AdmittedOracleArtifact, AdmittedOracleV1, AllowanceAssurance,
-    AllowanceMagnitude, AllowanceProvenance, ArtifactAuthorId, ArtifactAuthorshipV1,
-    AuthorshipOrigin, BudgetExhaustionOutcome, CallerDomainEvidenceArtifact,
-    CandidateVerdictArtifact, CandidateVerdictOutcomeV1, CandidateVerdictV1,
-    ConstructionClaimArtifact, ConstructionClaimInput, ConstructionClaimV1, ConstructionClassName,
-    ConstructionEvidenceArtifact, ConstructionJustification, ConstructionPrerequisiteArtifact,
-    CorpusCaseArtifact, CorpusCaseEntryV1, CorpusCaseProvenanceArtifact, CorpusCaseSource,
-    CorpusProposalArtifact, CorpusProposalInput, CorpusProposalV1, CorrectVariantMinimum,
-    CoverageObligationArtifact, DeclaredDomainArtifact, DeclaredDomainV1, DomainRegionName,
-    FaultClassName, FaultInjectionEvidenceArtifact, ImplementationBundleArtifact,
-    ImplementationVariantArtifact, ImplementationVariantV1, IncorrectVariantMinimum,
-    LicenseProvenanceArtifact, MutationGridCellV1, MutationTrialV1, NonInjectableReasonArtifact,
-    NumericalAllowanceInput, NumericalAllowanceV1, ObservationPlanArtifact, OracleProposalInput,
-    OracleProposalV1, OracleStrength, OracleTaskInputArtifact, ReferenceArtifact,
-    SaturationRoundCount, SourceAdmissionPlanArtifact, StructuralIndependenceRequirement,
-    TransformationKindName, ValidFamilyPlanArtifact, VariantExpectation, prepare_mutation_grid,
+    AdmissionSaturationRoundV1, AdmissionUnverifiedClaimV1, AdmittedOracleArtifact,
+    AdmittedOracleV1, AllowanceAssurance, AllowanceMagnitude, AllowanceProvenance,
+    ArtifactAuthorId, ArtifactAuthorshipV1, AuthorshipOrigin, BudgetExhaustionOutcome,
+    CallerDomainEvidenceArtifact, CandidateVerdictArtifact, CandidateVerdictOutcomeV1,
+    CandidateVerdictV1, ConstructionClaimArtifact, ConstructionClaimInput, ConstructionClaimV1,
+    ConstructionClassName, ConstructionEvidenceArtifact, ConstructionJustification,
+    ConstructionPrerequisiteArtifact, CorpusCaseArtifact, CorpusCaseEntryV1,
+    CorpusCaseProvenanceArtifact, CorpusCaseSource, CorpusProposalArtifact, CorpusProposalInput,
+    CorpusProposalV1, CorrectVariantMinimum, CoverageObligationArtifact, DeclaredDomainArtifact,
+    DeclaredDomainV1, DomainRegionName, FaultClassName, FaultInjectionEvidenceArtifact,
+    ImplementationBundleArtifact, ImplementationVariantArtifact, ImplementationVariantV1,
+    IncorrectVariantMinimum, LicenseProvenanceArtifact, ModelConfigurationArtifact,
+    MutationGridCellV1, MutationTrialV1, NonInjectableReasonArtifact, NumericalAllowanceInput,
+    NumericalAllowanceV1, ObservationPlanArtifact, OracleProposalInput, OracleProposalV1,
+    OracleStrength, OracleTaskInputArtifact, ReferenceArtifact, SaturationRoundCount,
+    SourceAdmissionPlanArtifact, StructuralIndependenceRequirement, TransformationKindName,
+    ValidFamilyPlanArtifact, VariantExpectation, prepare_mutation_grid,
     recompute_mutation_grid_proof,
 };
 
@@ -86,6 +90,11 @@ struct WrongControl {
     completed: CompletedRun,
 }
 
+struct OracleActors {
+    blue: OracleRoleEpisodeV1,
+    red: OracleRoleEpisodeV1,
+}
+
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -94,6 +103,7 @@ struct WrongControl {
 fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_spot() {
     let domain = reduction_domain();
     let declared = declared_domain(&domain);
+    let actors = oracle_actors();
     let historical = historical_record();
     let obligation = HistoricalFailureObligationV1::from_record(
         &historical,
@@ -102,7 +112,6 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
     .expect("historical obligation");
     let corpus_proposal = corpus_proposal(&declared, &obligation);
     let reference_id = id::<ReferenceArtifact>(b"binary64-reduction-reference");
-    let proposal = oracle_proposal(&declared, &corpus_proposal, reference_id);
     let corpus = reduction_corpus(&corpus_proposal);
     let reference = execute_reference(reference_id, &corpus);
     assert_strict_execution_artifacts(&reference);
@@ -113,6 +122,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         HistoricalReductionAlgorithm::Sequential,
         env!("CARGO_BIN_EXE_cairn-reduction-sequential-fixture"),
         &corpus,
+        &model_authorship(&actors.red),
     );
     let tree = execute_correct(
         "tree-order",
@@ -120,24 +130,28 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         HistoricalReductionAlgorithm::BalancedTree,
         env!("CARGO_BIN_EXE_cairn-reduction-tree-fixture"),
         &corpus,
+        &model_authorship(&actors.red),
     );
     let zero = execute_wrong(
         "zero-output",
         HistoricalReductionAlgorithm::ZeroOutput,
         env!("CARGO_BIN_EXE_cairn-reduction-zero-fixture"),
         &corpus,
+        &model_authorship(&actors.red),
     );
     let dropped = execute_wrong(
         "drop-last",
         HistoricalReductionAlgorithm::DropLast,
         env!("CARGO_BIN_EXE_cairn-reduction-drop-last-fixture"),
         &corpus,
+        &model_authorship(&actors.red),
     );
     let offset = execute_wrong(
         "unit-offset",
         HistoricalReductionAlgorithm::UnitOffset,
         env!("CARGO_BIN_EXE_cairn-reduction-offset-fixture"),
         &corpus,
+        &model_authorship(&actors.red),
     );
 
     let allowance = measured_allowance(&corpus);
@@ -253,6 +267,33 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             run: &offset.completed.run,
         },
     ];
+    let search_plan = oracle_search_plan(&declared, &policy_mutation.policy, actors);
+    let proposal = oracle_proposal(
+        &declared,
+        &corpus_proposal,
+        reference_id,
+        model_authorship(search_plan.blue()),
+    );
+    let proposal_revision =
+        prepare_oracle_proposal_revision(&search_plan, None, proposal.clone(), Vec::new())
+            .expect("model-authored blue proposal revision");
+    let attack = prepare_oracle_attack(
+        &search_plan,
+        &proposal_revision,
+        OracleAttackInput {
+            correct_variants: vec![sequential.variant.clone(), tree.variant.clone()],
+            wrong_variants: vec![
+                zero.variant.clone(),
+                dropped.variant.clone(),
+                offset.variant.clone(),
+            ],
+            adversarial_cases: Vec::new(),
+        },
+    )
+    .expect("model-authored red attack");
+    assert_eq!(proposal_revision.proposal(), &proposal);
+    assert_eq!(attack.body().correct_variants().len(), 2);
+    assert_eq!(attack.body().wrong_variants().len(), 3);
     let prepared = compose_historical_reduction_control(
         &domain,
         &declared,
@@ -376,6 +417,20 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         .oracle()
         .validate_receipt(admission.receipt())
         .expect("oracle mirrors exact admitted receipt");
+    assert!(
+        admission
+            .oracle()
+            .oracle()
+            .unverified_claims()
+            .contains(&AdmissionUnverifiedClaimV1::TargetDeviceBehavior)
+    );
+    assert!(
+        !admission
+            .receipt()
+            .receipt()
+            .execution_scopes()
+            .contains(&AdmissionExecutionScope::TargetDevice)
+    );
     assert_strict_admission_artifacts(&admission);
 
     assert!(
@@ -761,6 +816,7 @@ fn oracle_proposal(
     declared: &DeclaredDomainV1,
     corpus: &CorpusProposalV1,
     reference: ContentId<ReferenceArtifact>,
+    authorship: ArtifactAuthorshipV1,
 ) -> OracleProposalV1 {
     let declared_bytes = cairn_codec::to_vec(declared).expect("declared bytes");
     let corpus_bytes = cairn_codec::to_vec(corpus).expect("corpus bytes");
@@ -776,7 +832,7 @@ fn oracle_proposal(
         valid_family_plan: id::<ValidFamilyPlanArtifact>(b"two correct three wrong"),
         observation_plan: id::<ObservationPlanArtifact>(b"finite f32 result bits"),
         requested_strength: OracleStrength::Reference,
-        authorship: authorship(),
+        authorship,
     })
     .expect("oracle proposal")
 }
@@ -831,6 +887,7 @@ fn execute_correct(
     algorithm: HistoricalReductionAlgorithm,
     fixture: &str,
     corpus: &cairn_migration::PreparedHistoricalReductionCorpus,
+    authorship: &ArtifactAuthorshipV1,
 ) -> CorrectControl {
     let implementation = stripped_fixture(fixture);
     let claim = ConstructionClaimV1::new(ConstructionClaimInput {
@@ -842,7 +899,7 @@ fn execute_correct(
         )],
         evidence: vec![id::<ConstructionEvidenceArtifact>(class.as_bytes())],
         justification: ConstructionJustification::StructuralArgument,
-        authorship: authorship(),
+        authorship: authorship.clone(),
     })
     .expect("construction claim");
     let claim_bytes = cairn_codec::to_vec(&claim).expect("claim bytes");
@@ -853,7 +910,7 @@ fn execute_correct(
             construction_claim: ContentId::<ConstructionClaimArtifact>::derive(&claim_bytes)
                 .expect("claim identity"),
         },
-        authorship(),
+        authorship.clone(),
     );
     let build = execute_variant_build(&variant, &implementation);
     let completed = execute_variant_run(&variant, algorithm, corpus, &build);
@@ -870,6 +927,7 @@ fn execute_wrong(
     algorithm: HistoricalReductionAlgorithm,
     fixture: &str,
     corpus: &cairn_migration::PreparedHistoricalReductionCorpus,
+    authorship: &ArtifactAuthorshipV1,
 ) -> WrongControl {
     let implementation = stripped_fixture(fixture);
     let variant = ImplementationVariantV1::new(
@@ -879,7 +937,7 @@ fn execute_wrong(
             fault_class: FaultClassName::new(fault).expect("fault class"),
             fault_evidence: id::<FaultInjectionEvidenceArtifact>(fault.as_bytes()),
         },
-        authorship(),
+        authorship.clone(),
     );
     let build = execute_variant_build(&variant, &implementation);
     let completed = execute_variant_run(&variant, algorithm, corpus, &build);
@@ -1346,12 +1404,63 @@ fn assert_asserted_allowance_and_passed_tampering_fail(
     );
 }
 
-fn authorship() -> ArtifactAuthorshipV1 {
+fn oracle_actors() -> OracleActors {
+    let blue = prepare_oracle_role_episode(OracleRoleEpisodeInput {
+        role: OracleAgentRole::Blue,
+        episode_id: EpisodeId::new(),
+        model_configuration: id::<ResolvedRuntimeModelArtifact>(b"recorded blue runtime model"),
+        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded blue model"),
+        role_instruction: id::<InstructionBlock>(b"blue historical reduction role"),
+        private_context: Vec::new(),
+        budget: EpisodeBudget::default(),
+    })
+    .expect("blue actor");
+    let red = prepare_oracle_role_episode(OracleRoleEpisodeInput {
+        role: OracleAgentRole::Red,
+        episode_id: EpisodeId::new(),
+        model_configuration: id::<ResolvedRuntimeModelArtifact>(b"recorded red runtime model"),
+        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded red model"),
+        role_instruction: id::<InstructionBlock>(b"red historical reduction role"),
+        private_context: Vec::new(),
+        budget: EpisodeBudget::default(),
+    })
+    .expect("red actor");
+    OracleActors { blue, red }
+}
+
+fn oracle_search_plan(
+    declared: &DeclaredDomainV1,
+    policy: &AdmissionPolicyV1,
+    actors: OracleActors,
+) -> OracleSearchPlanV1 {
+    let declared_bytes = cairn_codec::to_vec(declared).expect("declared bytes");
+    let policy_bytes = cairn_codec::to_vec(policy).expect("policy bytes");
+    OracleSearchPlanV1::new(OracleSearchPlanInput {
+        task_id: declared.task_id(),
+        task_inputs: id::<OracleTaskInputArtifact>(b"historical reduction task inputs"),
+        declared_domain: ContentId::derive(&declared_bytes).expect("declared identity"),
+        admission_policy: ContentId::derive(&policy_bytes).expect("policy identity"),
+        common_instructions: vec![id::<InstructionBlock>(b"oracle search common rules")],
+        shared_context: vec![
+            id::<ContextBlock>(b"historical reduction caller contract"),
+            id::<ContextBlock>(b"historical reduction source snapshot"),
+        ],
+        blue: actors.blue,
+        red: actors.red,
+    })
+    .expect("oracle search plan")
+}
+
+fn model_authorship(role: &OracleRoleEpisodeV1) -> ArtifactAuthorshipV1 {
     ArtifactAuthorshipV1::new(
-        AuthorshipOrigin::Repository,
-        ArtifactAuthorId::new("cairn-historical-control").expect("author"),
-        None,
-        None,
+        AuthorshipOrigin::Model,
+        ArtifactAuthorId::new(match role.role() {
+            OracleAgentRole::Blue => "recorded-blue-oracle-agent",
+            OracleAgentRole::Red => "recorded-red-oracle-agent",
+        })
+        .expect("author"),
+        Some(role.episode_id()),
+        Some(role.authorship_configuration()),
     )
     .expect("authorship")
 }

@@ -175,7 +175,7 @@ impl EpisodeDeadlineUnixMillis {
 }
 
 /// V1 episode budgets enforce only dimensions currently derived from trusted durable facts.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EpisodeBudget {
     /// Optional maximum number of model steps that may start; `None` disables the dimension.
@@ -1870,7 +1870,10 @@ mod tests {
         )
         .expect("begin model");
         let mut transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
-            Ok::<_, TransportError>(ModelTransportResponse::new(b"raw-response".to_vec(), usage))
+            Ok::<_, TransportError>(ModelTransportResponse::new(
+                b"raw-response".to_vec(),
+                usage.clone(),
+            ))
         });
         let DispatchCompletion::Response(received) = execute_model_dispatch(
             events,

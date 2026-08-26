@@ -16,6 +16,7 @@ document is complete.
 | [`SYSTEM_REQUIREMENTS.md`](SYSTEM_REQUIREMENTS.md) | What must the system do, refuse, expose, and prove? | Normative requirements |
 | [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) | What architecture is intended to satisfy those requirements? | Normative target design |
 | [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md) | Why may an oracle judge a candidate? | Normative verification design |
+| [`ORACLE_AGENT.md`](ORACLE_AGENT.md) | How do isolated blue/red episodes research, propose, attack, and revise an oracle while preserving cache efficiency? | Normative agent/product design |
 | [`RECORD_REPLAY.md`](RECORD_REPLAY.md) | What is recorded, reconstructed, replayed, and compared? | Normative record design |
 | [`DECISIONS.md`](DECISIONS.md) | Which formerly open choices have been resolved? | Normative decision register |
 | [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) | What has not been decided? | Explicitly non-normative decision backlog |

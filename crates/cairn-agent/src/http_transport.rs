@@ -14,8 +14,9 @@ use reqwest::{
 use thiserror::Error;
 
 use crate::{
-    CredentialSource, ModelTransport, ModelTransportResponse, PreparedModelRequest,
-    ProviderTokenCount, ProviderTokenUsage, ResolvedRuntimeModel, TransportError,
+    CredentialSource, ModelProtocolKind, ModelTransport, ModelTransportResponse,
+    PreparedModelRequest, ProviderCacheTokenUsage, ProviderTokenCount, ProviderTokenUsage,
+    ResolvedRuntimeModel, TransportError,
 };
 
 const X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
@@ -34,6 +35,7 @@ pub struct HttpModelTransport {
     endpoint: String,
     credential: CredentialSource,
     credential_base: PathBuf,
+    protocol: ModelProtocolKind,
     max_request_bytes: u64,
     max_response_bytes: u64,
 }
@@ -69,6 +71,7 @@ impl HttpModelTransport {
             endpoint: model.endpoint().as_str().to_owned(),
             credential: model.credential().clone(),
             credential_base: credential_base.as_ref().to_path_buf(),
+            protocol: model.protocol().kind(),
             max_request_bytes: transport.max_request_bytes.get(),
             max_response_bytes: transport.max_response_bytes.get(),
         })
@@ -176,7 +179,7 @@ impl ModelTransport for HttpModelTransport {
                 .unwrap_or_default();
             return Err(TransportError::Rejected(format!("HTTP {status}{detail}")));
         }
-        let usage = response_usage(&bytes);
+        let usage = response_usage(&bytes, self.protocol);
         Ok(ModelTransportResponse::new(bytes, usage))
     }
 }
@@ -209,16 +212,99 @@ fn provider_error_summary(bytes: &[u8]) -> Option<String> {
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
-fn response_usage(bytes: &[u8]) -> Option<ProviderTokenUsage> {
+fn response_usage(bytes: &[u8], protocol: ModelProtocolKind) -> Option<ProviderTokenUsage> {
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
     let usage = value.get("usage")?;
+    match protocol {
+        ModelProtocolKind::OpenAiResponses => openai_responses_usage(usage),
+        ModelProtocolKind::OpenAiChatCompletions => openai_chat_usage(usage),
+        ModelProtocolKind::AnthropicMessages => anthropic_usage(usage),
+    }
+}
+
+fn openai_responses_usage(usage: &serde_json::Value) -> Option<ProviderTokenUsage> {
     let input = usage.get("input_tokens")?.as_u64()?;
     let output = usage.get("output_tokens")?.as_u64()?;
-    ProviderTokenUsage::new(
-        ProviderTokenCount::new(input),
-        ProviderTokenCount::new(output),
+    let details = usage.get("input_tokens_details");
+    usage_with_optional_cache(
+        input,
+        output,
+        details
+            .and_then(|value| value.get("cached_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        details
+            .and_then(|value| value.get("cache_write_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        None,
     )
-    .ok()
+}
+
+fn openai_chat_usage(usage: &serde_json::Value) -> Option<ProviderTokenUsage> {
+    let input = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))?
+        .as_u64()?;
+    let output = usage
+        .get("completion_tokens")
+        .or_else(|| usage.get("output_tokens"))?
+        .as_u64()?;
+    let details = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"));
+    usage_with_optional_cache(
+        input,
+        output,
+        usage
+            .get("prompt_cache_hit_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                details
+                    .and_then(|value| value.get("cached_tokens"))
+                    .and_then(serde_json::Value::as_u64)
+            }),
+        details
+            .and_then(|value| value.get("cache_write_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        usage
+            .get("prompt_cache_miss_tokens")
+            .and_then(serde_json::Value::as_u64),
+    )
+}
+
+fn anthropic_usage(usage: &serde_json::Value) -> Option<ProviderTokenUsage> {
+    let uncached = usage.get("input_tokens")?.as_u64()?;
+    let output = usage.get("output_tokens")?.as_u64()?;
+    let read = usage
+        .get("cache_read_input_tokens")
+        .and_then(serde_json::Value::as_u64);
+    let write = usage
+        .get("cache_creation_input_tokens")
+        .and_then(serde_json::Value::as_u64);
+    let input = uncached
+        .checked_add(read.unwrap_or(0))?
+        .checked_add(write.unwrap_or(0))?;
+    usage_with_optional_cache(input, output, read, write, Some(uncached))
+}
+
+fn usage_with_optional_cache(
+    input: u64,
+    output: u64,
+    read: Option<u64>,
+    write: Option<u64>,
+    miss: Option<u64>,
+) -> Option<ProviderTokenUsage> {
+    let input = ProviderTokenCount::new(input);
+    let output = ProviderTokenCount::new(output);
+    if read.is_none() && write.is_none() && miss.is_none() {
+        return ProviderTokenUsage::new(input, output).ok();
+    }
+    let cache = ProviderCacheTokenUsage::new(
+        read.map(ProviderTokenCount::new),
+        write.map(ProviderTokenCount::new),
+        miss.map(ProviderTokenCount::new),
+    )
+    .ok()?;
+    ProviderTokenUsage::with_cache_tokens(input, output, cache).ok()
 }
 
 #[cfg(test)]
@@ -232,9 +318,9 @@ mod tests {
     use super::{provider_error_summary, response_usage};
     use crate::{
         AdapterVersion, ContextBlock, DeploymentName, HistoryItem, HttpModelTransport,
-        InstructionBlock, ModelName, ModelSelection, ModelTransport, OperationResult,
-        PolicyDocument, ProviderName, ProviderTokenCount, ToolCatalog, TransportError,
-        TurnInputDecision, prepare_model_request,
+        InstructionBlock, ModelName, ModelProtocolKind, ModelSelection, ModelTransport,
+        OperationResult, PolicyDocument, ProviderName, ProviderTokenCount, ToolCatalog,
+        TransportError, TurnInputDecision, prepare_model_request,
     };
 
     fn put_json<T: ContentType>(
@@ -288,11 +374,61 @@ mod tests {
 
     #[test]
     fn usage_is_accepted_only_when_both_counts_are_valid() {
-        let usage =
-            response_usage(br#"{"usage":{"input_tokens":7,"output_tokens":3}}"#).expect("usage");
+        let usage = response_usage(
+            br#"{"usage":{"input_tokens":7,"output_tokens":3}}"#,
+            ModelProtocolKind::OpenAiResponses,
+        )
+        .expect("usage");
         assert_eq!(usage.input_tokens(), ProviderTokenCount::new(7));
         assert_eq!(usage.output_tokens(), ProviderTokenCount::new(3));
-        assert!(response_usage(br#"{"usage":{"input_tokens":7}}"#).is_none());
+        assert!(
+            response_usage(
+                br#"{"usage":{"input_tokens":7}}"#,
+                ModelProtocolKind::OpenAiResponses
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn protocol_usage_retains_cache_observations_without_inference() {
+        let responses = response_usage(
+            br#"{"usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":8,"cache_write_tokens":2},"output_tokens":3}}"#,
+            ModelProtocolKind::OpenAiResponses,
+        )
+        .expect("Responses usage");
+        let cache = responses.cache_tokens().expect("Responses cache detail");
+        assert_eq!(cache.read_tokens(), Some(ProviderTokenCount::new(8)));
+        assert_eq!(cache.write_tokens(), Some(ProviderTokenCount::new(2)));
+        assert_eq!(cache.miss_tokens(), None);
+
+        let chat = response_usage(
+            br#"{"usage":{"prompt_tokens":11,"completion_tokens":3,"prompt_cache_hit_tokens":8,"prompt_cache_miss_tokens":3}}"#,
+            ModelProtocolKind::OpenAiChatCompletions,
+        )
+        .expect("Chat usage");
+        let cache = chat.cache_tokens().expect("Chat cache detail");
+        assert_eq!(cache.read_tokens(), Some(ProviderTokenCount::new(8)));
+        assert_eq!(cache.write_tokens(), None);
+        assert_eq!(cache.miss_tokens(), Some(ProviderTokenCount::new(3)));
+
+        let anthropic = response_usage(
+            br#"{"usage":{"input_tokens":3,"cache_read_input_tokens":8,"cache_creation_input_tokens":2,"output_tokens":3}}"#,
+            ModelProtocolKind::AnthropicMessages,
+        )
+        .expect("Anthropic usage");
+        assert_eq!(anthropic.input_tokens(), ProviderTokenCount::new(13));
+        let cache = anthropic.cache_tokens().expect("Anthropic cache detail");
+        assert_eq!(cache.read_tokens(), Some(ProviderTokenCount::new(8)));
+        assert_eq!(cache.write_tokens(), Some(ProviderTokenCount::new(2)));
+        assert_eq!(cache.miss_tokens(), Some(ProviderTokenCount::new(3)));
+
+        let no_detail = response_usage(
+            br#"{"usage":{"input_tokens":7,"output_tokens":3}}"#,
+            ModelProtocolKind::OpenAiResponses,
+        )
+        .expect("usage without cache detail");
+        assert_eq!(no_detail.cache_tokens(), None);
     }
 
     #[test]

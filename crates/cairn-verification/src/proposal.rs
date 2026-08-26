@@ -843,6 +843,12 @@ impl ImplementationVariantV1 {
     pub const fn expectation(&self) -> &VariantExpectation {
         &self.expectation
     }
+
+    /// Returns variant authorship without promoting it to trusted evidence.
+    #[must_use]
+    pub const fn authorship(&self) -> &ArtifactAuthorshipV1 {
+        &self.authorship
+    }
 }
 
 /// Constructor input for an immutable oracle proposal bundle.
@@ -968,6 +974,12 @@ impl OracleProposalV1 {
         self.task_id
     }
 
+    /// Returns the frozen task/source inputs visible to the proposal author.
+    #[must_use]
+    pub const fn task_inputs(&self) -> ContentId<OracleTaskInputArtifact> {
+        self.task_inputs
+    }
+
     /// Returns the unmodified caller declaration.
     #[must_use]
     pub const fn declared_domain(&self) -> ContentId<DeclaredDomainArtifact> {
@@ -996,6 +1008,12 @@ impl OracleProposalV1 {
     #[must_use]
     pub const fn requested_strength(&self) -> OracleStrength {
         self.requested_strength
+    }
+
+    /// Returns proposal authorship without granting it admission authority.
+    #[must_use]
+    pub const fn authorship(&self) -> &ArtifactAuthorshipV1 {
+        &self.authorship
     }
 }
 

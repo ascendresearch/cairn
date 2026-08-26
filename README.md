@@ -47,7 +47,16 @@ cases on the GB10 twice; the Ascend gate compiles and links `dav-3510` code twic
 device-free build worker. These are authoritative execution receipts for the source reference and
 target compiler substrate, not yet a generated target reduction candidate or device verdict.
 
-M2 has begun in `cairn-verification`. Its current V1 foundation keeps admission-policy counts,
+M2 now includes the first model-authored Oracle Agent control. Separate cache-aware Blue and Red
+episodes freeze independent model, budget, private-context, and tool-catalog edges. Blue can search
+bounded operator-approved GitHub repositories for exact upstream test bytes and license/provenance
+evidence; those results remain proposals and cannot bypass trusted admission. Provider cache usage
+is retained as optional metering evidence, and native role prefixes reconstruct byte-identically
+across restart. Blue proposals and Red correct/wrong attacks carry exact model authorship into an
+immutable revision/feedback graph. The historical reduction gate now traverses that model-authored
+boundary before producing its hardware-free admitted oracle.
+
+The current V1 verification foundation keeps admission-policy counts,
 the exact trusted generic-mutant set, required construction/fault classes, execution scope, and
 budget-exhaustion behavior in immutable configuration. Numerical allowance provenance and assurance
 are independent typed facts;

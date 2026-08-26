@@ -6,10 +6,15 @@ mod corpus_execution;
 mod corpus_observation;
 mod domain;
 mod exact_comparison;
+mod external_research;
 mod historical;
 mod input_values;
 mod materialize;
 mod memory_surface;
+mod oracle_prompt;
+mod oracle_search;
+mod oracle_tools;
+mod oracle_workflow;
 mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
@@ -66,6 +71,15 @@ pub use exact_comparison::{
     ExactCorpusComparisonV1, ExactOutputComparisonV1, PreparedExactCorpusComparison,
     compare_exact_corpus_observations,
 };
+pub use external_research::{
+    ArchivedExternalTestEvidence, ExternalLicenseEvidenceV1, ExternalResearchPolicy,
+    ExternalResearchProvider, ExternalResearchProviderError, ExternalTestCaseV1,
+    ExternalTestSearchGateway, ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1,
+    ExternalTestSearchResultArtifact, ExternalTestSearchResultV1, GitHubBlobIdentity,
+    GitHubExternalResearchProvider, GitHubRepository, RecordedExternalResearchExchange,
+    RecordedExternalResearchProvider, SearchQuery, SearchResultLimit, SourcePath,
+    archive_external_test_evidence, external_test_search_registration,
+};
 pub use historical::{
     HistoricalDetectionRequirement, HistoricalDiagnosticClassName, HistoricalFailureClassName,
     HistoricalFailureContractError, HistoricalFailureCoverageArtifact, HistoricalFailureCoverageV1,
@@ -97,6 +111,28 @@ pub use memory_surface::{
     MemorySurfaceCaseTarget, MemorySurfaceDerivationPolicy, MisalignmentOffsetBytes,
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
+};
+pub use oracle_prompt::{
+    MaterializedOraclePrompt, OraclePromptError, OracleRolePromptArtifact, OracleRolePromptInput,
+    OracleRolePromptV1, archive_oracle_role_prompt, materialize_oracle_prompt,
+    prepare_oracle_role_prompt,
+};
+pub use oracle_search::{
+    OracleAgentRole, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleRoleTool,
+    OracleSearchPlanArtifact, OracleSearchPlanError, OracleSearchPlanInput, OracleSearchPlanV1,
+    oracle_role_tool_catalog_bytes, oracle_role_tool_catalog_id, prepare_oracle_role_episode,
+};
+pub use oracle_tools::{
+    BlueProposalGateway, BlueProposalSubmissionV1, OracleToolError, RedSubmissionGateway,
+    blue_proposal_registration, oracle_role_native_tools, red_submission_registrations,
+};
+pub use oracle_workflow::{
+    OracleAdmissionAttemptArtifact, OracleAdmissionFeedbackArtifact, OracleAdmissionFeedbackV1,
+    OracleAttackArtifact, OracleAttackInput, OracleAttackV1, OracleDiagnosticEvidenceArtifact,
+    OracleDiagnosticKind, OracleDiagnosticV1, OracleFeedbackTarget, OracleProposalRevisionArtifact,
+    OracleProposalRevisionV1, OracleWorkflowError, PreparedOracleAdmissionFeedback,
+    PreparedOracleAttack, PreparedOracleProposalRevision, prepare_oracle_admission_feedback,
+    prepare_oracle_attack, prepare_oracle_proposal_revision,
 };
 pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,

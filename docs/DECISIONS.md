@@ -452,3 +452,37 @@ One deterministic container belongs to one `AttemptId`. Worker restart reconcile
 instead of manufacturing a new execution authority. Terminal publication precedes cleanup. The
 adapter assumes trusted private infrastructure and is deliberately not wrapped in a provider-neutral
 OCI runtime framework or presented as malicious-code containment.
+
+## D-020 — Oracle blue and red use separate cache-aware episodes
+
+- Decision: accepted
+
+One oracle-search attempt opens distinct blue and red Cairn episodes. They have separate
+`EpisodeId` values, durable histories, model snapshots, budgets, capability sets, and visibility
+policies. Blue and red exchange only submitted content-addressed artifacts and trusted diagnostic
+bundles; a provider-native continuation or unsubmitted reasoning never crosses the role boundary.
+
+This separation is logical and durable, not a requirement to depend on provider-hosted conversation
+state. V1 continues to reconstruct stateless requests locally. Prompt-cache efficiency is preserved
+by deterministic, append-only role projections with stable instructions, tool ordering, caller
+contract, source snapshot, and policy material before changing evidence. Cache reuse across roles is
+an optional provider optimization and never justifies exposing a capability or private history.
+
+Provider-returned cache read/write/miss token counts are recorded when supplied. Missing detail is
+unknown rather than zero, and cache reuse is not replay or correctness evidence. Cost evaluation
+uses total input, uncached input, output, latency, and task quality rather than hit percentage alone.
+
+## D-021 — External tests enter through a bounded blue research tool
+
+- Decision: accepted
+
+The blue role receives a read-only `oracle.search_external_tests` product tool. The model supplies a
+bounded query and operator-approved repository scopes; trusted adapters own endpoints, credentials,
+redirect policy, response bounds, and repository allowlists. Results retain exact query, source,
+immutable upstream revision/blob identity where available, fetched bytes or bounded excerpt,
+retrieval provenance, truncation, and license/SPDX evidence or an explicit unknown.
+
+PyTorch and other upstream tests are proposals, not truth. Search snippets cannot become executable
+cases, source origin cannot bypass admission, and unknown/incompatible license provenance prevents
+copying bytes into distributable fixtures. Recorded providers drive offline CI and replay through
+the same generic tool-operation seam as live providers.

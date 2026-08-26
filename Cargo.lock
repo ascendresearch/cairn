@@ -172,12 +172,15 @@ dependencies = [
 name = "cairn-migration"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "cairn-agent",
  "cairn-codec",
  "cairn-execution",
  "cairn-protocol",
  "cairn-record",
  "cairn-store-sqlite",
  "cairn-verification",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

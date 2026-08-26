@@ -288,7 +288,16 @@ flowchart LR
 Blue and red are role scopes, not necessarily model identities. Different model families reduce a
 shared-prior risk but are not the adjudication authority. Admission is code and executed evidence.
 
-The detailed contract is in [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md).
+Blue and red use distinct durable episodes. They share immutable task/source artifacts but exchange
+only submitted proposal/attack artifacts and trusted diagnostics, never private native continuation
+or unsubmitted reasoning. Their model-input projections keep deterministic append-only prefixes so
+role isolation does not require abandoning provider prompt caching. Blue has a bounded read-only
+external-test research tool; PyTorch and other upstream cases retain exact source, revision,
+retrieval, and license provenance and remain proposals until admission.
+
+The role, cache, network-research, and feedback contract is in
+[`ORACLE_AGENT.md`](ORACLE_AGENT.md). The adjudication contract is in
+[`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md).
 
 ### 8.3 Candidate search
 
@@ -492,7 +501,8 @@ response or automatically bill a duplicate request without policy authority.
 
 Each episode receives a typed capability set:
 
-- blue can read task/source semantics and submit oracle proposals;
+- blue can read task/source semantics, perform policy-bounded external-test research, and submit
+  oracle proposals;
 - red can read the proposal contract needed to attack it and submit variants;
 - candidate author can read the frozen oracle's public contract and diagnostics but not modify
   admission inputs;
@@ -1530,6 +1540,12 @@ or crosses the threshold remains valid because its usage was not knowable before
 usage fails closed before a continuable next step for a budgeted episode and remains explicitly
 unmetered for an episode with no token threshold. A step that already yielded requires no additional
 budget stop because it grants no further model authority.
+
+When present, provider cache-read, cache-write, and cache-miss token details travel with this same
+receipt. They are cost/latency observations, not replay or correctness authority. Missing detail is
+unknown. Role projections keep stable instructions, canonically ordered tools, caller/source
+context, and policy blocks before append-only evidence; they do not merge blue and red histories to
+inflate a cache-hit metric.
 
 Scheduling decisions and skipped checks are durable facts.
 

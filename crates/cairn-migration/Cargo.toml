@@ -7,17 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
+cairn-agent.workspace = true
 cairn-codec.workspace = true
 cairn-execution.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 cairn-verification.workspace = true
+reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 cairn-store-sqlite.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]

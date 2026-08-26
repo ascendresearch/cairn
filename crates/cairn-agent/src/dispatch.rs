@@ -120,8 +120,8 @@ impl ReceivedModelResponse {
 
     /// Returns provider-reported token usage when supplied with the response.
     #[must_use]
-    pub const fn usage(&self) -> Option<ProviderTokenUsage> {
-        self.usage
+    pub fn usage(&self) -> Option<ProviderTokenUsage> {
+        self.usage.clone()
     }
 
     /// Returns the archived protocol-native request context, when present.
@@ -349,7 +349,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 attempt_id,
                 response_id: Some(descriptor.content_id),
                 diagnostic: None,
-                usage,
+                usage: usage.clone(),
             };
             let outcome = append_terminal(
                 events,
@@ -362,7 +362,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
             .map_err(|record| DispatchCoordinatorError::UnrecordedResponse {
                 attempt_id,
                 response_id: descriptor.content_id,
-                usage,
+                usage: usage.clone(),
                 record: record.to_string(),
             })?;
             Ok(DispatchCompletion::Response(ReceivedModelResponse {
@@ -783,8 +783,8 @@ mod tests {
     };
     use crate::{
         MaterializedRequestArtifact, ModelTransportResponse, PreparedModelRequest,
-        ProviderTokenCount, ProviderTokenUsage, ScriptedModelTransport, TransportError,
-        TurnInputDecisionArtifact,
+        ProviderCacheTokenUsage, ProviderTokenCount, ProviderTokenUsage, ScriptedModelTransport,
+        TransportError, TurnInputDecisionArtifact,
     };
 
     fn stream() -> StreamId {
@@ -869,13 +869,22 @@ mod tests {
             cairn_protocol::ObservedAtUnixMillis::new(2),
         )
         .expect("begin");
-        let usage =
-            ProviderTokenUsage::new(ProviderTokenCount::new(11), ProviderTokenCount::new(4))
-                .expect("usage");
+        let usage = ProviderTokenUsage::with_cache_tokens(
+            ProviderTokenCount::new(11),
+            ProviderTokenCount::new(4),
+            ProviderCacheTokenUsage::new(
+                Some(ProviderTokenCount::new(8)),
+                Some(ProviderTokenCount::new(2)),
+                None,
+            )
+            .expect("cache detail"),
+        )
+        .expect("usage");
+        let dispatched_usage = usage.clone();
         let mut transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
             Ok::<_, TransportError>(ModelTransportResponse::new(
                 b"provider response".to_vec(),
-                Some(usage),
+                Some(dispatched_usage.clone()),
             ))
         });
         let completion = execute_model_dispatch(
@@ -891,7 +900,7 @@ mod tests {
             panic!("expected response completion");
         };
         let response_id = received.response_id();
-        assert_eq!(received.usage(), Some(usage));
+        assert_eq!(received.usage(), Some(usage.clone()));
         let mut archived = Vec::new();
         content
             .write_to(&response_id, &mut archived)
@@ -903,7 +912,7 @@ mod tests {
             recover_model_attempt(&history, attempt).expect("recover completed"),
             ModelAttemptState::Completed {
                 response_id,
-                usage: Some(usage),
+                usage: Some(usage.clone()),
             }
         );
         assert_eq!(

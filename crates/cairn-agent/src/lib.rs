@@ -540,14 +540,112 @@ impl ProviderTokenCount {
 
 /// Invalid or unrepresentable provider usage receipt.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("provider input and output token counts overflow their total")]
-pub struct ProviderUsageError;
+pub enum ProviderUsageError {
+    /// Input and output token counts overflow their total.
+    #[error("provider input and output token counts overflow their total")]
+    TotalOverflow,
+    /// A cache detail exceeds the provider-reported total input count.
+    #[error("provider cache token detail exceeds total input tokens")]
+    CacheExceedsInput,
+    /// A cache-detail object contains no observation.
+    #[error("provider cache token detail must contain at least one observed count")]
+    EmptyCacheDetail,
+}
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the repeated token unit is explicit in the persisted provider contract"
+)]
+struct ProviderCacheTokenUsageWire {
+    read_tokens: Option<ProviderTokenCount>,
+    write_tokens: Option<ProviderTokenCount>,
+    miss_tokens: Option<ProviderTokenCount>,
+}
+
+/// Optional provider-reported prompt-cache token details for one completed request.
+///
+/// Providers expose different subsets. Absence of a dimension remains unknown rather than zero.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    try_from = "ProviderCacheTokenUsageWire",
+    into = "ProviderCacheTokenUsageWire"
+)]
+pub struct ProviderCacheTokenUsage {
+    read_tokens: Option<ProviderTokenCount>,
+    write_tokens: Option<ProviderTokenCount>,
+    miss_tokens: Option<ProviderTokenCount>,
+}
+
+impl ProviderCacheTokenUsage {
+    /// Creates a non-empty cache observation without inventing unavailable dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderUsageError::EmptyCacheDetail`] when every dimension is absent.
+    pub const fn new(
+        read_tokens: Option<ProviderTokenCount>,
+        write_tokens: Option<ProviderTokenCount>,
+        miss_tokens: Option<ProviderTokenCount>,
+    ) -> Result<Self, ProviderUsageError> {
+        if read_tokens.is_none() && write_tokens.is_none() && miss_tokens.is_none() {
+            return Err(ProviderUsageError::EmptyCacheDetail);
+        }
+        Ok(Self {
+            read_tokens,
+            write_tokens,
+            miss_tokens,
+        })
+    }
+
+    /// Returns provider-reported cache-read tokens when supplied.
+    #[must_use]
+    pub const fn read_tokens(self) -> Option<ProviderTokenCount> {
+        self.read_tokens
+    }
+
+    /// Returns provider-reported cache-write tokens when supplied.
+    #[must_use]
+    pub const fn write_tokens(self) -> Option<ProviderTokenCount> {
+        self.write_tokens
+    }
+
+    /// Returns provider-reported cache-miss tokens when supplied.
+    #[must_use]
+    pub const fn miss_tokens(self) -> Option<ProviderTokenCount> {
+        self.miss_tokens
+    }
+}
+
+impl TryFrom<ProviderCacheTokenUsageWire> for ProviderCacheTokenUsage {
+    type Error = ProviderUsageError;
+
+    fn try_from(value: ProviderCacheTokenUsageWire) -> Result<Self, Self::Error> {
+        Self::new(value.read_tokens, value.write_tokens, value.miss_tokens)
+    }
+}
+
+impl From<ProviderCacheTokenUsage> for ProviderCacheTokenUsageWire {
+    fn from(value: ProviderCacheTokenUsage) -> Self {
+        Self {
+            read_tokens: value.read_tokens,
+            write_tokens: value.write_tokens,
+            miss_tokens: value.miss_tokens,
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the repeated token unit is explicit in the persisted provider contract"
+)]
 struct ProviderTokenUsageWire {
     input_tokens: ProviderTokenCount,
     output_tokens: ProviderTokenCount,
+    cache_tokens: Option<Box<ProviderCacheTokenUsage>>,
 }
 
 /// Provider-reported token usage for one completed model attempt.
@@ -563,11 +661,12 @@ struct ProviderTokenUsageWire {
 ///     output_tokens: ProviderTokenCount::new(1),
 /// };
 /// ```
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "ProviderTokenUsageWire", into = "ProviderTokenUsageWire")]
 pub struct ProviderTokenUsage {
     input_tokens: ProviderTokenCount,
     output_tokens: ProviderTokenCount,
+    cache_tokens: Option<Box<ProviderCacheTokenUsage>>,
 }
 
 impl ProviderTokenUsage {
@@ -585,30 +684,61 @@ impl ProviderTokenUsage {
             .checked_add(output_tokens.get())
             .is_none()
         {
-            Err(ProviderUsageError)
+            Err(ProviderUsageError::TotalOverflow)
         } else {
             Ok(Self {
                 input_tokens,
                 output_tokens,
+                cache_tokens: None,
             })
         }
     }
 
+    /// Creates usage with optional provider-reported prompt-cache details.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderUsageError`] when totals overflow or any supplied cache dimension exceeds
+    /// the total logical input count.
+    pub fn with_cache_tokens(
+        input_tokens: ProviderTokenCount,
+        output_tokens: ProviderTokenCount,
+        cache_tokens: ProviderCacheTokenUsage,
+    ) -> Result<Self, ProviderUsageError> {
+        let usage = Self::new(input_tokens, output_tokens)?;
+        if exceeds_input(cache_tokens.read_tokens, input_tokens)
+            || exceeds_input(cache_tokens.write_tokens, input_tokens)
+            || exceeds_input(cache_tokens.miss_tokens, input_tokens)
+        {
+            return Err(ProviderUsageError::CacheExceedsInput);
+        }
+        Ok(Self {
+            cache_tokens: Some(Box::new(cache_tokens)),
+            ..usage
+        })
+    }
+
     /// Returns provider-reported input tokens.
     #[must_use]
-    pub const fn input_tokens(self) -> ProviderTokenCount {
+    pub const fn input_tokens(&self) -> ProviderTokenCount {
         self.input_tokens
     }
 
     /// Returns provider-reported output tokens.
     #[must_use]
-    pub const fn output_tokens(self) -> ProviderTokenCount {
+    pub const fn output_tokens(&self) -> ProviderTokenCount {
         self.output_tokens
+    }
+
+    /// Returns provider-reported prompt-cache details when available.
+    #[must_use]
+    pub fn cache_tokens(&self) -> Option<ProviderCacheTokenUsage> {
+        self.cache_tokens.as_deref().copied()
     }
 
     /// Returns the validated sum of input and output tokens.
     #[must_use]
-    pub const fn total_tokens(self) -> u64 {
+    pub const fn total_tokens(&self) -> u64 {
         match self
             .input_tokens
             .get()
@@ -624,7 +754,10 @@ impl TryFrom<ProviderTokenUsageWire> for ProviderTokenUsage {
     type Error = ProviderUsageError;
 
     fn try_from(value: ProviderTokenUsageWire) -> Result<Self, Self::Error> {
-        Self::new(value.input_tokens, value.output_tokens)
+        match value.cache_tokens {
+            Some(cache) => Self::with_cache_tokens(value.input_tokens, value.output_tokens, *cache),
+            None => Self::new(value.input_tokens, value.output_tokens),
+        }
     }
 }
 
@@ -633,7 +766,15 @@ impl From<ProviderTokenUsage> for ProviderTokenUsageWire {
         Self {
             input_tokens: value.input_tokens,
             output_tokens: value.output_tokens,
+            cache_tokens: value.cache_tokens,
         }
+    }
+}
+
+const fn exceeds_input(observed: Option<ProviderTokenCount>, input: ProviderTokenCount) -> bool {
+    match observed {
+        Some(observed) => observed.get() > input.get(),
+        None => false,
     }
 }
 
@@ -668,8 +809,8 @@ impl ModelTransportResponse {
 
     /// Returns provider-reported usage when available.
     #[must_use]
-    pub const fn usage(&self) -> Option<ProviderTokenUsage> {
-        self.usage
+    pub fn usage(&self) -> Option<ProviderTokenUsage> {
+        self.usage.clone()
     }
 
     fn into_parts(self) -> (Vec<u8>, Option<ProviderTokenUsage>) {
@@ -782,9 +923,9 @@ mod tests {
         AdapterVersion, ContextBlock, DeploymentName, HistoryItem, InputGapKind, InstructionBlock,
         MaterializedRequestArtifact, ModelName, ModelSelection, ModelTransport,
         ModelTransportResponse, OperationResult, PolicyDocument, PreparedModelRequest,
-        ProviderName, ProviderTokenCount, ProviderTokenUsage, RecordedExchange,
-        RecordedModelTransport, ScriptedModelTransport, ToolCatalog, TransportError,
-        TurnInputDecision, prepare_model_request,
+        ProviderCacheTokenUsage, ProviderName, ProviderTokenCount, ProviderTokenUsage,
+        ProviderUsageError, RecordedExchange, RecordedModelTransport, ScriptedModelTransport,
+        ToolCatalog, TransportError, TurnInputDecision, prepare_model_request,
     };
 
     fn put_json<T: ContentType>(
@@ -850,6 +991,43 @@ mod tests {
     }
 
     #[test]
+    fn cache_usage_is_strict_optional_evidence() {
+        let cache = ProviderCacheTokenUsage::new(
+            Some(ProviderTokenCount::new(8)),
+            None,
+            Some(ProviderTokenCount::new(3)),
+        )
+        .expect("cache detail");
+        let usage = ProviderTokenUsage::with_cache_tokens(
+            ProviderTokenCount::new(11),
+            ProviderTokenCount::new(4),
+            cache,
+        )
+        .expect("usage");
+        let bytes = cairn_codec::to_vec(&usage).expect("usage bytes");
+        assert_eq!(
+            cairn_codec::from_slice::<ProviderTokenUsage>(&bytes).expect("strict usage"),
+            usage
+        );
+        assert_eq!(
+            ProviderCacheTokenUsage::new(None, None, None),
+            Err(ProviderUsageError::EmptyCacheDetail)
+        );
+        assert_eq!(
+            ProviderTokenUsage::with_cache_tokens(
+                ProviderTokenCount::new(7),
+                ProviderTokenCount::new(1),
+                ProviderCacheTokenUsage::new(Some(ProviderTokenCount::new(8)), None, None)
+                    .expect("cache detail"),
+            ),
+            Err(ProviderUsageError::CacheExceedsInput)
+        );
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("usage JSON");
+        value["legacy_cached_tokens"] = serde_json::json!(8);
+        assert!(serde_json::from_value::<ProviderTokenUsage>(value).is_err());
+    }
+
+    #[test]
     fn completeness_audit_reports_missing_reference_without_synthesis() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut store = SqliteContentStore::open(
@@ -883,7 +1061,7 @@ mod tests {
         let mut recorded = RecordedModelTransport::new([RecordedExchange {
             request_id,
             response_bytes: b"recorded".to_vec(),
-            usage: Some(usage),
+            usage: Some(usage.clone()),
         }]);
         let recorded_response = recorded.dispatch(&request).expect("recorded");
         assert_eq!(recorded_response.response_bytes(), b"recorded");

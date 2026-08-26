@@ -1,8 +1,8 @@
 # Integrated implementation plan
 
 - Status: active
-- Date: 2026-08-25
-- Scope: worker authority, scheduling, resource discovery, registry transition, and open-source onboarding
+- Date: 2026-08-26
+- Scope: integrated worker/runtime foundation and model-authored Oracle Agent delivery
 
 This plan combines the unfinished parts of resource-driven workers and managed enrollment into one
 dependency-ordered program. It is an implementation plan, not a replacement for the normative
@@ -341,6 +341,140 @@ incomplete while step 4 lacks production compiler/vendor/device adapters and gen
 property variants. Open questions OQ-004 and OQ-007 remain
 unresolved; implementation must preserve derivation and disagreement evidence rather than selecting
 an independence or automatic disagreement policy.
+
+### Phase G7–G12 — model-authored Oracle Agent
+
+These slices close the gap between the fixed historical proposal control and a real OracleSearch.
+They are ordered so that paid/live model work begins only after its cache cost and external research
+are observable. The focused contract is [`ORACLE_AGENT.md`](ORACLE_AGENT.md).
+
+#### G7 — cache usage and stable-prefix evidence
+
+Status: implemented 2026-08-26.
+
+1. Replace the current V1 provider-usage body with one that can retain optional provider-reported
+   cache-read, cache-write, and cache-miss token counts alongside total input/output counts.
+2. Parse the supported Responses, Chat/DeepSeek, and Anthropic usage shapes at the protocol-aware
+   transport boundary without inferring missing values from bytes or a local tokenizer.
+3. Keep episode token budgets based on the validated total input/output counts; cache details are
+   attribution observations and cannot change authority.
+4. Add deterministic role-prefix artifacts whose ordering is common instructions, role
+   instructions, caller/source context, policy, append-only evidence, then current diagnostics.
+5. Prove strict V1 round trips, missing-detail behavior, overflow rejection, response/event
+   retention, and byte-stable reconstruction.
+
+Acceptance: offline per-protocol usage fixtures and a two-turn prefix control pass. No live provider
+claim is required.
+
+Implemented evidence: protocol-aware usage fixtures retain optional cache read/write/miss counts;
+durable response recovery preserves them; `OracleRolePromptV1` reconstructs the same role
+instructions, tool schema, initial input, and second-turn native request across a CAS restart.
+
+#### G8 — OracleSearch plan and role isolation
+
+Status: implemented 2026-08-26.
+
+1. Add a strict `OracleSearchPlanV1` in `cairn-migration` binding task, caller domain, source/task
+   inputs, admission policy, shared immutable context, and exactly one blue and one red episode.
+2. Require distinct episode identities, frozen model configurations, role-specific tool catalogs,
+   budgets, and visibility roots.
+3. Define closed product roles and role tool policies while keeping `cairn-agent` domain-neutral.
+4. Prove blue/red private-history non-sharing and reject swapped, duplicated, or cross-task
+   bindings.
+
+Acceptance: canonical plan/identity mutation suite and capability matrix pass.
+
+Implemented evidence: `OracleSearchPlanV1` binds separate episode/model/authorship/budget/tool
+edges for Blue and Red, and strict tests reject shared sessions, swapped roles, private-context
+leaks, changed identities, unknown fields, and non-V1 input.
+
+#### G9 — bounded external-test research
+
+Status: implemented 2026-08-26.
+
+1. Register `oracle.search_external_tests` for blue as `ReadOnly` with a pinned implementation
+   version.
+2. Define bounded strict request/result contracts for query, approved repository scopes, maximum
+   results, exact upstream path/blob/revision, fetched bytes or excerpt, retrieval provenance,
+   truncation, and known/unknown license evidence.
+3. Implement a replaceable provider port, an offline recorded provider, and a live GitHub adapter
+   whose endpoint, credentials, redirects, repositories, and response sizes are trusted
+   configuration rather than model arguments.
+4. Validate the typed result before it becomes model-visible. Search snippets alone never become
+   executable corpus material.
+5. Archive imported-case and license provenance separately so downstream `CorpusCaseSource::Upstream`
+   or `External` retains origin without trust promotion.
+
+Acceptance: a recorded PyTorch-like result traverses the normal durable tool operation; query,
+scope, blob, bytes, and license mutations fail; unknown license remains visible but non-promotable.
+The live adapter has an opt-in test only.
+
+Implemented evidence: the recorded PyTorch-like GitHub search traverses the normal durable
+read-only operation lifecycle; exact source, blob, retrieval, license, and provenance artifacts are
+archived separately. The fixed-authority live adapter has an ignored opt-in test and propagates
+network/license lookup failures rather than silently reporting them as unknown licenses.
+
+#### G10 — Blue proposal episode
+
+Status: implemented 2026-08-26.
+
+1. Project the minimum structured caller contract, source snapshot, mandatory trusted cases,
+   historical obligations, and blue tool catalog into a durable blue episode.
+2. Accept typed model submissions for refinements, reference/property proposals, corpus additions,
+   valid-family plans, correct variants, and the aggregate `OracleProposalV1`.
+3. Require model authorship to cite the exact episode and resolved model configuration.
+4. Keep external research results as evidence-citing proposals and preserve caller declarations and
+   explicit unknowns unchanged.
+
+Acceptance: a recorded model uses external research and submits one complete proposal; missing
+evidence, wrong episode/model identity, or caller-domain rewriting fails.
+
+Implemented evidence: the Blue native catalog includes bounded research and typed submissions;
+`BlueProposalGateway` accepts a complete canonical `OracleProposalV1`; the immutable revision
+boundary requires the exact task inputs, unchanged caller-domain identity, Blue episode, Blue model
+configuration, and canonical research citations.
+
+#### G11 — Red attack episode and trusted feedback
+
+Status: implemented 2026-08-26.
+
+1. Open a separate red episode over the frozen public contract of one proposal.
+2. Accept correct-by-construction and deliberately wrong variants plus adversarial cases through
+   role-specific typed tools.
+3. Execute all already-authorized cheaper admission diagnostics before buying a correction turn.
+4. Emit a typed diagnostic bundle identifying responsible role, proposal revision, evidence,
+   disagreements, missing obligations, false accepts/rejects, and infrastructure-only blocks.
+5. Feed only submitted red artifacts and trusted diagnostics to blue; never copy red native history.
+
+Acceptance: capability escape attempts fail and one rejected proposal produces a linked immutable
+revision rather than mutation.
+
+Implemented evidence: `OracleAttackV1` requires model-authored Red correct and wrong variants over
+one frozen Blue revision. `OracleAdmissionFeedbackV1` binds the exact attempt and typed evidence to
+Blue, Red, or both; a correction must create a changed child revision and cannot mutate or repeat
+its parent.
+
+#### G12 — first model-authored admitted oracle
+
+Status: implemented 2026-08-26 for the hardware-free control.
+
+1. Drive the historical reduction input through the same model-authored proposal boundary, using
+   recorded providers in ordinary CI and an opt-in live provider gate.
+2. Reuse the existing executed correct/wrong variants, mutation grid, measured-family allowance,
+   blind spot, saturation, and immutable admission receipt.
+3. Produce an `AdmittedOracle` that explicitly retains unverified Ascend device claims and NPU
+   revalidation triggers.
+4. Prove that this oracle can judge the existing host candidate control but cannot claim a target
+   device verdict.
+
+Acceptance: the full hardware-free model/tool replay is deterministic over recorded external
+outcomes and has a complete evidence graph. Only after this gate does M3 candidate search begin.
+
+Implemented evidence: the historical reduction integration now creates the ordinary proposal with
+Blue model authorship, creates all two correct and three wrong controls with Red model authorship,
+passes both through revision/attack validation, and then reuses the complete executed admission
+graph. Its admitted oracle judges the existing host candidates while retaining target-device
+behavior as unverified and omitting `TargetDevice` from executed scopes.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.
