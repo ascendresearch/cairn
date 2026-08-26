@@ -78,10 +78,12 @@ can now be bound back to the exact prepared job, loaded through typed declared-o
 and validated as the adapter result plus ABI observation; a CAS object alone is not execution
 authority. A deterministic Rust host fixture now exercises this entire transport path with an
 actual adapter process, durable coordinator facts, restart recovery, and exact output-byte identity.
-A canonical complete-corpus plan now binds the quantitative, dtype, and memory obligation-set roots
-to one executable and one independently identified generic job per executable obligation. Unknown
-and explicitly excluded obligations remain committed but do not silently become jobs; missing,
-duplicate, extra, reordered, or cross-domain cases fail closed. Real CUDA/Ascend C adapters, device
+A canonical complete-corpus plan now binds the quantitative, dtype, and memory obligation-set roots,
+the exact source/reference/property/admission-variant/candidate subject role and upstream artifact,
+one executable, and one independently identified generic job per executable obligation. Unknown and
+explicitly excluded obligations remain committed but do not silently become jobs; missing,
+duplicate, extra, reordered, cross-domain, or unrecognized-role cases fail closed. Real CUDA/Ascend
+C adapters, device
 execution of the complete plan, and semantic adjudication remain unfinished. Given authoritative
 receipts, strict complete-corpus collection now requires exactly one receipt per planned `JobId`,
 revalidates every category-specific adapter result and declared output, and emits a canonical

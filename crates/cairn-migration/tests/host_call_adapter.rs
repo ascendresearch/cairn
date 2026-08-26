@@ -18,27 +18,29 @@ use cairn_migration::{
     CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1, CallAdapterOutputBytesArtifact,
     CallAdapterResultV1, CaseExpectedOutcome, CaseTarget, CorpusBufferByteLimit,
     CorpusElementCount, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
-    CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusObservationSetArtifact,
-    CorpusObservationSetError, CorpusObservationSetV1, DataType, DimensionSpec, EntryPointName,
-    ExtentValue, InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget,
-    InputValueDisposition, InputValueDomainV1, IntegerValue, InvalidInputBehavior,
-    MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1, MemoryConditionDisposition,
-    MigrationDomainContractInput, MigrationDomainContractV1, MigrationExecutionNeed,
-    MigrationMandatoryCasesV1, MigrationValidationTier, PointerAlignmentContractV1,
-    PreparedCallAdapterInput, PreparedCallAdapterJob, PreparedCorpusExecutionCase,
-    PreparedCorpusExecutionPlan, RequestedSemanticsArtifact, ScalarParameterContractInput,
-    ScalarParameterContractV1, ScalarParameterName, ScalarParameterRole, SemanticClaimKind,
-    ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
-    ValidatedCorpusExecutionCase, ValidatedCorpusObservationSet, assemble_boundary_case_input,
-    assemble_input_value_case_input, assemble_memory_surface_case_input, compose_call_adapter_job,
-    derive_mandatory_base_cases, derive_mandatory_input_value_cases,
-    derive_mandatory_memory_surface_cases, materialize_input_value_case,
-    prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
-    validate_boundary_call_adapter_receipt, validate_corpus_execution_receipts,
+    CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusExecutionSubjectV1,
+    CorpusObservationSetArtifact, CorpusObservationSetError, CorpusObservationSetV1, DataType,
+    DimensionSpec, EntryPointName, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
+    InputValueCaseTarget, InputValueDisposition, InputValueDomainV1, IntegerValue,
+    InvalidInputBehavior, MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1,
+    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
+    MigrationExecutionNeed, MigrationMandatoryCasesV1, MigrationValidationTier,
+    PointerAlignmentContractV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
+    PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, RequestedSemanticsArtifact,
+    ScalarParameterContractInput, ScalarParameterContractV1, ScalarParameterName,
+    ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1,
+    ShapeSymbolName, ShapeSymbolSource, ValidatedCorpusExecutionCase,
+    ValidatedCorpusObservationSet, assemble_boundary_case_input, assemble_input_value_case_input,
+    assemble_memory_surface_case_input, compose_call_adapter_job, derive_mandatory_base_cases,
+    derive_mandatory_input_value_cases, derive_mandatory_memory_surface_cases,
+    materialize_input_value_case, prepare_boundary_call_adapter_input,
+    prepare_corpus_execution_plan, validate_boundary_call_adapter_receipt,
+    validate_corpus_execution_receipts,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
+use cairn_verification::ImplementationBundleArtifact;
 
 const HOST_FIXTURE_BACKEND: &str = "host-fixture-v1";
 
@@ -99,6 +101,19 @@ fn complete_corpus_plan_is_canonical_complete_and_strict_v1() {
         original.clone(),
     )
     .expect("ordered complete corpus plan");
+    let candidate = prepare_plan_for_subject(
+        &quantitative,
+        &input_values,
+        &memory_surfaces,
+        CorpusExecutionSubjectV1::Candidate {
+            implementation: ContentId::<ImplementationBundleArtifact>::derive(
+                b"source implementation",
+            )
+            .expect("implementation identity"),
+        },
+        original.clone(),
+    )
+    .expect("candidate corpus plan");
     cases.reverse();
     let prepared = prepare_plan(&quantitative, &input_values, &memory_surfaces, cases)
         .expect("complete corpus plan");
@@ -110,6 +125,8 @@ fn complete_corpus_plan_is_canonical_complete_and_strict_v1() {
         &input_values,
         &memory_surfaces,
     );
+    assert_ne!(prepared.plan(), candidate.plan());
+    assert_ne!(prepared.plan_id(), candidate.plan_id());
     assert_incomplete_case_sets_rejected(&quantitative, &input_values, &memory_surfaces, &original);
     assert_persisted_plan_is_strict(prepared.plan());
 }
@@ -145,6 +162,10 @@ fn assert_complete_plan_shape(
 ) {
     assert_eq!(prepared.plan(), ordered.plan());
     assert_eq!(prepared.plan_id(), ordered.plan_id());
+    assert!(matches!(
+        prepared.plan().subject(),
+        CorpusExecutionSubjectV1::Source { .. }
+    ));
     assert_eq!(prepared.plan().items().len(), 8);
     assert_eq!(prepared.cases().len(), 8);
     assert_eq!(
@@ -246,6 +267,9 @@ fn assert_persisted_plan_is_strict(plan: &CorpusExecutionPlanV1) {
     let mut duplicate_job = value.clone();
     duplicate_job["items"][1]["job_id"] = duplicate_job["items"][0]["job_id"].clone();
     assert!(serde_json::from_value::<CorpusExecutionPlanV1>(duplicate_job).is_err());
+    let mut unknown_role = value.clone();
+    unknown_role["subject"]["role"] = serde_json::json!("untrusted-reference");
+    assert!(serde_json::from_value::<CorpusExecutionPlanV1>(unknown_role).is_err());
     let mut unknown = value;
     unknown["fallback_reader"] = serde_json::json!(true);
     assert!(serde_json::from_value::<CorpusExecutionPlanV1>(unknown).is_err());
@@ -652,6 +676,27 @@ fn prepare_plan(
     memory_surfaces: &MandatoryMemorySurfaceCasesV1,
     cases: Vec<AssembledCorpusExecutionCase>,
 ) -> Result<PreparedCorpusExecutionPlan, CorpusExecutionPlanError> {
+    prepare_plan_for_subject(
+        quantitative,
+        input_values,
+        memory_surfaces,
+        CorpusExecutionSubjectV1::Source {
+            implementation: ContentId::<ImplementationBundleArtifact>::derive(
+                b"source implementation",
+            )
+            .expect("implementation identity"),
+        },
+        cases,
+    )
+}
+
+fn prepare_plan_for_subject(
+    quantitative: &MigrationMandatoryCasesV1,
+    input_values: &MandatoryInputValueCasesV1,
+    memory_surfaces: &MandatoryMemorySurfaceCasesV1,
+    subject: CorpusExecutionSubjectV1,
+    cases: Vec<AssembledCorpusExecutionCase>,
+) -> Result<PreparedCorpusExecutionPlan, CorpusExecutionPlanError> {
     let need = MigrationExecutionNeed::new(
         MigrationValidationTier::V0Cpu,
         ExecutionBackend::new(HOST_FIXTURE_BACKEND).expect("backend"),
@@ -667,6 +712,7 @@ fn prepare_plan(
         quantitative,
         input_values,
         memory_surfaces,
+        subject,
         cases,
         b"ELF",
         CallAdapterExecutableByteLimit::new(16).expect("executable limit"),

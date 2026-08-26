@@ -21,6 +21,10 @@ use crate::{
     prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
 };
 use cairn_verification::CallerDomainBodyArtifact;
+use cairn_verification::{
+    ImplementationBundleArtifact, ImplementationVariantArtifact, PropertyRelationArtifact,
+    ReferenceArtifact,
+};
 
 /// Failure to turn the complete executable obligation surface into isolated jobs.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -75,6 +79,32 @@ pub enum CorpusObligationIdentityV1 {
     /// Pointer/capacity/aliasing obligation.
     MemorySurface {
         case: ContentId<MandatoryMemorySurfaceCaseArtifact>,
+    },
+}
+
+/// Upstream artifact role represented by one complete executable corpus plan.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "role", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CorpusExecutionSubjectV1 {
+    /// Caller/source implementation being interrogated during oracle admission.
+    Source {
+        implementation: ContentId<ImplementationBundleArtifact>,
+    },
+    /// Proposed semantic reference or allowed-result-set implementation.
+    Reference {
+        reference: ContentId<ReferenceArtifact>,
+    },
+    /// Proposed property or metamorphic relation implementation.
+    Property {
+        property: ContentId<PropertyRelationArtifact>,
+    },
+    /// Correct-by-construction or deliberately incorrect admission variant.
+    AdmissionVariant {
+        variant: ContentId<ImplementationVariantArtifact>,
+    },
+    /// Candidate implementation whose observations may later be judged by an admitted oracle.
+    Candidate {
+        implementation: ContentId<ImplementationBundleArtifact>,
     },
 }
 
@@ -163,6 +193,7 @@ pub struct CorpusExecutionPlanV1 {
     quantitative_obligations: ContentId<MigrationMandatoryCasesArtifact>,
     input_value_obligations: ContentId<MandatoryInputValueCasesArtifact>,
     memory_surface_obligations: ContentId<MandatoryMemorySurfaceCasesArtifact>,
+    subject: CorpusExecutionSubjectV1,
     executable: ContentId<CallAdapterExecutableArtifact>,
     tier: MigrationValidationTier,
     items: Vec<CorpusExecutionPlanItemV1>,
@@ -176,17 +207,23 @@ struct CorpusExecutionPlanWire {
     quantitative_obligations: ContentId<MigrationMandatoryCasesArtifact>,
     input_value_obligations: ContentId<MandatoryInputValueCasesArtifact>,
     memory_surface_obligations: ContentId<MandatoryMemorySurfaceCasesArtifact>,
+    subject: CorpusExecutionSubjectV1,
     executable: ContentId<CallAdapterExecutableArtifact>,
     tier: MigrationValidationTier,
     items: Vec<CorpusExecutionPlanItemV1>,
 }
 
 impl CorpusExecutionPlanV1 {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "domain, three obligation roots, subject, executable, tier, and items are independent immutable bindings"
+    )]
     fn new(
         domain: ContentId<CallerDomainBodyArtifact>,
         quantitative_obligations: ContentId<MigrationMandatoryCasesArtifact>,
         input_value_obligations: ContentId<MandatoryInputValueCasesArtifact>,
         memory_surface_obligations: ContentId<MandatoryMemorySurfaceCasesArtifact>,
+        subject: CorpusExecutionSubjectV1,
         executable: ContentId<CallAdapterExecutableArtifact>,
         tier: MigrationValidationTier,
         items: Vec<CorpusExecutionPlanItemV1>,
@@ -227,6 +264,7 @@ impl CorpusExecutionPlanV1 {
             quantitative_obligations,
             input_value_obligations,
             memory_surface_obligations,
+            subject,
             executable,
             tier,
             items,
@@ -253,6 +291,11 @@ impl CorpusExecutionPlanV1 {
         &self,
     ) -> ContentId<MandatoryMemorySurfaceCasesArtifact> {
         self.memory_surface_obligations
+    }
+
+    #[must_use]
+    pub const fn subject(&self) -> CorpusExecutionSubjectV1 {
+        self.subject
     }
 
     #[must_use]
@@ -317,6 +360,7 @@ impl TryFrom<CorpusExecutionPlanWire> for CorpusExecutionPlanV1 {
             wire.quantitative_obligations,
             wire.input_value_obligations,
             wire.memory_surface_obligations,
+            wire.subject,
             wire.executable,
             wire.tier,
             wire.items,
@@ -474,8 +518,9 @@ impl PreparedCorpusExecutionPlan {
 /// Builds one canonical plan covering every executable mandatory obligation exactly once.
 ///
 /// Unknown and explicitly excluded obligations remain committed by their mandatory-set roots but
-/// do not become jobs. Each executable case receives its own caller-supplied `JobId` and therefore
-/// its own generic execution lifecycle.
+/// do not become jobs. The subject binds the executable run to its source/reference/variant/
+/// candidate role. Each executable case receives its own caller-supplied `JobId` and therefore its
+/// own generic execution lifecycle.
 ///
 /// # Errors
 ///
@@ -489,6 +534,7 @@ pub fn prepare_corpus_execution_plan(
     quantitative: &MigrationMandatoryCasesV1,
     input_values: &MandatoryInputValueCasesV1,
     memory_surfaces: &MandatoryMemorySurfaceCasesV1,
+    subject: CorpusExecutionSubjectV1,
     cases: Vec<AssembledCorpusExecutionCase>,
     executable: &[u8],
     executable_limit: CallAdapterExecutableByteLimit,
@@ -546,6 +592,7 @@ pub fn prepare_corpus_execution_plan(
         roots.quantitative,
         roots.input_values,
         roots.memory_surfaces,
+        subject,
         executable_id,
         need.tier(),
         descriptors,

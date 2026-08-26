@@ -258,10 +258,13 @@ The remaining G slices, in dependency order, are:
    outputs, runs through generic execution start/completion and durable recovery, and is finally
    admitted as the exact receipt-bound observation. Tampered invocation bytes are rejected before a
    result is written. A canonical complete-corpus execution plan now commits all three mandatory-set
-   roots, their shared caller domain, the exact adapter executable, validation tier, and one
-   independently identified generic job per executable obligation. The plan derives its executable
-   subset from typed dispositions, orders it canonically, and rejects missing, duplicate, extra,
-   reordered, cross-domain, or expectation-changed material. Unknown and explicitly excluded
+   roots, their shared caller domain, the exact source/reference/property/admission-variant/candidate
+   subject role and upstream artifact, the adapter executable, validation tier, and one independently
+   identified generic job per executable obligation. The plan derives its executable subset from
+   typed dispositions, orders it canonically, and rejects missing, duplicate, extra, reordered,
+   cross-domain, expectation-changed, or unknown-role material. Subject role and identity participate
+   in plan identity, so a candidate run cannot later be relabeled as a reference run. Unknown and
+   explicitly excluded
    obligations remain visible through their set roots without becoming executable jobs. Complete
    receipt collection is now also implemented: unordered authoritative receipts are matched by the
    planned `JobId`, then every boundary, dtype, or memory case passes its category-specific exact

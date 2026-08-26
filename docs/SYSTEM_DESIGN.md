@@ -1095,8 +1095,11 @@ harness is not a production unsandboxed executor, and real vendor/device executi
 
 **Implemented complete-corpus execution-plan slice (2026-08-26).** A strict V1 plan now binds the
 shared caller domain, exact identities of the quantitative, dtype-pattern, and memory-surface
-mandatory sets, adapter executable identity, migration validation tier, and the canonical list of
-independent generic jobs. The executable subset is derived rather than caller-selected: successful
+mandatory sets, a closed typed execution subject, adapter executable identity, migration validation
+tier, and the canonical list of independent generic jobs. The subject distinguishes source,
+reference, property, admission-variant, and candidate runs while citing the corresponding exact
+upstream artifact identity; changing only that role or identity changes the plan identity. The
+executable subset is derived rather than caller-selected: successful
 and explicitly specified invalid obligations become jobs, while unknown and explicitly excluded
 obligations remain committed by their set roots but cannot enter the list. Each item retains a typed
 boundary, input-value, or memory-surface obligation and invocation identity, expected outcome,

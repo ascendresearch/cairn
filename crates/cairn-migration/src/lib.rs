@@ -33,8 +33,9 @@ pub use call_adapter::{
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
-    CorpusExecutionPlanItemV1, CorpusExecutionPlanV1, CorpusObligationIdentityV1,
-    PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, prepare_corpus_execution_plan,
+    CorpusExecutionPlanItemV1, CorpusExecutionPlanV1, CorpusExecutionSubjectV1,
+    CorpusObligationIdentityV1, PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan,
+    prepare_corpus_execution_plan,
 };
 pub use corpus_observation::{
     CorpusExecutionReceipt, CorpusObservationItemV1, CorpusObservationSetArtifact,
