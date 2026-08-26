@@ -952,9 +952,9 @@ full mandatory corpus, execution, admission receipt, and adjudication remain unf
 **Implemented strongly typed migration-domain slice (2026-08-25).** `cairn-migration` now defines a
 strict V1 caller-domain body for operator entry point, ABI-ordered buffers and scalar parameters,
 buffer roles, dtypes, fixed/symbolic shapes, logical shape-symbol sources and ranges, tile/alignment
-moduli, invalid-input behavior, requested semantics, claim kind, and explicit exclusions. Buffer
-name, scalar-parameter name, shape-symbol name, argument index, dimension axis, rank, extent,
-ordinary integer, modulus, and status code are distinct Rust types; compile-fail controls prevent
+moduli, input-value families, invalid-input behavior, requested semantics, claim kind, and explicit
+exclusions. Buffer name, scalar-parameter name, shape-symbol name, argument index, dimension axis,
+rank, extent, ordinary integer, modulus, and status code are distinct Rust types; compile-fail controls prevent
 cross-unit assignment. Domain validation rejects duplicate ABI positions/names, dtype/range
 mismatch, unknown shape symbols, disagreement between logical and ABI ranges, and ambiguous
 shape-parameter bindings.
@@ -964,8 +964,17 @@ maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid 
 first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
 typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
 rather than inventing an expected status. This is not yet the complete mandatory corpus: dtype
-extrema, signed zero, non-finite/denormal/cancellation patterns, pointer/error surfaces, historical
-target-failure families, and executable case materialization remain target work.
+patterns are derived by a separate typed policy described below, while pointer/error surfaces,
+historical target-failure families, and executable case materialization remain target work.
+
+Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
+integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
+values. It covers exact dtype extrema, positive/negative zero, normal/subnormal boundaries,
+infinities, quiet/signaling NaN, unit cancellation, and a deterministic mixed-scale cancellation
+sequence. The caller must classify negative zero, subnormal, infinity, and NaN families separately
+as supported, invalid with explicit behavior, explicitly excluded with a content identity, or
+unknown. Exclusion identities must also occur in the domain's canonical exclusion set. These are
+construction obligations, not yet concrete corpus bytes or executed observations.
 
 Its core modules are expected to include:
 

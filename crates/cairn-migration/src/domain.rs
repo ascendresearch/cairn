@@ -8,6 +8,8 @@ use cairn_verification::CallerDomainBodyArtifact;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
+use crate::input_values::InputValueDomainV1;
+
 const MAX_DOMAIN_LABEL_LEN: usize = 128;
 
 /// Failure to construct or derive a migration-domain contract.
@@ -88,6 +90,18 @@ pub enum DomainContractError {
     ScalarRangeOutsideDataType {
         /// Parameter that failed.
         parameter: String,
+    },
+    /// A buffer value-domain category disagrees with its element dtype.
+    #[error("buffer {buffer} has a value-domain category incompatible with its data type")]
+    InputValueDomainTypeMismatch {
+        /// Buffer whose typed value domain disagreed with its dtype.
+        buffer: String,
+    },
+    /// A special-value exclusion was not present in the domain's canonical exclusion set.
+    #[error("buffer {buffer} cites an input-value exclusion absent from the domain exclusions")]
+    UnlistedInputValueExclusion {
+        /// Buffer containing the dangling exclusion edge.
+        buffer: String,
     },
     /// The contract has no input-capable buffer.
     #[error("migration domain requires at least one input-capable buffer")]
@@ -566,6 +580,51 @@ pub enum BufferRole {
     InputOutput,
 }
 
+/// Buffer access and its structurally required input-value domain.
+///
+/// An output-only value cannot carry an input domain, while both input-capable variants require
+/// one. The impossible role/domain combinations therefore have no Rust representation.
+///
+/// ```compile_fail
+/// use cairn_migration::{BufferAccessV1, InputValueDomainV1};
+///
+/// let domain = InputValueDomainV1::Boolean;
+/// let access = BufferAccessV1::Output { value_domain: domain };
+/// ```
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum BufferAccessV1 {
+    /// Read-only input with an explicit value domain.
+    Input {
+        /// Caller-declared input values.
+        value_domain: InputValueDomainV1,
+    },
+    /// Write-only output, which has no input-value declaration.
+    Output,
+    /// Read/write buffer with an explicit input-value domain.
+    InputOutput {
+        /// Caller-declared input values.
+        value_domain: InputValueDomainV1,
+    },
+}
+
+impl BufferAccessV1 {
+    const fn role(&self) -> BufferRole {
+        match self {
+            Self::Input { .. } => BufferRole::Input,
+            Self::Output => BufferRole::Output,
+            Self::InputOutput { .. } => BufferRole::InputOutput,
+        }
+    }
+
+    const fn input_value_domain(&self) -> Option<&InputValueDomainV1> {
+        match self {
+            Self::Input { value_domain } | Self::InputOutput { value_domain } => Some(value_domain),
+            Self::Output => None,
+        }
+    }
+}
+
 /// One buffer dimension, either fixed or bound to a declared symbol.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -589,8 +648,8 @@ pub struct BufferContractInput {
     pub argument_index: ArgumentIndex,
     /// Strong buffer name.
     pub name: BufferName,
-    /// Input/output role.
-    pub role: BufferRole,
+    /// Access role coupled to its required input-value declaration.
+    pub access: BufferAccessV1,
     /// Element type.
     pub data_type: DataType,
     /// Ordered shape dimensions; empty means a scalar buffer value.
@@ -604,7 +663,7 @@ pub struct BufferContractV1 {
     schema_version: MigrationDomainSchemaV1,
     argument_index: ArgumentIndex,
     name: BufferName,
-    role: BufferRole,
+    access: BufferAccessV1,
     data_type: DataType,
     shape: Vec<DimensionSpec>,
 }
@@ -615,7 +674,7 @@ struct BufferContractWire {
     schema_version: MigrationDomainSchemaV1,
     argument_index: ArgumentIndex,
     name: BufferName,
-    role: BufferRole,
+    access: BufferAccessV1,
     data_type: DataType,
     shape: Vec<DimensionSpec>,
 }
@@ -628,11 +687,20 @@ impl BufferContractV1 {
     /// Rejects a rank outside the typed V1 range.
     pub fn new(input: BufferContractInput) -> Result<Self, DomainContractError> {
         let _ = ShapeRank::from_len(input.shape.len())?;
+        if input
+            .access
+            .input_value_domain()
+            .is_some_and(|domain| !domain.is_compatible_with(input.data_type))
+        {
+            return Err(DomainContractError::InputValueDomainTypeMismatch {
+                buffer: input.name.to_string(),
+            });
+        }
         Ok(Self {
             schema_version: MigrationDomainSchemaV1,
             argument_index: input.argument_index,
             name: input.name,
-            role: input.role,
+            access: input.access,
             data_type: input.data_type,
             shape: input.shape,
         })
@@ -653,7 +721,7 @@ impl BufferContractV1 {
     /// Returns its input/output role.
     #[must_use]
     pub const fn role(&self) -> BufferRole {
-        self.role
+        self.access.role()
     }
 
     /// Returns the element type.
@@ -673,6 +741,12 @@ impl BufferContractV1 {
     pub fn shape(&self) -> &[DimensionSpec] {
         &self.shape
     }
+
+    /// Returns the declared value domain for input-capable buffers.
+    #[must_use]
+    pub const fn input_value_domain(&self) -> Option<&InputValueDomainV1> {
+        self.access.input_value_domain()
+    }
 }
 
 impl TryFrom<BufferContractWire> for BufferContractV1 {
@@ -683,7 +757,7 @@ impl TryFrom<BufferContractWire> for BufferContractV1 {
         Self::new(BufferContractInput {
             argument_index: wire.argument_index,
             name: wire.name,
-            role: wire.role,
+            access: wire.access,
             data_type: wire.data_type,
             shape: wire.shape,
         })
@@ -1084,6 +1158,7 @@ impl MigrationDomainContractV1 {
             });
         }
         validate_content_ids(&input.exclusions, "domain exclusions")?;
+        validate_input_value_exclusions(&input.buffers, &input.exclusions)?;
         validate_shape_graph(
             &input.buffers,
             &input.scalar_parameters,
@@ -1329,6 +1404,26 @@ fn validate_content_ids<T: ContentType>(
         .any(|pair| pair[0].to_wire() >= pair[1].to_wire())
     {
         return Err(DomainContractError::NonCanonicalSet { field });
+    }
+    Ok(())
+}
+
+fn validate_input_value_exclusions(
+    buffers: &[BufferContractV1],
+    exclusions: &[ContentId<MigrationDomainExclusionArtifact>],
+) -> Result<(), DomainContractError> {
+    for buffer in buffers {
+        let Some(value_domain) = buffer.input_value_domain() else {
+            continue;
+        };
+        if value_domain
+            .referenced_exclusions()
+            .any(|exclusion| !exclusions.contains(exclusion))
+        {
+            return Err(DomainContractError::UnlistedInputValueExclusion {
+                buffer: buffer.name().to_string(),
+            });
+        }
     }
     Ok(())
 }
@@ -2120,7 +2215,7 @@ mod tests {
     use cairn_verification::CallerDomainBodyArtifact;
 
     use super::{
-        ArgumentIndex, BufferContractInput, BufferContractV1, BufferName, BufferRole,
+        ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName,
         CaseExpectedOutcome, CaseTarget, DataType, DimensionSpec, DomainContractError,
         EntryPointName, ExtentModulus, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
         IntegerValue, InvalidInputBehavior, MigrationDomainContractInput,
@@ -2130,6 +2225,10 @@ mod tests {
         ScalarParameterRole, SemanticClaimKind, ShapeBoundaryObligation, ShapeSymbolContractInput,
         ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource, StatusCode,
         derive_mandatory_base_cases,
+    };
+    use crate::input_values::{
+        FloatingInputValueDomainInput, FloatingInputValueDomainV1, InputValueDisposition,
+        InputValueDomainV1,
     };
 
     fn id<T: ContentType>(seed: &str) -> ContentId<T> {
@@ -2152,6 +2251,17 @@ mod tests {
         }
     }
 
+    fn floating_value_domain() -> InputValueDomainV1 {
+        InputValueDomainV1::Floating {
+            special_values: FloatingInputValueDomainV1::new(FloatingInputValueDomainInput {
+                negative_zero: InputValueDisposition::Supported,
+                subnormal: InputValueDisposition::Supported,
+                infinity: InputValueDisposition::Unknown,
+                nan: InputValueDisposition::Unknown,
+            }),
+        }
+    }
+
     fn reduction_domain(maximum: u64) -> MigrationDomainContractV1 {
         let n = ShapeSymbolName::new("n").expect("symbol");
         MigrationDomainContractV1::new(MigrationDomainContractInput {
@@ -2160,7 +2270,9 @@ mod tests {
                 BufferContractV1::new(BufferContractInput {
                     argument_index: ArgumentIndex::new(0),
                     name: BufferName::new("input").expect("buffer"),
-                    role: BufferRole::Input,
+                    access: BufferAccessV1::Input {
+                        value_domain: floating_value_domain(),
+                    },
                     data_type: DataType::F32,
                     shape: vec![DimensionSpec::Symbol { symbol: n.clone() }],
                 })
@@ -2168,7 +2280,7 @@ mod tests {
                 BufferContractV1::new(BufferContractInput {
                     argument_index: ArgumentIndex::new(1),
                     name: BufferName::new("output").expect("buffer"),
-                    role: BufferRole::Output,
+                    access: BufferAccessV1::Output,
                     data_type: DataType::F32,
                     shape: Vec::new(),
                 })

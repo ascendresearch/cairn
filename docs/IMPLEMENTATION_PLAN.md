@@ -215,9 +215,10 @@ The remaining G slices, in dependency order, are:
    different evidence categories have different content identity domains.
 2. **In progress:** the strongly typed operator-domain V1 body and trusted quantitative boundary
    derivation now cover ABI buffer/parameter roles, dtypes, symbolic shapes/ranges, invalid behavior,
-   min/max/zero/one/interiors, invalid neighbors, and first/last tile tails. Remaining mandatory
-   families include dtype extrema, signed zero, non-finite/denormal/cancellation, pointer/error
-   surfaces, historical target failures, and executable corpus-case materialization;
+   min/max/zero/one/interiors, invalid neighbors, first/last tile tails, dtype extrema, signed zero,
+   non-finite/subnormal inputs, cancellation, and mixed finite scales. Remaining mandatory families
+   include pointer/error surfaces, historical target failures, and executable corpus-case
+   materialization;
 3. versioned mutation-grid trials and recomputed proof obligations that ignore stored `passed`
    metadata;
 4. execution-port composition for correct and deliberately wrong variants through the complete

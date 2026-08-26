@@ -1,9 +1,10 @@
 //! Operator-migration product semantics and translation into domain-neutral execution requests.
 
 mod domain;
+mod input_values;
 
 pub use domain::{
-    ArgumentIndex, BufferContractInput, BufferContractV1, BufferName, BufferRole,
+    ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,
     CaseExpectedOutcome, CaseTarget, DataType, DimensionAxis, DimensionSpec, DomainContractError,
     EntryPointName, ExtentModulus, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
     IntegerValue, InvalidInputBehavior, MandatoryCaseDerivationPolicy, MigrationDomainCaseArtifact,
@@ -14,6 +15,14 @@ pub use domain::{
     ScalarParameterRole, SemanticClaimKind, ShapeAssignment, ShapeBoundaryObligation, ShapeRank,
     ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
     StatusCode, derive_mandatory_base_cases,
+};
+pub use input_values::{
+    BooleanInputPattern, FloatingDataType, FloatingInputPattern, FloatingInputValueDomainInput,
+    FloatingInputValueDomainV1, InputValueCaseTarget, InputValueDerivationPolicy,
+    InputValueDisposition, InputValueDomainV1, MandatoryInputValueCaseArtifact,
+    MandatoryInputValueCaseV1, MandatoryInputValueCasesArtifact, MandatoryInputValueCasesV1,
+    SignedIntegerDataType, SignedIntegerInputPattern, UnsignedIntegerDataType,
+    UnsignedIntegerInputPattern, derive_mandatory_input_value_cases,
 };
 
 use cairn_execution::{
