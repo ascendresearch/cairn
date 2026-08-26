@@ -50,7 +50,9 @@ use thiserror::Error;
 use tokio::time::{Instant, Interval};
 
 use docker::DockerExecutor;
-pub use docker::WorkerExecutionConfig;
+pub use docker::{
+    AscendDeviceIndex, DockerAcceleratorConfig, NvidiaDeviceIndex, WorkerExecutionConfig,
+};
 
 pub use probe::{
     ExpectedResourceConstraints, HostResourceProbe, ResourceProbeConfig, ResourceProbeError,
@@ -2032,7 +2034,7 @@ mod tests {
         WorkerHealth, WorkerResourceSource,
     };
 
-    use super::{WorkerConfig, WorkerExecutionConfig};
+    use super::{DockerAcceleratorConfig, WorkerConfig, WorkerExecutionConfig};
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
@@ -2074,6 +2076,7 @@ mod tests {
         config.execution = WorkerExecutionConfig::Docker {
             command: PathBuf::from("/usr/bin/docker"),
             state_directory: PathBuf::from("state/docker"),
+            accelerator: DockerAcceleratorConfig::None,
             poll_interval_ms: NonZeroU64::new(10).expect("poll interval"),
             logical_cpu_limit: None,
             memory_byte_limit: None,
@@ -2085,6 +2088,13 @@ mod tests {
             .expect("availability");
         let profile = config.runtime_profile().expect("runtime profile");
         config.validate(&profile).expect("coherent activation");
+
+        let mut missing_accelerator = serde_json::to_value(&config).expect("worker JSON");
+        missing_accelerator["execution"]
+            .as_object_mut()
+            .expect("execution object")
+            .remove("accelerator");
+        assert!(serde_json::from_value::<WorkerConfig>(missing_accelerator).is_err());
 
         config.availability =
             WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())

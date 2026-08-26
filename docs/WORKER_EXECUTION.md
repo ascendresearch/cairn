@@ -23,6 +23,9 @@ Change the generated worker configuration coherently:
     "health": "ready"
   },
   "execution": {
+    "accelerator": {
+      "kind": "none"
+    },
     "command": "/usr/bin/docker",
     "logical_cpu_limit": null,
     "memory_byte_limit": null,
@@ -42,6 +45,22 @@ Change the generated worker configuration coherently:
 The fragment shows only changed fields. Retain the other generated fields. Each resource limit is
 independently optional; `null` disables it. The worker currently accepts one concurrent attempt so
 that its durable journal and availability claim remain simple.
+
+`execution.accelerator` is mandatory whenever Docker execution is enabled. It is a closed V1 local
+policy, not job-controlled Docker argv:
+
+- `{"kind":"none"}` exposes no accelerator;
+- `{"kind":"nvidia","device_index":0}` derives exactly `--gpus device=0`;
+- `{"kind":"ascend","device_index":3}` maps only `/dev/davinci3`,
+  `/dev/davinci_manager`, and `/dev/hisi_hdc`, mounts the fixed Ascend driver directory read-only,
+  adds only `DAC_OVERRIDE`, and fixes the container-visible device index to
+  `ASCEND_RT_VISIBLE_DEVICES=0`.
+
+Vendor-specific device indices are distinct bounded types. Ascend activation fails before the
+worker connects if the fixed driver path or any required character device is absent. The selected
+host device and the in-container index are deliberately different concepts; jobs cannot override
+the worker-derived container-visible index. Each terminal execution receipt records the exact
+accelerator policy observation beside the immutable image and container identities.
 
 The job environment is strict canonical JSON containing a full local Docker image ID of the form
 `sha256:<64 lowercase hex digits>` and sorted environment variables. Mutable tags are rejected.

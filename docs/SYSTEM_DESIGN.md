@@ -857,8 +857,11 @@ Bootstrap intentionally composes a `NotStarted` executor and unavailable/drainin
 Schema-V1 configuration may activate `docker-v1` only by coherently changing execution mode, the
 exact advertised backend, and ready one-slot availability. Typed material replication, resumable
 transfer, Docker supervision, bounded capture, terminal publication, and worker-start recovery are
-implemented. Accelerator device exposure, additional network modes, concurrency greater than one,
-and service deployment remain later demand-driven slices.
+implemented. Docker accelerator exposure is one closed worker-local policy: none, one indexed
+NVIDIA device, or one indexed Ascend device with fixed manager/driver bindings and an independently
+derived container-visible index. Jobs cannot inject device flags or host paths, and terminal
+evidence records the exact policy observation. Dynamic shared-device selection, additional network
+modes, concurrency greater than one, and service deployment remain later demand-driven slices.
 
 **Implemented real heterogeneous enrollment gate (2026-08-26).** One AArch64 NVIDIA GB10 worker
 and one x86-64 Ascend worker now enroll through the same V1 managed-identity path, connect through
@@ -866,8 +869,9 @@ independent operator-owned reverse tunnels, and produce durable registration and
 The controller admits a worker resource timestamp ahead of its own clock only within the optional
 positive `resource_clock_skew_tolerance_ms`; `null` preserves zero tolerance, an excess lead fails
 closed, and accepted evidence is never silently retimestamped. Both hardware workers remain
-unavailable/draining until accelerator device exposure is represented by an explicit execution
-policy rather than inferred from host inventory.
+unavailable/draining until the operator activates one explicit accelerator policy rather than
+inferring exposure from host inventory. Activation on a shared host additionally requires an
+actually free device; static policy never claims or evicts another process's device.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point

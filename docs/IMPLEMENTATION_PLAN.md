@@ -344,9 +344,10 @@ an independence or automatic disagreement policy.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.
-They deliberately remain unavailable/draining because the current `docker-v1` adapter has no typed
-accelerator-device exposure policy. The next production-adapter slice must add that policy and prove
-device-visible CUDA and Ascend container controls before scheduling migration work to either pool.
+The `docker-v1` adapter now has a closed typed accelerator policy for no device, one indexed NVIDIA
+device, or one indexed Ascend device with fixed manager/driver bindings. The next production-adapter
+gate is operational: activate the dedicated GB10, wait for one genuinely free shared Ascend device,
+and prove device-visible CUDA and Ascend containers before scheduling migration work to either pool.
 
 ## Cross-cutting gates
 

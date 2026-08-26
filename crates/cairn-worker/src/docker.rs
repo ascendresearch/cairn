@@ -2,7 +2,9 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     num::{NonZeroU16, NonZeroU64},
-    os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::fs::{
+        DirBuilderExt as _, FileTypeExt as _, OpenOptionsExt as _, PermissionsExt as _,
+    },
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
@@ -25,6 +27,66 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const INPUT: &str = "/cairn/input";
 const WORK: &str = "/cairn/work";
 const OUTPUT: &str = "/cairn/output";
+const ASCEND_DRIVER: &str = "/usr/local/Ascend/driver";
+const ASCEND_MANAGER: &str = "/dev/davinci_manager";
+const ASCEND_HDC: &str = "/dev/hisi_hdc";
+
+macro_rules! docker_device_index {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+        #[serde(transparent)]
+        pub struct $name(u16);
+
+        impl $name {
+            /// Creates a bounded host accelerator index.
+            ///
+            /// # Errors
+            ///
+            /// Rejects indices outside the worker policy's bounded host-device namespace.
+            pub fn new(value: u16) -> Result<Self, &'static str> {
+                if value > 1023 {
+                    Err("Docker accelerator device index must be between 0 and 1023")
+                } else {
+                    Ok(Self(value))
+                }
+            }
+
+            #[must_use]
+            pub const fn get(self) -> u16 {
+                self.0
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = u16::deserialize(deserializer)?;
+                Self::new(value).map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+
+docker_device_index!(
+    /// Host NVIDIA device selected by the local Docker worker policy.
+    NvidiaDeviceIndex
+);
+docker_device_index!(
+    /// Host Ascend device selected by the local Docker worker policy.
+    AscendDeviceIndex
+);
+
+/// Closed worker-local accelerator exposure policy for `docker-v1`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+pub enum DockerAcceleratorConfig {
+    None,
+    Nvidia { device_index: NvidiaDeviceIndex },
+    Ascend { device_index: AscendDeviceIndex },
+}
 
 /// Worker execution mode. Join defaults to disabled; Docker activation is one explicit edit.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -35,6 +97,7 @@ pub enum WorkerExecutionConfig {
     Docker {
         command: PathBuf,
         state_directory: PathBuf,
+        accelerator: DockerAcceleratorConfig,
         poll_interval_ms: NonZeroU64,
         logical_cpu_limit: Option<NonZeroU16>,
         memory_byte_limit: Option<NonZeroU64>,
@@ -75,6 +138,7 @@ pub(crate) struct DockerExecutor<'a> {
     memory_byte_limit: Option<NonZeroU64>,
     pids_limit: Option<NonZeroU64>,
     writable_byte_limit: Option<NonZeroU64>,
+    accelerator: &'a DockerAcceleratorConfig,
 }
 
 #[derive(Deserialize)]
@@ -101,6 +165,7 @@ impl<'a> DockerExecutor<'a> {
         let WorkerExecutionConfig::Docker {
             command,
             state_directory,
+            accelerator,
             poll_interval_ms,
             logical_cpu_limit,
             memory_byte_limit,
@@ -121,12 +186,14 @@ impl<'a> DockerExecutor<'a> {
             memory_byte_limit: *memory_byte_limit,
             pids_limit: *pids_limit,
             writable_byte_limit: *writable_byte_limit,
+            accelerator,
         })
     }
 
     pub(crate) fn preflight(&self) -> Result<(), ExecutorError> {
         let output = self.run(["version", "--format", "{{.Server.Version}}"])?;
         require_success(output, "Docker daemon preflight")?;
+        validate_accelerator_paths(self.accelerator)?;
         Ok(())
     }
 
@@ -247,6 +314,7 @@ impl<'a> DockerExecutor<'a> {
         optional_limit(&mut arguments, "--cpus", self.logical_cpu_limit);
         optional_limit(&mut arguments, "--memory", self.memory_byte_limit);
         optional_limit(&mut arguments, "--pids-limit", self.pids_limit);
+        append_accelerator_arguments(&mut arguments, self.accelerator);
         arguments.extend([
             "--mount".to_owned(),
             format!("type=bind,src={},dst={INPUT},readonly", input.display()),
@@ -264,6 +332,9 @@ impl<'a> DockerExecutor<'a> {
                 "--env".to_owned(),
                 format!("{}={}", variable.name().as_str(), variable.value()),
             ]);
+        }
+        if matches!(self.accelerator, DockerAcceleratorConfig::Ascend { .. }) {
+            arguments.extend(["--env".to_owned(), "ASCEND_RT_VISIBLE_DEVICES=0".to_owned()]);
         }
         arguments.extend([
             "--entrypoint".to_owned(),
@@ -412,6 +483,8 @@ impl<'a> DockerExecutor<'a> {
                     .map_err(|error| ExecutorError::Ambiguous(error.to_string()))?,
                 ExecutionObservation::new(format!("docker:container:{name}"))
                     .map_err(|error| ExecutorError::Ambiguous(error.to_string()))?,
+                ExecutionObservation::new(accelerator_observation(self.accelerator))
+                    .map_err(|error| ExecutorError::Ambiguous(error.to_string()))?,
             ],
         )
         .map_err(|error| ExecutorError::Ambiguous(error.to_string()))?;
@@ -501,6 +574,73 @@ fn cleanup_attempt(command: &Path, state_directory: &Path, attempt_id: AttemptId
     let directory = state_directory.join(attempt_id.as_uuid().to_string());
     if directory.parent() == Some(state_directory) {
         let _ = fs::remove_dir_all(directory);
+    }
+}
+
+fn append_accelerator_arguments(
+    arguments: &mut Vec<String>,
+    accelerator: &DockerAcceleratorConfig,
+) {
+    match accelerator {
+        DockerAcceleratorConfig::None => {}
+        DockerAcceleratorConfig::Nvidia { device_index } => arguments.extend([
+            "--gpus".to_owned(),
+            format!("device={}", device_index.get()),
+        ]),
+        DockerAcceleratorConfig::Ascend { device_index } => {
+            arguments.extend([
+                "--cap-add".to_owned(),
+                "DAC_OVERRIDE".to_owned(),
+                "--mount".to_owned(),
+                format!("type=bind,src={ASCEND_DRIVER},dst={ASCEND_DRIVER},readonly"),
+            ]);
+            for path in [
+                format!("/dev/davinci{}", device_index.get()),
+                ASCEND_MANAGER.to_owned(),
+                ASCEND_HDC.to_owned(),
+            ] {
+                arguments.extend(["--device".to_owned(), format!("{path}:{path}:rwm")]);
+            }
+        }
+    }
+}
+
+fn validate_accelerator_paths(accelerator: &DockerAcceleratorConfig) -> Result<(), ExecutorError> {
+    let DockerAcceleratorConfig::Ascend { device_index } = accelerator else {
+        return Ok(());
+    };
+    let driver = fs::metadata(ASCEND_DRIVER)
+        .map_err(|error| ExecutorError::NotStarted(format!("{ASCEND_DRIVER}: {error}")))?;
+    if !driver.is_dir() {
+        return Err(ExecutorError::NotStarted(
+            "Ascend driver policy path is not a directory".into(),
+        ));
+    }
+    for path in [
+        format!("/dev/davinci{}", device_index.get()),
+        ASCEND_MANAGER.to_owned(),
+        ASCEND_HDC.to_owned(),
+    ] {
+        let metadata = fs::metadata(&path)
+            .map_err(|error| ExecutorError::NotStarted(format!("{path}: {error}")))?;
+        if !metadata.file_type().is_char_device() {
+            return Err(ExecutorError::NotStarted(format!(
+                "Ascend policy path is not a character device: {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn accelerator_observation(accelerator: &DockerAcceleratorConfig) -> String {
+    match accelerator {
+        DockerAcceleratorConfig::None => "docker:accelerator:none".to_owned(),
+        DockerAcceleratorConfig::Nvidia { device_index } => {
+            format!("docker:accelerator:nvidia:{}", device_index.get())
+        }
+        DockerAcceleratorConfig::Ascend { device_index } => {
+            format!("docker:accelerator:ascend:{}", device_index.get())
+        }
     }
 }
 
@@ -733,6 +873,7 @@ mod tests {
             let config = WorkerExecutionConfig::Docker {
                 command: PathBuf::from("/usr/bin/docker"),
                 state_directory,
+                accelerator: DockerAcceleratorConfig::None,
                 poll_interval_ms: NonZeroU64::new(10).expect("poll"),
                 logical_cpu_limit: None,
                 memory_byte_limit: None,
@@ -746,6 +887,66 @@ mod tests {
                 contract,
             }
         }
+    }
+
+    #[test]
+    fn accelerator_policy_is_closed_typed_and_derives_fixed_docker_arguments() {
+        assert!(serde_json::from_str::<DockerAcceleratorConfig>(r#"{"kind":"other"}"#).is_err());
+        assert!(
+            serde_json::from_str::<DockerAcceleratorConfig>(
+                r#"{"kind":"nvidia","device_index":1024}"#,
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<DockerAcceleratorConfig>(
+                r#"{"kind":"nvidia","device_index":0,"extra":true}"#,
+            )
+            .is_err()
+        );
+
+        let mut nvidia = Vec::new();
+        append_accelerator_arguments(
+            &mut nvidia,
+            &DockerAcceleratorConfig::Nvidia {
+                device_index: NvidiaDeviceIndex::new(0).expect("NVIDIA index"),
+            },
+        );
+        assert_eq!(nvidia, ["--gpus", "device=0"]);
+
+        let mut ascend = Vec::new();
+        append_accelerator_arguments(
+            &mut ascend,
+            &DockerAcceleratorConfig::Ascend {
+                device_index: AscendDeviceIndex::new(3).expect("Ascend index"),
+            },
+        );
+        assert!(
+            ascend
+                .windows(2)
+                .any(|pair| pair == ["--cap-add", "DAC_OVERRIDE"])
+        );
+        assert!(
+            ascend
+                .windows(2)
+                .any(|pair| { pair == ["--device", "/dev/davinci3:/dev/davinci3:rwm"] })
+        );
+        assert!(
+            ascend.windows(2).any(|pair| {
+                pair == ["--device", "/dev/davinci_manager:/dev/davinci_manager:rwm"]
+            })
+        );
+        assert!(
+            ascend
+                .windows(2)
+                .any(|pair| { pair == ["--device", "/dev/hisi_hdc:/dev/hisi_hdc:rwm"] })
+        );
+        assert_eq!(
+            accelerator_observation(&DockerAcceleratorConfig::Ascend {
+                device_index: AscendDeviceIndex::new(3).expect("Ascend index"),
+            }),
+            "docker:accelerator:ascend:3"
+        );
     }
 
     #[test]
