@@ -1000,7 +1000,17 @@ scalar-byte identities; the canonical `InputBundleV1` contains that manifest and
 input/scalar files, and validation rejects missing, extra, executable, reordered, length-changed, or
 content-changed material. Explicitly excluded boundaries and explicitly-invalid dtype recipes are
 not admitted into this baseline assembly, preventing two independent invalid conditions from being
-silently assigned the boundary case's outcome. Dedicated dtype-invalid composition, isolated
+silently assigned the boundary case's outcome.
+
+**Implemented explicitly-invalid dtype-case composition slice (2026-08-25).** A dtype obligation
+classified `Invalid` can now be assembled only over a quantitative case that trusted derivation
+proves is both a member of the exact caller domain and expected to succeed. The targeted
+materialized buffer must validate against the exact dtype-obligation identity and disposition;
+every other input-capable buffer must remain `Supported`. The strict V1 dtype-case manifest uses a
+content-identity domain distinct from quantitative boundary manifests, binds the domain, successful
+baseline, dtype obligation, copied typed target/outcome, and the complete ABI argument set, and
+cross-validates the canonical bundle files. Unknown, excluded, supported-as-invalid, underived, and
+multi-invalid compositions fail closed. Supported dtype-pattern case composition, isolated
 pointer/capacity/aliasing layouts, a call adapter, observations, and execution remain target work.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,

@@ -13,9 +13,10 @@ use thiserror::Error;
 use crate::{
     ArgumentIndex, BufferContractV1, BufferName, BufferRole, CaseExpectedOutcome, DataType,
     DimensionSpec, ExtentValue, InputValueCaseTarget, InputValueDisposition, IntegerValue,
-    MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
-    MaterializedCorpusBufferBytesArtifact, MigrationDomainCaseArtifact, MigrationDomainCaseV1,
-    MigrationDomainContractV1, ScalarParameterName, derive_mandatory_base_cases,
+    MandatoryInputValueCaseArtifact, MandatoryInputValueCaseV1, MaterializedCorpusBuffer,
+    MaterializedCorpusBufferArtifact, MaterializedCorpusBufferBytesArtifact,
+    MigrationDomainCaseArtifact, MigrationDomainCaseV1, MigrationDomainContractV1,
+    ScalarParameterName, derive_mandatory_base_cases, derive_mandatory_input_value_cases,
 };
 use crate::{CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount};
 
@@ -23,11 +24,11 @@ const MATERIAL_ROOT: &str = "cairn";
 const ABI_DIRECTORY: &str = "cairn/abi";
 const INVOCATION_PATH: &str = "cairn/invocation.json";
 
-/// Failure to bind a trusted boundary case to complete ABI-ordered execution material.
+/// Failure to bind a trusted corpus case to complete ABI-ordered execution material.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
-pub enum BoundaryCaseAssemblyError {
+pub enum CorpusCaseAssemblyError {
     /// Only the current pre-release V1 schema is accepted.
-    #[error("materialized boundary-case schema version must be 1")]
+    #[error("materialized corpus-case schema version must be 1")]
     UnsupportedSchemaVersion,
     /// The supplied case is not one of the exact cases rederived from the caller domain.
     #[error("boundary case is not a trusted derivation of the caller domain")]
@@ -35,6 +36,12 @@ pub enum BoundaryCaseAssemblyError {
     /// An explicitly excluded boundary must not become execution authority.
     #[error("explicitly excluded boundary case is not executable")]
     ExcludedBoundaryCase,
+    /// The quantitative baseline is not a trusted successful case for this caller domain.
+    #[error("input-value case requires a trusted successful quantitative baseline")]
+    InvalidQuantitativeBaseline,
+    /// The input-value case is absent from trusted dtype derivation or is not explicitly invalid.
+    #[error("input-value case is not a trusted explicitly-invalid dtype obligation")]
+    UntrustedInputValueCase,
     /// Input-capable domain buffers and supplied materialized values do not match exactly.
     #[error("materialized input buffers do not exactly cover the input ABI")]
     InputCoverageMismatch,
@@ -59,18 +66,20 @@ pub enum BoundaryCaseAssemblyError {
     #[error("scalar assignment cannot be encoded by its declared ABI dtype")]
     ScalarEncodingMismatch,
     /// Persisted manifest arguments are contradictory or non-canonical.
-    #[error("materialized boundary-case manifest is inconsistent")]
+    #[error("materialized corpus-case manifest is inconsistent")]
     InconsistentManifest,
     /// The canonical input bundle does not contain exactly the files committed by the manifest.
-    #[error("input bundle contradicts the materialized boundary-case manifest")]
+    #[error("input bundle contradicts the materialized corpus-case manifest")]
     InconsistentInputBundle,
     /// Canonical encoding, identity, or execution-material construction failed.
-    #[error("boundary-case assembly codec error: {message}")]
+    #[error("corpus-case assembly codec error: {message}")]
     Codec {
         /// Adapter-neutral diagnostic.
         message: String,
     },
 }
+
+use CorpusCaseAssemblyError as BoundaryCaseAssemblyError;
 
 /// Content identity domain for exact little-endian bytes of one scalar ABI argument.
 pub enum MaterializedScalarArgumentBytesArtifact {}
@@ -97,9 +106,9 @@ impl ContentType for MaterializedBoundaryCaseArtifact {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BoundaryCaseSchemaV1;
+struct MaterializedCaseSchemaV1;
 
-impl Serialize for BoundaryCaseSchemaV1 {
+impl Serialize for MaterializedCaseSchemaV1 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -108,7 +117,7 @@ impl Serialize for BoundaryCaseSchemaV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for BoundaryCaseSchemaV1 {
+impl<'de> Deserialize<'de> for MaterializedCaseSchemaV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -146,7 +155,7 @@ pub enum MaterializedAbiArgumentV1 {
         materialization: ContentId<MaterializedCorpusBufferArtifact>,
         /// Exact raw-byte identity.
         bytes: ContentId<MaterializedCorpusBufferBytesArtifact>,
-        /// Supported baseline value behavior.
+        /// Caller-declared value behavior for this invocation.
         disposition: InputValueDisposition,
     },
     /// Write-only buffer allocated by the trusted call adapter.
@@ -184,7 +193,7 @@ pub enum MaterializedAbiArgumentV1 {
         materialization: ContentId<MaterializedCorpusBufferArtifact>,
         /// Exact raw-byte identity.
         bytes: ContentId<MaterializedCorpusBufferBytesArtifact>,
-        /// Supported baseline value behavior.
+        /// Caller-declared value behavior for this invocation.
         disposition: InputValueDisposition,
     },
     /// Integer or boolean scalar encoded into an exact ABI-width file.
@@ -236,7 +245,7 @@ impl MaterializedAbiArgumentV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "MaterializedBoundaryCaseWire")]
 pub struct MaterializedBoundaryCaseV1 {
-    schema_version: BoundaryCaseSchemaV1,
+    schema_version: MaterializedCaseSchemaV1,
     domain: ContentId<CallerDomainBodyArtifact>,
     boundary_case: ContentId<MigrationDomainCaseArtifact>,
     expected_outcome: CaseExpectedOutcome,
@@ -246,7 +255,7 @@ pub struct MaterializedBoundaryCaseV1 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MaterializedBoundaryCaseWire {
-    schema_version: BoundaryCaseSchemaV1,
+    schema_version: MaterializedCaseSchemaV1,
     domain: ContentId<CallerDomainBodyArtifact>,
     boundary_case: ContentId<MigrationDomainCaseArtifact>,
     expected_outcome: CaseExpectedOutcome,
@@ -260,26 +269,16 @@ impl MaterializedBoundaryCaseV1 {
         expected_outcome: CaseExpectedOutcome,
         arguments: Vec<MaterializedAbiArgumentV1>,
     ) -> Result<Self, BoundaryCaseAssemblyError> {
-        if arguments.is_empty()
-            || arguments
-                .windows(2)
-                .any(|pair| pair[0].argument_index() >= pair[1].argument_index())
+        if !argument_collection_is_consistent(&arguments)
             || arguments
                 .iter()
-                .any(|argument| !argument_is_consistent(argument))
-        {
-            return Err(BoundaryCaseAssemblyError::InconsistentManifest);
-        }
-        let mut paths = BTreeSet::new();
-        if arguments
-            .iter()
-            .filter_map(MaterializedAbiArgumentV1::path)
-            .any(|path| !paths.insert(path.as_str()))
+                .filter_map(argument_input_disposition)
+                .any(|disposition| disposition != &InputValueDisposition::Supported)
         {
             return Err(BoundaryCaseAssemblyError::InconsistentManifest);
         }
         Ok(Self {
-            schema_version: BoundaryCaseSchemaV1,
+            schema_version: MaterializedCaseSchemaV1,
             domain,
             boundary_case,
             expected_outcome,
@@ -320,7 +319,7 @@ impl MaterializedBoundaryCaseV1 {
         &self,
         domain: &MigrationDomainContractV1,
         case: &MigrationDomainCaseV1,
-    ) -> Result<(), BoundaryCaseAssemblyError> {
+    ) -> Result<(), CorpusCaseAssemblyError> {
         let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
         let case_id = canonical_id::<MigrationDomainCaseArtifact, _>(case)?;
         let derived = derive_mandatory_base_cases(domain).map_err(codec_error)?;
@@ -340,83 +339,7 @@ impl MaterializedBoundaryCaseV1 {
         domain: &MigrationDomainContractV1,
         case: &MigrationDomainCaseV1,
     ) -> bool {
-        if self.arguments.len()
-            != domain
-                .buffers()
-                .len()
-                .saturating_add(domain.scalar_parameters().len())
-        {
-            return false;
-        }
-        let buffers_match = domain.buffers().iter().all(|buffer| {
-            let Ok(extents) = resolve_extents(buffer.shape(), case) else {
-                return false;
-            };
-            let Some(argument) = self
-                .arguments
-                .iter()
-                .find(|argument| argument.argument_index() == buffer.argument_index())
-            else {
-                return false;
-            };
-            match (buffer.role(), argument) {
-                (
-                    BufferRole::Input,
-                    MaterializedAbiArgumentV1::InputBuffer {
-                        buffer: name,
-                        data_type,
-                        extents: observed,
-                        ..
-                    },
-                )
-                | (
-                    BufferRole::InputOutput,
-                    MaterializedAbiArgumentV1::InputOutputBuffer {
-                        buffer: name,
-                        data_type,
-                        extents: observed,
-                        ..
-                    },
-                )
-                | (
-                    BufferRole::Output,
-                    MaterializedAbiArgumentV1::OutputBuffer {
-                        buffer: name,
-                        data_type,
-                        extents: observed,
-                        ..
-                    },
-                ) => {
-                    name == buffer.name()
-                        && *data_type == buffer.data_type()
-                        && observed == &extents
-                }
-                _ => false,
-            }
-        });
-        buffers_match
-            && domain.scalar_parameters().iter().all(|parameter| {
-                let Some(assignment) = case
-                    .scalar_assignments()
-                    .iter()
-                    .find(|assignment| assignment.parameter() == parameter.name())
-                else {
-                    return false;
-                };
-                matches!(
-                    self.arguments.iter().find(|argument| {
-                        argument.argument_index() == parameter.argument_index()
-                    }),
-                    Some(MaterializedAbiArgumentV1::Scalar {
-                        parameter: name,
-                        data_type,
-                        value,
-                        ..
-                    }) if name == parameter.name()
-                        && *data_type == parameter.data_type()
-                        && *value == assignment.value()
-                )
-            })
+        arguments_match_domain(&self.arguments, domain, case)
     }
 
     /// Verifies that a canonical input bundle contains exactly this manifest and its input files.
@@ -427,95 +350,8 @@ impl MaterializedBoundaryCaseV1 {
     pub fn validate_input_bundle(
         &self,
         bundle: &InputBundleV1,
-    ) -> Result<(), BoundaryCaseAssemblyError> {
-        let manifest_bytes = cairn_codec::to_vec(self).map_err(codec_error)?;
-        let expected_file_count = 1 + self
-            .arguments
-            .iter()
-            .filter_map(Self::argument_path)
-            .count();
-        if bundle.entries().len() != expected_file_count + 2 {
-            return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
-        }
-        let mut saw_root = false;
-        let mut saw_abi = false;
-        let mut saw_manifest = false;
-        let mut seen_argument_paths = BTreeSet::new();
-        for entry in bundle.entries() {
-            match entry {
-                InputBundleEntry::Directory { path } if path.as_str() == MATERIAL_ROOT => {
-                    saw_root = true;
-                }
-                InputBundleEntry::Directory { path } if path.as_str() == ABI_DIRECTORY => {
-                    saw_abi = true;
-                }
-                InputBundleEntry::File { path, mode, bytes }
-                    if path.as_str() == INVOCATION_PATH
-                        && *mode == InputFileMode::Data
-                        && bytes == &manifest_bytes =>
-                {
-                    saw_manifest = true;
-                }
-                InputBundleEntry::File { path, mode, bytes } if *mode == InputFileMode::Data => {
-                    let Some(argument) = self
-                        .arguments
-                        .iter()
-                        .find(|argument| argument.path() == Some(path))
-                    else {
-                        return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
-                    };
-                    if !seen_argument_paths.insert(path.as_str())
-                        || !Self::bytes_match_argument(argument, bytes)?
-                    {
-                        return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
-                    }
-                }
-                _ => return Err(BoundaryCaseAssemblyError::InconsistentInputBundle),
-            }
-        }
-        if !saw_root
-            || !saw_abi
-            || !saw_manifest
-            || seen_argument_paths.len() + 1 != expected_file_count
-        {
-            return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
-        }
-        Ok(())
-    }
-
-    fn argument_path(argument: &MaterializedAbiArgumentV1) -> Option<&SandboxPath> {
-        argument.path()
-    }
-
-    fn bytes_match_argument(
-        argument: &MaterializedAbiArgumentV1,
-        bytes: &[u8],
-    ) -> Result<bool, BoundaryCaseAssemblyError> {
-        let length = u64::try_from(bytes.len()).ok();
-        match argument {
-            MaterializedAbiArgumentV1::InputBuffer {
-                byte_length,
-                bytes: expected,
-                ..
-            }
-            | MaterializedAbiArgumentV1::InputOutputBuffer {
-                byte_length,
-                bytes: expected,
-                ..
-            } => Ok(length == Some(byte_length.get())
-                && ContentId::<MaterializedCorpusBufferBytesArtifact>::derive(bytes)
-                    .map_err(codec_error)?
-                    == *expected),
-            MaterializedAbiArgumentV1::Scalar {
-                byte_length,
-                bytes: expected,
-                ..
-            } => Ok(length == Some(byte_length.get())
-                && ContentId::<MaterializedScalarArgumentBytesArtifact>::derive(bytes)
-                    .map_err(codec_error)?
-                    == *expected),
-            MaterializedAbiArgumentV1::OutputBuffer { .. } => Ok(false),
-        }
+    ) -> Result<(), CorpusCaseAssemblyError> {
+        validate_manifest_bundle(self, &self.arguments, bundle)
     }
 }
 
@@ -527,6 +363,170 @@ impl TryFrom<MaterializedBoundaryCaseWire> for MaterializedBoundaryCaseV1 {
         Self::new(
             wire.domain,
             wire.boundary_case,
+            wire.expected_outcome,
+            wire.arguments,
+        )
+    }
+}
+
+/// Content identity domain for one materialized explicitly-invalid dtype invocation manifest.
+///
+/// ```compile_fail
+/// use cairn_migration::{MaterializedBoundaryCaseArtifact, MaterializedInputValueCaseArtifact};
+/// use cairn_protocol::ContentId;
+///
+/// fn require_dtype_case(_: Option<ContentId<MaterializedInputValueCaseArtifact>>) {}
+/// let boundary: Option<ContentId<MaterializedBoundaryCaseArtifact>> = None;
+/// require_dtype_case(boundary);
+/// ```
+pub enum MaterializedInputValueCaseArtifact {}
+
+impl ContentType for MaterializedInputValueCaseArtifact {
+    const DOMAIN: &'static str = "migration.materialized-input-value-case.v1";
+}
+
+/// Strict V1 invocation manifest for one explicitly-invalid dtype obligation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "MaterializedInputValueCaseWire")]
+pub struct MaterializedInputValueCaseV1 {
+    schema_version: MaterializedCaseSchemaV1,
+    domain: ContentId<CallerDomainBodyArtifact>,
+    quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
+    input_value_case: ContentId<MandatoryInputValueCaseArtifact>,
+    target: InputValueCaseTarget,
+    expected_outcome: CaseExpectedOutcome,
+    arguments: Vec<MaterializedAbiArgumentV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaterializedInputValueCaseWire {
+    schema_version: MaterializedCaseSchemaV1,
+    domain: ContentId<CallerDomainBodyArtifact>,
+    quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
+    input_value_case: ContentId<MandatoryInputValueCaseArtifact>,
+    target: InputValueCaseTarget,
+    expected_outcome: CaseExpectedOutcome,
+    arguments: Vec<MaterializedAbiArgumentV1>,
+}
+
+impl MaterializedInputValueCaseV1 {
+    fn new(
+        domain: ContentId<CallerDomainBodyArtifact>,
+        quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
+        input_value_case: ContentId<MandatoryInputValueCaseArtifact>,
+        target: InputValueCaseTarget,
+        expected_outcome: CaseExpectedOutcome,
+        arguments: Vec<MaterializedAbiArgumentV1>,
+    ) -> Result<Self, BoundaryCaseAssemblyError> {
+        if !argument_collection_is_consistent(&arguments)
+            || !arguments_match_invalid_target(&arguments, &target, &expected_outcome)
+        {
+            return Err(BoundaryCaseAssemblyError::InconsistentManifest);
+        }
+        Ok(Self {
+            schema_version: MaterializedCaseSchemaV1,
+            domain,
+            quantitative_baseline,
+            input_value_case,
+            target,
+            expected_outcome,
+            arguments,
+        })
+    }
+
+    /// Returns the exact caller-domain identity.
+    #[must_use]
+    pub const fn domain(&self) -> ContentId<CallerDomainBodyArtifact> {
+        self.domain
+    }
+
+    /// Returns the successful quantitative baseline identity.
+    #[must_use]
+    pub const fn quantitative_baseline(&self) -> ContentId<MigrationDomainCaseArtifact> {
+        self.quantitative_baseline
+    }
+
+    /// Returns the exact explicitly-invalid dtype obligation identity.
+    #[must_use]
+    pub const fn input_value_case(&self) -> ContentId<MandatoryInputValueCaseArtifact> {
+        self.input_value_case
+    }
+
+    /// Returns the only input buffer and dtype recipe varied by this invocation.
+    #[must_use]
+    pub const fn target(&self) -> &InputValueCaseTarget {
+        &self.target
+    }
+
+    /// Returns the caller-declared invalid-input outcome.
+    #[must_use]
+    pub const fn expected_outcome(&self) -> &CaseExpectedOutcome {
+        &self.expected_outcome
+    }
+
+    /// Returns all buffer and scalar arguments in strict ABI order.
+    #[must_use]
+    pub fn arguments(&self) -> &[MaterializedAbiArgumentV1] {
+        &self.arguments
+    }
+
+    /// Recomputes domain, baseline, and dtype-obligation identities and trusted membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a different domain, a non-successful/underived baseline, an underived dtype case,
+    /// or copied target/outcome/ABI metadata that contradicts those sources.
+    pub fn validate_sources(
+        &self,
+        domain: &MigrationDomainContractV1,
+        baseline: &MigrationDomainCaseV1,
+        input_case: &MandatoryInputValueCaseV1,
+    ) -> Result<(), CorpusCaseAssemblyError> {
+        let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
+        let baseline_id = canonical_id::<MigrationDomainCaseArtifact, _>(baseline)?;
+        let input_case_id = canonical_id::<MandatoryInputValueCaseArtifact, _>(input_case)?;
+        let quantitative = derive_mandatory_base_cases(domain).map_err(codec_error)?;
+        let input_values = derive_mandatory_input_value_cases(domain).map_err(codec_error)?;
+        if domain_id != self.domain
+            || baseline_id != self.quantitative_baseline
+            || input_case_id != self.input_value_case
+            || baseline.expected_outcome() != &CaseExpectedOutcome::Success
+            || !quantitative.cases().contains(baseline)
+            || !input_values.cases().contains(input_case)
+            || input_case.target() != &self.target
+            || invalid_input_outcome(input_case.disposition()).as_ref()
+                != Some(&self.expected_outcome)
+            || !arguments_match_domain(&self.arguments, domain, baseline)
+        {
+            return Err(BoundaryCaseAssemblyError::UntrustedInputValueCase);
+        }
+        Ok(())
+    }
+
+    /// Verifies the canonical bundle against this manifest and every committed input file.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, extra, executable, length-mismatched, or identity-mismatched files.
+    pub fn validate_input_bundle(
+        &self,
+        bundle: &InputBundleV1,
+    ) -> Result<(), CorpusCaseAssemblyError> {
+        validate_manifest_bundle(self, &self.arguments, bundle)
+    }
+}
+
+impl TryFrom<MaterializedInputValueCaseWire> for MaterializedInputValueCaseV1 {
+    type Error = BoundaryCaseAssemblyError;
+
+    fn try_from(wire: MaterializedInputValueCaseWire) -> Result<Self, Self::Error> {
+        let _ = wire.schema_version;
+        Self::new(
+            wire.domain,
+            wire.quantitative_baseline,
+            wire.input_value_case,
+            wire.target,
             wire.expected_outcome,
             wire.arguments,
         )
@@ -575,6 +575,48 @@ impl AssembledBoundaryCaseInput {
     }
 }
 
+/// Complete explicitly-invalid dtype invocation ready for input-bundle archival.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssembledInputValueCaseInput {
+    manifest: MaterializedInputValueCaseV1,
+    manifest_id: ContentId<MaterializedInputValueCaseArtifact>,
+    input_bundle: InputBundleV1,
+    input_bundle_bytes: Vec<u8>,
+    input_bundle_id: ContentId<InputBundleArtifact>,
+}
+
+impl AssembledInputValueCaseInput {
+    /// Returns the immutable dtype-case invocation manifest embedded in the bundle.
+    #[must_use]
+    pub const fn manifest(&self) -> &MaterializedInputValueCaseV1 {
+        &self.manifest
+    }
+
+    /// Returns the typed identity of the dtype-case invocation manifest.
+    #[must_use]
+    pub const fn manifest_id(&self) -> ContentId<MaterializedInputValueCaseArtifact> {
+        self.manifest_id
+    }
+
+    /// Returns the canonical execution input bundle.
+    #[must_use]
+    pub const fn input_bundle(&self) -> &InputBundleV1 {
+        &self.input_bundle
+    }
+
+    /// Returns canonical bundle bytes ready for CAS archival.
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> &[u8] {
+        &self.input_bundle_bytes
+    }
+
+    /// Returns the exact execution input-bundle identity.
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
+    }
+}
+
 /// Assembles one exact trusted boundary case and complete supported input-buffer baselines.
 ///
 /// The supplied supported materialized buffers must cover every input/input-output ABI buffer
@@ -593,7 +635,7 @@ pub fn assemble_boundary_case_input(
     case: &MigrationDomainCaseV1,
     materialized_inputs: &[MaterializedCorpusBuffer],
     per_buffer_limit: CorpusBufferByteLimit,
-) -> Result<AssembledBoundaryCaseInput, BoundaryCaseAssemblyError> {
+) -> Result<AssembledBoundaryCaseInput, CorpusCaseAssemblyError> {
     let derived = derive_mandatory_base_cases(domain).map_err(codec_error)?;
     if !derived.cases().contains(case) {
         return Err(BoundaryCaseAssemblyError::UntrustedBoundaryCase);
@@ -609,10 +651,16 @@ pub fn assemble_boundary_case_input(
 
     let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
     let case_id = canonical_id::<MigrationDomainCaseArtifact, _>(case)?;
-    let (mut arguments, mut argument_files) =
-        assemble_buffer_arguments(domain, case, materialized_inputs, per_buffer_limit)?;
+    let (mut arguments, argument_files) = assemble_buffer_arguments(
+        domain,
+        case,
+        materialized_inputs,
+        per_buffer_limit,
+        InputComposition::SupportedOnly,
+    )?;
     let (scalar_arguments, scalar_files) = assemble_scalar_arguments(domain, case)?;
     arguments.extend(scalar_arguments);
+    let mut argument_files = argument_files;
     argument_files.extend(scalar_files);
     arguments.sort_by_key(MaterializedAbiArgumentV1::argument_index);
 
@@ -625,25 +673,9 @@ pub fn assemble_boundary_case_input(
     let manifest_bytes = cairn_codec::to_vec(&manifest).map_err(codec_error)?;
     let manifest_id = ContentId::<MaterializedBoundaryCaseArtifact>::derive(&manifest_bytes)
         .map_err(codec_error)?;
-    let mut files = vec![
-        InputBundleEntry::Directory {
-            path: sandbox_path(MATERIAL_ROOT)?,
-        },
-        InputBundleEntry::Directory {
-            path: sandbox_path(ABI_DIRECTORY)?,
-        },
-    ];
-    files.append(&mut argument_files);
-    files.push(InputBundleEntry::File {
-        path: sandbox_path(INVOCATION_PATH)?,
-        mode: InputFileMode::Data,
-        bytes: manifest_bytes,
-    });
-    let input_bundle = InputBundleV1::new(files).map_err(codec_error)?;
+    let (input_bundle, input_bundle_bytes, input_bundle_id) =
+        build_input_bundle(manifest_bytes, argument_files)?;
     manifest.validate_input_bundle(&input_bundle)?;
-    let input_bundle_bytes = input_bundle.to_bytes().map_err(codec_error)?;
-    let input_bundle_id =
-        ContentId::<InputBundleArtifact>::derive(&input_bundle_bytes).map_err(codec_error)?;
     Ok(AssembledBoundaryCaseInput {
         manifest,
         manifest_id,
@@ -653,11 +685,87 @@ pub fn assemble_boundary_case_input(
     })
 }
 
+/// Assembles one explicitly-invalid dtype obligation over a trusted successful baseline.
+///
+/// Exactly the target buffer may use the invalid recipe; all other input-capable buffers must use
+/// supported values. This preserves single-variable attribution and gives the invocation the
+/// caller-declared invalid-input outcome from the dtype obligation.
+///
+/// # Errors
+///
+/// Rejects a non-successful/underived quantitative baseline, a supported/unknown/excluded or
+/// underived dtype case, incomplete input coverage, contradictory materialized bytes, size/limit
+/// failures, and canonical bundle or identity failures.
+pub fn assemble_input_value_case_input(
+    domain: &MigrationDomainContractV1,
+    quantitative_baseline: &MigrationDomainCaseV1,
+    input_case: &MandatoryInputValueCaseV1,
+    materialized_inputs: &[MaterializedCorpusBuffer],
+    per_buffer_limit: CorpusBufferByteLimit,
+) -> Result<AssembledInputValueCaseInput, CorpusCaseAssemblyError> {
+    let quantitative = derive_mandatory_base_cases(domain).map_err(codec_error)?;
+    if quantitative_baseline.expected_outcome() != &CaseExpectedOutcome::Success
+        || !quantitative.cases().contains(quantitative_baseline)
+    {
+        return Err(BoundaryCaseAssemblyError::InvalidQuantitativeBaseline);
+    }
+    let input_values = derive_mandatory_input_value_cases(domain).map_err(codec_error)?;
+    let expected_outcome = invalid_input_outcome(input_case.disposition())
+        .filter(|_| input_values.cases().contains(input_case))
+        .ok_or(BoundaryCaseAssemblyError::UntrustedInputValueCase)?;
+
+    let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
+    let baseline_id = canonical_id::<MigrationDomainCaseArtifact, _>(quantitative_baseline)?;
+    let input_case_id = canonical_id::<MandatoryInputValueCaseArtifact, _>(input_case)?;
+    let (mut arguments, argument_files) = assemble_buffer_arguments(
+        domain,
+        quantitative_baseline,
+        materialized_inputs,
+        per_buffer_limit,
+        InputComposition::OneInvalid(input_case),
+    )?;
+    let (scalar_arguments, scalar_files) =
+        assemble_scalar_arguments(domain, quantitative_baseline)?;
+    arguments.extend(scalar_arguments);
+    let mut argument_files = argument_files;
+    argument_files.extend(scalar_files);
+    arguments.sort_by_key(MaterializedAbiArgumentV1::argument_index);
+
+    let manifest = MaterializedInputValueCaseV1::new(
+        domain_id,
+        baseline_id,
+        input_case_id,
+        input_case.target().clone(),
+        expected_outcome,
+        arguments,
+    )?;
+    let manifest_bytes = cairn_codec::to_vec(&manifest).map_err(codec_error)?;
+    let manifest_id = ContentId::<MaterializedInputValueCaseArtifact>::derive(&manifest_bytes)
+        .map_err(codec_error)?;
+    let (input_bundle, input_bundle_bytes, input_bundle_id) =
+        build_input_bundle(manifest_bytes, argument_files)?;
+    manifest.validate_input_bundle(&input_bundle)?;
+    Ok(AssembledInputValueCaseInput {
+        manifest,
+        manifest_id,
+        input_bundle,
+        input_bundle_bytes,
+        input_bundle_id,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum InputComposition<'a> {
+    SupportedOnly,
+    OneInvalid(&'a MandatoryInputValueCaseV1),
+}
+
 fn assemble_buffer_arguments(
     domain: &MigrationDomainContractV1,
     case: &MigrationDomainCaseV1,
     materialized_inputs: &[MaterializedCorpusBuffer],
     limit: CorpusBufferByteLimit,
+    composition: InputComposition<'_>,
 ) -> Result<(Vec<MaterializedAbiArgumentV1>, Vec<InputBundleEntry>), BoundaryCaseAssemblyError> {
     let mut arguments = Vec::with_capacity(domain.buffers().len());
     let mut files = Vec::new();
@@ -668,6 +776,7 @@ fn assemble_buffer_arguments(
             case,
             materialized_inputs,
             limit,
+            composition,
             &mut consumed_inputs,
         )?;
         arguments.push(argument);
@@ -684,6 +793,7 @@ fn assemble_buffer_argument<'a>(
     case: &MigrationDomainCaseV1,
     materialized_inputs: &'a [MaterializedCorpusBuffer],
     limit: CorpusBufferByteLimit,
+    composition: InputComposition<'_>,
     consumed_inputs: &mut BTreeSet<&'a BufferName>,
 ) -> Result<(MaterializedAbiArgumentV1, Option<InputBundleEntry>), BoundaryCaseAssemblyError> {
     let extents = resolve_extents(buffer.shape(), case)?;
@@ -715,6 +825,7 @@ fn assemble_buffer_argument<'a>(
         buffer.data_type(),
         element_count,
         byte_length,
+        composition,
     )?;
     let path = argument_path(buffer.argument_index())?;
     let file = InputBundleEntry::File {
@@ -841,18 +952,200 @@ fn validate_materialized_input(
     data_type: DataType,
     element_count: CorpusElementCount,
     byte_length: CorpusBufferByteLength,
+    composition: InputComposition<'_>,
 ) -> Result<(), BoundaryCaseAssemblyError> {
     let manifest = materialized.manifest();
+    let disposition_matches = match composition {
+        InputComposition::OneInvalid(input_case) if input_case.target().buffer() == buffer => {
+            manifest.disposition() == input_case.disposition()
+                && manifest.validate_source_case(input_case).is_ok()
+        }
+        InputComposition::SupportedOnly | InputComposition::OneInvalid(_) => {
+            manifest.disposition() == &InputValueDisposition::Supported
+        }
+    };
     if manifest.target().buffer() != buffer
         || target_data_type(manifest.target()) != data_type
         || manifest.element_count() != element_count
         || manifest.byte_length() != byte_length
-        || manifest.disposition() != &InputValueDisposition::Supported
+        || !disposition_matches
         || manifest.validate_bytes(materialized.bytes()).is_err()
     {
         return Err(BoundaryCaseAssemblyError::InputBufferMismatch);
     }
     Ok(())
+}
+
+fn invalid_input_outcome(disposition: &InputValueDisposition) -> Option<CaseExpectedOutcome> {
+    match disposition {
+        InputValueDisposition::Invalid { behavior } => Some(CaseExpectedOutcome::Invalid {
+            behavior: behavior.clone(),
+        }),
+        InputValueDisposition::Supported
+        | InputValueDisposition::ExplicitlyExcluded { .. }
+        | InputValueDisposition::Unknown => None,
+    }
+}
+
+fn argument_collection_is_consistent(arguments: &[MaterializedAbiArgumentV1]) -> bool {
+    if arguments.is_empty()
+        || arguments
+            .windows(2)
+            .any(|pair| pair[0].argument_index() >= pair[1].argument_index())
+        || arguments
+            .iter()
+            .any(|argument| !argument_is_consistent(argument))
+    {
+        return false;
+    }
+    let mut paths = BTreeSet::new();
+    !arguments
+        .iter()
+        .filter_map(MaterializedAbiArgumentV1::path)
+        .any(|path| !paths.insert(path.as_str()))
+}
+
+fn argument_input_disposition(
+    argument: &MaterializedAbiArgumentV1,
+) -> Option<&InputValueDisposition> {
+    match argument {
+        MaterializedAbiArgumentV1::InputBuffer { disposition, .. }
+        | MaterializedAbiArgumentV1::InputOutputBuffer { disposition, .. } => Some(disposition),
+        MaterializedAbiArgumentV1::OutputBuffer { .. }
+        | MaterializedAbiArgumentV1::Scalar { .. } => None,
+    }
+}
+
+fn arguments_match_invalid_target(
+    arguments: &[MaterializedAbiArgumentV1],
+    target: &InputValueCaseTarget,
+    expected_outcome: &CaseExpectedOutcome,
+) -> bool {
+    let mut invalid_count = 0;
+    for argument in arguments {
+        let Some((buffer, data_type, disposition)) = argument_input_metadata(argument) else {
+            continue;
+        };
+        match disposition {
+            InputValueDisposition::Supported => {}
+            InputValueDisposition::Invalid { behavior } => {
+                invalid_count += 1;
+                if buffer != target.buffer()
+                    || data_type != target_data_type(target)
+                    || expected_outcome
+                        != &(CaseExpectedOutcome::Invalid {
+                            behavior: behavior.clone(),
+                        })
+                {
+                    return false;
+                }
+            }
+            InputValueDisposition::ExplicitlyExcluded { .. } | InputValueDisposition::Unknown => {
+                return false;
+            }
+        }
+    }
+    invalid_count == 1
+}
+
+fn argument_input_metadata(
+    argument: &MaterializedAbiArgumentV1,
+) -> Option<(&BufferName, DataType, &InputValueDisposition)> {
+    match argument {
+        MaterializedAbiArgumentV1::InputBuffer {
+            buffer,
+            data_type,
+            disposition,
+            ..
+        }
+        | MaterializedAbiArgumentV1::InputOutputBuffer {
+            buffer,
+            data_type,
+            disposition,
+            ..
+        } => Some((buffer, *data_type, disposition)),
+        MaterializedAbiArgumentV1::OutputBuffer { .. }
+        | MaterializedAbiArgumentV1::Scalar { .. } => None,
+    }
+}
+
+fn arguments_match_domain(
+    arguments: &[MaterializedAbiArgumentV1],
+    domain: &MigrationDomainContractV1,
+    case: &MigrationDomainCaseV1,
+) -> bool {
+    if arguments.len()
+        != domain
+            .buffers()
+            .len()
+            .saturating_add(domain.scalar_parameters().len())
+    {
+        return false;
+    }
+    let buffers_match = domain.buffers().iter().all(|buffer| {
+        let Ok(extents) = resolve_extents(buffer.shape(), case) else {
+            return false;
+        };
+        let Some(argument) = arguments
+            .iter()
+            .find(|argument| argument.argument_index() == buffer.argument_index())
+        else {
+            return false;
+        };
+        match (buffer.role(), argument) {
+            (
+                BufferRole::Input,
+                MaterializedAbiArgumentV1::InputBuffer {
+                    buffer: name,
+                    data_type,
+                    extents: observed,
+                    ..
+                },
+            )
+            | (
+                BufferRole::InputOutput,
+                MaterializedAbiArgumentV1::InputOutputBuffer {
+                    buffer: name,
+                    data_type,
+                    extents: observed,
+                    ..
+                },
+            )
+            | (
+                BufferRole::Output,
+                MaterializedAbiArgumentV1::OutputBuffer {
+                    buffer: name,
+                    data_type,
+                    extents: observed,
+                    ..
+                },
+            ) => name == buffer.name() && *data_type == buffer.data_type() && observed == &extents,
+            _ => false,
+        }
+    });
+    buffers_match
+        && domain.scalar_parameters().iter().all(|parameter| {
+            let Some(assignment) = case
+                .scalar_assignments()
+                .iter()
+                .find(|assignment| assignment.parameter() == parameter.name())
+            else {
+                return false;
+            };
+            matches!(
+                arguments.iter().find(|argument| {
+                    argument.argument_index() == parameter.argument_index()
+                }),
+                Some(MaterializedAbiArgumentV1::Scalar {
+                    parameter: name,
+                    data_type,
+                    value,
+                    ..
+                }) if name == parameter.name()
+                    && *data_type == parameter.data_type()
+                    && *value == assignment.value()
+            )
+        })
 }
 
 const fn target_data_type(target: &InputValueCaseTarget) -> DataType {
@@ -928,8 +1221,10 @@ fn argument_is_consistent(argument: &MaterializedAbiArgumentV1) -> bool {
             disposition,
             ..
         } => {
-            disposition == &InputValueDisposition::Supported
-                && path_matches(*argument_index, path)
+            matches!(
+                disposition,
+                InputValueDisposition::Supported | InputValueDisposition::Invalid { .. }
+            ) && path_matches(*argument_index, path)
                 && shape_lengths_match(*data_type, extents, *element_count, *byte_length)
         }
         MaterializedAbiArgumentV1::OutputBuffer {
@@ -973,6 +1268,119 @@ fn shape_lengths_match(
             == Some(byte_length.get())
 }
 
+fn validate_manifest_bundle<V: Serialize>(
+    manifest: &V,
+    arguments: &[MaterializedAbiArgumentV1],
+    bundle: &InputBundleV1,
+) -> Result<(), BoundaryCaseAssemblyError> {
+    let manifest_bytes = cairn_codec::to_vec(manifest).map_err(codec_error)?;
+    let expected_file_count = 1 + arguments
+        .iter()
+        .filter_map(MaterializedAbiArgumentV1::path)
+        .count();
+    if bundle.entries().len() != expected_file_count + 2 {
+        return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
+    }
+    let mut saw_root = false;
+    let mut saw_abi = false;
+    let mut saw_manifest = false;
+    let mut seen_argument_paths = BTreeSet::new();
+    for entry in bundle.entries() {
+        match entry {
+            InputBundleEntry::Directory { path } if path.as_str() == MATERIAL_ROOT => {
+                saw_root = true;
+            }
+            InputBundleEntry::Directory { path } if path.as_str() == ABI_DIRECTORY => {
+                saw_abi = true;
+            }
+            InputBundleEntry::File { path, mode, bytes }
+                if path.as_str() == INVOCATION_PATH
+                    && *mode == InputFileMode::Data
+                    && bytes == &manifest_bytes =>
+            {
+                saw_manifest = true;
+            }
+            InputBundleEntry::File { path, mode, bytes } if *mode == InputFileMode::Data => {
+                let Some(argument) = arguments
+                    .iter()
+                    .find(|argument| argument.path() == Some(path))
+                else {
+                    return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
+                };
+                if !seen_argument_paths.insert(path.as_str())
+                    || !bytes_match_argument(argument, bytes)?
+                {
+                    return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
+                }
+            }
+            _ => return Err(BoundaryCaseAssemblyError::InconsistentInputBundle),
+        }
+    }
+    if !saw_root
+        || !saw_abi
+        || !saw_manifest
+        || seen_argument_paths.len() + 1 != expected_file_count
+    {
+        return Err(BoundaryCaseAssemblyError::InconsistentInputBundle);
+    }
+    Ok(())
+}
+
+fn bytes_match_argument(
+    argument: &MaterializedAbiArgumentV1,
+    bytes: &[u8],
+) -> Result<bool, BoundaryCaseAssemblyError> {
+    let length = u64::try_from(bytes.len()).ok();
+    match argument {
+        MaterializedAbiArgumentV1::InputBuffer {
+            byte_length,
+            bytes: expected,
+            ..
+        }
+        | MaterializedAbiArgumentV1::InputOutputBuffer {
+            byte_length,
+            bytes: expected,
+            ..
+        } => Ok(length == Some(byte_length.get())
+            && ContentId::<MaterializedCorpusBufferBytesArtifact>::derive(bytes)
+                .map_err(codec_error)?
+                == *expected),
+        MaterializedAbiArgumentV1::Scalar {
+            byte_length,
+            bytes: expected,
+            ..
+        } => Ok(length == Some(byte_length.get())
+            && ContentId::<MaterializedScalarArgumentBytesArtifact>::derive(bytes)
+                .map_err(codec_error)?
+                == *expected),
+        MaterializedAbiArgumentV1::OutputBuffer { .. } => Ok(false),
+    }
+}
+
+fn build_input_bundle(
+    manifest_bytes: Vec<u8>,
+    mut argument_files: Vec<InputBundleEntry>,
+) -> Result<(InputBundleV1, Vec<u8>, ContentId<InputBundleArtifact>), BoundaryCaseAssemblyError> {
+    let mut files = vec![
+        InputBundleEntry::Directory {
+            path: sandbox_path(MATERIAL_ROOT)?,
+        },
+        InputBundleEntry::Directory {
+            path: sandbox_path(ABI_DIRECTORY)?,
+        },
+    ];
+    files.append(&mut argument_files);
+    files.push(InputBundleEntry::File {
+        path: sandbox_path(INVOCATION_PATH)?,
+        mode: InputFileMode::Data,
+        bytes: manifest_bytes,
+    });
+    let bundle = InputBundleV1::new(files).map_err(codec_error)?;
+    let bytes = bundle.to_bytes().map_err(codec_error)?;
+    let identity = ContentId::<InputBundleArtifact>::derive(&bytes).map_err(codec_error)?;
+    Ok((bundle, bytes, identity))
+}
+
 fn argument_path(index: ArgumentIndex) -> Result<SandboxPath, BoundaryCaseAssemblyError> {
     sandbox_path(&format!("{ABI_DIRECTORY}/arg-{:05}.bin", index.get()))
 }
@@ -1007,20 +1415,22 @@ mod tests {
 
     use super::{
         BoundaryCaseAssemblyError, MaterializedAbiArgumentV1, MaterializedBoundaryCaseV1,
-        assemble_boundary_case_input,
+        MaterializedInputValueCaseV1, assemble_boundary_case_input,
+        assemble_input_value_case_input,
     };
     use crate::{
         ArgumentIndex, BufferAccessV1, BufferAliasingContractInput, BufferAliasingContractV1,
         BufferContractInput, BufferContractV1, BufferMemoryContractInput, BufferMemoryContractV1,
-        BufferName, BufferPairV1, CaseTarget, CorpusBufferByteLimit, CorpusElementCount, DataType,
-        DimensionSpec, EntryPointName, ExtentValue, FloatingDataType, FloatingInputPattern,
-        FloatingInputValueDomainInput, FloatingInputValueDomainV1, InclusiveExtentRange,
-        InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition, InputValueDomainV1,
-        IntegerValue, InvalidInputBehavior, MandatoryInputValueCaseV1, MemoryConditionDisposition,
-        MigrationDomainContractInput, MigrationDomainContractV1, PointerAlignmentContractV1,
-        RequestedSemanticsArtifact, ScalarParameterContractInput, ScalarParameterContractV1,
-        ScalarParameterName, ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput,
-        ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource, derive_mandatory_base_cases,
+        BufferName, BufferPairV1, CaseExpectedOutcome, CaseTarget, CorpusBufferByteLimit,
+        CorpusElementCount, DataType, DimensionSpec, EntryPointName, ExtentValue, FloatingDataType,
+        FloatingInputPattern, FloatingInputValueDomainInput, FloatingInputValueDomainV1,
+        InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition,
+        InputValueDomainV1, IntegerValue, InvalidInputBehavior, MandatoryInputValueCaseV1,
+        MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
+        PointerAlignmentContractV1, RequestedSemanticsArtifact, ScalarParameterContractInput,
+        ScalarParameterContractV1, ScalarParameterName, ScalarParameterRole, SemanticClaimKind,
+        ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
+        derive_mandatory_base_cases, derive_mandatory_input_value_cases,
         materialize_input_value_case,
     };
 
@@ -1036,11 +1446,11 @@ mod tests {
         })
     }
 
-    fn float_domain() -> InputValueDomainV1 {
+    fn float_domain(subnormal: InputValueDisposition) -> InputValueDomainV1 {
         InputValueDomainV1::Floating {
             special_values: FloatingInputValueDomainV1::new(FloatingInputValueDomainInput {
                 negative_zero: InputValueDisposition::Supported,
-                subnormal: InputValueDisposition::Supported,
+                subnormal,
                 infinity: InputValueDisposition::Supported,
                 nan: InputValueDisposition::Supported,
             }),
@@ -1048,6 +1458,13 @@ mod tests {
     }
 
     fn domain(invalid_behavior: InvalidInputBehavior) -> MigrationDomainContractV1 {
+        domain_with_subnormal(invalid_behavior, InputValueDisposition::Supported)
+    }
+
+    fn domain_with_subnormal(
+        invalid_behavior: InvalidInputBehavior,
+        subnormal: InputValueDisposition,
+    ) -> MigrationDomainContractV1 {
         let input = BufferName::new("input").expect("input");
         let output = BufferName::new("output").expect("output");
         let symbol = ShapeSymbolName::new("n").expect("symbol");
@@ -1063,7 +1480,7 @@ mod tests {
                     argument_index: ArgumentIndex::new(0),
                     name: input.clone(),
                     access: BufferAccessV1::Input {
-                        value_domain: float_domain(),
+                        value_domain: float_domain(subnormal),
                     },
                     data_type: DataType::F32,
                     shape: vec![DimensionSpec::Symbol {
@@ -1146,6 +1563,27 @@ mod tests {
             },
             InputValueDisposition::Supported,
         )
+    }
+
+    fn derived_input_case(
+        domain: &MigrationDomainContractV1,
+        pattern: FloatingInputPattern,
+    ) -> MandatoryInputValueCaseV1 {
+        derive_mandatory_input_value_cases(domain)
+            .expect("derive input values")
+            .cases()
+            .iter()
+            .find(|case| {
+                matches!(
+                    case.target(),
+                    InputValueCaseTarget::Floating {
+                        pattern: candidate,
+                        ..
+                    } if *candidate == pattern
+                )
+            })
+            .cloned()
+            .expect("input-value case")
     }
 
     fn assembled(
@@ -1367,5 +1805,174 @@ mod tests {
                 &cairn_codec::to_vec(&different_domain).expect("domain bytes")
             )
         );
+    }
+
+    #[test]
+    fn invalid_dtype_case_uses_one_successful_quantitative_baseline() {
+        let invalid_behavior = InvalidInputBehavior::ReturnStatus {
+            status: crate::StatusCode::new(-7),
+        };
+        let domain = domain_with_subnormal(
+            InvalidInputBehavior::RejectBeforeExecution,
+            InputValueDisposition::Invalid {
+                behavior: invalid_behavior.clone(),
+            },
+        );
+        let baseline = boundary_case(&domain, 2);
+        let input_case =
+            derived_input_case(&domain, FloatingInputPattern::SmallestPositiveSubnormal);
+        let materialized = materialize_input_value_case(
+            &input_case,
+            CorpusElementCount::new(2),
+            CorpusBufferByteLimit::new(128).expect("limit"),
+        )
+        .expect("materialize invalid dtype case");
+        let assembled = assemble_input_value_case_input(
+            &domain,
+            &baseline,
+            &input_case,
+            &[materialized],
+            CorpusBufferByteLimit::new(128).expect("limit"),
+        )
+        .expect("assemble invalid dtype case");
+
+        assert_eq!(
+            assembled.manifest().expected_outcome(),
+            &CaseExpectedOutcome::Invalid {
+                behavior: invalid_behavior,
+            }
+        );
+        assert_eq!(assembled.manifest().target(), input_case.target());
+        assert_eq!(
+            assembled
+                .manifest()
+                .arguments()
+                .iter()
+                .filter_map(super::argument_input_disposition)
+                .filter(|disposition| {
+                    matches!(disposition, InputValueDisposition::Invalid { .. })
+                })
+                .count(),
+            1
+        );
+        let input_bytes = assembled
+            .input_bundle()
+            .entries()
+            .iter()
+            .find_map(|entry| match entry {
+                InputBundleEntry::File { path, bytes, .. }
+                    if path.as_str() == "cairn/abi/arg-00000.bin" =>
+                {
+                    Some(bytes.as_slice())
+                }
+                _ => None,
+            })
+            .expect("input bytes");
+        assert_eq!(input_bytes, &[1, 0, 0, 0, 1, 0, 0, 0]);
+        assembled
+            .manifest()
+            .validate_sources(&domain, &baseline, &input_case)
+            .expect("source graph");
+        assembled
+            .manifest()
+            .validate_input_bundle(assembled.input_bundle())
+            .expect("bundle graph");
+        assert_eq!(
+            assembled.input_bundle_id(),
+            ContentId::<InputBundleArtifact>::derive(assembled.input_bundle_bytes())
+                .expect("bundle identity")
+        );
+        assert_eq!(
+            assembled.manifest_id(),
+            ContentId::<super::MaterializedInputValueCaseArtifact>::derive(
+                &cairn_codec::to_vec(assembled.manifest()).expect("manifest bytes")
+            )
+            .expect("manifest identity")
+        );
+    }
+
+    #[test]
+    fn invalid_dtype_composition_and_persistence_fail_closed() {
+        let domain = domain_with_subnormal(
+            InvalidInputBehavior::RejectBeforeExecution,
+            InputValueDisposition::Invalid {
+                behavior: InvalidInputBehavior::RejectBeforeExecution,
+            },
+        );
+        let valid_baseline = boundary_case(&domain, 2);
+        let invalid_baseline = boundary_case(&domain, 0);
+        let invalid_case =
+            derived_input_case(&domain, FloatingInputPattern::SmallestPositiveSubnormal);
+        let supported_case = derived_input_case(&domain, FloatingInputPattern::PositiveOne);
+        let limit = CorpusBufferByteLimit::new(128).expect("limit");
+        let invalid_bytes =
+            materialize_input_value_case(&invalid_case, CorpusElementCount::new(2), limit)
+                .expect("invalid bytes");
+        assert_eq!(
+            assemble_input_value_case_input(
+                &domain,
+                &invalid_baseline,
+                &invalid_case,
+                &[invalid_bytes.clone()],
+                limit,
+            ),
+            Err(BoundaryCaseAssemblyError::InvalidQuantitativeBaseline)
+        );
+        assert_eq!(
+            assemble_input_value_case_input(
+                &domain,
+                &valid_baseline,
+                &supported_case,
+                &[invalid_bytes],
+                limit,
+            ),
+            Err(BoundaryCaseAssemblyError::UntrustedInputValueCase)
+        );
+
+        let supported_bytes =
+            materialize_input_value_case(&supported_case, CorpusElementCount::new(2), limit)
+                .expect("supported bytes");
+        assert_eq!(
+            assemble_input_value_case_input(
+                &domain,
+                &valid_baseline,
+                &invalid_case,
+                &[supported_bytes],
+                limit,
+            ),
+            Err(BoundaryCaseAssemblyError::InputBufferMismatch)
+        );
+
+        let invalid_bytes =
+            materialize_input_value_case(&invalid_case, CorpusElementCount::new(2), limit)
+                .expect("invalid bytes");
+        let assembled = assemble_input_value_case_input(
+            &domain,
+            &valid_baseline,
+            &invalid_case,
+            &[invalid_bytes],
+            limit,
+        )
+        .expect("assemble");
+        let value = serde_json::to_value(assembled.manifest()).expect("manifest json");
+        assert!(serde_json::from_value::<MaterializedInputValueCaseV1>(value.clone()).is_ok());
+
+        let mut wrong_version = value.clone();
+        wrong_version["schema_version"] = json!(2);
+        assert!(serde_json::from_value::<MaterializedInputValueCaseV1>(wrong_version).is_err());
+
+        let mut unknown_field = value.clone();
+        unknown_field["legacy_expected"] = json!("failure");
+        assert!(serde_json::from_value::<MaterializedInputValueCaseV1>(unknown_field).is_err());
+
+        let mut supported_argument = value.clone();
+        supported_argument["arguments"][0]["disposition"] = json!({"kind": "supported"});
+        assert!(
+            serde_json::from_value::<MaterializedInputValueCaseV1>(supported_argument).is_err()
+        );
+
+        let mut wrong_outcome = value;
+        wrong_outcome["expected_outcome"] = json!({"kind": "success"});
+        assert!(serde_json::from_value::<MaterializedInputValueCaseV1>(wrong_outcome).is_err());
     }
 }
