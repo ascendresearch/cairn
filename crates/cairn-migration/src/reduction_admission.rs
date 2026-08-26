@@ -17,12 +17,11 @@ use crate::{
     HistoricalReductionCorrectVariantEvidence, HistoricalReductionWrongVariantEvidence,
     MigrationDomainContractV1, PreparedHistoricalReductionControl,
     PreparedHistoricalReductionCorpus, PreparedHistoricalReductionJob,
-    ValidatedHistoricalReductionRun,
+    PreparedHistoricalReductionMutationGrid, ValidatedHistoricalReductionRun,
 };
 use cairn_verification::{
     AdmissionPolicyV1, CorpusProposalV1, DeclaredDomainV1, ImplementationVariantArtifact,
-    MutationGridProofV1, NumericalAllowanceV1, OracleProposalV1, PreparedGenericMutantSet,
-    PreparedMutationGrid,
+    NumericalAllowanceV1, OracleProposalV1,
 };
 
 /// Every independently validated input required to promote the historical control.
@@ -44,9 +43,7 @@ pub struct HistoricalReductionAdmissionInputs<'a> {
     pub reference_run: &'a ValidatedHistoricalReductionRun,
     pub correct: &'a [HistoricalReductionCorrectVariantEvidence<'a>],
     pub wrong: &'a [HistoricalReductionWrongVariantEvidence<'a>],
-    pub mutant_set: &'a PreparedGenericMutantSet,
-    pub mutation_grid: &'a PreparedMutationGrid,
-    pub mutation_proof: &'a MutationGridProofV1,
+    pub mutation: &'a PreparedHistoricalReductionMutationGrid,
     pub saturation_rounds: &'a [AdmissionSaturationRoundV1],
     pub revalidation: &'a AdmissionRevalidationPolicyV1,
 }
@@ -106,9 +103,7 @@ pub fn compose_historical_reduction_admission(
         input.reference_run,
         input.correct,
         input.wrong,
-        input.mutant_set,
-        input.mutation_grid,
-        input.mutation_proof,
+        input.mutation,
     )?;
 
     let exclusions = input
@@ -158,7 +153,7 @@ pub fn compose_historical_reduction_admission(
     )?;
     let receipt_input = AdmittedReceiptInput {
         admitted_domain: admitted_domain.domain_id(),
-        admission_corpus: input.mutation_grid.grid().corpus(),
+        admission_corpus: input.mutation.grid().grid().corpus(),
         admission_control: reidentify::<AdmissionControlArtifact>(input.control.control_bytes())?,
         environments,
         source_observations: vec![source_observation],
@@ -186,9 +181,9 @@ pub fn compose_historical_reduction_admission(
         input.proposal,
         input.policy,
         input.allowance,
-        input.mutant_set,
-        input.mutation_grid,
-        input.mutation_proof,
+        input.mutation.mutant_set(),
+        input.mutation.grid(),
+        input.mutation.proof().proof(),
     )
     .map_err(composition)?;
     receipt
@@ -198,9 +193,9 @@ pub fn compose_historical_reduction_admission(
             input.proposal,
             input.policy,
             input.allowance,
-            input.mutant_set,
-            input.mutation_grid,
-            input.mutation_proof,
+            input.mutation.mutant_set(),
+            input.mutation.grid(),
+            input.mutation.proof().proof(),
         )
         .map_err(composition)?;
     let oracle =

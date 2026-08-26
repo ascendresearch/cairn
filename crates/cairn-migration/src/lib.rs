@@ -13,6 +13,7 @@ mod memory_surface;
 mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
+mod reduction_mutation;
 mod variant_execution;
 
 pub use assemble::{
@@ -124,6 +125,13 @@ pub use reduction_control::{
     prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
     prepare_historical_reduction_reference_job, prepare_historical_reduction_variant_job,
     validate_historical_reduction_receipt,
+};
+pub use reduction_mutation::{
+    HistoricalReductionMutationCaseComparisonArtifact, HistoricalReductionMutationCaseComparisonV1,
+    HistoricalReductionMutationInjectionArtifact, HistoricalReductionMutationInjectionV1,
+    HistoricalReductionMutationInputs, HistoricalReductionMutationKind,
+    HistoricalReductionMutationVariantEvidence, PreparedHistoricalReductionMutationGrid,
+    compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,

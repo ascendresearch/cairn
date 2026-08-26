@@ -17,9 +17,9 @@ use cairn_verification::{
     ConstructionClaimV1, ConstructionClassName, CorpusProposalArtifact, CorpusProposalV1,
     DeclaredDomainArtifact, DeclaredDomainV1, FaultClassName, FaultInjectionEvidenceArtifact,
     ImplementationBundleArtifact, ImplementationVariantArtifact, ImplementationVariantV1,
-    MutationGridCellV1, MutationGridProofArtifact, MutationGridProofV1, NumericalAllowanceArtifact,
+    MutationGridCellV1, MutationGridProofArtifact, NumericalAllowanceArtifact,
     NumericalAllowanceV1, OracleProposalArtifact, OracleProposalV1, OracleStrength,
-    PreparedGenericMutantSet, PreparedMutationGrid, ReferenceArtifact, VariantExpectation,
+    ReferenceArtifact, VariantExpectation,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -28,7 +28,7 @@ use crate::{
     CallAdapterExecutableArtifact, HistoricalDetectionRequirement, HistoricalFailureCoverageV1,
     HistoricalFailureObligationArtifact, HistoricalFailureObligationV1, HistoricalFailureRecordV1,
     MigrationDomainContractV1, MigrationExecutionNeed, MigrationValidationTier,
-    ValidatedVariantBuild,
+    PreparedHistoricalReductionMutationGrid, ValidatedVariantBuild,
 };
 
 const REDUCTION_DIRECTORY: &str = "cairn";
@@ -94,6 +94,12 @@ pub enum HistoricalReductionControlError {
     /// Candidate comparison facts differed from exact reference/candidate output bits.
     #[error("historical reduction candidate comparison is inconsistent")]
     InconsistentCandidateComparison,
+    /// A trusted mutant was not the exact injected implementation/build/execution it claimed.
+    #[error("historical reduction mutation injection is inconsistent")]
+    InconsistentMutationInjection,
+    /// A mutation comparison differed from the exact executed reference and mutant outputs.
+    #[error("historical reduction mutation comparison is inconsistent")]
+    InconsistentMutationComparison,
     /// Content storage failed while loading a declared observation.
     #[error("historical reduction content error: {message}")]
     Content { message: String },
@@ -1439,9 +1445,7 @@ impl HistoricalReductionControlV1 {
         reference_run: &ValidatedHistoricalReductionRun,
         correct: &[HistoricalReductionCorrectVariantEvidence<'_>],
         wrong: &[HistoricalReductionWrongVariantEvidence<'_>],
-        mutant_set: &PreparedGenericMutantSet,
-        mutation_grid: &PreparedMutationGrid,
-        mutation_proof: &MutationGridProofV1,
+        mutation: &PreparedHistoricalReductionMutationGrid,
     ) -> Result<(), HistoricalReductionControlError> {
         let recomputed = compose_historical_reduction_control(
             domain,
@@ -1460,9 +1464,7 @@ impl HistoricalReductionControlV1 {
             reference_run,
             correct,
             wrong,
-            mutant_set,
-            mutation_grid,
-            mutation_proof,
+            mutation,
         )?;
         if recomputed.control != *self {
             return Err(HistoricalReductionControlError::InconsistentControl);
@@ -1545,9 +1547,7 @@ pub fn compose_historical_reduction_control(
     reference_run: &ValidatedHistoricalReductionRun,
     correct: &[HistoricalReductionCorrectVariantEvidence<'_>],
     wrong: &[HistoricalReductionWrongVariantEvidence<'_>],
-    mutant_set: &PreparedGenericMutantSet,
-    mutation_grid: &PreparedMutationGrid,
-    mutation_proof: &MutationGridProofV1,
+    mutation: &PreparedHistoricalReductionMutationGrid,
 ) -> Result<PreparedHistoricalReductionControl, HistoricalReductionControlError> {
     validate_control_proposal_graph(
         domain,
@@ -1618,6 +1618,9 @@ pub fn compose_historical_reduction_control(
     {
         return Err(HistoricalReductionControlError::FalseRejectNotReproduced);
     }
+    let mutant_set = mutation.mutant_set();
+    let mutation_grid = mutation.grid();
+    let mutation_proof = mutation.proof().proof();
     mutation_proof
         .validate_against(policy, mutant_set, mutation_grid)
         .map_err(composition)?;

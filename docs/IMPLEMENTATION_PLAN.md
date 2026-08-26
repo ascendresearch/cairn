@@ -293,24 +293,33 @@ The remaining G slices, in dependency order, are:
    non-injectability remains visible, required fault-class coverage is recomputed, an empty
    applicable grid fails, and comparator-only trials fail the implementation-path obligation. The
    proof has no stored `passed` field and validates only by recomputation against its exact policy,
-   mutant set, and grid. This is the trusted evidence/adjudication contract; actual mutant injection
-   and execution are part of the next composition slice;
+   mutant set, and grid. The historical-reduction adapter now supplies the first actual composition:
+   its closed drop-last, unit-offset, and zero-output kinds bind the trusted definition to the exact
+   wrong variant, fault evidence, implementation, authoritative build, and real admission-variant
+   run. It derives mutation-case identities from the frozen case bodies, recomputes every reference
+   versus mutant ULP distance, and derives detected/missed without accepting either a verdict flag or
+   opaque evidence identity from the caller. Strict V1 injection and comparison artifacts reject
+   kind/algorithm mismatches, changed ULP facts, unknown fields, and non-V1 input. The historical
+   control and admission APIs accept only the privately constructed product preparation, so an
+   arbitrary caller-authored generic grid cannot bypass this composition;
 4. **In progress:** exact host execution-port composition now binds correct and deliberately wrong
    variants to implementation bytes, fixed build jobs, authoritative generic receipts, exact built
    adapter identities, complete admission-variant plans, observation sets, comparisons, and
    recomputed `MustAccept`/`MustReject` expectations. The fixture directly executes the build driver
    and representative built adapters, while deterministic generic captures keep the complete host
-   corpus gate bounded. It emits no admission verdict. Real compiler/vendor/device adapters,
-   production numerical/property variants, and mutation injection remain pending;
+   corpus gate bounded. It emits no admission verdict. Real compiler/vendor/device adapters and
+   production numerical/property variants remain pending;
 5. **Implemented 2026-08-26:** the hardware-free
    historical reduction control loads an ordinary proposal graph, builds and executes two distinct
    correct and three distinct wrong compiled host implementations through generic authoritative
    receipts, stores finite-f32 bits rather than JSON floats, and recomputes every per-case ULP
    distance. The archived single sample derives the old zero-ULP allowance and rejects the correct
    balanced tree; measured family spread derives one ULP and accepts both correct variants while all
-   wrong variants are red. The selected mutation proof must retain a case-dependent blind spot and
-   exercise one of the correct implementations. Asserted allowance, an empty applicable grid,
-   relabeling, changed content, stored `passed`, and non-V1 input fail closed;
+   wrong variants are red. The executed 3-by-2 mutation grid reuses those authoritative wrong runs:
+   scale-free unit-offset and zero-output cells are detected, while a trailing-zero case honestly
+   exposes one case-dependent drop-last miss. The selected mutation proof must retain that blind
+   spot and mutate one of the correct implementations. Asserted allowance, an empty applicable
+   grid, mutant/algorithm relabeling, changed content, stored `passed`, and non-V1 input fail closed;
 6. **Historical admitted-oracle and candidate-verdict receipts implemented 2026-08-26:** the reduction
    control now recomputes all product evidence before emitting a frozen admitted-domain manifest,
    complete admission receipt, and immutable `AdmittedOracle`. The graph binds proposal, task,
@@ -328,8 +337,8 @@ The remaining G slices, in dependency order, are:
    rejected. General candidate-search integration and target-device verdicts remain pending.
 
 Phase G now has a complete hardware-free admission-to-candidate-verdict control, but remains
-incomplete while step 4 lacks production compiler/vendor/device adapters, general numerical and
-property variants, and actual mutation injection. Open questions OQ-004 and OQ-007 remain
+incomplete while step 4 lacks production compiler/vendor/device adapters and general numerical and
+property variants. Open questions OQ-004 and OQ-007 remain
 unresolved; implementation must preserve derivation and disagreement evidence rather than selecting
 an independence or automatic disagreement policy.
 

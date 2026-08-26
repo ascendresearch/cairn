@@ -1149,8 +1149,8 @@ comparison; `MustAccept` means the complete comparison matches and `MustReject` 
 No persisted `passed` field or admission verdict exists. The host gate executes its identity build
 fixture and representative built adapters as real processes, but uses bounded deterministic generic
 captures for the complete corpus. It proves composition and identity flow, not compilation or
-device semantics; CUDA/Ascend C compiler adapters, full device execution, numerical/property
-comparison, and mutation injection remain pending.
+device semantics; CUDA/Ascend C compiler adapters, full device execution, and general
+numerical/property comparison remain pending.
 
 **Implemented mutation-grid contract slice (2026-08-26).** `AdmissionPolicyV1` now cites one exact
 content-addressed trusted generic-mutant set. A strict V1 mutation grid binds that policy, the tested
@@ -1164,10 +1164,16 @@ comparison artifact may support multiple cells. Trusted proof
 recomputation derives empty-applicable-grid failure, required fault-class coverage, implementation-
 path failures, fatal policy-sized/scale-free misses, mandatory case-dependent blind spots, and every
 non-injectable cell. The strict proof rejects a stored `passed` field and validates only by full
-recomputation against the cited policy, mutant set, and grid. These contracts do not yet inject or
-execute mutants. The exact correct/wrong host composition slice above now exercises the shared
-execution contracts; real compiler/vendor/device variant execution and mutation injection remain
-the next M2 work.
+recomputation against the cited policy, mutant set, and grid. The domain-neutral contracts do not
+themselves know how to inject an operator mutant. The historical-reduction product adapter now
+implements the first concrete composition: a closed mutation kind selects a matching `MustReject`
+variant and fault-evidence edge, then validates its exact implementation, build receipt,
+admission-variant plan, real run, environment, and corpus. Each frozen reduction case is translated
+to a mutation-case identity; strict product comparison evidence retains the exact reference and
+mutant bits, measured allowance, and recomputed ULP distance. Only that recomputation supplies the
+generic detected/missed fact and injection/execution/comparison identities. Historical control and
+admission accept only this privately constructed product preparation, not an arbitrary generic
+grid. Real compiler/vendor/device mutation adapters remain later M2 work.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
@@ -1207,11 +1213,17 @@ must have measured-family provenance, admissible assurance, the exact derivation
 finite-f32-reduction region, and a magnitude equal to the maximum observed correct-family distance.
 Both correct variants must then fall within it and every wrong variant must exceed it. Policy minima,
 required construction/fault classes, distinct construction claims, and implementation plus
-observation-pipeline scopes are rechecked. The mutation proof must cover the same admission corpus,
-mutate an implementation from this correct family, have no fatal failure, and retain at least one
-case-dependent blind spot. Asserted allowance, empty applicable grids, relabeling, changed
-receipt/content identities, stored `passed`, and non-V1 artifacts fail closed. The resulting control
-is the recomputed evidence base for the first nine requirements of `ORACLE_ADMISSION.md` section 18.
+observation-pipeline scopes are rechecked. The mutation adapter applies the closed drop-last,
+unit-offset, and zero-output definitions by binding them to the three exact wrong implementations
+and their already authoritative real runs. It constructs the full three-mutant by two-case grid and
+compares each output with the same reference under the measured one-ULP allowance. Unit-offset and
+zero-output are detected as scale-free defects; drop-last is detected on the historical case but
+honestly missed on the trailing-zero held-out case, which supplies the mandatory case-dependent
+blind spot. The proof must cover the same admission corpus, mutate an implementation from this
+correct family, and have no fatal failure. Asserted allowance, empty applicable grids,
+mutant/algorithm relabeling, changed ULP or receipt/content identities, stored `passed`, and non-V1
+artifacts fail closed. The resulting control is the recomputed evidence base for the first nine
+requirements of `ORACLE_ADMISSION.md` section 18.
 
 **Implemented historical reduction admission receipt (2026-08-26).** Promotion re-runs the entire
 product control rather than trusting its identity alone, then freezes the caller declaration,

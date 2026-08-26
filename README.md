@@ -112,15 +112,19 @@ bytes, a fixed no-shell build job, an authoritative generic receipt, the exact p
 executable, a complete admission-variant corpus plan, observations, comparison, and recomputed
 `MustAccept`/`MustReject` expectation. Its build fixture is an identity-preserving host fixture rather
 than a compiler, and the complete corpus uses deterministic execution captures after separately
-exercising the real build and representative adapter processes. Actual mutant injection, CUDA/Ascend
-C compilation, and full device execution through vendor adapters remain unfinished. The first
+exercising the real build and representative adapter processes. The historical reduction adapter
+now provides the first actual mutation composition: it binds closed drop-last, unit-offset, and
+zero-output mutant kinds to the exact wrong implementations, fault evidence, builds, and real runs,
+then derives a complete 3-by-2 grid from exact per-case ULP comparisons. CUDA/Ascend C compilation
+and full device execution through vendor adapters remain unfinished. The first
 hardware-free historical reduction control now loads the domain/reference/corpus through ordinary
 proposal artifacts, builds and executes two distinct correct and three distinct wrong compiled host
 variants through authoritative generic receipts, and records exact finite-f32 bits plus recomputed
 ULP distances. It reproduces the old zero-ULP single-sample false reject, derives a one-ULP
 measured-family allowance that accepts the correct balanced tree, makes all three wrong variants red,
-and retains a case-dependent mutation blind spot. Asserted allowance, an empty applicable mutation
-grid, changed receipt/output identities, a stored `passed` field, and non-V1 input fail closed. The
+and retains a real case-dependent drop-last blind spot on a trailing-zero case. Asserted allowance,
+an empty applicable mutation grid, mutant/algorithm relabeling, changed ULP or receipt/output
+identities, a stored `passed` field, and non-V1 input fail closed. The
 validated control now emits a strict admitted-domain manifest, complete admission receipt, and
 immutable `AdmittedOracle`. These artifacts freeze the proposal, policy, empirical reference
 strength, corpus, allowance, environments, variant and mutation evidence, historical coverage,

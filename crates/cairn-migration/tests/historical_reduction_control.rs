@@ -21,19 +21,22 @@ use cairn_migration::{
     HistoricalReductionCandidateComparisonArtifact, HistoricalReductionCandidateInputs,
     HistoricalReductionCaptureLimits, HistoricalReductionCaseArtifact, HistoricalReductionCaseV1,
     HistoricalReductionControlArtifact, HistoricalReductionControlError,
-    HistoricalReductionCorrectVariantEvidence, HistoricalReductionWrongVariantEvidence,
-    HistoricalReproductionArtifact, HistoricalValidationStage, InputValueDomainV1,
-    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
-    MigrationDomainFamilyName, MigrationExecutionNeed, MigrationValidationTier,
-    OracleFailureMechanismName, PointerAlignmentContractV1, PreparedHistoricalReductionJob,
-    RequestedSemanticsArtifact, SemanticClaimKind, ValidatedHistoricalReductionRun,
-    ValidatedVariantBuild, VariantBuildCaptureLimits, VariantBuildDriverByteLimit,
-    VariantImplementationByteLimit, compose_historical_reduction_admission,
-    compose_historical_reduction_candidate_verdict, compose_historical_reduction_control,
+    HistoricalReductionCorrectVariantEvidence, HistoricalReductionMutationInputs,
+    HistoricalReductionMutationKind, HistoricalReductionMutationVariantEvidence,
+    HistoricalReductionWrongVariantEvidence, HistoricalReproductionArtifact,
+    HistoricalValidationStage, InputValueDomainV1, MemoryConditionDisposition,
+    MigrationDomainContractInput, MigrationDomainContractV1, MigrationDomainFamilyName,
+    MigrationExecutionNeed, MigrationValidationTier, OracleFailureMechanismName,
+    PointerAlignmentContractV1, PreparedHistoricalReductionJob,
+    PreparedHistoricalReductionMutationGrid, RequestedSemanticsArtifact, SemanticClaimKind,
+    ValidatedHistoricalReductionRun, ValidatedVariantBuild, VariantBuildCaptureLimits,
+    VariantBuildDriverByteLimit, VariantImplementationByteLimit,
+    compose_historical_reduction_admission, compose_historical_reduction_candidate_verdict,
+    compose_historical_reduction_control, compose_historical_reduction_mutation_grid,
     prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
-    prepare_historical_reduction_reference_job, prepare_historical_reduction_variant_job,
-    prepare_variant_build_job, validate_historical_reduction_receipt,
-    validate_variant_build_receipt,
+    prepare_historical_reduction_mutant_set, prepare_historical_reduction_reference_job,
+    prepare_historical_reduction_variant_job, prepare_variant_build_job,
+    validate_historical_reduction_receipt, validate_variant_build_receipt,
 };
 use cairn_protocol::{
     AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis, TaskId,
@@ -55,14 +58,12 @@ use cairn_verification::{
     CoverageObligationArtifact, DeclaredDomainArtifact, DeclaredDomainV1, DomainRegionName,
     FaultClassName, FaultInjectionEvidenceArtifact, ImplementationBundleArtifact,
     ImplementationVariantArtifact, ImplementationVariantV1, IncorrectVariantMinimum,
-    LicenseProvenanceArtifact, MutationCaseArtifact, MutationComparisonArtifact, MutationDetection,
-    MutationExecutionArtifact, MutationGridCellV1, MutationInjectionArtifact, MutationSizing,
-    MutationTrialV1, NonInjectableReasonArtifact, NumericalAllowanceInput, NumericalAllowanceV1,
-    ObservationPlanArtifact, OracleProposalInput, OracleProposalV1, OracleStrength,
-    OracleTaskInputArtifact, PreparedMutationGridProof, ReferenceArtifact, SaturationRoundCount,
-    SourceAdmissionPlanArtifact, StructuralIndependenceRequirement, TransformationKindName,
-    TrustedMutantDefinitionArtifact, TrustedMutantV1, ValidFamilyPlanArtifact, VariantExpectation,
-    prepare_generic_mutant_set, prepare_mutation_grid, recompute_mutation_grid_proof,
+    LicenseProvenanceArtifact, MutationGridCellV1, MutationTrialV1, NonInjectableReasonArtifact,
+    NumericalAllowanceInput, NumericalAllowanceV1, ObservationPlanArtifact, OracleProposalInput,
+    OracleProposalV1, OracleStrength, OracleTaskInputArtifact, ReferenceArtifact,
+    SaturationRoundCount, SourceAdmissionPlanArtifact, StructuralIndependenceRequirement,
+    TransformationKindName, ValidFamilyPlanArtifact, VariantExpectation, prepare_mutation_grid,
+    recompute_mutation_grid_proof,
 };
 
 const BACKEND: &str = "historical-reduction-host-v1";
@@ -139,8 +140,74 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         &corpus,
     );
 
-    let policy_mutation = mutation_control(&corpus, sequential.variant.implementation());
     let allowance = measured_allowance(&corpus);
+    let mutation_variants = [
+        HistoricalReductionMutationVariantEvidence {
+            kind: HistoricalReductionMutationKind::DropLast,
+            variant: &dropped.variant,
+            build: &dropped.build,
+            job: &dropped.completed.job,
+            run: &dropped.completed.run,
+        },
+        HistoricalReductionMutationVariantEvidence {
+            kind: HistoricalReductionMutationKind::UnitOffset,
+            variant: &offset.variant,
+            build: &offset.build,
+            job: &offset.completed.job,
+            run: &offset.completed.run,
+        },
+        HistoricalReductionMutationVariantEvidence {
+            kind: HistoricalReductionMutationKind::ZeroOutput,
+            variant: &zero.variant,
+            build: &zero.build,
+            job: &zero.completed.job,
+            run: &zero.completed.run,
+        },
+    ];
+    let policy_mutation = mutation_control(
+        &corpus,
+        sequential.variant.implementation(),
+        &allowance,
+        &reference,
+        &mutation_variants,
+    );
+    assert_strict_mutation_artifacts(&policy_mutation.executed);
+    let mismatched_mutation_variants = [
+        HistoricalReductionMutationVariantEvidence {
+            kind: HistoricalReductionMutationKind::UnitOffset,
+            variant: &dropped.variant,
+            build: &dropped.build,
+            job: &dropped.completed.job,
+            run: &dropped.completed.run,
+        },
+        HistoricalReductionMutationVariantEvidence {
+            kind: HistoricalReductionMutationKind::DropLast,
+            variant: &offset.variant,
+            build: &offset.build,
+            job: &offset.completed.job,
+            run: &offset.completed.run,
+        },
+        HistoricalReductionMutationVariantEvidence {
+            kind: HistoricalReductionMutationKind::ZeroOutput,
+            variant: &zero.variant,
+            build: &zero.build,
+            job: &zero.completed.job,
+            run: &zero.completed.run,
+        },
+    ];
+    assert_eq!(
+        compose_historical_reduction_mutation_grid(&HistoricalReductionMutationInputs {
+            policy: &policy_mutation.policy,
+            mutant_set: &policy_mutation.mutants,
+            subject: sequential.variant.implementation(),
+            allowance: &allowance,
+            corpus: &corpus,
+            reference_job: &reference.job,
+            reference_run: &reference.run,
+            variants: &mismatched_mutation_variants,
+        }),
+        Err(HistoricalReductionControlError::InconsistentMutationInjection)
+    );
     let coverage = HistoricalFailureCoverageV1::new(
         declared.body(),
         MigrationDomainFamilyName::new("reduction").expect("domain family"),
@@ -203,9 +270,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         &reference.run,
         &correct,
         &wrong,
-        &policy_mutation.mutants,
-        &policy_mutation.grid,
-        policy_mutation.proof.proof(),
+        &policy_mutation.executed,
     )
     .expect("complete historical control");
 
@@ -241,9 +306,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             &reference.run,
             &correct,
             &wrong,
-            &policy_mutation.mutants,
-            &policy_mutation.grid,
-            policy_mutation.proof.proof(),
+            &policy_mutation.executed,
         )
         .expect("recomputed control");
 
@@ -292,9 +355,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         reference_run: &reference.run,
         correct: &correct,
         wrong: &wrong,
-        mutant_set: &policy_mutation.mutants,
-        mutation_grid: &policy_mutation.grid,
-        mutation_proof: policy_mutation.proof.proof(),
+        mutation: &policy_mutation.executed,
         saturation_rounds: &saturation_rounds,
         revalidation: &revalidation,
     };
@@ -336,9 +397,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             reference_run: &reference.run,
             correct: &correct,
             wrong: &wrong,
-            mutant_set: &policy_mutation.mutants,
-            mutation_grid: &policy_mutation.grid,
-            mutation_proof: policy_mutation.proof.proof(),
+            mutation: &policy_mutation.executed,
             saturation_rounds: &saturation_rounds[..1],
             revalidation: &revalidation,
         })
@@ -372,9 +431,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             reference_run: &reference.run,
             correct: &correct,
             wrong: &wrong,
-            mutant_set: &policy_mutation.mutants,
-            mutation_grid: &policy_mutation.grid,
-            mutation_proof: policy_mutation.proof.proof(),
+            mutation: &policy_mutation.executed,
             saturation_rounds: &unsaturated_rounds,
             revalidation: &revalidation,
         })
@@ -552,11 +609,43 @@ fn assert_strict_admission_artifacts(
     assert!(oracle.validate_receipt(admission.receipt()).is_err());
 }
 
+fn assert_strict_mutation_artifacts(mutation: &PreparedHistoricalReductionMutationGrid) {
+    let mut injection =
+        serde_json::to_value(&mutation.injections()[0]).expect("mutation injection JSON");
+    injection["schema_version"] = serde_json::json!(2);
+    assert!(
+        serde_json::from_value::<cairn_migration::HistoricalReductionMutationInjectionV1>(
+            injection
+        )
+        .is_err()
+    );
+
+    let mut injection =
+        serde_json::to_value(&mutation.injections()[0]).expect("mutation injection JSON");
+    injection["algorithm"] = serde_json::json!("high-precision-reference");
+    assert!(
+        serde_json::from_value::<cairn_migration::HistoricalReductionMutationInjectionV1>(
+            injection
+        )
+        .is_err()
+    );
+
+    let mut comparison =
+        serde_json::to_value(mutation.comparisons()[0]).expect("mutation comparison JSON");
+    comparison["ulp_distance"] = serde_json::json!(u32::MAX);
+    assert!(
+        serde_json::from_value::<cairn_migration::HistoricalReductionMutationCaseComparisonV1>(
+            comparison
+        )
+        .is_err()
+    );
+}
+
 struct MutationControl {
     policy: AdmissionPolicyV1,
     mutants: cairn_verification::PreparedGenericMutantSet,
     grid: cairn_verification::PreparedMutationGrid,
-    proof: PreparedMutationGridProof,
+    executed: PreparedHistoricalReductionMutationGrid,
 }
 
 fn reduction_domain() -> MigrationDomainContractV1 {
@@ -700,7 +789,7 @@ fn reduction_corpus(
         .into_iter()
         .map(|bits| FiniteF32Bits::new(bits).expect("finite historical input"))
         .collect();
-    let held_out = [1.0_f32, 2.0, 3.0, 4.0]
+    let held_out = [1.0_f32, 2.0, 3.0, 0.0]
         .into_iter()
         .map(|value| FiniteF32Bits::from_f32(value).expect("finite held out input"))
         .collect();
@@ -1077,18 +1166,11 @@ fn translate_argument(value: &str, input: &Path, output: &Path) -> OsString {
 fn mutation_control(
     corpus: &cairn_migration::PreparedHistoricalReductionCorpus,
     subject: ContentId<ImplementationBundleArtifact>,
+    allowance: &NumericalAllowanceV1,
+    reference: &CompletedRun,
+    variants: &[HistoricalReductionMutationVariantEvidence<'_>],
 ) -> MutationControl {
-    let mut mutants = ["drop-last", "unit-offset", "zero-output"]
-        .into_iter()
-        .map(|fault| {
-            TrustedMutantV1::new(
-                id::<TrustedMutantDefinitionArtifact>(fault.as_bytes()),
-                FaultClassName::new(fault).expect("fault class"),
-            )
-        })
-        .collect::<Vec<_>>();
-    mutants.sort_by_key(|mutant| mutant.definition().to_wire());
-    let mutants = prepare_generic_mutant_set(mutants).expect("mutant set");
+    let mutants = prepare_historical_reduction_mutant_set().expect("mutant set");
     let policy = AdmissionPolicyV1::new(AdmissionPolicyInput {
         mutant_set: mutants.mutant_set_id(),
         minimum_correct_variants: CorrectVariantMinimum::new(2).expect("correct minimum"),
@@ -1112,55 +1194,40 @@ fn mutation_control(
         budget_exhaustion_outcome: BudgetExhaustionOutcome::Unverifiable,
     })
     .expect("admission policy");
-    let case = id::<MutationCaseArtifact>(b"accumulation-order case");
-    let trials = mutants
-        .mutant_set()
-        .mutants()
-        .iter()
-        .enumerate()
-        .map(|(index, mutant)| {
-            let cell = MutationGridCellV1::new(mutant.definition(), case);
-            MutationTrialV1::applied(
-                cell,
-                if index == 0 {
-                    MutationSizing::CaseDependent
-                } else {
-                    MutationSizing::ScaleFree
-                },
-                id::<MutationInjectionArtifact>(mutant.definition().to_wire().as_bytes()),
-                id::<MutationExecutionArtifact>(b"real implementation observation path"),
-                vec![
-                    AdmissionExecutionScope::ObservationPipeline,
-                    AdmissionExecutionScope::Implementation,
-                ],
-                id::<MutationComparisonArtifact>(mutant.fault_class().as_str().as_bytes()),
-                if index == 0 {
-                    MutationDetection::Missed
-                } else {
-                    MutationDetection::Detected
-                },
-            )
-        })
-        .collect();
-    let admission_corpus = ContentId::<AdmissionCorpusArtifact>::derive(corpus.corpus_bytes())
-        .expect("admission corpus");
-    let grid = prepare_mutation_grid(
-        &policy,
-        &mutants,
+    let executed = compose_historical_reduction_mutation_grid(&HistoricalReductionMutationInputs {
+        policy: &policy,
+        mutant_set: &mutants,
         subject,
-        admission_corpus,
-        vec![case],
-        trials,
-    )
-    .expect("mutation grid");
-    let proof = recompute_mutation_grid_proof(&policy, &mutants, &grid).expect("mutation proof");
+        allowance,
+        corpus,
+        reference_job: &reference.job,
+        reference_run: &reference.run,
+        variants,
+    })
+    .expect("executed mutation grid");
+    let grid = executed.grid().clone();
+    let proof = executed.proof().clone();
     assert!(proof.proof().obligations_satisfied());
     assert_eq!(proof.proof().blind_spots().len(), 1);
+    assert_eq!(executed.injections().len(), 3);
+    assert_eq!(executed.comparisons().len(), 6);
+    let missed = executed
+        .comparisons()
+        .iter()
+        .filter(|comparison| comparison.ulp_distance() <= comparison.maximum_ulp_distance())
+        .collect::<Vec<_>>();
+    assert_eq!(missed.len(), 1);
+    let drop_last = executed
+        .injections()
+        .iter()
+        .find(|injection| injection.kind() == HistoricalReductionMutationKind::DropLast)
+        .expect("drop-last injection");
+    assert_eq!(missed[0].cell().mutant(), drop_last.mutant());
     MutationControl {
         policy,
         mutants,
         grid,
-        proof,
+        executed,
     }
 }
 
@@ -1233,9 +1300,7 @@ fn assert_asserted_allowance_and_passed_tampering_fail(
             &reference.run,
             correct,
             wrong,
-            &mutation.mutants,
-            &mutation.grid,
-            mutation.proof.proof(),
+            &mutation.executed,
         ),
         Err(HistoricalReductionControlError::InadmissibleAllowance)
     );
@@ -1266,30 +1331,6 @@ fn assert_asserted_allowance_and_passed_tampering_fail(
         recompute_mutation_grid_proof(&mutation.policy, &mutation.mutants, &empty_grid)
             .expect("empty-applicable proof");
     assert!(!empty_proof.proof().obligations_satisfied());
-    assert_eq!(
-        compose_historical_reduction_control(
-            domain,
-            declared,
-            corpus_proposal,
-            proposal,
-            historical,
-            obligation,
-            coverage,
-            &mutation.policy,
-            &measured_allowance(corpus),
-            corpus,
-            old_sample_case,
-            old_baseline_variant,
-            &reference.job,
-            &reference.run,
-            correct,
-            wrong,
-            &mutation.mutants,
-            &empty_grid,
-            empty_proof.proof(),
-        ),
-        Err(HistoricalReductionControlError::InsufficientMutationControl)
-    );
 
     let mut value: serde_json::Value =
         serde_json::from_slice(prepared.control_bytes()).expect("control JSON");
