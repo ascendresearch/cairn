@@ -48,14 +48,15 @@ are independent typed facts;
 held-out evidence requires identity-disjoint corpora, and asserted or external-prior-only values
 cannot be promoted by assurance metadata. The proposal side now has immutable caller-domain,
 refinement, corpus, authorship, construction-claim, correct/wrong-variant, and oracle-proposal
-manifests with separate typed identity domains. Executed oracle admission, mandatory base-case
-execution, the historical reduction control, candidate judgment, and the first unified migration
-are not implemented yet. `cairn-migration` now supplies the first strongly typed operator-domain
+manifests with separate typed identity domains. Immutable admitted-oracle receipts, candidate
+judgment, real CUDA/Ascend execution, and the first unified migration are not implemented yet.
+`cairn-migration` now supplies the first strongly typed operator-domain
 body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivation. Floating
 special-value and memory conditions retain explicit supported/invalid/excluded/unknown
 dispositions. Historical target/oracle failure records and exact-domain coverage obligations now
-retain typed provenance, scope, stage, and detection requirements. Populating and executing the
-historical fixtures remain unfinished. Supported and explicitly-invalid dtype recipes now
+retain typed provenance, scope, stage, and detection requirements. The reduction false-reject
+fixture is populated and executed; target-specific historical fixtures remain unfinished. Supported
+and explicitly-invalid dtype recipes now
 materialize into bounded deterministic little-endian bytes with typed element/byte quantities and
 content-bound source/byte manifests. Trusted quantitative boundary cases can now rederive their
 domain membership, resolve shapes, encode scalar arguments, describe output allocations, and build
@@ -109,7 +110,15 @@ executable, a complete admission-variant corpus plan, observations, comparison, 
 `MustAccept`/`MustReject` expectation. Its build fixture is an identity-preserving host fixture rather
 than a compiler, and the complete corpus uses deterministic execution captures after separately
 exercising the real build and representative adapter processes. Actual mutant injection, CUDA/Ascend
-C compilation, and full device execution through vendor adapters remain unfinished.
+C compilation, and full device execution through vendor adapters remain unfinished. The first
+hardware-free historical reduction control now loads the domain/reference/corpus through ordinary
+proposal artifacts, builds and executes two distinct correct and three distinct wrong compiled host
+variants through authoritative generic receipts, and records exact finite-f32 bits plus recomputed
+ULP distances. It reproduces the old zero-ULP single-sample false reject, derives a one-ULP
+measured-family allowance that accepts the correct balanced tree, makes all three wrong variants red,
+and retains a case-dependent mutation blind spot. Asserted allowance, an empty applicable mutation
+grid, changed receipt/output identities, a stored `passed` field, and non-V1 input fail closed. This
+is admission-control evidence, not yet an `AdmittedOracle` receipt.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

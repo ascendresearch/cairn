@@ -929,9 +929,10 @@ trusted classification boundary prevents asserted or external-prior-only values 
 upgraded by assurance metadata. Only proven-bound or exhaustive-finite assurance can reach the
 unqualified-domain-wide class; held-out evidence reaches empirical at most.
 
-This foundation does not claim executed admission. Admitted-domain/frozen-corpus artifacts, receipt
-lifecycles, variant build/execution, mutation-grid adjudication, historical reduction controls,
-candidate judgment, and complete evidence-graph validation remain target work for M2.
+This foundation alone does not claim executed admission. Admitted-domain/frozen-corpus artifacts,
+receipt lifecycles, candidate judgment, and complete evidence-graph validation remain target work
+for M2; later implemented slices below now cover host variant execution, mutation proof, and the
+hardware-free historical reduction control.
 
 **Implemented proposal artifact graph (2026-08-25).** Strict V1 manifests now preserve the caller
 domain and its explicit unknowns separately from evidence-citing refinements; corpus cases retain
@@ -1186,8 +1187,32 @@ record identity and permits only a detector at the recorded stage: oracle verdic
 compile/link diagnostic class, invocation failure/status, or output-observation class. Loading an
 obligation against record bytes recomputes identity and copied metadata; an exact-domain coverage
 set rejects empty, duplicate, out-of-order, or cross-family obligations. This establishes the
-artifact and graph-validation boundary only. The known reduction, `GM_ADDR`, `DataCopyExtParams`,
-alignment, initialization, and related fixtures have not yet been populated or executed.
+artifact and graph-validation boundary. The known reduction fixture is now populated and executed by
+the control below; `GM_ADDR`, `DataCopyExtParams`, alignment, initialization, and related
+target-specific fixtures have not yet been populated or executed.
+
+**Implemented hardware-free historical reduction control (2026-08-26).** The first implementation
+control loads its caller domain, reference, corpus, and historical oracle-divergence obligation
+through the ordinary proposal graph. Six separately compiled Rust fixtures provide a binary64
+accumulate/one-round reference, sequential and balanced-tree correct implementations, and zero,
+drop-last, and unit-offset wrong implementations. Each admission variant is bound to distinct
+implementation bytes, passes through the generic variant-build job and authoritative receipt, then
+runs as a real isolated host process through another generic job and receipt. Declared output is a
+strict finite-f32-bit artifact; trusted validation independently recomputes every output and ULP
+distance without persisting raw JSON floats.
+
+The archived single sample gives the sequential implementation zero ULP distance and therefore
+reproduces the old false rejection when the balanced tree differs by one ULP. The control allowance
+must have measured-family provenance, admissible assurance, the exact derivation corpus, the
+finite-f32-reduction region, and a magnitude equal to the maximum observed correct-family distance.
+Both correct variants must then fall within it and every wrong variant must exceed it. Policy minima,
+required construction/fault classes, distinct construction claims, and implementation plus
+observation-pipeline scopes are rechecked. The mutation proof must cover the same admission corpus,
+mutate an implementation from this correct family, have no fatal failure, and retain at least one
+case-dependent blind spot. Asserted allowance, empty applicable grids, relabeling, changed
+receipt/content identities, stored `passed`, and non-V1 artifacts fail closed. The resulting control
+is complete evidence for the first nine requirements of `ORACLE_ADMISSION.md` section 18; immutable
+admitted-oracle emission and full identity-graph validation remain the next receipt slice.
 
 Its core modules are expected to include:
 

@@ -974,6 +974,18 @@ impl OracleProposalV1 {
         self.declared_domain
     }
 
+    /// Returns the proposed corpus as an immutable, separately validated artifact.
+    #[must_use]
+    pub const fn corpus_proposal(&self) -> ContentId<CorpusProposalArtifact> {
+        self.corpus_proposal
+    }
+
+    /// Returns proposed semantic references in canonical identity order.
+    #[must_use]
+    pub fn references(&self) -> &[ContentId<ReferenceArtifact>] {
+        &self.references
+    }
+
     /// Returns proposed refinements as separate artifacts.
     #[must_use]
     pub fn domain_refinements(&self) -> &[ContentId<DomainRefinementArtifact>] {

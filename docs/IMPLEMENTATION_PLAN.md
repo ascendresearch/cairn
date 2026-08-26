@@ -301,15 +301,23 @@ The remaining G slices, in dependency order, are:
    recomputed `MustAccept`/`MustReject` expectations. The fixture directly executes the build driver
    and representative built adapters, while deterministic generic captures keep the complete host
    corpus gate bounded. It emits no admission verdict. Real compiler/vendor/device adapters,
-   numerical/property variants, and mutation injection remain pending;
-5. the offline historical reduction control required by `ORACLE_ADMISSION.md` section 18;
+   production numerical/property variants, and mutation injection remain pending;
+5. **Implemented 2026-08-26 except for final admitted-oracle emission:** the hardware-free
+   historical reduction control loads an ordinary proposal graph, builds and executes two distinct
+   correct and three distinct wrong compiled host implementations through generic authoritative
+   receipts, stores finite-f32 bits rather than JSON floats, and recomputes every per-case ULP
+   distance. The archived single sample derives the old zero-ULP allowance and rejects the correct
+   balanced tree; measured family spread derives one ULP and accepts both correct variants while all
+   wrong variants are red. The selected mutation proof must retain a case-dependent blind spot and
+   exercise one of the correct implementations. Asserted allowance, an empty applicable grid,
+   relabeling, changed content, stored `passed`, and non-V1 input fail closed. This artifact is
+   control evidence for step 6, not an admission receipt;
 6. immutable admitted-oracle and candidate-verdict receipts with complete identity-graph audit.
 
-Phase G is incomplete until that historical control reproduces the old false reject, accepts the
-correct tree reduction under measured family spread, retains the known blind spot, rejects asserted
-allowance and an empty applicable mutation grid, and emits a complete admitted-oracle graph. Open
-questions OQ-004 and OQ-007 remain unresolved; implementation must preserve derivation and
-disagreement evidence rather than selecting an independence or automatic disagreement policy.
+Phase G is incomplete until step 6 emits a complete admitted-oracle graph from the now-executed
+historical control. Open questions OQ-004 and OQ-007 remain unresolved; implementation must preserve
+derivation and disagreement evidence rather than selecting an independence or automatic disagreement
+policy.
 
 ## Cross-cutting gates
 

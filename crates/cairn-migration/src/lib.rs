@@ -10,6 +10,7 @@ mod historical;
 mod input_values;
 mod materialize;
 mod memory_surface;
+mod reduction_control;
 mod variant_execution;
 
 pub use assemble::{
@@ -93,6 +94,24 @@ pub use memory_surface::{
     MemorySurfaceCaseTarget, MemorySurfaceDerivationPolicy, MisalignmentOffsetBytes,
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
+};
+pub use reduction_control::{
+    FiniteF32Bits, HistoricalReductionAlgorithm, HistoricalReductionCaptureLimits,
+    HistoricalReductionCaseArtifact, HistoricalReductionCaseComparisonV1,
+    HistoricalReductionCaseEntryV1, HistoricalReductionCaseOutputV1, HistoricalReductionCaseV1,
+    HistoricalReductionControlArtifact, HistoricalReductionControlError,
+    HistoricalReductionControlV1, HistoricalReductionCorpusArtifact, HistoricalReductionCorpusV1,
+    HistoricalReductionCorrectVariantEvidence, HistoricalReductionExecutionPlanArtifact,
+    HistoricalReductionExecutionPlanV1, HistoricalReductionExecutionReceiptArtifact,
+    HistoricalReductionExecutionReceiptV1, HistoricalReductionExecutionSubjectV1,
+    HistoricalReductionFixtureOutputArtifact, HistoricalReductionFixtureOutputV1,
+    HistoricalReductionTrialExpectationV1, HistoricalReductionVariantTrialV1,
+    HistoricalReductionWrongVariantEvidence, PreparedHistoricalReductionControl,
+    PreparedHistoricalReductionCorpus, PreparedHistoricalReductionJob, ReductionUlpDistance,
+    ValidatedHistoricalReductionRun, compose_historical_reduction_control,
+    compute_historical_reduction_fixture_output, compute_historical_reduction_output,
+    prepare_historical_reduction_corpus, prepare_historical_reduction_reference_job,
+    prepare_historical_reduction_variant_job, validate_historical_reduction_receipt,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,
