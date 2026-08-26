@@ -89,7 +89,11 @@ receipts, strict complete-corpus collection now requires exactly one receipt per
 revalidates every category-specific adapter result and declared output, and emits a canonical
 observation-set identity bound to the exact plan. The set records execution observations, never a
 pass/fail verdict. The host adapter is a protocol fixture, not an admitted oracle or a production
-unsandboxed executor.
+unsandboxed executor. For domains explicitly requesting exact semantics, a role-safe comparison
+slice now accepts only `Reference` versus `Candidate` plans over identical mandatory obligations,
+aligns every typed case, and records both completion values plus both exact ABI-output identities.
+Match status is recomputed from those facts; the artifact has no stored `passed` field and does not
+promote a proposed reference into an admitted oracle or candidate verdict.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

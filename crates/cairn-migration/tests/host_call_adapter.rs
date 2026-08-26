@@ -20,7 +20,8 @@ use cairn_migration::{
     CorpusElementCount, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
     CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusExecutionSubjectV1,
     CorpusObservationSetArtifact, CorpusObservationSetError, CorpusObservationSetV1, DataType,
-    DimensionSpec, EntryPointName, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
+    DimensionSpec, EntryPointName, ExactCorpusComparisonArtifact, ExactCorpusComparisonError,
+    ExactCorpusComparisonV1, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
     InputValueCaseTarget, InputValueDisposition, InputValueDomainV1, IntegerValue,
     InvalidInputBehavior, MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1,
     MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
@@ -31,16 +32,16 @@ use cairn_migration::{
     ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1,
     ShapeSymbolName, ShapeSymbolSource, ValidatedCorpusExecutionCase,
     ValidatedCorpusObservationSet, assemble_boundary_case_input, assemble_input_value_case_input,
-    assemble_memory_surface_case_input, compose_call_adapter_job, derive_mandatory_base_cases,
-    derive_mandatory_input_value_cases, derive_mandatory_memory_surface_cases,
-    materialize_input_value_case, prepare_boundary_call_adapter_input,
-    prepare_corpus_execution_plan, validate_boundary_call_adapter_receipt,
-    validate_corpus_execution_receipts,
+    assemble_memory_surface_case_input, compare_exact_corpus_observations,
+    compose_call_adapter_job, derive_mandatory_base_cases, derive_mandatory_input_value_cases,
+    derive_mandatory_memory_surface_cases, materialize_input_value_case,
+    prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
+    validate_boundary_call_adapter_receipt, validate_corpus_execution_receipts,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-use cairn_verification::ImplementationBundleArtifact;
+use cairn_verification::{ImplementationBundleArtifact, ReferenceArtifact};
 
 const HOST_FIXTURE_BACKEND: &str = "host-fixture-v1";
 
@@ -151,6 +152,102 @@ fn complete_corpus_receipts_are_exact_typed_and_not_a_verdict() {
     assert_complete_observation_set(&completed, &collected);
     assert_receipt_set_failures(&completed);
     assert_persisted_observation_set_is_strict(collected.observation_set(), completed.plan.plan());
+}
+
+#[test]
+fn exact_comparison_aligns_roles_obligations_and_value_identities() {
+    let domain = domain();
+    let reference = complete_synthetic_corpus_for(
+        CorpusExecutionSubjectV1::Reference {
+            reference: ContentId::<ReferenceArtifact>::derive(b"proposed exact reference")
+                .expect("reference identity"),
+        },
+        0,
+    );
+    let matching_candidate = complete_synthetic_corpus_for(
+        CorpusExecutionSubjectV1::Candidate {
+            implementation: ContentId::<ImplementationBundleArtifact>::derive(b"candidate")
+                .expect("candidate identity"),
+        },
+        0,
+    );
+    let different_candidate = complete_synthetic_corpus_for(
+        CorpusExecutionSubjectV1::Candidate {
+            implementation: ContentId::<ImplementationBundleArtifact>::derive(b"candidate")
+                .expect("candidate identity"),
+        },
+        1,
+    );
+    let reference_observations = collect_completed_corpus(&reference);
+    let matching_observations = collect_completed_corpus(&matching_candidate);
+    let different_observations = collect_completed_corpus(&different_candidate);
+
+    let matching = compare_exact_corpus_observations(
+        &domain,
+        &reference.plan,
+        &reference_observations,
+        &matching_candidate.plan,
+        &matching_observations,
+    )
+    .expect("matching exact comparison");
+    let different = compare_exact_corpus_observations(
+        &domain,
+        &reference.plan,
+        &reference_observations,
+        &different_candidate.plan,
+        &different_observations,
+    )
+    .expect("different exact comparison");
+
+    assert!(matching.comparison().all_match());
+    assert!(!different.comparison().all_match());
+    assert!(
+        different
+            .comparison()
+            .comparisons()
+            .iter()
+            .any(|case| case.outputs().iter().any(|output| !output.matches()))
+    );
+    assert_eq!(
+        matching.comparison_id(),
+        ContentId::<ExactCorpusComparisonArtifact>::derive(matching.comparison_bytes())
+            .expect("comparison identity")
+    );
+    matching
+        .comparison()
+        .validate_inputs(
+            &domain,
+            &reference.plan,
+            &reference_observations,
+            &matching_candidate.plan,
+            &matching_observations,
+        )
+        .expect("recomputed exact comparison");
+    assert_exact_comparison_is_strict(matching.comparison());
+    assert_eq!(
+        compare_exact_corpus_observations(
+            &domain,
+            &matching_candidate.plan,
+            &matching_observations,
+            &reference.plan,
+            &reference_observations,
+        ),
+        Err(ExactCorpusComparisonError::ReferenceRoleRequired)
+    );
+    let mut numerical = serde_json::to_value(&domain).expect("domain JSON");
+    numerical["semantic_claim"] = serde_json::json!("numerical");
+    let numerical: MigrationDomainContractV1 =
+        serde_json::from_value(numerical).expect("numerical domain");
+    assert_eq!(
+        compare_exact_corpus_observations(
+            &numerical,
+            &reference.plan,
+            &reference_observations,
+            &matching_candidate.plan,
+            &matching_observations,
+        ),
+        Err(ExactCorpusComparisonError::NonExactDomain)
+    );
 }
 
 fn assert_complete_plan_shape(
@@ -391,6 +488,26 @@ fn assert_persisted_observation_set_is_strict(
     let mut unknown = value;
     unknown["verdict"] = serde_json::json!("pass");
     assert!(serde_json::from_value::<CorpusObservationSetV1>(unknown).is_err());
+}
+
+fn assert_exact_comparison_is_strict(comparison: &ExactCorpusComparisonV1) {
+    let value = serde_json::to_value(comparison).expect("comparison JSON");
+    let mut wrong_version = value.clone();
+    wrong_version["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<ExactCorpusComparisonV1>(wrong_version).is_err());
+    let mut wrong_order = value.clone();
+    wrong_order["comparisons"]
+        .as_array_mut()
+        .expect("comparisons")
+        .reverse();
+    assert!(serde_json::from_value::<ExactCorpusComparisonV1>(wrong_order).is_err());
+    let mut duplicate_result = value.clone();
+    duplicate_result["comparisons"][1]["reference_result"] =
+        duplicate_result["comparisons"][0]["reference_result"].clone();
+    assert!(serde_json::from_value::<ExactCorpusComparisonV1>(duplicate_result).is_err());
+    let mut verdict = value;
+    verdict["passed"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<ExactCorpusComparisonV1>(verdict).is_err());
 }
 
 fn prepared_host_case() -> PreparedHostCase {
@@ -730,6 +847,21 @@ fn prepare_plan_for_subject(
 }
 
 fn complete_synthetic_corpus() -> CompletedCorpus {
+    complete_synthetic_corpus_for(
+        CorpusExecutionSubjectV1::Source {
+            implementation: ContentId::<ImplementationBundleArtifact>::derive(
+                b"source implementation",
+            )
+            .expect("implementation identity"),
+        },
+        0,
+    )
+}
+
+fn complete_synthetic_corpus_for(
+    subject: CorpusExecutionSubjectV1,
+    output_byte: u8,
+) -> CompletedCorpus {
     let directory = tempfile::tempdir().expect("temporary corpus execution state");
     let mut content = SqliteContentStore::open(
         directory.path().join("content.db"),
@@ -741,8 +873,14 @@ fn complete_synthetic_corpus() -> CompletedCorpus {
     let environment = put::<ExecutionEnvironmentArtifact>(&mut content, b"corpus environment");
     let domain = domain();
     let (quantitative, input_values, memory_surfaces, cases) = assembled_corpus(&domain);
-    let plan = prepare_plan(&quantitative, &input_values, &memory_surfaces, cases)
-        .expect("prepared corpus plan");
+    let plan = prepare_plan_for_subject(
+        &quantitative,
+        &input_values,
+        &memory_surfaces,
+        subject,
+        cases,
+    )
+    .expect("prepared corpus plan");
     assert_eq!(
         put::<CorpusExecutionPlanArtifact>(&mut content, plan.plan_bytes()),
         plan.plan_id()
@@ -771,7 +909,7 @@ fn complete_synthetic_corpus() -> CompletedCorpus {
             ObservedAtUnixMillis::new(i64::try_from(index * 3 + 2).expect("event time")),
         )
         .expect("started corpus execution");
-        let capture = synthetic_corpus_capture(case, environment);
+        let capture = synthetic_corpus_capture(case, environment, output_byte);
         let mut executor =
             ScriptedExecutor::new(move |_input: &ExecutionInput<'_>| Ok(capture.clone()));
         let completion = execute_execution_attempt(
@@ -800,9 +938,19 @@ fn complete_synthetic_corpus() -> CompletedCorpus {
     }
 }
 
+fn collect_completed_corpus(completed: &CompletedCorpus) -> ValidatedCorpusObservationSet {
+    validate_corpus_execution_receipts(
+        &completed.plan,
+        completed.receipts.clone(),
+        &completed.content,
+    )
+    .expect("collected corpus observations")
+}
+
 fn synthetic_corpus_capture(
     case: &PreparedCorpusExecutionCase,
     environment: ContentId<ExecutionEnvironmentArtifact>,
+    output_byte: u8,
 ) -> ExecutionCapture {
     let input = case.input();
     let completion = match case.descriptor().expected_outcome() {
@@ -825,7 +973,7 @@ fn synthetic_corpus_capture(
             .iter()
             .map(|expected| {
                 let bytes = vec![
-                    0_u8;
+                    output_byte;
                     usize::try_from(expected.byte_length().get())
                         .expect("synthetic output length")
                 ];
@@ -866,7 +1014,7 @@ fn synthetic_corpus_capture(
                     .find(|output| output.path() == &expected.path)
                     .expect("declared ABI output");
                 vec![
-                    0_u8;
+                    output_byte;
                     usize::try_from(output.byte_length().get()).expect("synthetic output length")
                 ]
             },

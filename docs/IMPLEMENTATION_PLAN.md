@@ -272,7 +272,13 @@ The remaining G slices, in dependency order, are:
    and result identities. Missing, duplicate, extra, crossed, non-successful, or content-incomplete
    receipts fail closed. The observation set carries no semantic verdict. This fixture, plan, and
    collector do not substitute for CUDA/Ascend C adapters, device isolation, complete-plan dispatch,
-   semantic comparison, or oracle admission.
+   general numerical/property comparison, or oracle admission. The first exact-only comparison slice
+   is implemented for caller domains whose semantic claim is `Exact`: it requires a `Reference` plan
+   and a `Candidate` plan over the same domain and mandatory roots, validates both observation-set
+   identities, aligns typed obligations, and records paired completion values and exact ABI-output
+   identities. Per-output, per-case, and full-set matches are recomputed rather than trusted as
+   persisted booleans. The strict comparison artifact rejects verdict fields and remains evidence,
+   not reference admission or candidate judgment.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

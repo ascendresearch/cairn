@@ -5,6 +5,7 @@ mod call_adapter;
 mod corpus_execution;
 mod corpus_observation;
 mod domain;
+mod exact_comparison;
 mod historical;
 mod input_values;
 mod materialize;
@@ -54,6 +55,11 @@ pub use domain::{
     ScalarParameterRole, SemanticClaimKind, ShapeAssignment, ShapeBoundaryObligation, ShapeRank,
     ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
     StatusCode, derive_mandatory_base_cases,
+};
+pub use exact_comparison::{
+    ExactCaseComparisonV1, ExactCorpusComparisonArtifact, ExactCorpusComparisonError,
+    ExactCorpusComparisonV1, ExactOutputComparisonV1, PreparedExactCorpusComparison,
+    compare_exact_corpus_observations,
 };
 pub use historical::{
     HistoricalDetectionRequirement, HistoricalDiagnosticClassName, HistoricalFailureClassName,

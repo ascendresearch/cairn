@@ -1123,6 +1123,18 @@ plan; the set alone does not manufacture execution authority. Prepared results r
 category and full validated execution. This is an execution-completeness record only: its schema
 cannot carry a pass/fail verdict, numerical comparison, oracle admission, or candidate judgment.
 
+**Implemented exact corpus-comparison slice (2026-08-26).** For a caller domain explicitly marked
+`Exact`, trusted product comparison now accepts only a `Reference` execution plan and a `Candidate`
+plan. Both plans must cite the exact caller-domain identity and identical quantitative, dtype, and
+memory obligation roots; every obligation and expected outcome must align even though executable,
+tier, job, contract, receipt, and result identities may differ. Both observation sets are rechecked
+against their own plans and canonical identities before comparison. Each strict V1 case fact records
+the typed obligation, both adapter-result identities, both completion values, and for every ABI
+output its shared typed metadata plus reference and candidate byte identities. Equality is always
+recomputed from those facts at output, case, and corpus level; there is no stored `passed` summary.
+The artifact rejects verdict fields. It is useful comparison evidence, but a proposed reference has
+not thereby passed oracle admission and an all-match result is not yet a candidate verdict.
+
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
 valid non-empty shapes. Required alignment, misalignment offset, capacity shortfall, overlap offset,
