@@ -22,10 +22,12 @@ pub use call_adapter::{
     CallAdapterOutputBytesArtifact, CallAdapterProtocolError, CallAdapterRequestArtifact,
     CallAdapterRequestV1, CallAdapterResultArtifact, CallAdapterResultV1,
     CorpusInvocationIdentityV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
-    ValidatedCallAdapterObservation, compose_call_adapter_job, prepare_boundary_call_adapter_input,
-    prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
-    validate_boundary_call_adapter_capture, validate_input_value_call_adapter_capture,
-    validate_memory_surface_call_adapter_capture,
+    ValidatedCallAdapterExecution, ValidatedCallAdapterObservation, compose_call_adapter_job,
+    prepare_boundary_call_adapter_input, prepare_input_value_call_adapter_input,
+    prepare_memory_surface_call_adapter_input, validate_boundary_call_adapter_capture,
+    validate_boundary_call_adapter_receipt, validate_input_value_call_adapter_capture,
+    validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
+    validate_memory_surface_call_adapter_receipt,
 };
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,

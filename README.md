@@ -74,7 +74,10 @@ successful output bytes. Invalid-input cases never promote unspecified output bu
 Prepared adapter processes now compose into the existing vendor-neutral `JobContract` with explicit
 environment, resources, disabled network, capture bounds, canonical bytes, and typed contract
 identity; migration tiers remain outside worker records. Real CUDA/Ascend C adapters, execution
-receipt ingestion, and complete corpus orchestration remain unfinished.
+and complete corpus orchestration remain unfinished. An authoritative generic execution receipt can
+now be bound back to the exact prepared job, loaded through typed declared-output identities, and
+validated as the adapter result plus ABI observation; a CAS object alone is not execution
+authority.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

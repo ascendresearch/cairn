@@ -10,6 +10,7 @@ license.workspace = true
 cairn-codec.workspace = true
 cairn-execution.workspace = true
 cairn-protocol.workspace = true
+cairn-record.workspace = true
 cairn-verification.workspace = true
 serde.workspace = true
 thiserror.workspace = true

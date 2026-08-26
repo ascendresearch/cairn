@@ -1011,8 +1011,8 @@ dtype-case manifest uses a content-identity domain distinct from quantitative bo
 binds the domain, successful baseline, dtype obligation, target materialization, copied typed
 target/outcome, and complete ABI argument set, and cross-validates the canonical bundle files.
 Supported recipes expect success; invalid recipes retain their caller-declared behavior. Unknown,
-excluded, underived, wrong-target, and multi-invalid compositions fail closed. A call adapter,
-observations, and execution remain target work.
+excluded, underived, wrong-target, and multi-invalid compositions fail closed. Vendor adapter
+implementation, real execution, and complete corpus orchestration remain target work.
 
 **Implemented memory-surface layout assembly slice (2026-08-25).** An executable null-pointer,
 misalignment, capacity-shortfall, exact-alias, or partial-overlap obligation can now be composed only
@@ -1051,8 +1051,7 @@ lengths and identities, and rejects missing, duplicate, extra, or changed materi
 `RejectBeforeExecution` requires the non-invocation completion; `ReturnStatus` requires the exact
 declared status. Invalid cases deliberately declare no ABI output capture because those buffers are
 unspecified and cannot support evidence. A structurally valid adapter report remains an observation,
-not automatic semantic authority; adapter admission, execution receipts, and oracle comparison
-remain pending.
+not automatic semantic authority; adapter admission and oracle comparison remain pending.
 
 **Implemented generic call-adapter job-composition slice (2026-08-25).** A prepared adapter process,
 exact execution-environment identity, product execution need, stable `JobId`, and independent
@@ -1064,7 +1063,20 @@ validation tier remains only in a transient product wrapper: changing V1 source-
 target-device while every generic constraint stays equal does not change worker-facing contract
 bytes or identity. The normal execution coordinator can therefore verify/archive the input bundle,
 environment, and contract without learning migration stages or vendor runtimes. Real adapter
-execution, receipt-to-result loading, and oracle comparison remain pending.
+execution and oracle comparison remain pending.
+
+**Implemented execution-receipt to adapter-observation slice (2026-08-25).** Migration can now
+consume a canonical receipt obtained from authoritative generic execution completion or recovery,
+along with its typed receipt identity. Validation recomputes that identity, binds the receipt to the
+exact prepared `JobId` and `JobContract` identity, rechecks that the contract carries the prepared
+adapter input, command, and complete output declarations, and admits only `Succeeded` with the
+generic success exit code. Receipt output names must exactly equal the contract's canonical declared
+set. Each `DeclaredOutputArtifact` is then read through the typed content store, so missing or
+identity-changed bytes fail before the existing strict adapter-result and ABI-output validator runs.
+The returned typed value retains both receipt and validated adapter observation. The receipt must
+already be an authoritative execution fact; merely placing receipt-shaped bytes in content storage
+does not prove execution, and stdout/stderr or process exit are never reinterpreted as an operator
+status.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

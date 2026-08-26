@@ -3,12 +3,14 @@
 use std::collections::BTreeSet;
 
 use cairn_execution::{
-    CapturePolicy, CapturedOutput, CommandArgument, CommandContract, DiagnosticByteLimit,
-    EvidenceByteLimit, ExecutionEnvironmentArtifact, ExpectedOutput, InputBundleArtifact,
+    CapturePolicy, CapturedOutput, CommandArgument, CommandContract, DeclaredOutputArtifact,
+    DiagnosticByteLimit, EvidenceByteLimit, ExecutionEnvironmentArtifact, ExecutionOutcome,
+    ExecutionReceipt, ExecutionReceiptArtifact, ExpectedOutput, InputBundleArtifact,
     InputBundleEntry, InputBundleV1, InputFileMode, JobContract, JobContractArtifact,
     NetworkPolicy, OutputByteLimit, OutputName, SandboxPath,
 };
 use cairn_protocol::{ContentId, ContentType, JobId};
+use cairn_record::ContentStore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
@@ -50,6 +52,15 @@ pub enum CallAdapterProtocolError {
     /// The result file or declared ABI outputs are absent, duplicated, extra, or contradictory.
     #[error("call-adapter capture is inconsistent")]
     InconsistentCapture,
+    /// A receipt, job contract, and prepared adapter input do not describe the same execution.
+    #[error("call-adapter execution receipt binding is inconsistent")]
+    InconsistentExecutionReceipt,
+    /// Only a successful generic execution can yield an operator observation.
+    #[error("call-adapter execution did not succeed: {outcome:?}")]
+    ExecutionDidNotSucceed { outcome: ExecutionOutcome },
+    /// A typed execution artifact could not be read with verified content identity.
+    #[error("call-adapter execution content could not be read: {message}")]
+    Content { message: String },
     /// Adapter completion contradicts the caller-declared expected outcome.
     #[error("call-adapter completion contradicts the case expectation")]
     UnexpectedCompletion,
@@ -453,6 +464,34 @@ impl ValidatedCallAdapterObservation {
     }
 }
 
+/// Validated operator observation tied to one authoritative generic execution receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedCallAdapterExecution {
+    receipt: ExecutionReceipt,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    observation: ValidatedCallAdapterObservation,
+}
+
+impl ValidatedCallAdapterExecution {
+    /// Returns the canonical generic execution receipt.
+    #[must_use]
+    pub const fn receipt(&self) -> &ExecutionReceipt {
+        &self.receipt
+    }
+
+    /// Returns the exact receipt artifact identity.
+    #[must_use]
+    pub const fn receipt_id(&self) -> ContentId<ExecutionReceiptArtifact> {
+        self.receipt_id
+    }
+
+    /// Returns the validated adapter result and ABI-output observation.
+    #[must_use]
+    pub const fn observation(&self) -> &ValidatedCallAdapterObservation {
+        &self.observation
+    }
+}
+
 /// Independent bounds used when the generic executor captures one adapter process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallAdapterCaptureLimits {
@@ -757,6 +796,184 @@ pub fn validate_memory_surface_call_adapter_capture(
     )
 }
 
+/// Validates an authoritative successful execution receipt for a boundary case and reads its
+/// declared result files through the typed content store.
+///
+/// The receipt must come from generic execution completion or recovery. This function binds that
+/// receipt to the prepared job and case; content storage by itself is not execution authority.
+///
+/// # Errors
+///
+/// Rejects a mismatched receipt/job/input, a non-success terminal outcome, unreadable declared
+/// output content, or an invalid adapter capture.
+pub fn validate_boundary_call_adapter_receipt<C: ContentStore>(
+    case: &AssembledBoundaryCaseInput,
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    content: &C,
+) -> Result<ValidatedCallAdapterExecution, CallAdapterProtocolError> {
+    validate_receipt(
+        input,
+        job,
+        receipt_id,
+        receipt,
+        content,
+        CorpusInvocationIdentityV1::Boundary {
+            manifest: case.manifest_id(),
+        },
+        case.manifest().expected_outcome(),
+    )
+}
+
+/// Validates an authoritative successful execution receipt for a dtype case and reads its declared
+/// result files through the typed content store.
+///
+/// # Errors
+///
+/// Rejects a mismatched receipt/job/input, a non-success terminal outcome, unreadable declared
+/// output content, or an invalid adapter capture.
+pub fn validate_input_value_call_adapter_receipt<C: ContentStore>(
+    case: &AssembledInputValueCaseInput,
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    content: &C,
+) -> Result<ValidatedCallAdapterExecution, CallAdapterProtocolError> {
+    validate_receipt(
+        input,
+        job,
+        receipt_id,
+        receipt,
+        content,
+        CorpusInvocationIdentityV1::InputValue {
+            manifest: case.manifest_id(),
+        },
+        case.manifest().expected_outcome(),
+    )
+}
+
+/// Validates an authoritative successful execution receipt for a memory-surface case and reads its
+/// declared result files through the typed content store.
+///
+/// # Errors
+///
+/// Rejects a mismatched receipt/job/input, a non-success terminal outcome, unreadable declared
+/// output content, or an invalid adapter capture.
+pub fn validate_memory_surface_call_adapter_receipt<C: ContentStore>(
+    case: &AssembledMemorySurfaceCaseInput,
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    content: &C,
+) -> Result<ValidatedCallAdapterExecution, CallAdapterProtocolError> {
+    validate_receipt(
+        input,
+        job,
+        receipt_id,
+        receipt,
+        content,
+        CorpusInvocationIdentityV1::MemorySurface {
+            manifest: case.manifest_id(),
+        },
+        case.manifest().expected_outcome(),
+    )
+}
+
+fn validate_receipt<C: ContentStore>(
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    content: &C,
+    invocation: CorpusInvocationIdentityV1,
+    expected_outcome: &CaseExpectedOutcome,
+) -> Result<ValidatedCallAdapterExecution, CallAdapterProtocolError> {
+    validate_job_binding(input, job)?;
+    let receipt_bytes = cairn_codec::to_vec(receipt).map_err(codec)?;
+    if ContentId::<ExecutionReceiptArtifact>::derive(&receipt_bytes).map_err(codec)? != receipt_id
+        || receipt.job_id() != job.contract.job_id()
+        || receipt.contract_id() != job.contract_id
+    {
+        return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+    }
+    if receipt.outcome() != ExecutionOutcome::Succeeded {
+        return Err(CallAdapterProtocolError::ExecutionDidNotSucceed {
+            outcome: receipt.outcome(),
+        });
+    }
+    if receipt.exit_code() != Some(0) {
+        return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+    }
+
+    let declarations = job.contract.capture().expected_outputs();
+    if receipt.outputs().len() != declarations.len()
+        || receipt
+            .outputs()
+            .iter()
+            .zip(declarations)
+            .any(|(archived, declared)| archived.name != declared.name)
+    {
+        return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+    }
+    let mut captured = Vec::with_capacity(receipt.outputs().len());
+    for output in receipt.outputs() {
+        let mut bytes = Vec::new();
+        content
+            .write_to::<DeclaredOutputArtifact>(&output.content_id, &mut bytes)
+            .map_err(content_error)?;
+        captured.push(CapturedOutput {
+            name: output.name.clone(),
+            bytes,
+        });
+    }
+    let observation = validate_capture(input, invocation, expected_outcome, &captured)?;
+    Ok(ValidatedCallAdapterExecution {
+        receipt: receipt.clone(),
+        receipt_id,
+        observation,
+    })
+}
+
+fn validate_job_binding(
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+) -> Result<(), CallAdapterProtocolError> {
+    let canonical_contract = cairn_codec::to_vec(&job.contract).map_err(codec)?;
+    if canonical_contract != job.contract_bytes
+        || ContentId::<JobContractArtifact>::derive(&canonical_contract).map_err(codec)?
+            != job.contract_id
+        || job.contract.input_bundle_id() != input.input_bundle_id
+        || job.contract.command() != &input.command
+    {
+        return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+    }
+    let declarations = job.contract.capture().expected_outputs();
+    if declarations.len() != input.request.expected_outputs.len().saturating_add(1) {
+        return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+    }
+    let result_name = output_name("call-adapter-result")?;
+    if !declarations
+        .iter()
+        .any(|output| output.name == result_name && output.path == input.request.result_path)
+    {
+        return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+    }
+    for expected in &input.request.expected_outputs {
+        let name = output_name_for_argument(expected.argument_index)?;
+        let byte_limit = OutputByteLimit::new(expected.byte_length.get().max(1)).map_err(codec)?;
+        if !declarations.iter().any(|output| {
+            output.name == name && output.path == expected.path && output.byte_limit == byte_limit
+        }) {
+            return Err(CallAdapterProtocolError::InconsistentExecutionReceipt);
+        }
+    }
+    Ok(())
+}
+
 fn validate_capture(
     prepared: &PreparedCallAdapterInput,
     invocation: CorpusInvocationIdentityV1,
@@ -985,23 +1202,38 @@ fn job_composition_error(error: impl std::fmt::Display) -> CallAdapterProtocolEr
     }
 }
 
+fn content_error(error: impl std::fmt::Display) -> CallAdapterProtocolError {
+    CallAdapterProtocolError::Content {
+        message: error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use cairn_execution::{
-        CapturedOutput, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend,
-        ExecutionEnvironmentArtifact, ExecutionTimeoutMillis, InputBundleEntry, InputFileMode,
-        JobContractArtifact, NetworkPolicy, OutputByteLimit,
+    use std::{
+        collections::BTreeMap,
+        io::{Cursor, Read, Write},
     };
-    use cairn_protocol::{ContentId, ContentType, JobId};
+
+    use cairn_execution::{
+        ArchivedOutput, CapturedOutput, DeclaredOutputArtifact, DiagnosticByteLimit,
+        EvidenceByteLimit, ExecutionBackend, ExecutionElapsedMillis, ExecutionEnvironmentArtifact,
+        ExecutionEvidenceArtifact, ExecutionOutcome, ExecutionReceipt, ExecutionReceiptArtifact,
+        ExecutionStderrArtifact, ExecutionStdoutArtifact, ExecutionTimeoutMillis, InputBundleEntry,
+        InputFileMode, JobContractArtifact, NetworkPolicy, OutputByteLimit,
+    };
+    use cairn_protocol::{AttemptId, BlobDigest, ContentId, ContentType, JobId};
+    use cairn_record::{ContentDescriptor, ContentStore, ContentStoreError};
+    use serde::Serialize;
     use serde_json::json;
 
     use super::{
         ADAPTER_PATH, CallAdapterCaptureLimits, CallAdapterCompletionV1,
         CallAdapterExecutableArtifact, CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1,
         CallAdapterProtocolError, CallAdapterRequestArtifact, CallAdapterRequestV1,
-        CallAdapterResultV1, CorpusInvocationIdentityV1, INVOCATION_PATH, REQUEST_PATH,
-        compose_call_adapter_job, output_name, output_name_for_argument, path, prepare,
-        validate_capture,
+        CallAdapterResultV1, CorpusInvocationIdentityV1, INVOCATION_PATH, PreparedCallAdapterInput,
+        PreparedCallAdapterJob, REQUEST_PATH, compose_call_adapter_job, output_name,
+        output_name_for_argument, path, prepare, validate_capture, validate_receipt,
     };
     use crate::{
         ArgumentIndex, BufferName, CaseExpectedOutcome, CorpusBufferByteLength, CorpusElementCount,
@@ -1012,6 +1244,114 @@ mod tests {
 
     fn id<T: ContentType>(bytes: &[u8]) -> ContentId<T> {
         ContentId::<T>::derive(bytes).expect("content identity")
+    }
+
+    #[derive(Default)]
+    struct MemoryContentStore {
+        objects: BTreeMap<String, Vec<u8>>,
+    }
+
+    impl ContentStore for MemoryContentStore {
+        fn put<T: ContentType>(
+            &mut self,
+            reader: &mut dyn Read,
+        ) -> Result<ContentDescriptor<T>, ContentStoreError> {
+            let mut bytes = Vec::new();
+            reader
+                .read_to_end(&mut bytes)
+                .map_err(|error| ContentStoreError::Io {
+                    message: error.to_string(),
+                })?;
+            let content_id =
+                ContentId::<T>::derive(&bytes).map_err(|error| ContentStoreError::Integrity {
+                    message: error.to_string(),
+                })?;
+            self.objects.insert(content_id.to_string(), bytes.clone());
+            Ok(ContentDescriptor {
+                content_id,
+                blob_digest: BlobDigest::derive(&bytes),
+                byte_len: u64::try_from(bytes.len()).expect("test content length"),
+            })
+        }
+
+        fn write_to<T: ContentType>(
+            &self,
+            content_id: &ContentId<T>,
+            writer: &mut dyn Write,
+        ) -> Result<ContentDescriptor<T>, ContentStoreError> {
+            let bytes = self.objects.get(&content_id.to_string()).ok_or_else(|| {
+                ContentStoreError::NotFound {
+                    content_id: content_id.to_string(),
+                }
+            })?;
+            let actual =
+                ContentId::<T>::derive(bytes).map_err(|error| ContentStoreError::Integrity {
+                    message: error.to_string(),
+                })?;
+            if actual != *content_id {
+                return Err(ContentStoreError::Integrity {
+                    message: "test object identity changed".to_owned(),
+                });
+            }
+            writer
+                .write_all(bytes)
+                .map_err(|error| ContentStoreError::Io {
+                    message: error.to_string(),
+                })?;
+            Ok(ContentDescriptor {
+                content_id: *content_id,
+                blob_digest: BlobDigest::derive(bytes),
+                byte_len: u64::try_from(bytes.len()).expect("test content length"),
+            })
+        }
+    }
+
+    impl MemoryContentStore {
+        fn archive<T: ContentType>(&mut self, bytes: &[u8]) -> ContentId<T> {
+            self.put::<T>(&mut Cursor::new(bytes))
+                .expect("archive test content")
+                .content_id
+        }
+    }
+
+    #[derive(Serialize)]
+    struct ExecutionReceiptWire {
+        schema_version: u16,
+        job_id: JobId,
+        attempt_id: AttemptId,
+        contract_id: ContentId<JobContractArtifact>,
+        outcome: ExecutionOutcome,
+        exit_code: Option<i32>,
+        elapsed_ms: ExecutionElapsedMillis,
+        stdout_id: ContentId<ExecutionStdoutArtifact>,
+        stderr_id: ContentId<ExecutionStderrArtifact>,
+        evidence_id: ContentId<ExecutionEvidenceArtifact>,
+        outputs: Vec<ArchivedOutput>,
+    }
+
+    fn build_receipt(
+        job_id: JobId,
+        contract_id: ContentId<JobContractArtifact>,
+        outcome: ExecutionOutcome,
+        exit_code: Option<i32>,
+        outputs: Vec<ArchivedOutput>,
+    ) -> (ExecutionReceipt, Vec<u8>) {
+        let wire = ExecutionReceiptWire {
+            schema_version: 1,
+            job_id,
+            attempt_id: AttemptId::new(),
+            contract_id,
+            outcome,
+            exit_code,
+            elapsed_ms: ExecutionElapsedMillis::new(7),
+            stdout_id: id::<ExecutionStdoutArtifact>(b"stdout"),
+            stderr_id: id::<ExecutionStderrArtifact>(b"stderr"),
+            evidence_id: id::<ExecutionEvidenceArtifact>(b"evidence"),
+            outputs,
+        };
+        let bytes = cairn_codec::to_vec(&wire).expect("receipt bytes");
+        let receipt = cairn_codec::from_slice(&bytes).expect("receipt decode");
+        (receipt, bytes)
     }
 
     fn source_bundle() -> (
@@ -1036,6 +1376,130 @@ mod tests {
         let bytes = bundle.to_bytes().expect("source bytes");
         let identity = id(&bytes);
         (bundle, bytes, identity)
+    }
+
+    struct SuccessfulReceiptFixture {
+        input: PreparedCallAdapterInput,
+        job: PreparedCallAdapterJob,
+        invocation: CorpusInvocationIdentityV1,
+        content: MemoryContentStore,
+        result: CallAdapterResultV1,
+        result_bytes: Vec<u8>,
+        result_content: ContentId<DeclaredOutputArtifact>,
+        receipt: ExecutionReceipt,
+        receipt_id: ContentId<ExecutionReceiptArtifact>,
+    }
+
+    fn prepared_output_job() -> (
+        PreparedCallAdapterInput,
+        PreparedCallAdapterJob,
+        CorpusInvocationIdentityV1,
+    ) {
+        let (source, source_bytes, source_id) = source_bundle();
+        let invocation = CorpusInvocationIdentityV1::Boundary {
+            manifest: id::<MaterializedBoundaryCaseArtifact>(b"boundary"),
+        };
+        let output_argument = MaterializedAbiArgumentV1::OutputBuffer {
+            argument_index: ArgumentIndex::new(2),
+            buffer: BufferName::new("output").expect("buffer"),
+            data_type: DataType::F32,
+            extents: vec![ExtentValue::new(2)],
+            element_count: CorpusElementCount::new(2),
+            byte_length: CorpusBufferByteLength::new(8),
+        };
+        let input = prepare(
+            &source,
+            &source_bytes,
+            source_id,
+            invocation,
+            &CaseExpectedOutcome::Success,
+            &[output_argument],
+            b"ELF",
+            CallAdapterExecutableByteLimit::new(4).expect("executable limit"),
+        )
+        .expect("adapter input");
+        let need = MigrationExecutionNeed::new(
+            MigrationValidationTier::V3TargetDevice,
+            ExecutionBackend::new("docker-v1").expect("backend"),
+            ExecutionTimeoutMillis::new(30_000).expect("timeout"),
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("execution need");
+        let limits = CallAdapterCaptureLimits {
+            stdout: OutputByteLimit::new(1024).expect("stdout"),
+            stderr: OutputByteLimit::new(1024).expect("stderr"),
+            result: OutputByteLimit::new(4096).expect("result"),
+            diagnostic: DiagnosticByteLimit::new(512).expect("diagnostic"),
+            evidence: EvidenceByteLimit::new(1024).expect("evidence"),
+        };
+        let job = compose_call_adapter_job(
+            JobId::new(),
+            &input,
+            id::<ExecutionEnvironmentArtifact>(b"environment"),
+            &need,
+            limits,
+        )
+        .expect("job");
+        (input, job, invocation)
+    }
+
+    fn successful_receipt_fixture() -> SuccessfulReceiptFixture {
+        let (input, job, invocation) = prepared_output_job();
+        let output_bytes = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        let result = CallAdapterResultV1::new(
+            input.request_id(),
+            invocation,
+            CallAdapterCompletionV1::InvokedVoid,
+            vec![
+                CallAdapterObservedOutputV1::from_bytes(
+                    ArgumentIndex::new(2),
+                    BufferName::new("output").expect("buffer"),
+                    &output_bytes,
+                )
+                .expect("observed output"),
+            ],
+        )
+        .expect("result");
+        let result_bytes = cairn_codec::to_vec(&result).expect("result bytes");
+        let mut content = MemoryContentStore::default();
+        let result_content = content.archive::<DeclaredOutputArtifact>(&result_bytes);
+        let output_content = content.archive::<DeclaredOutputArtifact>(&output_bytes);
+        let archived = job
+            .contract()
+            .capture()
+            .expected_outputs()
+            .iter()
+            .map(|expected| ArchivedOutput {
+                name: expected.name.clone(),
+                content_id: if expected.name.as_str() == "call-adapter-result" {
+                    result_content
+                } else {
+                    output_content
+                },
+            })
+            .collect();
+        let (receipt, receipt_bytes) = build_receipt(
+            job.contract().job_id(),
+            job.contract_id(),
+            ExecutionOutcome::Succeeded,
+            Some(0),
+            archived,
+        );
+        SuccessfulReceiptFixture {
+            input,
+            job,
+            invocation,
+            content,
+            result,
+            result_bytes,
+            result_content,
+            receipt,
+            receipt_id: id::<ExecutionReceiptArtifact>(&receipt_bytes),
+        }
     }
 
     #[test]
@@ -1276,6 +1740,120 @@ mod tests {
             ),
             Err(CallAdapterProtocolError::UnexpectedCompletion)
         );
+    }
+
+    #[test]
+    fn successful_receipt_loads_exact_declared_outputs_and_binds_execution() {
+        let fixture = successful_receipt_fixture();
+        let validated = validate_receipt(
+            &fixture.input,
+            &fixture.job,
+            fixture.receipt_id,
+            &fixture.receipt,
+            &fixture.content,
+            fixture.invocation,
+            &CaseExpectedOutcome::Success,
+        )
+        .expect("validated execution");
+        assert_eq!(validated.receipt_id(), fixture.receipt_id);
+        assert_eq!(validated.receipt(), &fixture.receipt);
+        assert_eq!(validated.observation().result(), &fixture.result);
+        assert_eq!(
+            validated.observation().result_id(),
+            id::<super::CallAdapterResultArtifact>(&fixture.result_bytes)
+        );
+    }
+
+    #[test]
+    fn receipt_rejects_failed_outcome_and_wrong_contract() {
+        let fixture = successful_receipt_fixture();
+        assert_eq!(
+            validate_receipt(
+                &fixture.input,
+                &fixture.job,
+                id::<ExecutionReceiptArtifact>(b"wrong receipt"),
+                &fixture.receipt,
+                &fixture.content,
+                fixture.invocation,
+                &CaseExpectedOutcome::Success,
+            ),
+            Err(CallAdapterProtocolError::InconsistentExecutionReceipt)
+        );
+        let (failed, failed_bytes) = build_receipt(
+            fixture.job.contract().job_id(),
+            fixture.job.contract_id(),
+            ExecutionOutcome::SubjectFailed,
+            Some(9),
+            Vec::new(),
+        );
+        assert_eq!(
+            validate_receipt(
+                &fixture.input,
+                &fixture.job,
+                id::<ExecutionReceiptArtifact>(&failed_bytes),
+                &failed,
+                &fixture.content,
+                fixture.invocation,
+                &CaseExpectedOutcome::Success,
+            ),
+            Err(CallAdapterProtocolError::ExecutionDidNotSucceed {
+                outcome: ExecutionOutcome::SubjectFailed,
+            })
+        );
+
+        let (wrong_contract, wrong_contract_bytes) = build_receipt(
+            fixture.job.contract().job_id(),
+            id::<JobContractArtifact>(b"wrong contract"),
+            ExecutionOutcome::Succeeded,
+            Some(0),
+            Vec::new(),
+        );
+        assert_eq!(
+            validate_receipt(
+                &fixture.input,
+                &fixture.job,
+                id::<ExecutionReceiptArtifact>(&wrong_contract_bytes),
+                &wrong_contract,
+                &fixture.content,
+                fixture.invocation,
+                &CaseExpectedOutcome::Success,
+            ),
+            Err(CallAdapterProtocolError::InconsistentExecutionReceipt)
+        );
+    }
+
+    #[test]
+    fn receipt_rejects_missing_and_identity_changed_declared_content() {
+        let mut fixture = successful_receipt_fixture();
+        let missing_content = MemoryContentStore::default();
+        assert!(matches!(
+            validate_receipt(
+                &fixture.input,
+                &fixture.job,
+                fixture.receipt_id,
+                &fixture.receipt,
+                &missing_content,
+                fixture.invocation,
+                &CaseExpectedOutcome::Success,
+            ),
+            Err(CallAdapterProtocolError::Content { .. })
+        ));
+        fixture
+            .content
+            .objects
+            .insert(fixture.result_content.to_string(), b"tampered".to_vec());
+        assert!(matches!(
+            validate_receipt(
+                &fixture.input,
+                &fixture.job,
+                fixture.receipt_id,
+                &fixture.receipt,
+                &fixture.content,
+                fixture.invocation,
+                &CaseExpectedOutcome::Success,
+            ),
+            Err(CallAdapterProtocolError::Content { .. })
+        ));
     }
 
     #[test]

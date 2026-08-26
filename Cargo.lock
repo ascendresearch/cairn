@@ -175,6 +175,7 @@ dependencies = [
  "cairn-codec",
  "cairn-execution",
  "cairn-protocol",
+ "cairn-record",
  "cairn-verification",
  "serde",
  "serde_json",

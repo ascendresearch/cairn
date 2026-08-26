@@ -232,8 +232,8 @@ The remaining G slices, in dependency order, are:
    bytes, then emits a distinct manifest with one exact null, misalignment, capacity-shortfall,
    exact-alias, or partial-overlap layout. Required/accessible lengths, alignment/offset quantities,
    ABI positions, and shared allocation extent are cross-validated against baseline arguments;
-   unknown and excluded conditions are rejected. Actual pointer construction, call-adapter
-   execution, observations, and complete corpus orchestration are still pending. The isolated
+   unknown and excluded conditions are rejected. Vendor-specific pointer construction, real
+   call-adapter execution, and complete corpus orchestration are still pending. The isolated
    process input boundary is now implemented for all three assembled case categories: caller-bounded
    executable bytes receive a separate content identity, a strict V1 request binds the exact source
    bundle and typed case-manifest identity, and the final canonical bundle carries the executable
@@ -248,7 +248,12 @@ The remaining G slices, in dependency order, are:
    no-shell command, disabled network, translated placement/resources, and declared outputs produce
    canonical `JobContract` bytes and identity ready for normal execution preparation. The migration
    validation tier stays only in the product wrapper and is absent from worker-facing bytes. Real
-   vendor adapters and execution-receipt ingestion remain pending.
+   vendor adapters remain pending. Authoritative receipts returned by generic execution completion
+   or recovery can now be ingested with their typed receipt identity: migration validation checks
+   the exact job/contract/input/command/output-declaration binding, requires a successful terminal
+   outcome, reads every declared result through the typed content store, and then reuses strict
+   adapter-result/ABI-byte validation. Content archival without the generic execution fact does not
+   confer authority.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;
