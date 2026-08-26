@@ -197,6 +197,36 @@ All worker-control, journal, content, and configuration formats remain schema V1
 development, incompatible changes replace V1 directly and development state is rebuilt; there are
 no conversion or compatibility branches.
 
+## Phase G — executed oracle admission (active)
+
+The next product milestone is M2, not a wider worker runtime. Its first implemented foundation is a
+new domain-neutral `cairn-verification` crate with strict V1 admission-policy and numerical-allowance
+contracts. Policy owns variant minima, required construction/fault classes, structural independence,
+saturation, accepted strengths, execution scope, and budget-exhaustion outcome. Numerical provenance
+and assurance are separate; held-out derivation and validation corpora must be identity-disjoint;
+asserted and external-prior-only values cannot support a pass; held-out evidence is empirical at
+most; and only proven/exhaustive evidence may support an unqualified domain-wide numerical claim.
+
+The remaining G slices, in dependency order, are:
+
+1. **Implemented 2026-08-25:** immutable caller-domain, refinement, corpus-proposal, authorship,
+   construction-claim, correct/wrong-variant, and oracle-proposal manifests. Proposal schema cannot
+   carry trusted policy, allowance, mutant, comparison, or decision fields, and semantically
+   different evidence categories have different content identity domains.
+2. product-adapter structured domain bodies plus trusted mandatory base-case derivation with explicit
+   unknown/conflict preservation;
+3. versioned mutation-grid trials and recomputed proof obligations that ignore stored `passed`
+   metadata;
+4. execution-port composition for correct and deliberately wrong variants through the complete
+   build/execute/observe/compare path;
+5. the offline historical reduction control required by `ORACLE_ADMISSION.md` section 18;
+6. immutable admitted-oracle and candidate-verdict receipts with complete identity-graph audit.
+
+Phase G is incomplete until that historical control reproduces the old false reject, accepts the
+correct tree reduction under measured family spread, retains the known blind spot, rejects asserted
+allowance and an empty applicable mutation grid, and emits a complete admitted-oracle graph. Open
+questions OQ-004 and OQ-007 remain unresolved; implementation must preserve derivation and
+disagreement evidence rather than selecting an independence or automatic disagreement policy.
 
 ## Cross-cutting gates
 

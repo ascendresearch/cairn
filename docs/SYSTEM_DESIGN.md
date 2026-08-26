@@ -918,6 +918,38 @@ product or agent logic.
 `cairn-verification` operates on claims, observations, policies, and immutable artifacts. It does not
 call a model. It may request jobs through an execution port and then adjudicate their receipts.
 
+**Implemented verification foundation (2026-08-25).** `cairn-verification` now owns strict V1,
+domain-neutral `AdmissionPolicy` and `NumericalAllowance` contracts. Variant minima, required
+construction/fault classes, structural-independence rules, saturation rounds, accepted strengths,
+required execution scopes, and incomplete-budget outcome are explicit immutable policy fields; the
+verifier supplies no hidden global profile defaults. Allowance magnitude uses exact canonical
+decimal bytes rather than binary floating point. Provenance and assurance remain independent,
+held-out validation requires non-empty identity-disjoint derivation/validation corpora, and the
+trusted classification boundary prevents asserted or external-prior-only values from being
+upgraded by assurance metadata. Only proven-bound or exhaustive-finite assurance can reach the
+unqualified-domain-wide class; held-out evidence reaches empirical at most.
+
+This foundation does not claim executed admission. Admitted-domain/frozen-corpus artifacts, receipt
+lifecycles, variant build/execution, mutation-grid adjudication, historical reduction controls,
+candidate judgment, and complete evidence-graph validation remain target work for M2.
+
+**Implemented proposal artifact graph (2026-08-25).** Strict V1 manifests now preserve the caller
+domain and its explicit unknowns separately from evidence-citing refinements; corpus cases retain
+source, source provenance, license provenance, and coverage obligations without becoming trusted by
+origin. Authorship records caller/human/model/repository/external origin without trust promotion;
+model authorship requires an exact episode and model-configuration artifact. Correct variants must
+cite a construction claim whose closed justification vocabulary has no “passes the oracle under
+test” alternative. Wrong variants instead cite a distinct fault class and fault-injection evidence.
+Domain-refinement, corpus-provenance, construction, and fault-injection evidence use separate content
+identity domains.
+
+`OracleProposal` cites the task inputs, caller domain, separate refinements, corpus proposal,
+reference/property proposals, source-admission plan, valid-family plan, observation plan, requested
+strength, and authorship. Its strict schema has no admission policy, allowance, trusted mutant,
+comparison policy, or decision field. This graph establishes immutable proposal inputs only: the
+product-adapter structured domain body, trusted mandatory-case derivation, execution, admission
+receipt, and adjudication remain unfinished.
+
 Its core modules are expected to include:
 
 - domain and coverage obligations;

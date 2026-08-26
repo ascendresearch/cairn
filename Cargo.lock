@@ -238,6 +238,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-verification"
+version = "0.1.0"
+dependencies = [
+ "cairn-codec",
+ "cairn-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "cairn-worker"
 version = "0.1.0"
 dependencies = [

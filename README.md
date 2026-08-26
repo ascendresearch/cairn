@@ -22,7 +22,8 @@ Implemented foundations include strong domain identities, canonical JSON, append
 stores, filesystem content-addressed storage, durable model/tool/episode lifecycles, provider-native
 conversation replay, runtime model templates, managed worker enrollment and credential lifecycle,
 host resource probing, deterministic scheduling and reservations, resumable assignment-material
-transfer, and the first real worker execution backend.
+transfer, the first real worker execution backend, and the first domain-neutral oracle-admission
+policy and numerical-allowance contracts.
 
 F2 now uses one concrete `docker-v1` adapter. A worker commits the start fact before execution,
 reconciles one deterministic container across process restart, captures bounded stdout/stderr and
@@ -39,6 +40,16 @@ scripts/docker-hello-smoke.sh sha256:<64-hex-local-image-id>
 
 It executes content-addressed input in Docker and proves that replaying the same exited attempt
 returns a byte-identical capture. See [`docs/WORKER_EXECUTION.md`](docs/WORKER_EXECUTION.md).
+
+M2 has begun in `cairn-verification`. Its current V1 foundation keeps admission-policy counts,
+required construction/fault classes, execution scope, and budget-exhaustion behavior in immutable
+configuration. Numerical allowance provenance and assurance are independent typed facts;
+held-out evidence requires identity-disjoint corpora, and asserted or external-prior-only values
+cannot be promoted by assurance metadata. The proposal side now has immutable caller-domain,
+refinement, corpus, authorship, construction-claim, correct/wrong-variant, and oracle-proposal
+manifests with separate typed identity domains. Executed oracle admission, mandatory base-case
+derivation, the historical reduction control, candidate judgment, and the first unified migration
+are not implemented yet.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
