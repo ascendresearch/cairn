@@ -262,9 +262,14 @@ The remaining G slices, in dependency order, are:
    independently identified generic job per executable obligation. The plan derives its executable
    subset from typed dispositions, orders it canonically, and rejects missing, duplicate, extra,
    reordered, cross-domain, or expectation-changed material. Unknown and explicitly excluded
-   obligations remain visible through their set roots without becoming executable jobs. This fixture
-   and plan do not substitute for CUDA/Ascend C adapters, device isolation, complete-plan dispatch
-   and receipt collection, semantic comparison, or oracle admission.
+   obligations remain visible through their set roots without becoming executable jobs. Complete
+   receipt collection is now also implemented: unordered authoritative receipts are matched by the
+   planned `JobId`, then every boundary, dtype, or memory case passes its category-specific exact
+   receipt/result/output validator before a strict V1 observation set can bind the plan, receipts,
+   and result identities. Missing, duplicate, extra, crossed, non-successful, or content-incomplete
+   receipts fail closed. The observation set carries no semantic verdict. This fixture, plan, and
+   collector do not substitute for CUDA/Ascend C adapters, device isolation, complete-plan dispatch,
+   semantic comparison, or oracle admission.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

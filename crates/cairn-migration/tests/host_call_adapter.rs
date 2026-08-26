@@ -14,24 +14,27 @@ use cairn_execution::{
 use cairn_migration::{
     ArgumentIndex, AssembledBoundaryCaseInput, AssembledCorpusExecutionCase, BooleanInputPattern,
     BufferAccessV1, BufferContractInput, BufferContractV1, BufferMemoryContractInput,
-    BufferMemoryContractV1, BufferName, CallAdapterCaptureLimits, CallAdapterExecutableByteLimit,
-    CallAdapterOutputBytesArtifact, CaseTarget, CorpusBufferByteLimit, CorpusElementCount,
-    CorpusExecutionPlanArtifact, CorpusExecutionPlanError, CorpusExecutionPlanV1, DataType,
-    DimensionSpec, EntryPointName, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
-    InputValueCaseTarget, InputValueDisposition, InputValueDomainV1, IntegerValue,
-    InvalidInputBehavior, MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1,
-    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
-    MigrationExecutionNeed, MigrationMandatoryCasesV1, MigrationValidationTier,
-    PointerAlignmentContractV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
-    PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, RequestedSemanticsArtifact,
-    ScalarParameterContractInput, ScalarParameterContractV1, ScalarParameterName,
-    ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1,
-    ShapeSymbolName, ShapeSymbolSource, assemble_boundary_case_input,
+    BufferMemoryContractV1, BufferName, CallAdapterCaptureLimits, CallAdapterCompletionV1,
+    CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1, CallAdapterOutputBytesArtifact,
+    CallAdapterResultV1, CaseExpectedOutcome, CaseTarget, CorpusBufferByteLimit,
+    CorpusElementCount, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
+    CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusObservationSetArtifact,
+    CorpusObservationSetError, CorpusObservationSetV1, DataType, DimensionSpec, EntryPointName,
+    ExtentValue, InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget,
+    InputValueDisposition, InputValueDomainV1, IntegerValue, InvalidInputBehavior,
+    MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1, MemoryConditionDisposition,
+    MigrationDomainContractInput, MigrationDomainContractV1, MigrationExecutionNeed,
+    MigrationMandatoryCasesV1, MigrationValidationTier, PointerAlignmentContractV1,
+    PreparedCallAdapterInput, PreparedCallAdapterJob, PreparedCorpusExecutionCase,
+    PreparedCorpusExecutionPlan, RequestedSemanticsArtifact, ScalarParameterContractInput,
+    ScalarParameterContractV1, ScalarParameterName, ScalarParameterRole, SemanticClaimKind,
+    ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
+    ValidatedCorpusExecutionCase, ValidatedCorpusObservationSet, assemble_boundary_case_input,
     assemble_input_value_case_input, assemble_memory_surface_case_input, compose_call_adapter_job,
     derive_mandatory_base_cases, derive_mandatory_input_value_cases,
     derive_mandatory_memory_surface_cases, materialize_input_value_case,
     prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
-    validate_boundary_call_adapter_receipt,
+    validate_boundary_call_adapter_receipt, validate_corpus_execution_receipts,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
@@ -52,6 +55,13 @@ struct CompletedHostCase {
     job: PreparedCallAdapterJob,
     receipt_id: ContentId<ExecutionReceiptArtifact>,
     receipt: ExecutionReceipt,
+}
+
+struct CompletedCorpus {
+    _directory: tempfile::TempDir,
+    content: SqliteContentStore,
+    plan: PreparedCorpusExecutionPlan,
+    receipts: Vec<CorpusExecutionReceipt>,
 }
 
 #[test]
@@ -102,6 +112,28 @@ fn complete_corpus_plan_is_canonical_complete_and_strict_v1() {
     );
     assert_incomplete_case_sets_rejected(&quantitative, &input_values, &memory_surfaces, &original);
     assert_persisted_plan_is_strict(prepared.plan());
+}
+
+#[test]
+fn complete_corpus_receipts_are_exact_typed_and_not_a_verdict() {
+    let completed = complete_synthetic_corpus();
+    let ordered = validate_corpus_execution_receipts(
+        &completed.plan,
+        completed.receipts.clone(),
+        &completed.content,
+    )
+    .expect("ordered corpus observations");
+    let mut reversed = completed.receipts.clone();
+    reversed.reverse();
+    let collected =
+        validate_corpus_execution_receipts(&completed.plan, reversed, &completed.content)
+            .expect("complete corpus observations");
+
+    assert_eq!(collected.observation_set(), ordered.observation_set());
+    assert_eq!(collected.observation_set_id(), ordered.observation_set_id());
+    assert_complete_observation_set(&completed, &collected);
+    assert_receipt_set_failures(&completed);
+    assert_persisted_observation_set_is_strict(collected.observation_set(), completed.plan.plan());
 }
 
 fn assert_complete_plan_shape(
@@ -217,6 +249,124 @@ fn assert_persisted_plan_is_strict(plan: &CorpusExecutionPlanV1) {
     let mut unknown = value;
     unknown["fallback_reader"] = serde_json::json!(true);
     assert!(serde_json::from_value::<CorpusExecutionPlanV1>(unknown).is_err());
+}
+
+fn assert_complete_observation_set(
+    completed: &CompletedCorpus,
+    collected: &ValidatedCorpusObservationSet,
+) {
+    assert_eq!(collected.cases().len(), completed.plan.cases().len());
+    assert_eq!(collected.observation_set().plan(), completed.plan.plan_id());
+    collected
+        .observation_set()
+        .validate_plan(completed.plan.plan())
+        .expect("exact cited plan");
+    assert_eq!(
+        collected.observation_set_id(),
+        ContentId::<CorpusObservationSetArtifact>::derive(collected.observation_set_bytes())
+            .expect("observation-set identity")
+    );
+    assert_eq!(
+        cairn_codec::from_slice::<CorpusObservationSetV1>(collected.observation_set_bytes())
+            .expect("strict observation-set round trip"),
+        *collected.observation_set()
+    );
+    assert_eq!(
+        collected
+            .cases()
+            .iter()
+            .filter(|case| matches!(case, ValidatedCorpusExecutionCase::Boundary { .. }))
+            .count(),
+        4
+    );
+    assert_eq!(
+        collected
+            .cases()
+            .iter()
+            .filter(|case| matches!(case, ValidatedCorpusExecutionCase::InputValue { .. }))
+            .count(),
+        3
+    );
+    assert_eq!(
+        collected
+            .cases()
+            .iter()
+            .filter(|case| matches!(case, ValidatedCorpusExecutionCase::MemorySurface { .. }))
+            .count(),
+        1
+    );
+}
+
+fn assert_receipt_set_failures(completed: &CompletedCorpus) {
+    let mut missing = completed.receipts.clone();
+    let missing_job = missing.pop().expect("missing receipt").receipt().job_id();
+    assert_eq!(
+        validate_corpus_execution_receipts(&completed.plan, missing, &completed.content),
+        Err(CorpusObservationSetError::MissingReceipt {
+            job_id: missing_job
+        })
+    );
+
+    let mut duplicate = completed.receipts.clone();
+    duplicate.push(completed.receipts[0].clone());
+    assert_eq!(
+        validate_corpus_execution_receipts(&completed.plan, duplicate, &completed.content),
+        Err(CorpusObservationSetError::DuplicateReceipt {
+            job_id: completed.receipts[0].receipt().job_id()
+        })
+    );
+
+    let mut swapped = completed.receipts.clone();
+    swapped[0] = CorpusExecutionReceipt::new(swapped[1].receipt_id(), swapped[0].receipt().clone());
+    assert!(matches!(
+        validate_corpus_execution_receipts(&completed.plan, swapped, &completed.content),
+        Err(CorpusObservationSetError::Receipt { .. })
+    ));
+
+    let unexpected = receipt_with_job(&completed.receipts[0], JobId::new());
+    let unexpected_job = unexpected.receipt().job_id();
+    let mut extra = completed.receipts.clone();
+    extra.push(unexpected);
+    assert_eq!(
+        validate_corpus_execution_receipts(&completed.plan, extra, &completed.content),
+        Err(CorpusObservationSetError::UnexpectedReceipt {
+            job_id: unexpected_job
+        })
+    );
+}
+
+fn assert_persisted_observation_set_is_strict(
+    set: &CorpusObservationSetV1,
+    plan: &CorpusExecutionPlanV1,
+) {
+    let value = serde_json::to_value(set).expect("observation-set JSON");
+    let mut wrong_version = value.clone();
+    wrong_version["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<CorpusObservationSetV1>(wrong_version).is_err());
+    let mut wrong_order = value.clone();
+    wrong_order["observations"]
+        .as_array_mut()
+        .expect("observations")
+        .reverse();
+    assert!(serde_json::from_value::<CorpusObservationSetV1>(wrong_order).is_err());
+    let mut duplicate_receipt = value.clone();
+    duplicate_receipt["observations"][1]["receipt"] =
+        duplicate_receipt["observations"][0]["receipt"].clone();
+    assert!(serde_json::from_value::<CorpusObservationSetV1>(duplicate_receipt).is_err());
+    let mut wrong_plan = value.clone();
+    wrong_plan["plan"] = serde_json::to_value(
+        ContentId::<CorpusExecutionPlanArtifact>::derive(b"another plan").expect("plan identity"),
+    )
+    .expect("plan identity JSON");
+    let wrong_plan =
+        serde_json::from_value::<CorpusObservationSetV1>(wrong_plan).expect("structural set");
+    assert_eq!(
+        wrong_plan.validate_plan(plan),
+        Err(CorpusObservationSetError::InconsistentObservationSet)
+    );
+    let mut unknown = value;
+    unknown["verdict"] = serde_json::json!("pass");
+    assert!(serde_json::from_value::<CorpusObservationSetV1>(unknown).is_err());
 }
 
 fn prepared_host_case() -> PreparedHostCase {
@@ -530,6 +680,179 @@ fn prepare_plan(
             diagnostic: DiagnosticByteLimit::new(1_024).expect("diagnostic"),
             evidence: EvidenceByteLimit::new(4_096).expect("evidence"),
         },
+    )
+}
+
+fn complete_synthetic_corpus() -> CompletedCorpus {
+    let directory = tempfile::tempdir().expect("temporary corpus execution state");
+    let mut content = SqliteContentStore::open(
+        directory.path().join("content.db"),
+        directory.path().join("cas"),
+    )
+    .expect("content store");
+    let mut events =
+        SqliteEventStore::open(directory.path().join("events.db")).expect("event store");
+    let environment = put::<ExecutionEnvironmentArtifact>(&mut content, b"corpus environment");
+    let domain = domain();
+    let (quantitative, input_values, memory_surfaces, cases) = assembled_corpus(&domain);
+    let plan = prepare_plan(&quantitative, &input_values, &memory_surfaces, cases)
+        .expect("prepared corpus plan");
+    assert_eq!(
+        put::<CorpusExecutionPlanArtifact>(&mut content, plan.plan_bytes()),
+        plan.plan_id()
+    );
+
+    let mut receipts = Vec::with_capacity(plan.cases().len());
+    for (index, case) in plan.cases().iter().enumerate() {
+        assert_eq!(
+            put::<InputBundleArtifact>(&mut content, case.input().input_bundle_bytes()),
+            case.input().input_bundle_id()
+        );
+        let prepared = prepare_execution_job(&mut content, case.job().contract())
+            .expect("prepared corpus job");
+        let authority = authorize_execution_attempt(
+            &mut events,
+            prepared,
+            AttemptId::new(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(i64::try_from(index * 3 + 1).expect("event time")),
+        )
+        .expect("corpus execution authority");
+        let started = begin_execution_attempt(
+            &mut events,
+            authority,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(i64::try_from(index * 3 + 2).expect("event time")),
+        )
+        .expect("started corpus execution");
+        let capture = synthetic_corpus_capture(case, environment);
+        let mut executor =
+            ScriptedExecutor::new(move |_input: &ExecutionInput<'_>| Ok(capture.clone()));
+        let completion = execute_execution_attempt(
+            &mut events,
+            &mut content,
+            &mut executor,
+            started,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(i64::try_from(index * 3 + 3).expect("event time")),
+        )
+        .expect("completed corpus execution");
+        let ExecutionCompletion::Completed {
+            receipt_id,
+            receipt,
+        } = completion
+        else {
+            panic!("expected authoritative corpus receipt");
+        };
+        receipts.push(CorpusExecutionReceipt::new(receipt_id, receipt));
+    }
+    CompletedCorpus {
+        _directory: directory,
+        content,
+        plan,
+        receipts,
+    }
+}
+
+fn synthetic_corpus_capture(
+    case: &PreparedCorpusExecutionCase,
+    environment: ContentId<ExecutionEnvironmentArtifact>,
+) -> ExecutionCapture {
+    let input = case.input();
+    let completion = match case.descriptor().expected_outcome() {
+        CaseExpectedOutcome::Success => CallAdapterCompletionV1::InvokedVoid,
+        CaseExpectedOutcome::Invalid {
+            behavior: InvalidInputBehavior::RejectBeforeExecution,
+        } => CallAdapterCompletionV1::RejectedBeforeInvocation,
+        CaseExpectedOutcome::Invalid {
+            behavior: InvalidInputBehavior::ReturnStatus { status },
+        } => CallAdapterCompletionV1::InvokedStatus { status: *status },
+        CaseExpectedOutcome::Invalid {
+            behavior: InvalidInputBehavior::ExplicitlyExcluded,
+        } => panic!("excluded case entered executable corpus"),
+    };
+    let invoked = completion != CallAdapterCompletionV1::RejectedBeforeInvocation;
+    let observed = if invoked {
+        input
+            .request()
+            .expected_outputs()
+            .iter()
+            .map(|expected| {
+                let bytes = vec![
+                    0_u8;
+                    usize::try_from(expected.byte_length().get())
+                        .expect("synthetic output length")
+                ];
+                CallAdapterObservedOutputV1::from_bytes(
+                    expected.argument_index(),
+                    expected.buffer().clone(),
+                    &bytes,
+                )
+                .expect("synthetic observed output")
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let result = CallAdapterResultV1::new(
+        input.request_id(),
+        input.request().invocation(),
+        completion,
+        observed,
+    )
+    .expect("synthetic adapter result");
+    let result_bytes = cairn_codec::to_vec(&result).expect("synthetic result bytes");
+    let outputs = case
+        .job()
+        .contract()
+        .capture()
+        .expected_outputs()
+        .iter()
+        .map(|expected| CapturedOutput {
+            name: expected.name.clone(),
+            bytes: if expected.path == *input.request().result_path() {
+                result_bytes.clone()
+            } else {
+                let output = input
+                    .request()
+                    .expected_outputs()
+                    .iter()
+                    .find(|output| output.path() == &expected.path)
+                    .expect("declared ABI output");
+                vec![
+                    0_u8;
+                    usize::try_from(output.byte_length().get()).expect("synthetic output length")
+                ]
+            },
+        })
+        .collect();
+    let evidence = TrustedExecutionEvidence::new(
+        case.job().contract().backend().clone(),
+        environment,
+        ResolvedProgramIdentity::new(input.request().executable().to_wire())
+            .expect("synthetic executable identity"),
+        Vec::new(),
+    )
+    .expect("synthetic execution evidence");
+    ExecutionCapture::new(
+        ExecutionOutcome::Succeeded,
+        Some(0),
+        ExecutionElapsedMillis::new(1),
+        Vec::new(),
+        Vec::new(),
+        outputs,
+        evidence,
+    )
+}
+
+fn receipt_with_job(source: &CorpusExecutionReceipt, job_id: JobId) -> CorpusExecutionReceipt {
+    let mut value = serde_json::to_value(source.receipt()).expect("receipt JSON");
+    value["job_id"] = serde_json::to_value(job_id).expect("job identity JSON");
+    let receipt: ExecutionReceipt = serde_json::from_value(value).expect("changed receipt");
+    let bytes = cairn_codec::to_vec(&receipt).expect("changed receipt bytes");
+    CorpusExecutionReceipt::new(
+        ContentId::<ExecutionReceiptArtifact>::derive(&bytes).expect("changed receipt identity"),
+        receipt,
     )
 }
 

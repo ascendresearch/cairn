@@ -965,7 +965,8 @@ first/last below-at-above tile boundaries. A shape backed by a scalar ABI parame
 typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
 rather than inventing an expected status. Dtype and memory-surface patterns are derived by separate
 typed policies described below. Canonical complete-corpus planning is implemented as described
-below; device execution, receipt collection, and adjudication remain target work.
+below, as is exact collection once authoritative receipts exist; device execution and adjudication
+remain target work.
 
 Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
 integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
@@ -1103,8 +1104,21 @@ request and input-bundle identities, caller-assigned `JobId`, and generic contra
 order cannot affect plan identity; missing, duplicate, extra, reordered, cross-domain, or changed
 expectation material fails closed. Prepared values retain the category-specific assembled case,
 adapter input, and job so later receipt validation need not erase types. This plan proves complete
-and deterministic preparation only. Dispatching every job, collecting authoritative receipts, and
-turning observations into oracle judgments remain separate unfinished stages.
+and deterministic preparation only. Dispatching every job and turning observations into oracle
+judgments remain separate unfinished stages.
+
+**Implemented complete-corpus receipt-collection slice (2026-08-26).** Given receipts returned by
+authoritative generic execution completion or recovery, collection now requires exactly one receipt
+for every `JobId` in the cited complete plan. Caller order is irrelevant, but duplicate, missing, or
+unplanned jobs fail before a set can exist. Each receipt then passes the existing category-specific
+boundary, input-value, or memory-surface validator, which recomputes receipt identity and exact
+job/contract/input/command bindings, reads every declared result through typed content storage, and
+validates adapter completion plus output bytes. A strict V1 observation set binds the exact plan
+identity and, in canonical obligation order, each typed obligation, job, authoritative receipt, and
+validated adapter-result identity. Loading the set requires explicit validation against the cited
+plan; the set alone does not manufacture execution authority. Prepared results retain their typed
+category and full validated execution. This is an execution-completeness record only: its schema
+cannot carry a pass/fail verdict, numerical comparison, oracle admission, or candidate judgment.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

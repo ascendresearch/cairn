@@ -82,8 +82,12 @@ A canonical complete-corpus plan now binds the quantitative, dtype, and memory o
 to one executable and one independently identified generic job per executable obligation. Unknown
 and explicitly excluded obligations remain committed but do not silently become jobs; missing,
 duplicate, extra, reordered, or cross-domain cases fail closed. Real CUDA/Ascend C adapters, device
-execution of the complete plan, result collection, and semantic adjudication remain unfinished. The
-host adapter is a protocol fixture, not an admitted oracle or a production unsandboxed executor.
+execution of the complete plan, and semantic adjudication remain unfinished. Given authoritative
+receipts, strict complete-corpus collection now requires exactly one receipt per planned `JobId`,
+revalidates every category-specific adapter result and declared output, and emits a canonical
+observation-set identity bound to the exact plan. The set records execution observations, never a
+pass/fail verdict. The host adapter is a protocol fixture, not an admitted oracle or a production
+unsandboxed executor.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

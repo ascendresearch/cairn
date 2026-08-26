@@ -3,6 +3,7 @@
 mod assemble;
 mod call_adapter;
 mod corpus_execution;
+mod corpus_observation;
 mod domain;
 mod historical;
 mod input_values;
@@ -34,6 +35,11 @@ pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
     CorpusExecutionPlanItemV1, CorpusExecutionPlanV1, CorpusObligationIdentityV1,
     PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, prepare_corpus_execution_plan,
+};
+pub use corpus_observation::{
+    CorpusExecutionReceipt, CorpusObservationItemV1, CorpusObservationSetArtifact,
+    CorpusObservationSetError, CorpusObservationSetV1, ValidatedCorpusExecutionCase,
+    ValidatedCorpusObservationSet, validate_corpus_execution_receipts,
 };
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,
