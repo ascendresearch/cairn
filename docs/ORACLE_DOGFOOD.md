@@ -19,6 +19,13 @@ results per search, and maximum provider response bytes. The limits are trusted 
 remain unavailable to the model. Later Red/admission stages must consume the same role budgets
 rather than introduce hidden constants.
 
+The current complex-case profile is intentionally generous: 64 turns, 128 logical tool operations,
+4,000,000 cumulative provider tokens per role, and 131,072 output tokens per turn. Workflow limits
+separately allow four malformed-submission repairs per Blue or Red request, six adversarial Blue
+revision rounds, and three Red stability rechecks. These are hard ceilings, not expected spend.
+The pinned DeepSeek template declares 384,000 maximum output tokens and a 1,000,000-token context;
+configuration above either declared capability is rejected before dispatch.
+
 For live GitHub research, use
 [`config/oracle-blue-dogfood.live-github.example.json`](../config/oracle-blue-dogfood.live-github.example.json).
 Put the raw token, one line with no quotes, at:
@@ -61,11 +68,13 @@ cargo run -p cairn-migration --example oracle_blue_research_live -- \
 ```
 
 The current matrix names are `sum-empty-axis`, `max-empty-axis`, `sum-noncontiguous`, `sum-nan`,
-and `matmul-zero-k`. Each run creates a fresh Blue episode and a distinct Red episode. It prints the
-model's final typed Blue draft and Red review, their content identities, provider/cache usage, and
-closure booleans. It never prints credentials, provider reasoning, or fetched source snippets. The
-final submitted draft/review must be visible because this gate evaluates semantic quality, not just
-connectivity.
+and `matmul-zero-k`. Each run creates a fresh Blue episode and a distinct Red episode. Red blockers
+are returned to Blue as frozen review data; Blue must submit a changed complete revision, and Red
+reviews the new frozen identity. A pass receives three focused stability rechecks. It prints all
+draft/review identities, the final typed bodies, provider/cache usage, correction counts,
+adversarial rounds, and an explicit convergence reason. It never prints credentials, provider
+reasoning, or fetched source snippets. The final submitted draft/review must be visible because
+this gate evaluates semantic quality, not just connectivity.
 
 ## Dogfood ledger
 
@@ -100,8 +109,9 @@ Further dogfood found and fixed two harness/configuration assumptions:
    semantic blocks are concatenated before strict JSON decoding;
 2. a 2,048-token output limit repeatedly exhausted reasoning before final submission; one observed
    non-contiguous case required 2,346 output tokens and one evidence-aware Red review required
-   7,854. The opt-in configs therefore permit 16,384 tokens per turn while retaining the 100,000
-   cumulative provider-token ceiling per role.
+   7,854. Simple samples hid the likely scale of complete operator contracts, several evidence
+   artifacts, attacks, and correction turns. The opt-in configs therefore now permit 131,072
+   output tokens per turn and 4,000,000 cumulative provider tokens per role.
 
 The five-case Blue/Red matrix showed why a model verdict is evidence rather than authority. An early
 Red schema could list false-accept/false-reject risks while still returning `pass` and “no revision”.
@@ -112,6 +122,45 @@ disagreed when search returned unrelated files. Changing the query to the upstre
 receives the frozen draft's cited bounded evidence, but never Blue private history. Cross-run verdict
 disagreement remains a forced-revision signal rather than a majority vote.
 
+The harness now turns that policy into an executable bounded loop while retaining two sessions.
+The standard prompt is split into stable common and role-specific content-addressed blocks; mutable
+artifacts and diagnostics remain in the suffix for cache reuse. Red `revise` returns exact blockers
+to Blue's existing continuation. Blue's complete replacement must have a different content identity
+before Red re-reviews it. Red `pass` is rechecked three times with rotating false-accept,
+false-reject, and evidence/shape/target focus. Six unresolved revision rounds terminate as explicit
+non-convergence.
+
+JSON decoding errors, strict field failures, comparator/expectation contradictions, Red
+pass/blocker contradictions, unexpected tool calls, and unchanged Blue revisions are rejected
+atomically. The producing role receives the exact diagnostic and complete contract in the same
+continuation for up to four repairs; no invalid subset is retained. Offline tests assert that the
+second provider request contains the first decoder diagnostic and that the repaired response uses
+the original native continuation.
+
+Three post-audit live-GitHub runs exercised the new loop:
+
+| Sample | Provider requests | Blue revisions | Red stability rechecks | Largest observed output | Result |
+|---|---:|---:|---:|---:|---|
+| `sum-noncontiguous` | 6 | 0 | 3 | 7,199 tokens | stable pass |
+| `max-empty-axis` | 9 | 1 | 3 | 14,868 tokens | blocker repaired, then stable pass |
+| `sum-nan` | 6 | 0 | 3 | 5,135 tokens | stable pass |
+
+The layout case specified buffer `[0,1,2,3,4,5]`, shape `[3,2]`, and strides `[1,3]`, deriving
+`[3,5,7]` while naming `[1,5,9]` as the contiguous-reinterpretation failure. The empty-max first
+draft was reject-only; Red forced a changed Blue revision with a valid non-empty reduction and a
+zero-sized non-reduced-dimension control, after which the review remained blocker-free. The NaN
+case used a property comparator for NaNness and deliberately left sign, payload, and accumulation
+order unconstrained. It also marked retrieved softmax/scatter tests as non-dispositive instead of
+promoting them by origin.
+
+The DeepSeek console request count advanced during the otherwise quiet waits, consistent with the
+sequential Blue/Red dispatches recorded by the usage arrays; the harness was progressing, not stuck
+in one provider call. The harness currently prints only its final aggregate, so optional
+non-sensitive per-turn progress output would improve operator visibility but is not correctness
+evidence. Observed outputs exceeded the former 8k ceiling once, directly validating the larger
+limit. No response approached 131,072 tokens, so the new value remains headroom for complete future
+artifacts rather than expected per-turn consumption.
+
 This still does not accept the complete Oracle Agent:
 
 - move the dogfood-only typed draft/review bodies into the production Blue/Red submission gateways
@@ -121,8 +170,12 @@ This still does not accept the complete Oracle Agent:
   and cumulative-token budgets;
 - execute complete Blue proposal submission, isolated Red attacks, trusted feedback/revision, and
   hardware-free admission with real model calls;
-- add bounded retry/failure artifacts for turns that consume their output budget without a final
-  structured submission;
+- replace the harness-local correction/debate counters with generic durable `AgentEpisode` facts,
+  including terminal artifacts for output exhaustion and repair/revision limit exhaustion;
+- permit Blue to perform several bounded research searches in one episode instead of the current
+  single-search dogfood staging step;
+- add a retrieved prompt-injection control proving that external text cannot change role, policy,
+  schema, tools, or disclosure behavior;
 - repeat the same sample/evidence boundary enough times to quantify draft/verdict stability and
   cache behavior without treating either cache hits or majority votes as correctness.
 

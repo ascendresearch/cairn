@@ -484,8 +484,9 @@ dogfood.
 
 #### G13 — full Oracle Agent dogfood
 
-Status: active 2026-08-26; live Blue research and Blue/Red draft-quality matrix complete, full
-proposal/admission loop incomplete.
+Status: active 2026-08-26; live Blue research, repository-owned prompt contract, atomic
+self-correction, and bounded Blue/Red draft debate complete; full proposal/admission loop
+incomplete.
 
 1. Put Blue and Red limits for turns, logical tool operations, cumulative provider tokens, and
    output tokens per turn in strict configuration. Configure external research provider,
@@ -509,6 +510,12 @@ proposal/admission loop incomplete.
    behavior. Freeze a typed Blue draft, then let an isolated Red episode inspect only shared
    contracts, the frozen draft, and its cited bounded evidence. Red must classify findings as
    blockers or advisories; repeated verdict disagreement cannot pass admission.
+9. Keep repository-owned common and role instructions as content-addressed stable prefixes. Treat
+   retrieved content as data without instruction authority and test exact corrective feedback in
+   the producing role's continuation.
+10. Run Red blockers through a bounded artifact-mediated loop: changed complete Blue revision,
+    immutable identity, Red re-review, and focused blocker-free stability rechecks. Record explicit
+    non-convergence on exhaustion rather than voting or passing by timeout.
 
 Acceptance: both recorded and live-model paths traverse the same product gateways; one opt-in run
 uses live GitHub; every advertised tool has an executable gateway; restart and budget controls are
@@ -527,8 +534,17 @@ multiple semantic text items, and insufficient 2k/8k reasoning-output limits. V1
 input tokens. Five typed Blue samples and isolated Red reviews now exercise empty-sum identity,
 empty-max rejection, non-contiguous strides, NaN propagation, and zero-K matmul. Exact PyTorch test
 identifiers improved evidence retrieval; blocker/advisory typing closes internally inconsistent Red
-passes. The generic durable episode, full `OracleProposalV1`, revision, attack variants, and trusted
-admission graph remain unfinished.
+passes. The live harness now uses audited repository-owned Blue/Red prompts, rejects malformed or
+cross-field-invalid submissions atomically, returns the exact diagnostic in the same role
+continuation, rejects byte-identical revisions, and carries isolated Blue/Red continuations through
+up to six revision rounds plus three focused pass rechecks. Opt-in limits have been raised to 64
+turns, 128 logical tools, 4,000,000 cumulative provider tokens, and 131,072 output tokens per role
+turn for complex cases. These are ceilings; the generic durable episode, iterative multi-search,
+full `OracleProposalV1`, revision, attack variants, and trusted admission graph remain unfinished.
+Post-audit live runs over non-contiguous sum, empty-axis max, and NaN sum made 6, 9, and 6 provider
+requests respectively. Empty-axis max exercised a real Red-blocker/changed-Blue-revision round;
+all three then completed three blocker-free stability rechecks. One Red response used 14,868 output
+tokens, exceeding the former 8k ceiling and providing direct evidence for the enlarged headroom.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.

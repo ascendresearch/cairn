@@ -114,9 +114,10 @@ pub use memory_surface::{
     derive_mandatory_memory_surface_cases,
 };
 pub use oracle_prompt::{
-    MaterializedOraclePrompt, OraclePromptError, OracleRolePromptArtifact, OracleRolePromptInput,
-    OracleRolePromptV1, archive_oracle_role_prompt, materialize_oracle_prompt,
-    prepare_oracle_role_prompt,
+    MaterializedOraclePrompt, OracleInstructionSetV1, OraclePromptError, OracleRolePromptArtifact,
+    OracleRolePromptInput, OracleRolePromptV1, archive_oracle_role_prompt,
+    archive_standard_oracle_instructions, materialize_oracle_prompt,
+    oracle_common_instruction_text, oracle_role_instruction_text, prepare_oracle_role_prompt,
 };
 pub use oracle_search::{
     OracleAgentRole, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleRoleTool,

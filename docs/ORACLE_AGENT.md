@@ -4,7 +4,7 @@
 - Date: 2026-08-26
 - Parent design: [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md)
 - Verification design: [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md)
-- Decisions: `D-003`, `D-004`, `D-008`, `D-020`, `D-021`
+- Decisions: `D-003`, `D-004`, `D-008`, `D-020`, `D-021`, `D-022`
 - Requirements: `FR-TASK-005..007`, `FR-ORACLE-*`, `FR-AGENT-*`, `FR-COST-*`
 
 ## 1. Purpose
@@ -261,6 +261,25 @@ Admission may complete without NPU evidence when the selected strength permits i
 oracle must carry target/device assumptions, unverified claims, blind spots, and exact revalidation
 triggers. It cannot claim target-specific coverage that was not executed.
 
+Blue and Red keep their own continuations across this loop. A Red review names one frozen Blue
+identity; only that review artifact and trusted diagnostics cross back to Blue. A revised complete
+proposal must have changed canonical bytes before it receives a new identity. Red then receives the
+new frozen identity and checks both its prior blockers and possible regressions. Neither role sees
+the other's private native history.
+
+Malformed JSON, strict-schema failures, cross-field contradictions, unexpected tool calls, and an
+unchanged revision are subject failures, not partially usable output. Trusted code returns the
+exact decoder/field/invariant diagnostic to the producing role in the same continuation and permits
+a separately bounded correction. Nothing from the rejected submission is admitted. Repair
+exhaustion retains the last diagnostic as an explicit terminal result.
+
+The debate itself is bounded independently from submission repair. The dogfood profile currently
+allows six Blue revision rounds and, after a blocker-free review, three focused stability rechecks
+over the same frozen revision. A later blocker reopens Blue revision. Exhaustion is non-convergence,
+never an implicit pass, and repeated votes do not replace trusted admission. See
+[`ORACLE_PROMPTS.md`](ORACLE_PROMPTS.md) for the prompt layering, systematic failure audit, and
+budget rationale.
+
 ## 8. Strong types at necessary boundaries
 
 The product layer uses closed types for `Blue` versus `Red`, external-source kind, search
@@ -284,6 +303,9 @@ projection, and the process manager that connects role outputs to verification.
 | conflicting upstream and source behavior | admission disagreement | weaken, reject, or request evidence |
 | cache detail absent | observability gap | no fabricated zero/hit ratio |
 | NPU unavailable | infrastructure block for target evidence | continue device-free oracle work; retain trigger |
+| malformed or semantically inconsistent submission | subject rejection | exact diagnostic and bounded same-role repair; accept nothing partial |
+| unchanged Blue response after blocker | subject rejection | identify prior content identity and require changed complete replacement |
+| adversarial/recheck limit exhausted | search non-convergence | preserve terminal reason; never admit by timeout or vote |
 
 ## 10. Acceptance controls
 
@@ -304,6 +326,12 @@ The Oracle Agent slice is accepted only when tests demonstrate:
 11. the hardware-free historical reduction control can be driven through the model-authored
     proposal boundary before its oracle judges a candidate;
 12. no target-device claim is promoted while NPU evidence is unavailable.
+13. malformed Blue and Red submissions receive exact diagnostics and can repair in their original
+    continuations without crossing private role history;
+14. Red blockers create changed immutable Blue revisions and bounded re-review, while an unchanged
+    proposal and limit exhaustion cannot pass;
+15. repository-owned common/role instructions retain a byte-stable prefix and treat retrieved
+    content as data without instruction authority.
 
 ## 11. Deferred work
 
@@ -313,4 +341,6 @@ The Oracle Agent slice is accepted only when tests demonstrate:
 - cross-provider cache equivalence claims;
 - role merging for cost reasons;
 - target-device execution, which remains a later validation tier;
-- multiple independent red teams until the selected admission policy requires them.
+- multiple independent red teams until the selected admission policy requires them. Current
+  stability rechecks remain in the same Red episode and therefore measure reconsideration, not
+  independent-model consensus.

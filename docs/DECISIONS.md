@@ -492,3 +492,26 @@ does not query repository licenses because this path does not vendor or distribu
 Any future importing workflow remains subject to the ordinary release controls in D-006. Recorded
 providers drive offline CI and replay through the same generic tool-operation seam as live
 providers.
+
+## D-022 — Oracle disagreement uses bounded artifact-mediated debate
+
+- Decision: accepted
+
+Blue and Red retain separate durable episodes across an OracleSearch attempt. Red reviews exactly
+one frozen Blue revision. A Red `revise` with blocking findings is returned as trusted structured
+feedback to Blue's existing episode; Blue must submit a complete changed replacement, which creates
+a new immutable identity before Red can review it. Neither private continuation crosses the role
+boundary, and malformed submissions are rejected atomically with exact diagnostics to the role
+that produced them.
+
+The loop has separately configured limits for Blue submission repair, Red submission repair,
+Blue/Red adversarial rounds, and pass stability rechecks. A pass requires an empty blocker set and
+the configured rechecks over the same frozen revision. A later concrete blocker reopens revision;
+repeated votes never manufacture admission. Limit exhaustion produces an explicit non-converged
+terminal result for trusted admission or an operator to consume.
+
+This is not an instruction to maximize conversation length. Additional turns are purchased only
+to repair a rejected structure, resolve a concrete blocker, or test a named instability surface.
+The stable common and role instructions remain content-addressed prefixes; frozen artifacts and
+trusted diagnostics occupy the changing suffix so useful provider cache reuse does not require
+merging the two roles.
