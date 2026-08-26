@@ -1,8 +1,9 @@
 //! Domain-neutral trusted verification contracts.
 //!
 //! This crate owns admission and verdict policy, never operator mathematics, model transport, or
-//! execution. Current slices establish immutable V1 proposal, policy, and numerical allowance
-//! boundaries. Executed oracle admission remains a later composition over these types.
+//! execution. Current slices establish immutable V1 proposal, policy, numerical allowance,
+//! admitted-oracle, and candidate-verdict boundaries. Product crates supply and recompute the
+//! execution and comparison evidence consumed by these contracts.
 
 use std::{fmt, str::FromStr};
 
@@ -825,6 +826,7 @@ impl ContentType for NumericalAllowanceArtifact {
 }
 
 mod admission;
+mod candidate;
 mod mutation;
 mod proposal;
 
@@ -840,6 +842,12 @@ pub use admission::{
     PreparedAdmissionReceipt, PreparedAdmittedDomain, PreparedAdmittedOracle,
     SourceAdmissionObservationArtifact, prepare_admission_receipt, prepare_admitted_domain,
     prepare_admitted_oracle,
+};
+pub use candidate::{
+    CandidateArtifact, CandidateBuildArtifact, CandidateComparisonArtifact,
+    CandidateFailedCaseArtifact, CandidateRunArtifact, CandidateSourceArtifact,
+    CandidateVerdictArtifact, CandidateVerdictInput, CandidateVerdictOutcomeV1, CandidateVerdictV1,
+    PreparedCandidateVerdict, prepare_candidate_verdict,
 };
 
 pub use mutation::{

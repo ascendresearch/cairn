@@ -930,9 +930,9 @@ upgraded by assurance metadata. Only proven-bound or exhaustive-finite assurance
 unqualified-domain-wide class; held-out evidence reaches empirical at most.
 
 This foundation alone does not claim executed admission. Later implemented slices below now cover
-host variant execution, mutation proof, the hardware-free historical reduction control, and its
-first complete admitted-domain/receipt/oracle graph. Candidate judgment and broader receipt
-lifecycle integration remain target work for M2.
+host variant execution, mutation proof, the hardware-free historical reduction control, its first
+complete admitted-domain/receipt/oracle graph, and a candidate verdict over that frozen oracle.
+General candidate-search and broader receipt lifecycle integration remain target work for M2.
 
 **Implemented proposal artifact graph (2026-08-25).** Strict V1 manifests now preserve the caller
 domain and its explicit unknowns separately from evidence-citing refinements; corpus cases retain
@@ -1225,8 +1225,22 @@ attestation claims are closed typed values carried into the immutable oracle rat
 The oracle also freezes an explicit no-time-expiry/revalidation-trigger policy. Receipt and oracle
 identities are content-derived, critical edges are mirrored and revalidated, and there is no stored
 `passed` bit. Missing saturation, a changed frozen corpus, unknown fields, or a non-V1 schema fails
-closed. This completes all ten first-implementation controls in `ORACLE_ADMISSION.md` section 18;
-candidate-verdict composition remains the next receipt slice.
+closed. This completes all ten first-implementation controls in `ORACLE_ADMISSION.md` section 18.
+
+**Implemented historical reduction candidate verdict (2026-08-26).** A candidate run has its own
+closed execution role and cannot reuse an admission-variant label. Its plan binds the exact
+implementation, authoritative build receipt, executable, admitted host environment, and frozen
+reduction corpus before the generic coordinator executes it. Judgment first recomposes the full
+admitted oracle, revalidates reference and candidate observations, and recomputes each pair of
+finite-f32 results and its ULP distance. The product comparison stores no verdict; failed-case
+identities are derived exactly where distance exceeds the frozen allowance. A domain-neutral
+candidate receipt then cites the admitted oracle and admission receipt, candidate source/build/run,
+environment, corpus, allowance, comparison, and every failed case. `Pass` is derived only when that
+set is empty; `Fail` requires it to be non-empty. Oracle blind spots, assumptions, and unverified
+target/device claims are copied exactly into either result. The integration control executes a
+balanced-tree candidate to `Pass`, a zero-output candidate to `Fail`, and rejects role relabeling,
+changed ULP facts, stored `passed`, forged outcome metadata, and non-V1 data. This completes the
+hardware-free admission-to-verdict path; target-device coverage remains explicitly unverified.
 
 Its core modules are expected to include:
 

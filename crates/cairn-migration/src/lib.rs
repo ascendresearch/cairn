@@ -11,6 +11,7 @@ mod input_values;
 mod materialize;
 mod memory_surface;
 mod reduction_admission;
+mod reduction_candidate;
 mod reduction_control;
 mod variant_execution;
 
@@ -100,6 +101,11 @@ pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,
     compose_historical_reduction_admission,
 };
+pub use reduction_candidate::{
+    HistoricalReductionCandidateCaseV1, HistoricalReductionCandidateComparisonArtifact,
+    HistoricalReductionCandidateComparisonV1, HistoricalReductionCandidateInputs,
+    PreparedHistoricalReductionCandidateVerdict, compose_historical_reduction_candidate_verdict,
+};
 pub use reduction_control::{
     FiniteF32Bits, HistoricalReductionAlgorithm, HistoricalReductionCaptureLimits,
     HistoricalReductionCaseArtifact, HistoricalReductionCaseComparisonV1,
@@ -115,8 +121,9 @@ pub use reduction_control::{
     PreparedHistoricalReductionCorpus, PreparedHistoricalReductionJob, ReductionUlpDistance,
     ValidatedHistoricalReductionRun, compose_historical_reduction_control,
     compute_historical_reduction_fixture_output, compute_historical_reduction_output,
-    prepare_historical_reduction_corpus, prepare_historical_reduction_reference_job,
-    prepare_historical_reduction_variant_job, validate_historical_reduction_receipt,
+    prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
+    prepare_historical_reduction_reference_job, prepare_historical_reduction_variant_job,
+    validate_historical_reduction_receipt,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,

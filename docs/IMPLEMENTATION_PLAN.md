@@ -311,7 +311,7 @@ The remaining G slices, in dependency order, are:
    wrong variants are red. The selected mutation proof must retain a case-dependent blind spot and
    exercise one of the correct implementations. Asserted allowance, an empty applicable grid,
    relabeling, changed content, stored `passed`, and non-V1 input fail closed;
-6. **Admitted-oracle receipt implemented 2026-08-26; candidate verdict pending:** the reduction
+6. **Historical admitted-oracle and candidate-verdict receipts implemented 2026-08-26:** the reduction
    control now recomputes all product evidence before emitting a frozen admitted-domain manifest,
    complete admission receipt, and immutable `AdmittedOracle`. The graph binds proposal, task,
    policy, empirical reference strength, corpus, measured allowance, host environment, source
@@ -319,12 +319,19 @@ The remaining G slices, in dependency order, are:
    historical coverage, blind spots, assumptions, explicit unverified target/device claims, and
    revalidation triggers. Receipt/oracle identities and mirrored edges are recomputed; missing
    saturation, changed frozen corpus, stored `passed`, unknown fields, and non-V1 schemas fail
-   closed. Candidate-verdict receipt composition remains pending.
+   closed. A candidate-specific execution role now binds the implementation, authoritative build,
+   environment, frozen corpus, and run receipt. Product comparison recomputes exact reference and
+   candidate f32 bits plus every ULP distance; the domain-neutral receipt cites source/build/run and
+   comparison evidence, derives `Pass` only from an empty failed-case set, and carries the oracle's
+   blind spots, assumptions, and unverified claims forward. The balanced-tree control candidate
+   passes, zero-output fails with exact case identities, and relabeled admission-variant evidence is
+   rejected. General candidate-search integration and target-device verdicts remain pending.
 
-Phase G is incomplete until step 6 also emits and validates candidate-verdict receipts against the
-now-admitted frozen oracle. Open questions OQ-004 and OQ-007 remain unresolved; implementation must
-preserve derivation and disagreement evidence rather than selecting an independence or automatic
-disagreement policy.
+Phase G now has a complete hardware-free admission-to-candidate-verdict control, but remains
+incomplete while step 4 lacks production compiler/vendor/device adapters, general numerical and
+property variants, and actual mutation injection. Open questions OQ-004 and OQ-007 remain
+unresolved; implementation must preserve derivation and disagreement evidence rather than selecting
+an independence or automatic disagreement policy.
 
 ## Cross-cutting gates
 

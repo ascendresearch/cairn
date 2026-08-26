@@ -88,6 +88,12 @@ pub enum HistoricalReductionControlError {
     /// Persisted control facts were not the exact trusted recomputation.
     #[error("historical reduction control artifact is inconsistent")]
     InconsistentControl,
+    /// Candidate execution did not remain inside the admitted oracle graph and environment.
+    #[error("historical reduction candidate is outside the admitted oracle scope")]
+    CandidateOutsideAdmission,
+    /// Candidate comparison facts differed from exact reference/candidate output bits.
+    #[error("historical reduction candidate comparison is inconsistent")]
+    InconsistentCandidateComparison,
     /// Content storage failed while loading a declared observation.
     #[error("historical reduction content error: {message}")]
     Content { message: String },
@@ -162,6 +168,12 @@ impl From<FiniteF32Bits> for u32 {
 pub struct ReductionUlpDistance(u32);
 
 impl ReductionUlpDistance {
+    /// Creates an exact unsigned ULP count.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
     /// Computes monotonic IEEE-754 representation distance without floating-point subtraction.
     #[must_use]
     pub fn between(left: FiniteF32Bits, right: FiniteF32Bits) -> Self {
@@ -662,6 +674,13 @@ pub enum HistoricalReductionExecutionSubjectV1 {
         /// Authoritative validated build fact producing this executable.
         build: ContentId<crate::VariantBuildReceiptArtifact>,
     },
+    /// Candidate implementation judged only after an oracle has been admitted.
+    Candidate {
+        /// Exact candidate implementation bundle.
+        implementation: ContentId<ImplementationBundleArtifact>,
+        /// Authoritative build fact that produced the executed bytes.
+        build: ContentId<crate::VariantBuildReceiptArtifact>,
+    },
 }
 
 /// Independent capture bounds for a historical reduction process.
@@ -719,7 +738,8 @@ impl HistoricalReductionExecutionPlanV1 {
         ) || matches!(
             (&wire.subject, wire.algorithm),
             (
-                HistoricalReductionExecutionSubjectV1::AdmissionVariant { .. },
+                HistoricalReductionExecutionSubjectV1::AdmissionVariant { .. }
+                    | HistoricalReductionExecutionSubjectV1::Candidate { .. },
                 HistoricalReductionAlgorithm::HighPrecisionReference
             )
         ) {
@@ -752,6 +772,12 @@ impl HistoricalReductionExecutionPlanV1 {
     #[must_use]
     pub const fn environment(&self) -> ContentId<ExecutionEnvironmentArtifact> {
         self.environment
+    }
+
+    /// Returns the frozen reduction corpus exercised by this plan.
+    #[must_use]
+    pub const fn corpus(&self) -> ContentId<HistoricalReductionCorpusArtifact> {
+        self.corpus
     }
 }
 
@@ -912,6 +938,49 @@ pub fn prepare_historical_reduction_variant_job(
         HistoricalReductionExecutionSubjectV1::AdmissionVariant {
             variant: variant_id,
             implementation: variant.implementation(),
+            build: build.build_receipt_id(),
+        },
+        algorithm,
+        corpus,
+        build.executable_bytes(),
+        build.executable_id(),
+        environment,
+        need,
+        limits,
+    )
+}
+
+/// Prepares a candidate-role execution from exact authoritative build evidence.
+///
+/// # Errors
+///
+/// Rejects a changed candidate/build identity, reference-only algorithm, or invalid execution
+/// material. The build may retain its admission-variant provenance, but the run is independently
+/// bound to the candidate role and implementation identity.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "candidate, build, corpus, environment, execution need, and capture limits are independent trust inputs"
+)]
+pub fn prepare_historical_reduction_candidate_job(
+    job_id: JobId,
+    candidate: ContentId<ImplementationBundleArtifact>,
+    algorithm: HistoricalReductionAlgorithm,
+    corpus: &PreparedHistoricalReductionCorpus,
+    build: &ValidatedVariantBuild,
+    environment: ContentId<ExecutionEnvironmentArtifact>,
+    need: &MigrationExecutionNeed,
+    limits: HistoricalReductionCaptureLimits,
+) -> Result<PreparedHistoricalReductionJob, HistoricalReductionControlError> {
+    if algorithm == HistoricalReductionAlgorithm::HighPrecisionReference
+        || build.build_receipt().implementation() != candidate
+        || build.executable_bytes().is_empty()
+    {
+        return Err(HistoricalReductionControlError::InconsistentVariantBuild);
+    }
+    prepare_reduction_job(
+        job_id,
+        HistoricalReductionExecutionSubjectV1::Candidate {
+            implementation: candidate,
             build: build.build_receipt_id(),
         },
         algorithm,
@@ -1335,6 +1404,14 @@ impl HistoricalReductionControlV1 {
         &self.blind_spots
     }
 
+    /// Returns the exact reference execution frozen by the control.
+    #[must_use]
+    pub const fn reference_execution(
+        &self,
+    ) -> ContentId<HistoricalReductionExecutionReceiptArtifact> {
+        self.reference_execution
+    }
+
     /// Recomputes every graph, execution, numerical, variant, and mutation fact.
     ///
     /// # Errors
@@ -1621,7 +1698,8 @@ fn validate_control_proposal_graph(
         ContentId::<CorpusProposalArtifact>::derive(&corpus_proposal_bytes).map_err(composition)?;
     let reference = match reference_job.plan.subject {
         HistoricalReductionExecutionSubjectV1::Reference { reference } => reference,
-        HistoricalReductionExecutionSubjectV1::AdmissionVariant { .. } => {
+        HistoricalReductionExecutionSubjectV1::AdmissionVariant { .. }
+        | HistoricalReductionExecutionSubjectV1::Candidate { .. } => {
             return Err(HistoricalReductionControlError::InconsistentProposalGraph);
         }
     };
@@ -1731,7 +1809,7 @@ fn prepare_wrong_trial(
     })
 }
 
-fn validate_control_run(
+pub(crate) fn validate_control_run(
     corpus: &PreparedHistoricalReductionCorpus,
     job: &PreparedHistoricalReductionJob,
     run: &ValidatedHistoricalReductionRun,

@@ -769,6 +769,18 @@ impl AdmissionReceiptV1 {
     pub const fn decision(&self) -> AdmissionDecisionV1 {
         self.decision
     }
+
+    /// Returns every execution environment admitted for candidate judgment.
+    #[must_use]
+    pub fn environments(&self) -> &[ContentId<AdmissionEnvironmentArtifact>] {
+        &self.environments
+    }
+
+    /// Returns the exact execution scopes exercised during admission.
+    #[must_use]
+    pub fn execution_scopes(&self) -> &[AdmissionExecutionScope] {
+        &self.execution_scopes
+    }
 }
 
 /// Immutable admitted-oracle manifest. It duplicates receipt-critical edges for fail-closed reads.
@@ -891,6 +903,31 @@ pub fn prepare_admitted_oracle(
 }
 
 impl AdmittedOracleV1 {
+    #[must_use]
+    pub const fn frozen_corpus(&self) -> ContentId<AdmissionCorpusArtifact> {
+        self.frozen_corpus
+    }
+
+    #[must_use]
+    pub const fn allowance(&self) -> ContentId<NumericalAllowanceArtifact> {
+        self.allowance
+    }
+
+    #[must_use]
+    pub fn blind_spots(&self) -> &[MutationGridCellV1] {
+        &self.blind_spots
+    }
+
+    #[must_use]
+    pub fn assumptions(&self) -> &[AdmissionAssumptionV1] {
+        &self.assumptions
+    }
+
+    #[must_use]
+    pub fn unverified_claims(&self) -> &[AdmissionUnverifiedClaimV1] {
+        &self.unverified_claims
+    }
+
     /// Revalidates every receipt-mirrored edge and the receipt identity.
     ///
     /// # Errors

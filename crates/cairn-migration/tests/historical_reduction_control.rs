@@ -18,6 +18,7 @@ use cairn_migration::{
     HistoricalFailureEvidenceArtifact, HistoricalFailureObligationV1, HistoricalFailureRecordInput,
     HistoricalFailureRecordV1, HistoricalFailureScope, HistoricalObservedFailureArtifact,
     HistoricalReductionAdmissionInputs, HistoricalReductionAlgorithm,
+    HistoricalReductionCandidateComparisonArtifact, HistoricalReductionCandidateInputs,
     HistoricalReductionCaptureLimits, HistoricalReductionCaseArtifact, HistoricalReductionCaseV1,
     HistoricalReductionControlArtifact, HistoricalReductionControlError,
     HistoricalReductionCorrectVariantEvidence, HistoricalReductionWrongVariantEvidence,
@@ -28,7 +29,8 @@ use cairn_migration::{
     RequestedSemanticsArtifact, SemanticClaimKind, ValidatedHistoricalReductionRun,
     ValidatedVariantBuild, VariantBuildCaptureLimits, VariantBuildDriverByteLimit,
     VariantImplementationByteLimit, compose_historical_reduction_admission,
-    compose_historical_reduction_control, prepare_historical_reduction_corpus,
+    compose_historical_reduction_candidate_verdict, compose_historical_reduction_control,
+    prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
     prepare_historical_reduction_reference_job, prepare_historical_reduction_variant_job,
     prepare_variant_build_job, validate_historical_reduction_receipt,
     validate_variant_build_receipt,
@@ -45,6 +47,7 @@ use cairn_verification::{
     AdmissionSaturationRoundV1, AdmittedOracleArtifact, AdmittedOracleV1, AllowanceAssurance,
     AllowanceMagnitude, AllowanceProvenance, ArtifactAuthorId, ArtifactAuthorshipV1,
     AuthorshipOrigin, BudgetExhaustionOutcome, CallerDomainEvidenceArtifact,
+    CandidateVerdictArtifact, CandidateVerdictOutcomeV1, CandidateVerdictV1,
     ConstructionClaimArtifact, ConstructionClaimInput, ConstructionClaimV1, ConstructionClassName,
     ConstructionEvidenceArtifact, ConstructionJustification, ConstructionPrerequisiteArtifact,
     CorpusCaseArtifact, CorpusCaseEntryV1, CorpusCaseProvenanceArtifact, CorpusCaseSource,
@@ -72,11 +75,13 @@ struct CompletedRun {
 struct CorrectControl {
     variant: ImplementationVariantV1,
     claim: ConstructionClaimV1,
+    build: ValidatedVariantBuild,
     completed: CompletedRun,
 }
 
 struct WrongControl {
     variant: ImplementationVariantV1,
+    build: ValidatedVariantBuild,
     completed: CompletedRun,
 }
 
@@ -269,7 +274,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         ],
     )
     .expect("revalidation policy");
-    let admission = compose_historical_reduction_admission(&HistoricalReductionAdmissionInputs {
+    let admission_inputs = HistoricalReductionAdmissionInputs {
         control: &prepared,
         domain: &domain,
         declared_domain: &declared,
@@ -292,8 +297,9 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         mutation_proof: policy_mutation.proof.proof(),
         saturation_rounds: &saturation_rounds,
         revalidation: &revalidation,
-    })
-    .expect("complete admitted oracle graph");
+    };
+    let admission = compose_historical_reduction_admission(&admission_inputs)
+        .expect("complete admitted oracle graph");
     assert_eq!(
         ContentId::<AdmissionReceiptArtifact>::derive(admission.receipt().receipt_bytes())
             .expect("receipt identity"),
@@ -375,6 +381,92 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         .is_err()
     );
 
+    let passing_candidate = execute_candidate_run(
+        HistoricalReductionAlgorithm::BalancedTree,
+        &corpus,
+        &tree.build,
+    );
+    let passing_verdict =
+        compose_historical_reduction_candidate_verdict(&HistoricalReductionCandidateInputs {
+            admitted: &admission,
+            admission_inputs: &admission_inputs,
+            build: &tree.build,
+            job: &passing_candidate.job,
+            run: &passing_candidate.run,
+        })
+        .expect("passing candidate verdict");
+    assert_eq!(
+        passing_verdict.verdict().verdict().outcome(),
+        CandidateVerdictOutcomeV1::Pass
+    );
+    assert!(
+        passing_verdict
+            .verdict()
+            .verdict()
+            .failed_cases()
+            .is_empty()
+    );
+    assert_eq!(
+        passing_verdict.verdict().verdict().oracle_blind_spots(),
+        admission.oracle().oracle().blind_spots()
+    );
+    assert_eq!(
+        passing_verdict
+            .verdict()
+            .verdict()
+            .oracle_unverified_claims(),
+        admission.oracle().oracle().unverified_claims()
+    );
+
+    let failing_candidate = execute_candidate_run(
+        HistoricalReductionAlgorithm::ZeroOutput,
+        &corpus,
+        &zero.build,
+    );
+    let failing_verdict =
+        compose_historical_reduction_candidate_verdict(&HistoricalReductionCandidateInputs {
+            admitted: &admission,
+            admission_inputs: &admission_inputs,
+            build: &zero.build,
+            job: &failing_candidate.job,
+            run: &failing_candidate.run,
+        })
+        .expect("failing candidate verdict");
+    assert_eq!(
+        failing_verdict.verdict().verdict().outcome(),
+        CandidateVerdictOutcomeV1::Fail
+    );
+    assert!(
+        !failing_verdict
+            .verdict()
+            .verdict()
+            .failed_cases()
+            .is_empty()
+    );
+    assert_eq!(
+        ContentId::<HistoricalReductionCandidateComparisonArtifact>::derive(
+            passing_verdict.comparison_bytes(),
+        )
+        .expect("candidate comparison identity"),
+        passing_verdict.comparison_id()
+    );
+    assert_eq!(
+        ContentId::<CandidateVerdictArtifact>::derive(passing_verdict.verdict().verdict_bytes(),)
+            .expect("candidate verdict identity"),
+        passing_verdict.verdict().verdict_id()
+    );
+    assert_strict_candidate_artifacts(&passing_verdict, &admission);
+    assert_eq!(
+        compose_historical_reduction_candidate_verdict(&HistoricalReductionCandidateInputs {
+            admitted: &admission,
+            admission_inputs: &admission_inputs,
+            build: &tree.build,
+            job: &tree.completed.job,
+            run: &tree.completed.run,
+        }),
+        Err(HistoricalReductionControlError::CandidateOutsideAdmission)
+    );
+
     assert_asserted_allowance_and_passed_tampering_fail(
         &prepared,
         &domain,
@@ -391,6 +483,46 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         &reference,
         &correct,
         &wrong,
+    );
+}
+
+fn assert_strict_candidate_artifacts(
+    verdict: &cairn_migration::PreparedHistoricalReductionCandidateVerdict,
+    admission: &cairn_migration::PreparedHistoricalReductionAdmission,
+) {
+    let mut value =
+        serde_json::to_value(verdict.verdict().verdict()).expect("candidate verdict JSON");
+    value["passed"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CandidateVerdictV1>(value).is_err());
+
+    let mut value =
+        serde_json::to_value(verdict.verdict().verdict()).expect("candidate verdict JSON");
+    value["outcome"] = serde_json::json!("fail");
+    assert!(serde_json::from_value::<CandidateVerdictV1>(value).is_err());
+
+    let mut value =
+        serde_json::to_value(verdict.verdict().verdict()).expect("candidate verdict JSON");
+    value["outcome"] = serde_json::json!("fail");
+    value["failed_cases"] = serde_json::json!([id::<
+        cairn_verification::CandidateFailedCaseArtifact,
+    >(b"forged failed case")]);
+    let forged = serde_json::from_value::<CandidateVerdictV1>(value)
+        .expect("locally consistent forged outcome");
+    assert!(verdict.validate_verdict(&forged, admission).is_err());
+
+    let mut value =
+        serde_json::to_value(verdict.verdict().verdict()).expect("candidate verdict JSON");
+    value["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<CandidateVerdictV1>(value).is_err());
+
+    let mut comparison =
+        serde_json::to_value(verdict.comparison()).expect("candidate comparison JSON");
+    comparison["cases"][0]["ulp_distance"] = serde_json::json!(999);
+    assert!(
+        serde_json::from_value::<cairn_migration::HistoricalReductionCandidateComparisonV1>(
+            comparison
+        )
+        .is_err()
     );
 }
 
@@ -639,6 +771,7 @@ fn execute_correct(
     CorrectControl {
         variant,
         claim,
+        build,
         completed,
     }
 }
@@ -661,7 +794,11 @@ fn execute_wrong(
     );
     let build = execute_variant_build(&variant, &implementation);
     let completed = execute_variant_run(&variant, algorithm, corpus, &build);
-    WrongControl { variant, completed }
+    WrongControl {
+        variant,
+        build,
+        completed,
+    }
 }
 
 fn execute_variant_build(
@@ -730,6 +867,27 @@ fn execute_variant_run(
         reduction_limits(),
     )
     .expect("variant reduction job");
+    let run = execute_reduction_job(corpus, &job, environment);
+    CompletedRun { job, run }
+}
+
+fn execute_candidate_run(
+    algorithm: HistoricalReductionAlgorithm,
+    corpus: &cairn_migration::PreparedHistoricalReductionCorpus,
+    build: &ValidatedVariantBuild,
+) -> CompletedRun {
+    let environment = environment_id();
+    let job = prepare_historical_reduction_candidate_job(
+        JobId::new(),
+        build.build_receipt().implementation(),
+        algorithm,
+        corpus,
+        build,
+        environment,
+        &execution_need(),
+        reduction_limits(),
+    )
+    .expect("candidate reduction job");
     let run = execute_reduction_job(corpus, &job, environment);
     CompletedRun { job, run }
 }

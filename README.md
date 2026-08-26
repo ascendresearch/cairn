@@ -49,8 +49,10 @@ held-out evidence requires identity-disjoint corpora, and asserted or external-p
 cannot be promoted by assurance metadata. The proposal side now has immutable caller-domain,
 refinement, corpus, authorship, construction-claim, correct/wrong-variant, and oracle-proposal
 manifests with separate typed identity domains. The first immutable admitted-oracle receipt is now
-implemented for the hardware-free historical reduction control; candidate judgment, real
-CUDA/Ascend execution, and the first unified migration are not implemented yet.
+implemented for the hardware-free historical reduction control. That frozen oracle can judge
+candidate-role host reduction executions and emit recomputable pass/fail receipts; general
+candidate search, real CUDA/Ascend execution, and the first unified migration are not implemented
+yet.
 `cairn-migration` now supplies the first strongly typed operator-domain
 body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivation. Floating
 special-value and memory conditions retain explicit supported/invalid/excluded/unknown
@@ -124,6 +126,11 @@ immutable `AdmittedOracle`. These artifacts freeze the proposal, policy, empiric
 strength, corpus, allowance, environments, variant and mutation evidence, historical coverage,
 case-dependent blind spot, assumptions, target/device claims left unverified, and explicit
 revalidation triggers. Missing saturation rounds or any changed receipt/oracle edge fail closed.
+Candidate execution has a distinct role and authoritative run receipt. The reduction judgment path
+recomputes every reference/candidate ULP distance against the frozen one-ULP allowance, emits all
+failed cases, carries oracle blind spots/assumptions/unverified target claims forward, and derives
+`Pass` or `Fail` without a stored boolean. A balanced-tree candidate passes, a zero-output candidate
+fails, and an admission-variant run cannot be relabeled as candidate evidence.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
