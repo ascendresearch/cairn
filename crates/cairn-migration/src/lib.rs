@@ -1,6 +1,7 @@
 //! Operator-migration product semantics and translation into domain-neutral execution requests.
 
 mod domain;
+mod historical;
 mod input_values;
 mod memory_surface;
 
@@ -16,6 +17,15 @@ pub use domain::{
     ScalarParameterRole, SemanticClaimKind, ShapeAssignment, ShapeBoundaryObligation, ShapeRank,
     ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
     StatusCode, derive_mandatory_base_cases,
+};
+pub use historical::{
+    HistoricalDetectionRequirement, HistoricalDiagnosticClassName, HistoricalFailureClassName,
+    HistoricalFailureContractError, HistoricalFailureCoverageArtifact, HistoricalFailureCoverageV1,
+    HistoricalFailureEvidenceArtifact, HistoricalFailureObligationArtifact,
+    HistoricalFailureObligationV1, HistoricalFailureRecordArtifact, HistoricalFailureRecordInput,
+    HistoricalFailureRecordV1, HistoricalFailureScope, HistoricalObservationClassName,
+    HistoricalObservedFailureArtifact, HistoricalReproductionArtifact, HistoricalValidationStage,
+    MigrationDomainFamilyName, OracleFailureMechanismName, TargetMechanismName,
 };
 pub use input_values::{
     BooleanInputPattern, FloatingDataType, FloatingInputPattern, FloatingInputValueDomainInput,

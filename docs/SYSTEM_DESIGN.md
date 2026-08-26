@@ -986,6 +986,17 @@ non-empty pointer cases for zero-only buffers and does not claim partial overlap
 regions. These obligations still require isolated byte materialization and execution before they
 become observations.
 
+**Implemented historical-regression contract slice (2026-08-25).** Historical records now preserve
+a validated failure class, migration-domain family, target-mechanism or oracle-mechanism scope,
+observed validation stage, non-empty canonical source evidence, original observation, independent
+reproduction fixture, and license provenance. A regression obligation derives the exact typed
+record identity and permits only a detector at the recorded stage: oracle verdict divergence,
+compile/link diagnostic class, invocation failure/status, or output-observation class. Loading an
+obligation against record bytes recomputes identity and copied metadata; an exact-domain coverage
+set rejects empty, duplicate, out-of-order, or cross-family obligations. This establishes the
+artifact and graph-validation boundary only. The known reduction, `GM_ADDR`, `DataCopyExtParams`,
+alignment, initialization, and related fixtures have not yet been populated or executed.
+
 Its core modules are expected to include:
 
 - domain and coverage obligations;

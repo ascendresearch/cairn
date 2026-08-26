@@ -52,8 +52,9 @@ execution, the historical reduction control, candidate judgment, and the first u
 are not implemented yet. `cairn-migration` now supplies the first strongly typed operator-domain
 body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivation. Floating
 special-value and memory conditions retain explicit supported/invalid/excluded/unknown
-dispositions. Historical target-failure obligations and executable case materialization remain
-unfinished.
+dispositions. Historical target/oracle failure records and exact-domain coverage obligations now
+retain typed provenance, scope, stage, and detection requirements. Populating and executing the
+historical fixtures, plus general executable case materialization, remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

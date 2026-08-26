@@ -218,7 +218,10 @@ The remaining G slices, in dependency order, are:
    min/max/zero/one/interiors, invalid neighbors, first/last tile tails, dtype extrema, signed zero,
    non-finite/subnormal inputs, cancellation, mixed finite scales, null/misaligned pointers,
    insufficient capacity, exact aliasing, and applicable partial overlap. Remaining mandatory work
-   includes historical target failures and executable corpus-case materialization;
+   includes populating/reproducing historical fixtures and executable corpus-case materialization.
+   Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
+   observed stage, required detector, exact record identity, domain family, and caller-domain
+   identity;
 3. versioned mutation-grid trials and recomputed proof obligations that ignore stored `passed`
    metadata;
 4. execution-port composition for correct and deliberately wrong variants through the complete
