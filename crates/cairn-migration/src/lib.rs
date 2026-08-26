@@ -1,11 +1,17 @@
 //! Operator-migration product semantics and translation into domain-neutral execution requests.
 
+mod assemble;
 mod domain;
 mod historical;
 mod input_values;
 mod materialize;
 mod memory_surface;
 
+pub use assemble::{
+    AssembledBoundaryCaseInput, BoundaryCaseAssemblyError, MaterializedAbiArgumentV1,
+    MaterializedBoundaryCaseArtifact, MaterializedBoundaryCaseV1,
+    MaterializedScalarArgumentBytesArtifact, assemble_boundary_case_input,
+};
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,
     CaseExpectedOutcome, CaseTarget, DataType, DimensionAxis, DimensionSpec, DomainContractError,

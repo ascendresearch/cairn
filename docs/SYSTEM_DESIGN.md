@@ -986,8 +986,22 @@ distinct Rust types; multiplication, host-size conversion, and allocation fail c
 V1 manifest binds the canonical source-case identity, copied typed target/disposition, exact byte
 length/order, and raw-byte content identity, and validators recompute both source and byte
 bindings. Unknown and explicitly-excluded obligations cannot be materialized. This slice does not
-yet choose shape assignments, serialize scalar ABI arguments, assemble `InputBundleV1`, realize
-unsafe pointer/aliasing layouts, or execute a case.
+by itself choose a complete assignment or execute a case.
+
+**Implemented quantitative boundary-case bundle assembly slice (2026-08-25).** Given an exact
+caller domain, one trusted quantitative boundary case, supported baseline bytes for every
+input-capable buffer, and a positive per-buffer byte limit, migration assembly rederives the full
+mandatory case set and rejects a case that is not a member. It resolves every fixed/symbolic buffer
+shape, checks element/byte products, encodes integer and boolean scalar arguments in exact
+little-endian ABI widths, and interleaves buffers and scalars by the shared typed argument index.
+Write-only outputs carry exact allocation shapes and lengths without fabricated input files. The
+strict V1 invocation manifest binds domain, boundary-case, materialized-buffer, raw-buffer, and
+scalar-byte identities; the canonical `InputBundleV1` contains that manifest and only the required
+input/scalar files, and validation rejects missing, extra, executable, reordered, length-changed, or
+content-changed material. Explicitly excluded boundaries and explicitly-invalid dtype recipes are
+not admitted into this baseline assembly, preventing two independent invalid conditions from being
+silently assigned the boundary case's outcome. Dedicated dtype-invalid composition, isolated
+pointer/capacity/aliasing layouts, a call adapter, observations, and execution remain target work.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

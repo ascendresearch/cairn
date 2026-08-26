@@ -575,9 +575,27 @@ pub enum DataType {
     Bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DataTypeByteWidth(u64);
+
+impl DataTypeByteWidth {
+    pub(crate) const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 impl DataType {
-    const fn supports_integer_domain(self) -> bool {
+    pub(crate) const fn supports_integer_domain(self) -> bool {
         !matches!(self, Self::F16 | Self::F32 | Self::F64)
+    }
+
+    pub(crate) const fn byte_width(self) -> DataTypeByteWidth {
+        match self {
+            Self::F16 | Self::I16 | Self::U16 => DataTypeByteWidth(2),
+            Self::F32 | Self::I32 | Self::U32 => DataTypeByteWidth(4),
+            Self::F64 | Self::I64 | Self::U64 => DataTypeByteWidth(8),
+            Self::I8 | Self::U8 | Self::Bool => DataTypeByteWidth(1),
+        }
     }
 
     const fn integer_bounds(self) -> Option<(i64, i64)> {
@@ -929,6 +947,12 @@ impl ScalarParameterContractV1 {
     #[must_use]
     pub const fn role(&self) -> ScalarParameterRole {
         self.role
+    }
+
+    /// Returns the exact integer/bool ABI type.
+    #[must_use]
+    pub const fn data_type(&self) -> DataType {
+        self.data_type
     }
 
     /// Returns the valid integer range.

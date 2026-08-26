@@ -221,8 +221,11 @@ The remaining G slices, in dependency order, are:
    includes populating/reproducing historical fixtures and completing executable corpus-case
    assembly. Exact dtype recipes now materialize into caller-bounded deterministic bytes with
    typed element/byte quantities, checked overflow/allocation, and source/byte content identities;
-   shape/scalar ABI assembly, complete input bundles, memory-surface realization, and execution are
-   still pending.
+   trusted quantitative boundary cases now rederive exact domain membership, resolve buffer shapes,
+   encode scalar ABI files, describe output allocation lengths, and emit canonical ABI-ordered
+   `InputBundleV1` artifacts with cross-validated manifest/source/file identities. Separate
+   explicitly-invalid dtype-case composition, memory-surface realization, call-adapter execution,
+   and complete corpus orchestration are still pending.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

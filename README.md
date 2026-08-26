@@ -56,8 +56,11 @@ dispositions. Historical target/oracle failure records and exact-domain coverage
 retain typed provenance, scope, stage, and detection requirements. Populating and executing the
 historical fixtures remain unfinished. Supported and explicitly-invalid dtype recipes now
 materialize into bounded deterministic little-endian bytes with typed element/byte quantities and
-content-bound source/byte manifests. Shape/scalar ABI assembly, complete input bundles,
-memory-surface realization, and execution remain unfinished.
+content-bound source/byte manifests. Trusted quantitative boundary cases can now rederive their
+domain membership, resolve shapes, encode scalar arguments, describe output allocations, and build
+an ABI-ordered canonical `InputBundleV1`; bundle/manifest/source identities and exact files are
+cross-validated. Separate explicitly-invalid dtype-case composition, memory-surface realization,
+call-adapter execution, and complete corpus orchestration remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
