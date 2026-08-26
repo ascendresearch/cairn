@@ -1,7 +1,6 @@
 //! Runnable outbound Cairn worker composition root.
 
-mod local_process;
-mod oci_container;
+mod docker;
 mod probe;
 
 use std::{
@@ -25,13 +24,15 @@ use cairn_execution::{
     AssignmentMaterialKind, AssignmentMaterialManifest, CapabilityRequirement, ControlFrame,
     ControllerControlMessage, DurableControlMessage, ExecutionBackend, ExecutionCapture,
     ExecutionInput, ExecutionPlatform, ExecutionPlatformRequirement, Executor, ExecutorError,
-    InboundControlSession, WorkerAvailability, WorkerBinaryIdentity, WorkerExecutionAuthority,
-    WorkerExecutionObservation, WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile,
-    WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory, WorkerResourceSource,
-    WorkerSlotCount, acknowledge_worker_messages, active_worker_attempts, admit_worker_assignment,
-    deliver_worker_acknowledgement, deliver_worker_messages, invoke_worker_executor,
-    record_worker_execution_observation, record_worker_execution_start,
-    validate_assignment_material_manifest, verify_persisted_assignment_materials,
+    InboundControlSession, RecoverableExecutor, RecoveredWorkerExecutionAuthority,
+    WorkerAvailability, WorkerBinaryIdentity, WorkerExecutionAuthority, WorkerExecutionObservation,
+    WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion,
+    WorkerResourceClaim, WorkerResourceInventory, WorkerResourceSource, WorkerSlotCount,
+    acknowledge_worker_messages, active_worker_attempts, admit_worker_assignment,
+    deliver_worker_acknowledgement, deliver_worker_messages, invoke_recovered_worker_executor,
+    invoke_worker_executor, record_worker_execution_observation, record_worker_execution_start,
+    recover_started_worker_executions, validate_assignment_material_manifest,
+    verify_persisted_assignment_materials,
 };
 use cairn_protocol::{
     CommandId, ContentId, ContentType, ControlConnectionId, ControlMessageId, ControlSequence,
@@ -48,14 +49,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::time::{Instant, Interval};
 
-use local_process::LocalProcessExecutor;
-pub use local_process::{LinuxNamespaceConfig, WorkerExecutionConfig};
-pub use oci_container::{
-    ContainerLaunchLimits, ContainerLaunchPlan, ContainerLaunchPlanError, ContainerLogicalCpuLimit,
-    ContainerMemoryByteLimit, ContainerPidsLimit, ContainerStateRoot, ContainerSupervisorError,
-    ContainerSupervisorFailureClass, ContainerWritableByteLimit, build_container_launch_plan,
-    recover_container_supervision, start_container_supervision,
-};
+use docker::DockerExecutor;
+pub use docker::WorkerExecutionConfig;
 
 pub use probe::{
     ExpectedResourceConstraints, HostResourceProbe, ResourceProbeConfig, ResourceProbeError,
@@ -190,6 +185,11 @@ struct ExecutionTasks {
     pending: usize,
 }
 
+enum WorkerExecutionTaskAuthority {
+    Fresh(WorkerExecutionAuthority),
+    Recovered(RecoveredWorkerExecutionAuthority),
+}
+
 impl ExecutionTasks {
     fn new() -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -222,6 +222,12 @@ impl NotStartedExecutor {
 impl Executor for NotStartedExecutor {
     fn execute(&mut self, _input: &ExecutionInput<'_>) -> Result<ExecutionCapture, ExecutorError> {
         Err(ExecutorError::NotStarted(self.diagnostic.clone()))
+    }
+}
+
+impl RecoverableExecutor for NotStartedExecutor {
+    fn recover(&mut self, _input: &ExecutionInput<'_>) -> Result<ExecutionCapture, ExecutorError> {
+        Err(ExecutorError::Ambiguous(self.diagnostic.clone()))
     }
 }
 
@@ -303,18 +309,42 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     let mut content = SqliteContentStore::open(&config.content.database, &config.content.directory)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     prepare_state_directory(&config.content.transfer_directory)?;
-    if let WorkerExecutionConfig::LocalProcess {
-        sandbox_directory, ..
+    if let WorkerExecutionConfig::Docker {
+        state_directory, ..
     } = &config.execution
     {
-        prepare_state_directory(sandbox_directory)?;
-        LocalProcessExecutor::from_config(&content, &config.execution)
+        prepare_state_directory(state_directory)?;
+        DockerExecutor::from_config(&content, &config.execution)
             .and_then(|executor| executor.preflight())
             .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     }
     let mut execution_tasks = ExecutionTasks::new();
+    let mut startup_recovered = false;
     loop {
         let identity = config.resolve_identity()?;
+        if !startup_recovered {
+            if matches!(config.execution, WorkerExecutionConfig::Docker { .. }) {
+                let recovered = recover_started_worker_executions(
+                    &journal,
+                    &content,
+                    identity.worker_id,
+                    config.content.assignment_material_byte_limit,
+                )
+                .map_err(|error| WorkerError::Session(error.to_string()))?;
+                for authority in recovered {
+                    execution_tasks.pending =
+                        execution_tasks.pending.checked_add(1).ok_or_else(|| {
+                            WorkerError::Session("execution task count overflow".into())
+                        })?;
+                    spawn_worker_execution(
+                        &config,
+                        WorkerExecutionTaskAuthority::Recovered(authority),
+                        execution_tasks.sender.clone(),
+                    );
+                }
+            }
+            startup_recovered = true;
+        }
         if bound_credential.is_some() && bound_credential != identity.credential_id {
             incarnation_id = WorkerIncarnationId::new();
         }
@@ -347,7 +377,7 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
         }
         let Some(delay) = config.reconnect_delay_ms else {
             while execution_tasks.pending != 0 {
-                receive_and_record_execution(&mut journal, &mut execution_tasks).await?;
+                receive_and_record_execution(&mut journal, &mut execution_tasks, &config).await?;
             }
             return outcome;
         };
@@ -355,6 +385,7 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
             tokio::time::sleep(Duration::from_millis(delay.get())),
             &mut journal,
             &mut execution_tasks,
+            &config,
         )
         .await?;
     }
@@ -528,7 +559,7 @@ impl WorkerConfig {
                     || profile.max_concurrency().get() != 1
                 {
                     return Err(WorkerError::Configuration(
-                        "local_process activation requires exactly backend local-process-v1, concurrency one, and ready, non-draining, one-slot availability"
+                        "Docker activation requires exactly backend docker-v1, concurrency one, and ready, non-draining, one-slot availability"
                             .into(),
                     ));
                 }
@@ -604,6 +635,7 @@ async fn run_session(
         timeout_optional(config.handshake_timeout_ms, connecting),
         journal,
         execution_tasks,
+        config,
     ))
     .await??
     .map_err(|error| WorkerError::Session(error.to_string()))?;
@@ -633,6 +665,7 @@ async fn run_session(
         ),
         journal,
         execution_tasks,
+        config,
     ))
     .await??
     .map_err(|error| WorkerError::Session(error.to_string()))?;
@@ -688,7 +721,7 @@ async fn run_session(
         };
         match wake {
             Wake::ExecutionFinished(observation) => {
-                record_execution_observation(journal, execution_tasks, *observation)?;
+                record_execution_observation(journal, execution_tasks, *observation, config)?;
             }
             Wake::Heartbeat => {
                 write_wire_message(
@@ -744,7 +777,7 @@ async fn run_session(
                                 })?;
                             spawn_worker_execution(
                                 config,
-                                authority,
+                                WorkerExecutionTaskAuthority::Fresh(authority),
                                 execution_tasks.sender.clone(),
                             );
                         }
@@ -774,6 +807,7 @@ async fn await_with_execution<F, T>(
     future: F,
     journal: &mut SqliteEventStore,
     execution_tasks: &mut ExecutionTasks,
+    config: &WorkerConfig,
 ) -> Result<T, WorkerError>
 where
     F: Future<Output = T>,
@@ -783,7 +817,7 @@ where
         tokio::select! {
             output = &mut future => return Ok(output),
             Some(observation) = execution_tasks.receiver.recv() => {
-                record_execution_observation(journal, execution_tasks, *observation)?;
+                record_execution_observation(journal, execution_tasks, *observation, config)?;
             }
         }
     }
@@ -792,24 +826,27 @@ where
 async fn receive_and_record_execution(
     journal: &mut SqliteEventStore,
     execution_tasks: &mut ExecutionTasks,
+    config: &WorkerConfig,
 ) -> Result<(), WorkerError> {
     let observation = execution_tasks
         .receiver
         .recv()
         .await
         .ok_or_else(|| WorkerError::Session("execution observation channel closed".into()))?;
-    record_execution_observation(journal, execution_tasks, *observation)
+    record_execution_observation(journal, execution_tasks, *observation, config)
 }
 
 fn record_execution_observation(
     journal: &mut SqliteEventStore,
     execution_tasks: &mut ExecutionTasks,
     observation: WorkerExecutionObservation,
+    config: &WorkerConfig,
 ) -> Result<(), WorkerError> {
     execution_tasks.pending = execution_tasks
         .pending
         .checked_sub(1)
         .ok_or_else(|| WorkerError::Session("unexpected execution observation".into()))?;
+    let attempt_id = observation.attempt_id();
     record_worker_execution_observation(
         journal,
         observation,
@@ -818,6 +855,7 @@ fn record_execution_observation(
         observed_now()?,
     )
     .map_err(|error| WorkerError::Session(error.to_string()))?;
+    docker::cleanup_published_attempt(&config.execution, attempt_id);
     Ok(())
 }
 
@@ -884,34 +922,71 @@ async fn process_controller_frame(
 
 fn spawn_worker_execution(
     config: &WorkerConfig,
-    authority: WorkerExecutionAuthority,
+    authority: WorkerExecutionTaskAuthority,
     sender: tokio::sync::mpsc::UnboundedSender<Box<WorkerExecutionObservation>>,
 ) {
     let content_config = config.content.clone();
     let execution_config = config.execution.clone();
     tokio::task::spawn_blocking(move || {
-        let observation = match &execution_config {
-            WorkerExecutionConfig::Disabled => {
+        let observation = match (authority, &execution_config) {
+            (WorkerExecutionTaskAuthority::Fresh(authority), WorkerExecutionConfig::Disabled) => {
                 invoke_worker_executor(&mut NotStartedExecutor::disabled(), authority)
             }
-            WorkerExecutionConfig::LocalProcess { .. } => {
+            (
+                WorkerExecutionTaskAuthority::Recovered(authority),
+                WorkerExecutionConfig::Disabled,
+            ) => invoke_recovered_worker_executor(
+                &mut NotStartedExecutor::configuration(
+                    "Docker recovery was disabled after the start fact",
+                ),
+                authority,
+            ),
+            (authority, WorkerExecutionConfig::Docker { .. }) => {
                 match SqliteContentStore::open(&content_config.database, &content_config.directory)
                 {
-                    Ok(content) => {
-                        match LocalProcessExecutor::from_config(&content, &execution_config) {
-                            Ok(mut executor) => invoke_worker_executor(&mut executor, authority),
-                            Err(error) => invoke_worker_executor(
-                                &mut NotStartedExecutor::configuration(error.to_string()),
-                                authority,
-                            ),
+                    Ok(content) => match DockerExecutor::from_config(&content, &execution_config) {
+                        Ok(mut executor) => match authority {
+                            WorkerExecutionTaskAuthority::Fresh(authority) => {
+                                invoke_worker_executor(&mut executor, authority)
+                            }
+                            WorkerExecutionTaskAuthority::Recovered(authority) => {
+                                invoke_recovered_worker_executor(&mut executor, authority)
+                            }
+                        },
+                        Err(error) => match authority {
+                            WorkerExecutionTaskAuthority::Fresh(authority) => {
+                                invoke_worker_executor(
+                                    &mut NotStartedExecutor::configuration(error.to_string()),
+                                    authority,
+                                )
+                            }
+                            WorkerExecutionTaskAuthority::Recovered(authority) => {
+                                invoke_recovered_worker_executor(
+                                    &mut NotStartedExecutor::configuration(error.to_string()),
+                                    authority,
+                                )
+                            }
+                        },
+                    },
+                    Err(error) => {
+                        let diagnostic = format!(
+                            "worker content reopen failed before workload reconciliation: {error}"
+                        );
+                        match authority {
+                            WorkerExecutionTaskAuthority::Fresh(authority) => {
+                                invoke_worker_executor(
+                                    &mut NotStartedExecutor::configuration(diagnostic),
+                                    authority,
+                                )
+                            }
+                            WorkerExecutionTaskAuthority::Recovered(authority) => {
+                                invoke_recovered_worker_executor(
+                                    &mut NotStartedExecutor::configuration(diagnostic),
+                                    authority,
+                                )
+                            }
                         }
                     }
-                    Err(error) => invoke_worker_executor(
-                        &mut NotStartedExecutor::configuration(format!(
-                            "worker content reopen failed before workload start: {error}"
-                        )),
-                        authority,
-                    ),
                 }
             }
         };
@@ -1957,7 +2032,7 @@ mod tests {
         WorkerHealth, WorkerResourceSource,
     };
 
-    use super::{LinuxNamespaceConfig, WorkerConfig, WorkerExecutionConfig};
+    use super::{WorkerConfig, WorkerExecutionConfig};
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
@@ -1992,20 +2067,20 @@ mod tests {
     }
 
     #[test]
-    fn local_process_activation_is_one_coherent_invariant() {
+    fn docker_activation_is_one_coherent_invariant() {
         let mut config: WorkerConfig =
             serde_json::from_str(include_str!("../../../config/worker.example.json"))
                 .expect("documented worker configuration");
-        config.execution = WorkerExecutionConfig::LocalProcess {
-            sandbox_directory: PathBuf::from("state/sandboxes"),
-            namespace: LinuxNamespaceConfig {
-                command: PathBuf::from("/usr/bin/unshare"),
-                preflight_timeout_ms: NonZeroU64::new(1_000),
-            },
-            supervisor_poll_interval_ms: NonZeroU64::new(10).expect("poll interval"),
-            materialized_file_byte_limit: None,
+        config.execution = WorkerExecutionConfig::Docker {
+            command: PathBuf::from("/usr/bin/docker"),
+            state_directory: PathBuf::from("state/docker"),
+            poll_interval_ms: NonZeroU64::new(10).expect("poll interval"),
+            logical_cpu_limit: None,
+            memory_byte_limit: None,
+            pids_limit: None,
+            writable_byte_limit: None,
         };
-        config.profile.backends = vec![ExecutionBackend::new("local-process-v1").expect("backend")];
+        config.profile.backends = vec![ExecutionBackend::new("docker-v1").expect("backend")];
         config.availability = WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
             .expect("availability");
         let profile = config.runtime_profile().expect("runtime profile");

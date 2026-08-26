@@ -464,6 +464,11 @@ pub struct WorkerExecutionAuthority {
     contract: JobContract,
 }
 
+/// One locally journaled start that may only be consumed by a recovery-capable executor.
+pub struct RecoveredWorkerExecutionAuthority {
+    authority: WorkerExecutionAuthority,
+}
+
 /// Completed executor invocation awaiting serialized worker-journal publication.
 ///
 /// The value retains the consumed one-shot authority, so blocking supervision and journal append
@@ -471,6 +476,14 @@ pub struct WorkerExecutionAuthority {
 pub struct WorkerExecutionObservation {
     authority: WorkerExecutionAuthority,
     result: ReconciledExecutionResult,
+}
+
+impl WorkerExecutionObservation {
+    /// Returns the exact attempt whose terminal observation is awaiting durable publication.
+    #[must_use]
+    pub const fn attempt_id(&self) -> AttemptId {
+        self.authority.binding.attempt_id()
+    }
 }
 
 /// Worker-control and journal failure.
@@ -1258,6 +1271,45 @@ pub fn record_worker_execution_start<E: EventStore, C: ContentStore>(
     }))
 }
 
+/// Reconstructs execution authority for locally journaled starts that have no terminal result.
+///
+/// This is used only when a worker process starts. The concrete Docker executor reconciles the
+/// deterministic container for each returned attempt instead of assuming that the command must be
+/// invoked a second time.
+///
+/// # Errors
+///
+/// Returns an error for corrupt history or missing/changed locally persisted material.
+pub fn recover_started_worker_executions<E: EventStore, C: ContentStore>(
+    events: &E,
+    content: &C,
+    worker_id: WorkerId,
+    material_limit: Option<AssignmentMaterialByteLimit>,
+) -> Result<Vec<RecoveredWorkerExecutionAuthority>, ControlProtocolError> {
+    let stream = worker_stream(worker_id)?;
+    let projection = project_worker(&events.read_stream(&stream, None)?, worker_id)?;
+    let mut authorities = Vec::new();
+    for attempt in projection.attempts.into_values() {
+        if attempt.phase != LocalPhase::Started {
+            continue;
+        }
+        verify_persisted_assignment_materials(
+            content,
+            &attempt.contract,
+            &attempt.materials,
+            material_limit,
+        )?;
+        authorities.push(RecoveredWorkerExecutionAuthority {
+            authority: WorkerExecutionAuthority {
+                stream: stream.clone(),
+                binding: attempt.binding,
+                contract: attempt.contract,
+            },
+        });
+    }
+    Ok(authorities)
+}
+
 /// Invokes one worker executor from a consumed durable start token and atomically journals its
 /// terminal observation plus worker outbox message.
 ///
@@ -1311,6 +1363,32 @@ pub fn invoke_worker_executor<X: Executor>(
                 }
             }
         }
+    };
+    WorkerExecutionObservation { authority, result }
+}
+
+/// Reconciles one already-started worker attempt without converting it into fresh executor
+/// authority.
+#[must_use]
+pub fn invoke_recovered_worker_executor<X: crate::RecoverableExecutor>(
+    executor: &mut X,
+    recovered: RecoveredWorkerExecutionAuthority,
+) -> WorkerExecutionObservation {
+    let authority = recovered.authority;
+    let input = ExecutionInput {
+        job_id: authority.binding.job_id(),
+        attempt_id: authority.binding.attempt_id(),
+        contract_id: authority.binding.contract_id(),
+        contract: &authority.contract,
+    };
+    let result = match executor.recover(&input) {
+        Ok(capture) => ReconciledExecutionResult::Completed { capture },
+        Err(error) => ReconciledExecutionResult::Ambiguous {
+            diagnostic: bound_utf8(
+                &error.to_string(),
+                authority.contract.capture().diagnostic_limit().get(),
+            ),
+        },
     };
     WorkerExecutionObservation { authority, result }
 }
@@ -2759,12 +2837,27 @@ mod tests {
         )
         .expect("record worker start")
         .expect("new worker start");
+        assert_eq!(&worker_authority.binding, &binding);
+        drop(worker_authority);
+        fixture.reopen_worker();
+        let mut recovered_authorities = recover_started_worker_executions(
+            &fixture.worker_events,
+            &fixture.worker_content,
+            fixture.worker_id,
+            None,
+        )
+        .expect("recover journaled worker start");
+        assert_eq!(recovered_authorities.len(), 1);
+        let worker_authority = recovered_authorities
+            .pop()
+            .expect("one recovered authority");
+        assert_eq!(&worker_authority.authority.binding, &binding);
         let capture = fixture.capture();
         let mut executor = RecordedExecutor::new([RecordedExecution {
             contract_id,
             capture,
         }]);
-        let observation = invoke_worker_executor(&mut executor, worker_authority);
+        let observation = invoke_recovered_worker_executor(&mut executor, worker_authority);
         deliver_worker_acknowledgement(
             &mut fixture.worker_events,
             fixture.worker_id,
@@ -2856,6 +2949,16 @@ mod tests {
         ));
         fixture.reopen_controller();
         fixture.reopen_worker();
+        assert!(
+            recover_started_worker_executions(
+                &fixture.worker_events,
+                &fixture.worker_content,
+                fixture.worker_id,
+                None,
+            )
+            .expect("terminal starts do not recover")
+            .is_empty()
+        );
         assert!(
             pending_controller_messages(&fixture.controller_events, fixture.worker_id)
                 .expect("controller empty")

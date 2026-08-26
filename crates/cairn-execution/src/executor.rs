@@ -135,6 +135,19 @@ pub trait Executor {
     fn execute(&mut self, input: &ExecutionInput<'_>) -> Result<ExecutionCapture, ExecutorError>;
 }
 
+/// Executor capability that can reconcile an already-started durable attempt.
+///
+/// This is deliberately separate from [`Executor`]: a recovered start must not be handed to an
+/// adapter that can only launch fresh work.
+pub trait RecoverableExecutor {
+    /// Reconciles the exact previously started attempt and returns its terminal capture.
+    ///
+    /// # Errors
+    ///
+    /// Returns an ambiguous failure when the existing external effect cannot be reconciled.
+    fn recover(&mut self, input: &ExecutionInput<'_>) -> Result<ExecutionCapture, ExecutorError>;
+}
+
 /// Closure-backed executor for deterministic tests and embedders.
 pub struct ScriptedExecutor<F> {
     script: F,
@@ -189,5 +202,11 @@ impl Executor for RecordedExecutor {
             ));
         }
         Ok(exchange.capture)
+    }
+}
+
+impl RecoverableExecutor for RecordedExecutor {
+    fn recover(&mut self, input: &ExecutionInput<'_>) -> Result<ExecutionCapture, ExecutorError> {
+        self.execute(input)
     }
 }

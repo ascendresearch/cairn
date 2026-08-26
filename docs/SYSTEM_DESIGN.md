@@ -7,8 +7,8 @@
 ## 1. Design objective
 
 Cairn is one product with several internal authorities. It must let agents propose work without
-letting agents decide whether their own work is trustworthy. It must execute untrusted artifacts on
-heterogeneous machines without making remote workers understand product semantics. It must return a
+letting agents decide whether their own work is trustworthy. It must execute operator-submitted migration jobs on heterogeneous private machines without making
+remote workers understand product semantics. It must return a
 verdict without losing the requests, decisions, artifacts, failures, and assumptions that produced
 that verdict.
 
@@ -134,7 +134,7 @@ flowchart TD
     L6["L6 Product orchestration<br/>task lifecycle, oracle search, candidate search, reporting"]
     L5["L5 Domain adapters<br/>CUDA/Ascend contracts and operator-specific artifacts"]
     L4["L4 Verification<br/>admission, mutants, tolerance, comparison, verdict"]
-    L3["L3 Execution substrate<br/>jobs, attempts, workers, leases, sandbox evidence"]
+    L3["L3 Execution substrate<br/>jobs, attempts, workers, leases, execution evidence"]
     L2["L2 Agent runtime<br/>loop, model, tools, context policy, role scopes"]
     L1["L1 Record<br/>events, CAS, projections, audit, replay"]
     L0["L0 Protocol foundations<br/>identity, envelopes, schemas, error taxonomy"]
@@ -540,20 +540,14 @@ reconstruct start authority, but a recovered `Started` fact cannot reconstruct e
 Completed recovery reloads every cited CAS artifact and revalidates outcome/exit semantics, byte
 bounds, output completeness, observed backend/environment, canonical output ordering, and receipt
 lineage against the frozen contract. Recorded and scripted executors provide deterministic seams.
-`local-process-v1` now provides an explicitly activated controlled-host adapter with versioned
-material, create-only workspace expansion, Linux user/network namespace preflight, process-group
-supervision, and bounded capture. It is not classified as hostile-code filesystem isolation;
-hardened container execution and richer remote-worker adapters remain target work. F2d-c now
-freezes the first hardened backend's provider-neutral contract and launch policy: immutable OCI
-image digests, deterministic attempt-owned names, full runtime IDs, typed lifecycle phases/mount
-roles, exact identity bindings, a code-owned CPU sandbox policy, strict canonical OCI environment
-bytes, a narrow read-only runtime resolution/inspection port, and deterministic shell-free create
-argv derived from verified material and strong ceilings. A separate minimal lifecycle capability
-and supervisor now reconcile create/start/wait through exact inspection, reject image-declared
-volumes, and preserve one runtime subject across ambiguous responses and restart. No worker
-advertises this backend yet, and no concrete runtime adapter or operational isolation claim exists
-until bounded capture, activation, and real-host gates land. See
-[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md).
+
+**Implemented F2 Docker path (2026-08-25).** `docker-v1` consumes strict input-bundle and Docker
+environment artifacts from worker-local CAS. It accepts only a full immutable local image ID and
+uses one deterministic container name per `AttemptId`. Worker startup recovers locally journaled
+starts and reconciles absent, created, running, or exited Docker state. Terminal streams and
+declared outputs are bounded by the job contract; the worker commits the terminal observation and
+outbox message before cleanup. The real Hello World gate is documented in
+[`WORKER_EXECUTION.md`](WORKER_EXECUTION.md).
 
 ### 10.2 Worker protocol
 
@@ -860,11 +854,11 @@ tests cover durable outbox/journal replay. All wire-size, handshake, idle, heart
 polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
 
 Bootstrap intentionally composes a `NotStarted` executor and unavailable/draining availability.
-Schema-V1 configuration may explicitly activate `local-process-v1` only by changing execution mode,
-the exact advertised backend, and ready availability coherently. Small typed artifact replication,
-resumable chunk transfer, create-only materialization, process-group timeout/stream supervision, and
-terminal evidence capture are implemented. Cancellation delivery, hardened container isolation,
-and production service deployment remain application/adapter slices.
+Schema-V1 configuration may activate `docker-v1` only by coherently changing execution mode, the
+exact advertised backend, and ready one-slot availability. Typed material replication, resumable
+transfer, Docker supervision, bounded capture, terminal publication, and worker-start recovery are
+implemented. Accelerator device exposure, additional network modes, concurrency greater than one,
+and service deployment remain later demand-driven slices.
 
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
@@ -900,7 +894,7 @@ individual external effect did or did not occur.
 
 An attempt has two output domains:
 
-1. **candidate-visible workspace** — useful diagnostics, fully untrusted;
+1. **job workspace** — operator-submitted files and useful diagnostics; its results are not verdicts;
 2. **worker evidence channel** — argv, resolved image/binary, mounts, stream bytes, exit status,
    timing, declared output ingestion, and device observations, inaccessible to candidate writes.
 
@@ -909,12 +903,12 @@ output is never the only durable capture path.
 
 ### 10.4 Execution backends
 
-Initial backends:
+Implemented backend:
 
-- controlled local process for trusted repository utilities;
-- sandboxed container without device;
-- sandboxed source-accelerator container;
-- sandboxed target-device container.
+- `docker-v1` for operator-submitted CPU build and validation jobs.
+
+Device-aware Docker execution may be added when the migration workflow reaches source-accelerator
+or target-device validation. It is not a separate orchestration platform.
 
 An out-of-process backend can be added behind the job/attempt protocol. It must not require a fork of
 product or agent logic.
@@ -1173,17 +1167,15 @@ It excludes:
 - UI summaries;
 - stored `passed` fields when underlying trials can be recomputed.
 
-### 16.2 Sandboxing
+### 16.2 Worker execution boundary
 
-Untrusted code receives only declared input mounts, a writable temporary workspace, bounded
-CPU/memory/time/process count, and explicitly authorized devices. Network is denied by default.
-Worker evidence storage and credentials are not mounted into the sandbox.
-
-The initial `oci-container-v1` target is deliberately CPU-only and denies every device rather than
-interpreting “no device request” as ambient host access. Its code-owned policy, threat model,
-identity binding, fixed launch plan, recoverable supervisor, and implementation status are defined in
-[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md). OCI containment trusts the host kernel and
-runtime; it is not a defense against either component being compromised.
+Workers run in operator-controlled private infrastructure. Submitted code and container images are
+the operator's responsibility; Cairn does not scan them or claim hostile multi-tenant containment.
+The Docker adapter uses a read-only root and input, temporary work storage, no network, non-root
+execution, dropped capabilities, and `no-new-privileges` as reproducibility and accidental-damage
+defaults. Worker credentials, journal files, CAS, and the Docker socket are not mounted into jobs.
+Deployment-specific CPU, memory, PID, and writable-work limits are independently configurable or
+disableable.
 
 ### 16.3 Data policy
 

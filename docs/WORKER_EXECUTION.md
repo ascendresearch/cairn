@@ -1,18 +1,18 @@
-# Worker execution and explicit activation
+# Docker worker execution
 
-`cairn-worker join` deliberately generates a schema-V1 worker with `execution.mode=disabled`, the
-single advertised backend `transport-only`, and unavailable/draining/zero-slot availability.
-Enrollment proves identity and pool ownership; it does not prove that a host can execute jobs.
+- Status: F2 implemented and measured on a real Docker daemon
+- Backend: `docker-v1`
+- Scope: trusted private infrastructure running operator-submitted migration jobs
 
-## Local-process V1 activation
+`cairn-worker join` creates an enrolled but disabled worker. Enrollment proves identity; an
+operator explicitly enables execution after Docker and the required immutable image are present.
+Cairn assumes the operator is responsible for the code and images submitted to that private
+environment. The Docker adapter provides repeatable packaging, configurable resource bounds, and
+recoverable process state. It is not a hostile multi-tenant security product or a malware scanner.
 
-The first real adapter is `local-process-v1`. It is intended for controlled host utilities and for
-exercising the durable execution loop. It is not an oracle-grade hostile-code filesystem sandbox:
-the create-only workspace does not hide worker credentials, CAS paths, or the rest of the host.
-Untrusted candidate/oracle workloads therefore still require a later container or hardened sandbox
-adapter. Scheduler policy must keep those workload contracts off this backend.
+## Activation
 
-Activation is one deliberate `worker.json` edit. These fields must change together:
+Change the generated worker configuration coherently:
 
 ```json
 {
@@ -23,94 +23,67 @@ Activation is one deliberate `worker.json` edit. These fields must change togeth
     "health": "ready"
   },
   "execution": {
-    "materialized_file_byte_limit": 536870912,
-    "mode": "local_process",
-    "namespace": {
-      "command": "/usr/bin/unshare",
-      "preflight_timeout_ms": 5000
-    },
-    "sandbox_directory": "sandboxes",
-    "supervisor_poll_interval_ms": 10
+    "command": "/usr/bin/docker",
+    "logical_cpu_limit": null,
+    "memory_byte_limit": null,
+    "mode": "docker",
+    "pids_limit": null,
+    "poll_interval_ms": 10,
+    "state_directory": "state/docker",
+    "writable_byte_limit": null
   },
   "profile": {
-    "backends": ["local-process-v1"]
-  },
-  "schema_version": 1
+    "backends": ["docker-v1"],
+    "max_concurrency": 1
+  }
 }
 ```
 
-The fragment shows only changed fields; retain all other generated fields. Both byte and preflight
-bounds can be set to `null` to disable them. The positive supervisor polling interval is required.
-All relative paths are resolved against `worker.json`.
+The fragment shows only changed fields. Retain the other generated fields. Each resource limit is
+independently optional; `null` disables it. The worker currently accepts one concurrent attempt so
+that its durable journal and availability claim remain simple.
 
-The worker invokes the configured, operator-trusted util-linux-compatible command with the fixed
-arguments `--user --map-root-user --net --`. It runs the same path with `/bin/true` during startup
-and before every workload. If user/network namespaces are unavailable, the binary is incompatible,
-or preflight times out, startup/execution fails closed. `local-process-v1` admits only job contracts
-whose network policy is `disabled`; `dependency-fetch` needs a separate constrained adapter.
+The job environment is strict canonical JSON containing a full local Docker image ID of the form
+`sha256:<64 lowercase hex digits>` and sorted environment variables. Mutable tags are rejected.
+The input bundle contains explicit directories and regular files only. The command is argv, never a
+shell string.
 
-The worker validates the execution mode, advertised backend, and availability as one configuration
-invariant. Merely changing `available_slots` cannot activate execution, and merely advertising the
-backend cannot make a disabled executor schedulable. V1 also requires `max_concurrency=1` and
-`available_slots=1`; broader concurrency waits for a deliberately sharded worker-journal design.
+## Execution and recovery
 
-## Versioned material formats
+For each `AttemptId`, the worker uses one deterministic container name and one state directory. It
+persists the worker `started` fact before invoking Docker. On worker restart it reconstructs every
+locally started, non-terminal attempt from SQLite and reconciles that same container:
 
-`InputBundleArtifact` bytes are canonical JSON encoding an `InputBundleV1`. V1 supports only
-explicit directories and complete regular files:
+- absent: materialize verified input and create it;
+- created: start it;
+- running: wait using the original Docker start time;
+- exited: capture the existing result without rerunning it.
 
-```json
-{"entries":[{"kind":"directory","path":"bin"},{"bytes":"IyEvYmluL3NoCg","kind":"file","mode":"executable","path":"bin/run"},{"kind":"directory","path":"work"}],"schema_version":1}
+The container receives a read-only root and input bind, an operator-owned output bind, temporary
+work directories, no network, a numeric non-root user, dropped capabilities, and
+`no-new-privileges`. CPU, memory, PID, and writable-work limits are included only when configured.
+These defaults reduce accidental interference but do not change the trusted-environment assumption.
+
+Stdout, stderr, and declared output files are checked against the job's configurable capture
+bounds. The terminal observation and outbox message are committed to SQLite before the worker
+removes the container and attempt directory. A cleanup failure never causes another execution.
+
+## Real Hello World gate
+
+Use any already-pulled image whose full ID is available locally:
+
+```bash
+docker image inspect --format '{{.Id}}' postgres:16-alpine
+scripts/docker-hello-smoke.sh sha256:<64-hex-image-id>
 ```
 
-File bytes use canonical unpadded base64. Entries are sorted by `SandboxPath`; every parent
-directory is explicit. Duplicate paths, dot/parent/absolute paths, missing parents, symlinks, and
-special files are not representable. Expansion creates a fresh `<sandbox>/<AttemptId>` tree with
-private permissions and `create_new` semantics for every entry. A stale or duplicate attempt tree
-is retained for audit and never overwritten.
+The smoke test runs an executable from the content-addressed input bundle, checks `hello world` on
+stdout and a declared output artifact, then asks the executor for the same exited attempt again and
+requires a byte-identical terminal capture. Ordinary CI leaves this host-dependent test ignored.
 
-`ExecutionEnvironmentArtifact` bytes are canonical JSON encoding an `ExecutionEnvironmentV1`:
+## F2 boundary
 
-```json
-{"schema_version":1,"variables":[{"name":"LANG","value":"C.UTF-8"}]}
-```
-
-Names use portable process-environment syntax and are unique/sorted. Values cannot contain NUL.
-The child environment is cleared before these exact variables are installed, so worker secrets and
-ambient deployment settings are not inherited accidentally.
-
-## Supervision and evidence boundary
-
-The adapter executes argv without a shell on a blocking supervisor task while the async control
-session continues heartbeats, starts a new process group, captures stdout/stderr into separate
-supervisor-owned files, enforces the contract timeout and stream bounds while polling, and kills the
-process group on timeout or overflow. Declared outputs are reopened with
-`symlink_metadata`, accepted only as regular files, and independently bounded. Evidence records the
-environment content identity, SHA-256 of the executable before launch, backend identity, namespace
-mode, and supervision mode.
-
-The durable start fact is still committed before materialization or process spawn. A deterministic
-preflight/materialization/spawn failure is reported as `NotStarted`; after a successful spawn, an
-unrecoverable supervision failure is `Ambiguous`. Timeout, subject failure, capture integrity
-violation, and success are terminal captures. A crash after the start fact remains in doubt and
-never reconstructs a second executor token.
-
-Executor invocation and journal publication are separate one-shot phases. The blocking task returns
-an opaque observation still owning the consumed authority; the control task reloads intervening
-delivery/acknowledgement facts and serially appends the terminal result. This avoids concurrent
-journal writers without freezing worker liveness during a long command. The observation channel is
-owned by the worker process rather than one WebSocket session, so a reconnect or credential cutover
-does not discard a still-running supervisor's terminal observation.
-
-## OCI container status
-
-The F2d-c typed contract, threat model, canonical CPU-only launch plan, and recoverable lifecycle
-supervisor are now implemented. The supervisor uses only typed inspect/create/start/wait operations,
-requires the exact binding and full runtime ID, and converges ambiguous mutation responses on the
-same deterministic container. It has no concrete Docker-compatible mutation adapter and does not
-yet capture bounded output or trusted evidence. Runtime/user-namespace preflight, activation, and
-real-host isolation gates also remain unfinished. Workers therefore still reject
-configuration/profile combinations that advertise `oci-container-v1`. See
-[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md) for the fixed policy, recovery rules, and
-remaining gates. No current configuration edit can turn these capabilities into execution
-authority.
+F2 is complete when a worker can receive verified materials, durably start a real Docker job,
+publish its bounded result, and recover the same attempt after restart. Service managers,
+multi-worker orchestration, accelerator device exposure, richer network policies, and stronger
+container isolation are separate product slices justified by actual migration needs.

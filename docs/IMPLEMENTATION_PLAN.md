@@ -153,176 +153,50 @@ Acceptance gate:
 - revoke, disable/re-enable, pool change, and import survive restart and reject contradictory
   histories.
 
-## Phase F — one-command open-source worker join
+## Phase F — one-command join and real worker execution
 
-Status: F1 join/bootstrap composition, F2a/F2b typed resumable assignment-material replication, and
-F2c controlled local-process activation/create-only materialization implemented. Service-unit
-output, hardened hostile-code sandboxing, and real x86-64/AArch64 execution gates remain.
+Status: F1 join/bootstrap, F2 material transfer, and F2 Docker execution are implemented. F2 has
+been measured with a real local Docker daemon.
 
-Implement `cairn-worker join` as a composition of enrollment, built-in probe, validated local
-profile creation, control-endpoint configuration, fixed state-directory layout, and optional
-service-unit output. The controller assigns `WorkerId` and pool; the worker reports resources. Keep
-the lower-level `enroll`, probe, validate, and run commands available for automation and debugging.
+F1 composes enrollment, the built-in host/resource probe, fixed local state, and strict worker
+configuration behind `cairn-worker join <bundle> <state-dir>`. The generated worker stays
+unavailable and draining until an operator explicitly enables an execution backend.
 
-Acceptance gate:
+F2 has one deliberately narrow responsibility: carry exact input/environment objects to the
+selected worker, execute one Docker attempt, durably publish its result, and recover that same
+attempt after a worker restart. It consists of:
 
-- a new machine needs one short-lived bundle and one command, with no copied private key;
-- generated configuration contains no model/provider or migration-business assumptions;
-- architecture is discovered on the target host and checked against optional operator expectations;
-- rerun is safe, no differing file is overwritten, and diagnostics identify the exact recovery
-  action;
-- clean x86-64 and AArch64 hosts join, reconnect, receive a generic assignment, and survive restart.
+1. a typed manifest and bounded resumable transfer into worker-local SQLite/CAS;
+2. strict canonical input-bundle and Docker-environment artifacts;
+3. an explicitly activated `docker-v1` adapter using an immutable full image ID;
+4. deterministic `AttemptId` container identity and reconciliation of absent, created, running,
+   and exited states;
+5. configurable or disableable CPU, memory, PID, writable-work, material, timeout, and capture
+   bounds;
+6. terminal journal/outbox commit before container and attempt-directory cleanup.
 
-F1 makes the V1 enrollment bundle self-contained by embedding the independently routable normal
-control endpoint and its pinned CA/name. `cairn-worker join <bundle> <state-dir>` creates a fixed
-identity/scratch/journal/config tree, hashes the running worker binary, runs the built-in host
-probe, and persists a strict V1 worker configuration with explicit execution mode. Its initial
-availability remains deliberately
-unavailable and draining with `execution.mode=disabled`; enrollment never implies execution
-readiness. Re-running join validates and reuses the tree without overwriting operator edits.
+The project runs in operator-controlled private infrastructure. Submitted code and images are the
+operator's responsibility. Docker is used for reproducible packaging and restart-visible process
+state; F2 does not attempt hostile multi-tenant isolation, malware detection, arbitrary runtime
+abstraction, or a Kubernetes-like control plane.
 
-F2a established worker-local typed CAS as a prerequisite for admission and start. F2b replaces
-inline offer bytes with an immutable manifest of typed identities, exact lengths, and configured
-chunk size. While the durable offer remains unacknowledged, the authenticated worker may request
-bounded ranges; every chunk is synced to a fixed per-offer staging file, and reconnect resumes from
-its exact length. Chunks create no domain facts. Complete assembly must derive the manifest's
-`ContentId<T>` values in worker-local CAS before admission; start reopens those objects. The source
-CAS is fully verified when creating the manifest, an isolated range-source port makes transfer
-linear, and destination verification closes the range-read trust boundary. Aggregate raw-material
-limits remain independently optional on controller and worker. Chunk sizes are positive explicit
-configuration, and their exact base64-expanded envelope is checked against the separately optional
-transport limit before startup. F2c now defines canonical versioned input/environment material,
-materializes only directories and regular files into a private create-only per-attempt tree, and
-composes an explicitly activated `local-process-v1` supervisor. Activation is a fail-closed
-invariant across mode, exact backend claim, and ready availability; join remains disabled. The
-adapter clears ambient environment, requires fixed Linux user/network namespace preflight, starts a
-new process group, enforces timeout/stream/output bounds, and captures executable/environment
-evidence. It is intentionally classified as a controlled-host utility backend rather than
-oracle-grade hostile-code filesystem isolation. The next F2 slice must add a hardened container or
-equivalent launcher while reusing these material and executor contracts.
+F2 acceptance evidence:
 
-### Next slice: F2d hardened OCI container backend
+- ordinary SQLite tests reopen a worker journal after the start fact and recover exactly one
+  execution authority; after terminal publication they recover none;
+- `scripts/docker-hello-smoke.sh <full-image-id>` runs a real container, captures `hello world`
+  plus a declared artifact, and requires byte-identical capture when the exited attempt is replayed;
+- worker activation remains one coherent configuration invariant and join remains disabled;
+- cleanup happens only after terminal observation and outbox publication are durable.
 
-F2d will implement `oci-container-v1` as the first backend allowed to run untrusted CPU-only
-candidate/oracle processes. The first runtime adapter will use a configured Docker-compatible CLI,
-but product code will depend on a narrow `ContainerRuntime` port rather than Docker command output
-or lifecycle vocabulary. Runtime path, state roots, timeouts, limits, and activation remain
-operator configuration; isolation capabilities and fixed security arguments belong to the backend
-template and cannot be weakened field-by-field in `worker.json`.
+Service-unit generation, accelerator device exposure, additional network modes, multiple concurrent
+attempts per worker, and stronger container isolation are not part of F2. They may be added as
+small, demand-driven slices once the CUDA-to-Ascend migration workflow requires them.
 
-The slice is divided into the following implementation steps:
+All worker-control, journal, content, and configuration formats remain schema V1. During pre-release
+development, incompatible changes replace V1 directly and development state is rebuilt; there are
+no conversion or compatibility branches.
 
-1. **Threat model and typed runtime contract.** Freeze which host resources are invisible to the
-   subject and introduce strong image digest, deterministic container name, runtime container ID,
-   container phase, mount role, and sandbox-policy types. Add a strict backend-specific OCI
-   environment format that pins an immutable image digest rather than a mutable tag. Preserve the
-   existing `JobContract`, `AttemptId`, material CAS, executor authority, and receipt lineage.
-2. **Fixed CPU-only isolation plan.** Generate argv without a shell for a read-only root filesystem,
-   non-root subject, `--network none`, dropped capabilities, `no-new-privileges`, independent PID,
-   mount, IPC, user, and network namespaces, bounded PIDs/CPU/memory, and size-bounded writable
-   work/output/tmpfs mounts. Input material is mounted read-only. Worker identity, credentials,
-   journal, CAS, runtime socket, and host paths are never mounted. V1 rejects device requests and
-   all GPU/NPU exposure rather than silently broadening privilege.
-3. **Recoverable container supervisor.** Derive one deterministic container identity from the exact
-   `AttemptId` and bind job/contract/input/environment identities as immutable labels. Reconcile
-   `Absent → Created → Running → Exited` through inspect/create/start/wait operations. Restart may
-   reattach to the exact labeled container or collect an exited result, but must never start a
-   second subject. A same-name container with conflicting labels fails closed and is not deleted or
-   reused.
-4. **Bounded capture and trusted evidence.** Drain stdout/stderr independently under contract bounds,
-   enforce timeout/output exhaustion by stopping the same identified container, ingest only
-   declared regular output files, and record resolved local image ID, runtime identity, fixed policy
-   version, container ID, timing, and exit state outside candidate-writable mounts. Cleanup occurs
-   only after the terminal worker result is durable; cleanup failure retains evidence and cannot
-   turn into re-execution.
-5. **Activation and open-source operations.** Extend V1 execution configuration with explicit
-   `oci_container` activation and derive the exact `oci-container-v1` worker claim from it. Startup
-   preflight verifies CLI/runtime reachability, immutable-image resolution, required isolation
-   features, disjoint absolute state roots, and configured optional limits. Join remains disabled.
-   Document rootful/rootless prerequisites, diagnostics, state recovery, and an operator smoke
-   command without embedding deployment-specific paths.
-
-F2d acceptance requires:
-
-- an escape fixture cannot read worker credentials, SQLite/CAS, runtime socket, or unrelated host
-  files, cannot write the input mount/root filesystem, and cannot obtain network connectivity;
-- timeout, fork/PID pressure, memory exhaustion, stdout/stderr exhaustion, missing/oversized output,
-  nonzero exit, and successful output produce distinct bounded terminal evidence;
-- runtime absence or failed preflight is `NotStarted`; uncertainty after create/start is
-  `Ambiguous` until exact-container reconciliation proves a terminal state;
-- worker/control reconnect and worker/runtime restart recover the same container without a second
-  start, including a result completed while the WebSocket is disconnected;
-- conflicting names/labels, mutable image tags, extra mounts/capabilities/devices, symlink outputs,
-  and policy downgrade attempts fail closed;
-- offline fake-runtime contract tests pass in ordinary CI, while opt-in Docker-compatible real-host
-  gates pass on both x86-64 and AArch64 and publish inspectable evidence;
-- the security documentation continues to classify `local-process-v1` as controlled-host only and
-  does not claim that OCI alone protects against a hostile kernel or runtime.
-
-**F2d-a implemented (2026-08-25).** The threat model is frozen in
-[`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md). `cairn-execution` now exposes strong
-immutable image digest, attempt-derived name, full runtime ID, phase, mount-role, code-owned policy,
-identity-binding, and impossible-state-free inspection types. `OciExecutionEnvironmentV1` is strict
-canonical JSON and rejects tags and non-V1 input. The initial `ContainerRuntime` port permits only
-typed image resolution and inspection; it deliberately grants no lifecycle mutation yet. Worker
-configuration still cannot advertise or activate the backend.
-
-**F2d-b implemented (2026-08-25).** `cairn-worker` now derives one strong
-`ContainerLaunchPlan` from the canonical job, worker-verified exact material, backend-owned state
-root, and positive resource ceilings. It renders deterministic Docker-compatible argv without a
-shell: immutable local image only, read-only root and input, three bounded subject-owned tmpfs
-mounts, numeric non-root user, denied network, dropped capabilities, `no-new-privileges`, private
-cgroup/PID/IPC namespaces, and hard PID/CPU/memory-and-swap ceilings. Golden argv and negative
-identity/layout/network/device/resource tests prevent policy downgrade. No execution configuration,
-runtime invocation, or lifecycle mutation was added.
-
-**F2d-c implemented (2026-08-25).** The provider-neutral runtime contract now includes typed local
-image/declared-volume observation, exit codes, and a minimal launch-plan-parameterized
-`ContainerLifecycleRuntime` capability for create/start/wait. The worker supervisor inspects the
-deterministic name before mutation and after successful create/start, validates the complete
-binding and full runtime ID before reattachment, rejects image-declared volumes, and separates the
-sole initial entry from conservative recovery. Unknown mutation responses are `Ambiguous`; recovery
-converges through `Absent`, `Created`, `Running`, or `Exited` without reconstructing job authority,
-starting an exited container, deleting a conflict, or producing a second runtime subject. The fake
-runtime crash matrix covers before/after-effect response loss, a concurrent create winner, binding
-conflict, completion during disconnect, and terminal replay. No concrete runtime adapter,
-execution configuration, bounded capture, or worker activation was added.
-
-**F2d-d implemented (2026-08-25).** `ContainerCaptureRuntime` is now the only terminal supervision
-port. Its bounded wait receives the original total execution timeout and independent stdout/stderr
-bounds, so reconnect cannot grant a fresh deadline. Timeout or stream exhaustion requests a typed
-stop against the same full runtime ID and always re-inspects before classification, including a
-lost stop response. Terminal capture independently retrieves both bounded stream prefixes,
-classifies each declared path as missing/non-regular/regular, rejects individual overrun, and
-builds `ExecutionCapture` from runtime-owned image, full identity, policy, program, timing,
-termination reason, and exit observations. Evidence size is checked before return. The fake runtime
-matrix covers both stop ambiguity windows, deadline preservation across recovery, bounded stream
-exhaustion, missing/symlink-or-special/oversized output, image conflict, evidence exhaustion,
-completion during disconnect, and stable exited replay. The capture capability deliberately has no
-cleanup operation; deletion cannot become callable through this path before terminal worker-result
-publication is durable. No concrete runtime adapter, execution configuration, or worker activation
-was added.
-
-### Next implementation slice: F2d-e concrete adapter and activation gate
-
-Implement the Docker-compatible CLI adapter behind the frozen typed ports, with configurable
-executable/state paths and optional operation timeouts. Startup preflight must prove runtime
-reachability, rootless or daemon-level user-namespace remapping, immutable local image resolution,
-absence of image-declared volumes, required namespace/security controls, and disjoint worker state.
-Add explicit V1 `oci_container` worker configuration and advertise `oci-container-v1` only after
-preflight succeeds. Connect terminal capture to the existing durable worker outbox; a separate
-cleanup capability may be granted only after that exact terminal observation is committed, and
-cleanup failure must retain recovery state without authorizing re-execution. Finish with opt-in
-real-host escape/resource/capture gates on x86-64 and AArch64; ordinary CI continues using the fake
-runtime.
-
-Accelerator/NPU/GPU device containers are intentionally a later F2e slice. They will add explicit
-device leases, exact device-node exposure, runtime/driver observations, and post-run quarantine on
-top of F2d rather than weakening the CPU container policy.
-
-Worker-control protocol, controller-outbox facts, and worker-journal facts all use schema V1. During
-pre-release development, an incompatible format change replaces the V1 definition and development
-state is rebuilt; runtime readers do not contain conversion branches.
 
 ## Cross-cutting gates
 

@@ -23,7 +23,7 @@ document is complete.
 | [`ENROLLMENT.md`](ENROLLMENT.md) | How does a worker bootstrap a local managed identity without copied private keys? | Operator procedure and implemented trust boundary |
 | [`SCHEDULER.md`](SCHEDULER.md) | How are generic candidates selected, reserved, assigned, retried, and safely released? | Implemented scheduling trust boundary |
 | [`RESOURCE_PROBING.md`](RESOURCE_PROBING.md) | Which resource facts are observed, configured, matched, and still deferred? | Implemented D1 probe/operator contract |
-| [`OCI_CONTAINER_SECURITY.md`](OCI_CONTAINER_SECURITY.md) | What must the CPU-only OCI backend hide, bind, recover, and refuse? | F2d security boundary and implementation status |
+| [`WORKER_EXECUTION.md`](WORKER_EXECUTION.md) | How is Docker activated, recovered, and measured? | Implemented F2 operator boundary |
 | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | In what dependency order do worker authority, scheduling, probing, registry lifecycle, and onboarding close? | Active delivery plan and acceptance gates |
 
 ## Reading order
