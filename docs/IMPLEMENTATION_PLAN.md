@@ -232,8 +232,8 @@ The remaining G slices, in dependency order, are:
    bytes, then emits a distinct manifest with one exact null, misalignment, capacity-shortfall,
    exact-alias, or partial-overlap layout. Required/accessible lengths, alignment/offset quantities,
    ABI positions, and shared allocation extent are cross-validated against baseline arguments;
-   unknown and excluded conditions are rejected. Vendor-specific pointer construction, real
-   call-adapter execution, and complete corpus orchestration are still pending. The isolated
+   unknown and excluded conditions are rejected. Vendor-specific pointer construction and real
+   call-adapter execution are still pending. The isolated
    process input boundary is now implemented for all three assembled case categories: caller-bounded
    executable bytes receive a separate content identity, a strict V1 request binds the exact source
    bundle and typed case-manifest identity, and the final canonical bundle carries the executable
@@ -257,8 +257,14 @@ The remaining G slices, in dependency order, are:
    gate: a real fixture process validates the typed invocation identity, emits bounded declared
    outputs, runs through generic execution start/completion and durable recovery, and is finally
    admitted as the exact receipt-bound observation. Tampered invocation bytes are rejected before a
-   result is written. This fixture does not substitute for CUDA/Ascend C adapters, device isolation,
-   semantic comparison, or oracle admission.
+   result is written. A canonical complete-corpus execution plan now commits all three mandatory-set
+   roots, their shared caller domain, the exact adapter executable, validation tier, and one
+   independently identified generic job per executable obligation. The plan derives its executable
+   subset from typed dispositions, orders it canonically, and rejects missing, duplicate, extra,
+   reordered, cross-domain, or expectation-changed material. Unknown and explicitly excluded
+   obligations remain visible through their set roots without becoming executable jobs. This fixture
+   and plan do not substitute for CUDA/Ascend C adapters, device isolation, complete-plan dispatch
+   and receipt collection, semantic comparison, or oracle admission.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

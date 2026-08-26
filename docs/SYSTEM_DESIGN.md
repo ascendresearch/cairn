@@ -964,7 +964,8 @@ maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid 
 first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
 typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
 rather than inventing an expected status. Dtype and memory-surface patterns are derived by separate
-typed policies described below; complete corpus orchestration and execution remain target work.
+typed policies described below. Canonical complete-corpus planning is implemented as described
+below; device execution, receipt collection, and adjudication remain target work.
 
 Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
 integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
@@ -1012,7 +1013,7 @@ binds the domain, successful baseline, dtype obligation, target materialization,
 target/outcome, and complete ABI argument set, and cross-validates the canonical bundle files.
 Supported recipes expect success; invalid recipes retain their caller-declared behavior. Unknown,
 excluded, underived, wrong-target, and multi-invalid compositions fail closed. Vendor adapter
-implementation, real execution, and complete corpus orchestration remain target work.
+implementation, real execution, and complete-plan adjudication remain target work.
 
 **Implemented memory-surface layout assembly slice (2026-08-25).** An executable null-pointer,
 misalignment, capacity-shortfall, exact-alias, or partial-overlap obligation can now be composed only
@@ -1090,6 +1091,20 @@ the test then recovers the durable completed job and validates its receipt back 
 operator observation. A changed invocation file fails before any result is written. This is a
 transport/conformance fixture only: zero-filled fixture outputs have no oracle authority, the host
 harness is not a production unsandboxed executor, and real vendor/device execution remains pending.
+
+**Implemented complete-corpus execution-plan slice (2026-08-26).** A strict V1 plan now binds the
+shared caller domain, exact identities of the quantitative, dtype-pattern, and memory-surface
+mandatory sets, adapter executable identity, migration validation tier, and the canonical list of
+independent generic jobs. The executable subset is derived rather than caller-selected: successful
+and explicitly specified invalid obligations become jobs, while unknown and explicitly excluded
+obligations remain committed by their set roots but cannot enter the list. Each item retains a typed
+boundary, input-value, or memory-surface obligation and invocation identity, expected outcome,
+request and input-bundle identities, caller-assigned `JobId`, and generic contract identity. Input
+order cannot affect plan identity; missing, duplicate, extra, reordered, cross-domain, or changed
+expectation material fails closed. Prepared values retain the category-specific assembled case,
+adapter input, and job so later receipt validation need not erase types. This plan proves complete
+and deterministic preparation only. Dispatching every job, collecting authoritative receipts, and
+turning observations into oracle judgments remain separate unfinished stages.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

@@ -12,20 +12,25 @@ use cairn_execution::{
     prepare_execution_job, recover_execution_job,
 };
 use cairn_migration::{
-    ArgumentIndex, AssembledBoundaryCaseInput, BooleanInputPattern, BufferAccessV1,
-    BufferContractInput, BufferContractV1, BufferMemoryContractInput, BufferMemoryContractV1,
-    BufferName, CallAdapterCaptureLimits, CallAdapterExecutableByteLimit,
+    ArgumentIndex, AssembledBoundaryCaseInput, AssembledCorpusExecutionCase, BooleanInputPattern,
+    BufferAccessV1, BufferContractInput, BufferContractV1, BufferMemoryContractInput,
+    BufferMemoryContractV1, BufferName, CallAdapterCaptureLimits, CallAdapterExecutableByteLimit,
     CallAdapterOutputBytesArtifact, CaseTarget, CorpusBufferByteLimit, CorpusElementCount,
-    DataType, DimensionSpec, EntryPointName, ExtentValue, InclusiveExtentRange,
-    InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition, InputValueDomainV1,
-    IntegerValue, InvalidInputBehavior, MemoryConditionDisposition, MigrationDomainContractInput,
-    MigrationDomainContractV1, MigrationExecutionNeed, MigrationValidationTier,
+    CorpusExecutionPlanArtifact, CorpusExecutionPlanError, CorpusExecutionPlanV1, DataType,
+    DimensionSpec, EntryPointName, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
+    InputValueCaseTarget, InputValueDisposition, InputValueDomainV1, IntegerValue,
+    InvalidInputBehavior, MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1,
+    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
+    MigrationExecutionNeed, MigrationMandatoryCasesV1, MigrationValidationTier,
     PointerAlignmentContractV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
-    RequestedSemanticsArtifact, ScalarParameterContractInput, ScalarParameterContractV1,
-    ScalarParameterName, ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput,
-    ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource, assemble_boundary_case_input,
-    compose_call_adapter_job, derive_mandatory_base_cases, derive_mandatory_input_value_cases,
-    materialize_input_value_case, prepare_boundary_call_adapter_input,
+    PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, RequestedSemanticsArtifact,
+    ScalarParameterContractInput, ScalarParameterContractV1, ScalarParameterName,
+    ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1,
+    ShapeSymbolName, ShapeSymbolSource, assemble_boundary_case_input,
+    assemble_input_value_case_input, assemble_memory_surface_case_input, compose_call_adapter_job,
+    derive_mandatory_base_cases, derive_mandatory_input_value_cases,
+    derive_mandatory_memory_surface_cases, materialize_input_value_case,
+    prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
     validate_boundary_call_adapter_receipt,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
@@ -70,6 +75,148 @@ fn host_fixture_runs_through_coordinator_receipt_and_typed_observation() {
         ContentId::<CallAdapterOutputBytesArtifact>::derive(&[0_u8; 2])
             .expect("zero output identity")
     );
+}
+
+#[test]
+fn complete_corpus_plan_is_canonical_complete_and_strict_v1() {
+    let domain = domain();
+    let (quantitative, input_values, memory_surfaces, mut cases) = assembled_corpus(&domain);
+    let original = cases.clone();
+    let ordered = prepare_plan(
+        &quantitative,
+        &input_values,
+        &memory_surfaces,
+        original.clone(),
+    )
+    .expect("ordered complete corpus plan");
+    cases.reverse();
+    let prepared = prepare_plan(&quantitative, &input_values, &memory_surfaces, cases)
+        .expect("complete corpus plan");
+
+    assert_complete_plan_shape(
+        &prepared,
+        &ordered,
+        &quantitative,
+        &input_values,
+        &memory_surfaces,
+    );
+    assert_incomplete_case_sets_rejected(&quantitative, &input_values, &memory_surfaces, &original);
+    assert_persisted_plan_is_strict(prepared.plan());
+}
+
+fn assert_complete_plan_shape(
+    prepared: &PreparedCorpusExecutionPlan,
+    ordered: &PreparedCorpusExecutionPlan,
+    quantitative: &MigrationMandatoryCasesV1,
+    input_values: &MandatoryInputValueCasesV1,
+    memory_surfaces: &MandatoryMemorySurfaceCasesV1,
+) {
+    assert_eq!(prepared.plan(), ordered.plan());
+    assert_eq!(prepared.plan_id(), ordered.plan_id());
+    assert_eq!(prepared.plan().items().len(), 8);
+    assert_eq!(prepared.cases().len(), 8);
+    assert_eq!(
+        prepared
+            .cases()
+            .iter()
+            .filter(|case| matches!(case, PreparedCorpusExecutionCase::Boundary { .. }))
+            .count(),
+        4
+    );
+    assert_eq!(
+        prepared
+            .cases()
+            .iter()
+            .filter(|case| matches!(case, PreparedCorpusExecutionCase::InputValue { .. }))
+            .count(),
+        3
+    );
+    assert_eq!(
+        prepared
+            .cases()
+            .iter()
+            .filter(|case| matches!(case, PreparedCorpusExecutionCase::MemorySurface { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        memory_surfaces
+            .cases()
+            .iter()
+            .any(|case| case.disposition() == &MemoryConditionDisposition::Unknown),
+        "unknown obligations stay in the committed set without becoming jobs"
+    );
+    prepared
+        .plan()
+        .validate_obligations(quantitative, input_values, memory_surfaces)
+        .expect("obligation roots and executable subset");
+    assert_eq!(
+        prepared.plan_id(),
+        ContentId::<CorpusExecutionPlanArtifact>::derive(prepared.plan_bytes())
+            .expect("plan identity")
+    );
+    assert_eq!(
+        cairn_codec::from_slice::<CorpusExecutionPlanV1>(prepared.plan_bytes())
+            .expect("strict plan round trip"),
+        *prepared.plan()
+    );
+}
+
+fn assert_incomplete_case_sets_rejected(
+    quantitative: &MigrationMandatoryCasesV1,
+    input_values: &MandatoryInputValueCasesV1,
+    memory_surfaces: &MandatoryMemorySurfaceCasesV1,
+    original: &[AssembledCorpusExecutionCase],
+) {
+    let mut missing = original.to_vec();
+    let removed = missing.pop().expect("one removable case");
+    assert_eq!(
+        prepare_plan(quantitative, input_values, memory_surfaces, missing),
+        Err(CorpusExecutionPlanError::MissingCase {
+            obligation: match removed {
+                AssembledCorpusExecutionCase::Boundary { case, .. } => {
+                    cairn_migration::CorpusObligationIdentityV1::Boundary {
+                        case: case.manifest().boundary_case(),
+                    }
+                }
+                AssembledCorpusExecutionCase::InputValue { case, .. } => {
+                    cairn_migration::CorpusObligationIdentityV1::InputValue {
+                        case: case.manifest().input_value_case(),
+                    }
+                }
+                AssembledCorpusExecutionCase::MemorySurface { case, .. } => {
+                    cairn_migration::CorpusObligationIdentityV1::MemorySurface {
+                        case: case.manifest().memory_surface_case(),
+                    }
+                }
+            },
+        })
+    );
+    let mut duplicate = original.to_vec();
+    duplicate.push(original[0].clone());
+    assert!(matches!(
+        prepare_plan(quantitative, input_values, memory_surfaces, duplicate),
+        Err(CorpusExecutionPlanError::DuplicateCase { .. })
+    ));
+}
+
+fn assert_persisted_plan_is_strict(plan: &CorpusExecutionPlanV1) {
+    let value = serde_json::to_value(plan).expect("plan JSON");
+    let mut wrong_version = value.clone();
+    wrong_version["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<CorpusExecutionPlanV1>(wrong_version).is_err());
+    let mut wrong_order = value.clone();
+    wrong_order["items"]
+        .as_array_mut()
+        .expect("items")
+        .reverse();
+    assert!(serde_json::from_value::<CorpusExecutionPlanV1>(wrong_order).is_err());
+    let mut duplicate_job = value.clone();
+    duplicate_job["items"][1]["job_id"] = duplicate_job["items"][0]["job_id"].clone();
+    assert!(serde_json::from_value::<CorpusExecutionPlanV1>(duplicate_job).is_err());
+    let mut unknown = value;
+    unknown["fallback_reader"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CorpusExecutionPlanV1>(unknown).is_err());
 }
 
 fn prepared_host_case() -> PreparedHostCase {
@@ -259,6 +406,133 @@ fn assert_tampered_invocation_is_rejected(prepared: &PreparedHostCase) {
     assert!(!output.join("cairn/call-adapter-result.json").exists());
 }
 
+fn assembled_corpus(
+    domain: &MigrationDomainContractV1,
+) -> (
+    MigrationMandatoryCasesV1,
+    MandatoryInputValueCasesV1,
+    MandatoryMemorySurfaceCasesV1,
+    Vec<AssembledCorpusExecutionCase>,
+) {
+    let quantitative = derive_mandatory_base_cases(domain).expect("quantitative obligations");
+    let input_values = derive_mandatory_input_value_cases(domain).expect("dtype obligations");
+    let memory_surfaces =
+        derive_mandatory_memory_surface_cases(domain).expect("memory obligations");
+    let supported_input = input_values
+        .cases()
+        .iter()
+        .find(|case| {
+            matches!(
+                case.target(),
+                InputValueCaseTarget::Boolean {
+                    pattern: BooleanInputPattern::True,
+                    ..
+                }
+            )
+        })
+        .expect("supported baseline input");
+    let baseline = quantitative
+        .cases()
+        .iter()
+        .find(|case| {
+            matches!(
+                case.target(),
+                CaseTarget::ShapeSymbol { value, .. } if value.get() == 2
+            )
+        })
+        .expect("successful quantitative baseline");
+    let limit = CorpusBufferByteLimit::new(64).expect("corpus limit");
+    let mut cases = Vec::new();
+    for case in quantitative.cases() {
+        let count = case.shape_assignments()[0].value().get();
+        let input =
+            materialize_input_value_case(supported_input, CorpusElementCount::new(count), limit)
+                .expect("quantitative input bytes");
+        let case = assemble_boundary_case_input(domain, case, &[input], limit)
+            .expect("quantitative assembly");
+        cases.push(AssembledCorpusExecutionCase::Boundary {
+            job_id: JobId::new(),
+            case,
+        });
+    }
+    for input_case in input_values.cases() {
+        let input = materialize_input_value_case(input_case, CorpusElementCount::new(2), limit)
+            .expect("dtype input bytes");
+        let case = assemble_input_value_case_input(domain, baseline, input_case, &[input], limit)
+            .expect("dtype assembly");
+        cases.push(AssembledCorpusExecutionCase::InputValue {
+            job_id: JobId::new(),
+            case,
+        });
+    }
+    let baseline_input =
+        materialize_input_value_case(supported_input, CorpusElementCount::new(2), limit)
+            .expect("memory baseline bytes");
+    for memory_case in memory_surfaces
+        .cases()
+        .iter()
+        .filter(|case| match case.disposition() {
+            MemoryConditionDisposition::Supported => true,
+            MemoryConditionDisposition::Invalid { behavior } => {
+                behavior != &InvalidInputBehavior::ExplicitlyExcluded
+            }
+            MemoryConditionDisposition::ExplicitlyExcluded { .. }
+            | MemoryConditionDisposition::Unknown => false,
+        })
+    {
+        let case = assemble_memory_surface_case_input(
+            domain,
+            baseline,
+            memory_case,
+            std::slice::from_ref(&baseline_input),
+            limit,
+        )
+        .expect("memory assembly");
+        cases.push(AssembledCorpusExecutionCase::MemorySurface {
+            job_id: JobId::new(),
+            case,
+        });
+    }
+    (quantitative, input_values, memory_surfaces, cases)
+}
+
+fn prepare_plan(
+    quantitative: &MigrationMandatoryCasesV1,
+    input_values: &MandatoryInputValueCasesV1,
+    memory_surfaces: &MandatoryMemorySurfaceCasesV1,
+    cases: Vec<AssembledCorpusExecutionCase>,
+) -> Result<PreparedCorpusExecutionPlan, CorpusExecutionPlanError> {
+    let need = MigrationExecutionNeed::new(
+        MigrationValidationTier::V0Cpu,
+        ExecutionBackend::new(HOST_FIXTURE_BACKEND).expect("backend"),
+        cairn_execution::ExecutionTimeoutMillis::new(5_000).expect("timeout"),
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("execution need");
+    prepare_corpus_execution_plan(
+        quantitative,
+        input_values,
+        memory_surfaces,
+        cases,
+        b"ELF",
+        CallAdapterExecutableByteLimit::new(16).expect("executable limit"),
+        ContentId::<ExecutionEnvironmentArtifact>::derive(b"corpus environment")
+            .expect("environment"),
+        &need,
+        CallAdapterCaptureLimits {
+            stdout: OutputByteLimit::new(1_024).expect("stdout"),
+            stderr: OutputByteLimit::new(1_024).expect("stderr"),
+            result: OutputByteLimit::new(4_096).expect("result"),
+            diagnostic: DiagnosticByteLimit::new(1_024).expect("diagnostic"),
+            evidence: EvidenceByteLimit::new(4_096).expect("evidence"),
+        },
+    )
+}
+
 fn domain() -> MigrationDomainContractV1 {
     let buffer = BufferName::new("value").expect("buffer");
     let symbol = ShapeSymbolName::new("n").expect("symbol");
@@ -269,9 +543,7 @@ fn domain() -> MigrationDomainContractV1 {
             behavior: invalid.clone(),
         },
         alignment: PointerAlignmentContractV1::ByteAligned,
-        insufficient_capacity_non_empty: MemoryConditionDisposition::Invalid {
-            behavior: invalid.clone(),
-        },
+        insufficient_capacity_non_empty: MemoryConditionDisposition::Unknown,
     });
     MigrationDomainContractV1::new(MigrationDomainContractInput {
         source_entry_point: EntryPointName::new("zero_bool").expect("entry point"),

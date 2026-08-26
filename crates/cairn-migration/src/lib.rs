@@ -2,6 +2,7 @@
 
 mod assemble;
 mod call_adapter;
+mod corpus_execution;
 mod domain;
 mod historical;
 mod input_values;
@@ -28,6 +29,11 @@ pub use call_adapter::{
     validate_boundary_call_adapter_receipt, validate_input_value_call_adapter_capture,
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
     validate_memory_surface_call_adapter_receipt,
+};
+pub use corpus_execution::{
+    AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
+    CorpusExecutionPlanItemV1, CorpusExecutionPlanV1, CorpusObligationIdentityV1,
+    PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, prepare_corpus_execution_plan,
 };
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,
