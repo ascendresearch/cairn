@@ -2,6 +2,7 @@
 
 mod domain;
 mod input_values;
+mod memory_surface;
 
 pub use domain::{
     ArgumentIndex, BufferAccessV1, BufferContractInput, BufferContractV1, BufferName, BufferRole,
@@ -23,6 +24,15 @@ pub use input_values::{
     MandatoryInputValueCaseV1, MandatoryInputValueCasesArtifact, MandatoryInputValueCasesV1,
     SignedIntegerDataType, SignedIntegerInputPattern, UnsignedIntegerDataType,
     UnsignedIntegerInputPattern, derive_mandatory_input_value_cases,
+};
+pub use memory_surface::{
+    BufferAliasingContractInput, BufferAliasingContractV1, BufferAliasingPattern,
+    BufferMemoryContractInput, BufferMemoryContractV1, BufferMemoryPattern, BufferPairV1,
+    CapacityShortfallBytes, MandatoryMemorySurfaceCaseArtifact, MandatoryMemorySurfaceCaseV1,
+    MandatoryMemorySurfaceCasesArtifact, MandatoryMemorySurfaceCasesV1, MemoryConditionDisposition,
+    MemorySurfaceCaseTarget, MemorySurfaceDerivationPolicy, MisalignmentOffsetBytes,
+    PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
+    derive_mandatory_memory_surface_cases,
 };
 
 use cairn_execution::{

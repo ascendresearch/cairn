@@ -746,6 +746,11 @@ mod tests {
         SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName,
         ShapeSymbolSource, StatusCode,
     };
+    use crate::memory_surface::{
+        BufferAliasingContractInput, BufferAliasingContractV1, BufferMemoryContractInput,
+        BufferMemoryContractV1, BufferPairV1, MemoryConditionDisposition,
+        PointerAlignmentContractV1,
+    };
 
     fn id<T: ContentType>(seed: &str) -> ContentId<T> {
         ContentId::derive(seed.as_bytes()).expect("identity")
@@ -765,6 +770,35 @@ mod tests {
             infinity,
             nan,
         })
+    }
+
+    fn memory_contract() -> BufferMemoryContractV1 {
+        BufferMemoryContractV1::new(BufferMemoryContractInput {
+            null_non_empty: MemoryConditionDisposition::Unknown,
+            alignment: PointerAlignmentContractV1::ByteAligned,
+            insufficient_capacity_non_empty: MemoryConditionDisposition::Unknown,
+        })
+    }
+
+    fn aliasing_contracts(names: &[&str]) -> Vec<BufferAliasingContractV1> {
+        let mut contracts = Vec::new();
+        for (index, left) in names.iter().enumerate() {
+            for right in &names[index + 1..] {
+                let mut pair = [*left, *right];
+                pair.sort_unstable();
+                contracts.push(BufferAliasingContractV1::new(BufferAliasingContractInput {
+                    pair: BufferPairV1::new(
+                        BufferName::new(pair[0]).expect("buffer"),
+                        BufferName::new(pair[1]).expect("buffer"),
+                    )
+                    .expect("pair"),
+                    exact_alias: MemoryConditionDisposition::Unknown,
+                    partial_overlap: MemoryConditionDisposition::Unknown,
+                }));
+            }
+        }
+        contracts.sort_by(|left, right| left.pair().cmp(right.pair()));
+        contracts
     }
 
     fn reduction_domain(
@@ -787,6 +821,7 @@ mod tests {
                     shape: vec![DimensionSpec::Symbol {
                         symbol: symbol.clone(),
                     }],
+                    memory: memory_contract(),
                 })?,
                 BufferContractV1::new(BufferContractInput {
                     argument_index: ArgumentIndex::new(1),
@@ -794,6 +829,7 @@ mod tests {
                     access: BufferAccessV1::Output,
                     data_type: DataType::F32,
                     shape: Vec::new(),
+                    memory: memory_contract(),
                 })?,
             ],
             scalar_parameters: Vec::new(),
@@ -810,6 +846,7 @@ mod tests {
                 boundary_moduli: vec![ExtentModulus::new(256)?],
                 invalid_behavior: InvalidInputBehavior::RejectBeforeExecution,
             })?],
+            buffer_aliasing: aliasing_contracts(&["input", "output"]),
             requested_semantics: id::<RequestedSemanticsArtifact>("sum-semantics"),
             semantic_claim: SemanticClaimKind::Numerical,
             exclusions,
@@ -884,6 +921,7 @@ mod tests {
             },
             data_type: DataType::F32,
             shape: Vec::new(),
+            memory: memory_contract(),
         });
         assert!(matches!(
             type_error,
@@ -919,6 +957,7 @@ mod tests {
                 access: BufferAccessV1::Input { value_domain },
                 data_type,
                 shape: Vec::new(),
+                memory: memory_contract(),
             })
             .expect("input")
         };
@@ -945,11 +984,19 @@ mod tests {
                     access: BufferAccessV1::Output,
                     data_type: DataType::F16,
                     shape: Vec::new(),
+                    memory: memory_contract(),
                 })
                 .expect("output"),
             ],
             scalar_parameters: Vec::new(),
             shape_symbols: Vec::new(),
+            buffer_aliasing: aliasing_contracts(&[
+                "float_input",
+                "signed_input",
+                "unsigned_input",
+                "bool_input",
+                "output",
+            ]),
             requested_semantics: id::<RequestedSemanticsArtifact>("typed-input-semantics"),
             semantic_claim: SemanticClaimKind::Numerical,
             exclusions: Vec::new(),

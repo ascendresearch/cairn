@@ -954,18 +954,18 @@ strict V1 caller-domain body for operator entry point, ABI-ordered buffers and s
 buffer roles, dtypes, fixed/symbolic shapes, logical shape-symbol sources and ranges, tile/alignment
 moduli, input-value families, invalid-input behavior, requested semantics, claim kind, and explicit
 exclusions. Buffer name, scalar-parameter name, shape-symbol name, argument index, dimension axis,
-rank, extent, ordinary integer, modulus, and status code are distinct Rust types; compile-fail controls prevent
-cross-unit assignment. Domain validation rejects duplicate ABI positions/names, dtype/range
-mismatch, unknown shape symbols, disagreement between logical and ABI ranges, and ambiguous
-shape-parameter bindings.
+rank, extent, ordinary integer, modulus, and status code are distinct Rust types; compile-fail
+controls prevent cross-unit assignment. Domain validation rejects duplicate ABI positions/names,
+dtype/range mismatch, unknown shape symbols, disagreement between logical and ABI ranges, and
+ambiguous shape-parameter bindings.
 
 Trusted `BoundaryV1` derivation emits complete one-variable-at-a-time assignments for valid minima,
 maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid neighbors, and the
 first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
 typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
-rather than inventing an expected status. This is not yet the complete mandatory corpus: dtype
-patterns are derived by a separate typed policy described below, while pointer/error surfaces,
-historical target-failure families, and executable case materialization remain target work.
+rather than inventing an expected status. Dtype and memory-surface patterns are derived by separate
+typed policies described below; historical target-failure families and executable case
+materialization remain target work.
 
 Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
 integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
@@ -975,6 +975,16 @@ sequence. The caller must classify negative zero, subnormal, infinity, and NaN f
 as supported, invalid with explicit behavior, explicitly excluded with a content identity, or
 unknown. Exclusion identities must also occur in the domain's canonical exclusion set. These are
 construction obligations, not yet concrete corpus bytes or executed observations.
+
+Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
+one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
+valid non-empty shapes. Required alignment, misalignment offset, capacity shortfall, overlap offset,
+and canonical buffer pair remain distinct Rust types. The domain must classify every memory
+condition as supported, invalid with explicit behavior, explicitly excluded with a content identity,
+or unknown, and it must declare every distinct ABI buffer pair exactly once. The derivation omits
+non-empty pointer cases for zero-only buffers and does not claim partial overlap for two one-byte
+regions. These obligations still require isolated byte materialization and execution before they
+become observations.
 
 Its core modules are expected to include:
 

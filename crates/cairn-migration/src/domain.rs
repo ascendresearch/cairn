@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::input_values::InputValueDomainV1;
+use crate::memory_surface::{BufferAliasingContractV1, BufferMemoryContractV1, BufferPairV1};
 
 const MAX_DOMAIN_LABEL_LEN: usize = 128;
 
@@ -103,6 +104,33 @@ pub enum DomainContractError {
         /// Buffer containing the dangling exclusion edge.
         buffer: String,
     },
+    /// A required alignment was not a non-trivial power of two.
+    #[error("required buffer alignment must be a power of two greater than one")]
+    InvalidRequiredAlignment,
+    /// A memory quantity that represents a perturbation used zero.
+    #[error("{field} must be greater than zero")]
+    NonPositiveMemoryQuantity {
+        /// Typed quantity that failed validation.
+        field: &'static str,
+    },
+    /// A deliberate misalignment offset did not lie below its required alignment.
+    #[error("misalignment offset must be the policy-sized one byte below the required alignment")]
+    InvalidMisalignmentPattern,
+    /// A buffer pair reused one name or was not in strict lexical order.
+    #[error("buffer pair must contain two distinct names in strict lexical order")]
+    InvalidBufferPair,
+    /// An aliasing declaration cites a buffer absent from the ABI.
+    #[error("aliasing contract cites unknown buffer {buffer}")]
+    UnknownAliasingBuffer {
+        /// Missing buffer name.
+        buffer: String,
+    },
+    /// Pairwise aliasing declarations did not cover the exact ABI buffer-pair set.
+    #[error("buffer aliasing contracts must cover every distinct ABI buffer pair exactly once")]
+    IncompleteAliasingContracts,
+    /// A memory-surface exclusion was not present in the domain's canonical exclusion set.
+    #[error("memory-surface contract cites an exclusion absent from the domain exclusions")]
+    UnlistedMemorySurfaceExclusion,
     /// The contract has no input-capable buffer.
     #[error("migration domain requires at least one input-capable buffer")]
     MissingInputBuffer,
@@ -654,6 +682,8 @@ pub struct BufferContractInput {
     pub data_type: DataType,
     /// Ordered shape dimensions; empty means a scalar buffer value.
     pub shape: Vec<DimensionSpec>,
+    /// Pointer, alignment, and capacity behavior at valid non-empty shapes.
+    pub memory: BufferMemoryContractV1,
 }
 
 /// Strict V1 buffer argument contract.
@@ -666,6 +696,7 @@ pub struct BufferContractV1 {
     access: BufferAccessV1,
     data_type: DataType,
     shape: Vec<DimensionSpec>,
+    memory: BufferMemoryContractV1,
 }
 
 #[derive(Deserialize)]
@@ -677,6 +708,7 @@ struct BufferContractWire {
     access: BufferAccessV1,
     data_type: DataType,
     shape: Vec<DimensionSpec>,
+    memory: BufferMemoryContractV1,
 }
 
 impl BufferContractV1 {
@@ -703,6 +735,7 @@ impl BufferContractV1 {
             access: input.access,
             data_type: input.data_type,
             shape: input.shape,
+            memory: input.memory,
         })
     }
 
@@ -742,6 +775,12 @@ impl BufferContractV1 {
         &self.shape
     }
 
+    /// Returns pointer, alignment, and capacity behavior for non-empty shapes.
+    #[must_use]
+    pub const fn memory(&self) -> &BufferMemoryContractV1 {
+        &self.memory
+    }
+
     /// Returns the declared value domain for input-capable buffers.
     #[must_use]
     pub const fn input_value_domain(&self) -> Option<&InputValueDomainV1> {
@@ -760,6 +799,7 @@ impl TryFrom<BufferContractWire> for BufferContractV1 {
             access: wire.access,
             data_type: wire.data_type,
             shape: wire.shape,
+            memory: wire.memory,
         })
     }
 }
@@ -1087,6 +1127,8 @@ pub struct MigrationDomainContractInput {
     pub scalar_parameters: Vec<ScalarParameterContractV1>,
     /// Logical symbols in strict name order.
     pub shape_symbols: Vec<ShapeSymbolContractV1>,
+    /// Complete pairwise aliasing declarations in strict pair order.
+    pub buffer_aliasing: Vec<BufferAliasingContractV1>,
     /// Requested semantics artifact.
     pub requested_semantics: ContentId<RequestedSemanticsArtifact>,
     /// Strength requested by the caller's domain body.
@@ -1104,6 +1146,7 @@ pub struct MigrationDomainContractV1 {
     buffers: Vec<BufferContractV1>,
     scalar_parameters: Vec<ScalarParameterContractV1>,
     shape_symbols: Vec<ShapeSymbolContractV1>,
+    buffer_aliasing: Vec<BufferAliasingContractV1>,
     requested_semantics: ContentId<RequestedSemanticsArtifact>,
     semantic_claim: SemanticClaimKind,
     exclusions: Vec<ContentId<MigrationDomainExclusionArtifact>>,
@@ -1117,6 +1160,7 @@ struct MigrationDomainContractWire {
     buffers: Vec<BufferContractV1>,
     scalar_parameters: Vec<ScalarParameterContractV1>,
     shape_symbols: Vec<ShapeSymbolContractV1>,
+    buffer_aliasing: Vec<BufferAliasingContractV1>,
     requested_semantics: ContentId<RequestedSemanticsArtifact>,
     semantic_claim: SemanticClaimKind,
     exclusions: Vec<ContentId<MigrationDomainExclusionArtifact>>,
@@ -1127,8 +1171,9 @@ impl MigrationDomainContractV1 {
     ///
     /// # Errors
     ///
-    /// Rejects ambiguous ABI order/names, non-canonical collections, unknown symbols, source/range
-    /// disagreement, missing input/output roles, and implicit merging of shape authorities.
+    /// Rejects ambiguous ABI order/names, incomplete pairwise aliasing, dangling exclusion edges,
+    /// non-canonical collections, unknown symbols, source/range disagreement, missing input/output
+    /// roles, and implicit merging of shape authorities.
     pub fn new(input: MigrationDomainContractInput) -> Result<Self, DomainContractError> {
         validate_argument_order(&input.buffers, &input.scalar_parameters)?;
         if input.buffers.is_empty() {
@@ -1159,6 +1204,12 @@ impl MigrationDomainContractV1 {
         }
         validate_content_ids(&input.exclusions, "domain exclusions")?;
         validate_input_value_exclusions(&input.buffers, &input.exclusions)?;
+        validate_buffer_aliasing(&input.buffers, &input.buffer_aliasing)?;
+        validate_memory_surface_exclusions(
+            &input.buffers,
+            &input.buffer_aliasing,
+            &input.exclusions,
+        )?;
         validate_shape_graph(
             &input.buffers,
             &input.scalar_parameters,
@@ -1170,6 +1221,7 @@ impl MigrationDomainContractV1 {
             buffers: input.buffers,
             scalar_parameters: input.scalar_parameters,
             shape_symbols: input.shape_symbols,
+            buffer_aliasing: input.buffer_aliasing,
             requested_semantics: input.requested_semantics,
             semantic_claim: input.semantic_claim,
             exclusions: input.exclusions,
@@ -1198,6 +1250,12 @@ impl MigrationDomainContractV1 {
     #[must_use]
     pub fn shape_symbols(&self) -> &[ShapeSymbolContractV1] {
         &self.shape_symbols
+    }
+
+    /// Returns complete pairwise aliasing declarations in strict pair order.
+    #[must_use]
+    pub fn buffer_aliasing(&self) -> &[BufferAliasingContractV1] {
+        &self.buffer_aliasing
     }
 
     /// Returns requested semantics.
@@ -1229,6 +1287,7 @@ impl TryFrom<MigrationDomainContractWire> for MigrationDomainContractV1 {
             buffers: wire.buffers,
             scalar_parameters: wire.scalar_parameters,
             shape_symbols: wire.shape_symbols,
+            buffer_aliasing: wire.buffer_aliasing,
             requested_semantics: wire.requested_semantics,
             semantic_claim: wire.semantic_claim,
             exclusions: wire.exclusions,
@@ -1424,6 +1483,72 @@ fn validate_input_value_exclusions(
                 buffer: buffer.name().to_string(),
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_buffer_aliasing(
+    buffers: &[BufferContractV1],
+    aliasing: &[BufferAliasingContractV1],
+) -> Result<(), DomainContractError> {
+    for contract in aliasing {
+        for name in [contract.pair().first(), contract.pair().second()] {
+            if !buffers.iter().any(|buffer| buffer.name() == name) {
+                return Err(DomainContractError::UnknownAliasingBuffer {
+                    buffer: name.to_string(),
+                });
+            }
+        }
+    }
+    if aliasing
+        .windows(2)
+        .any(|pair| pair[0].pair() >= pair[1].pair())
+    {
+        return Err(DomainContractError::NonCanonicalSet {
+            field: "buffer aliasing contracts",
+        });
+    }
+
+    let mut expected = Vec::new();
+    for (index, left) in buffers.iter().enumerate() {
+        for right in &buffers[index + 1..] {
+            let (first, second) = if left.name() < right.name() {
+                (left.name().clone(), right.name().clone())
+            } else {
+                (right.name().clone(), left.name().clone())
+            };
+            expected.push(BufferPairV1::new(first, second)?);
+        }
+    }
+    expected.sort();
+    let actual: Vec<_> = aliasing
+        .iter()
+        .map(|contract| contract.pair().clone())
+        .collect();
+    if actual != expected {
+        return Err(DomainContractError::IncompleteAliasingContracts);
+    }
+    Ok(())
+}
+
+fn validate_memory_surface_exclusions(
+    buffers: &[BufferContractV1],
+    aliasing: &[BufferAliasingContractV1],
+    exclusions: &[ContentId<MigrationDomainExclusionArtifact>],
+) -> Result<(), DomainContractError> {
+    let missing_buffer_exclusion = buffers.iter().any(|buffer| {
+        buffer
+            .memory()
+            .referenced_exclusions()
+            .any(|exclusion| !exclusions.contains(exclusion))
+    });
+    let missing_aliasing_exclusion = aliasing.iter().any(|contract| {
+        contract
+            .referenced_exclusions()
+            .any(|exclusion| !exclusions.contains(exclusion))
+    });
+    if missing_buffer_exclusion || missing_aliasing_exclusion {
+        return Err(DomainContractError::UnlistedMemorySurfaceExclusion);
     }
     Ok(())
 }
@@ -2230,6 +2355,11 @@ mod tests {
         FloatingInputValueDomainInput, FloatingInputValueDomainV1, InputValueDisposition,
         InputValueDomainV1,
     };
+    use crate::memory_surface::{
+        BufferAliasingContractInput, BufferAliasingContractV1, BufferMemoryContractInput,
+        BufferMemoryContractV1, BufferPairV1, MemoryConditionDisposition,
+        PointerAlignmentContractV1, RequiredAlignmentBytes,
+    };
 
     fn id<T: ContentType>(seed: &str) -> ContentId<T> {
         ContentId::derive(seed.as_bytes()).expect("identity")
@@ -2262,6 +2392,23 @@ mod tests {
         }
     }
 
+    fn memory_contract() -> BufferMemoryContractV1 {
+        BufferMemoryContractV1::new(BufferMemoryContractInput {
+            null_non_empty: MemoryConditionDisposition::Invalid {
+                behavior: status_error(),
+            },
+            alignment: PointerAlignmentContractV1::Required {
+                bytes: RequiredAlignmentBytes::new(16).expect("alignment"),
+                misaligned_non_empty: MemoryConditionDisposition::Invalid {
+                    behavior: status_error(),
+                },
+            },
+            insufficient_capacity_non_empty: MemoryConditionDisposition::Invalid {
+                behavior: status_error(),
+            },
+        })
+    }
+
     fn reduction_domain(maximum: u64) -> MigrationDomainContractV1 {
         let n = ShapeSymbolName::new("n").expect("symbol");
         MigrationDomainContractV1::new(MigrationDomainContractInput {
@@ -2275,6 +2422,7 @@ mod tests {
                     },
                     data_type: DataType::F32,
                     shape: vec![DimensionSpec::Symbol { symbol: n.clone() }],
+                    memory: memory_contract(),
                 })
                 .expect("input"),
                 BufferContractV1::new(BufferContractInput {
@@ -2283,6 +2431,7 @@ mod tests {
                     access: BufferAccessV1::Output,
                     data_type: DataType::F32,
                     shape: Vec::new(),
+                    memory: memory_contract(),
                 })
                 .expect("output"),
             ],
@@ -2318,6 +2467,19 @@ mod tests {
                 })
                 .expect("symbol"),
             ],
+            buffer_aliasing: vec![BufferAliasingContractV1::new(BufferAliasingContractInput {
+                pair: BufferPairV1::new(
+                    BufferName::new("input").expect("buffer"),
+                    BufferName::new("output").expect("buffer"),
+                )
+                .expect("pair"),
+                exact_alias: MemoryConditionDisposition::Invalid {
+                    behavior: status_error(),
+                },
+                partial_overlap: MemoryConditionDisposition::Invalid {
+                    behavior: status_error(),
+                },
+            })],
             requested_semantics: id::<RequestedSemanticsArtifact>("sum-semantics"),
             semantic_claim: SemanticClaimKind::Numerical,
             exclusions: vec![id::<MigrationDomainExclusionArtifact>("nan-payload")],

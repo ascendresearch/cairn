@@ -50,9 +50,10 @@ refinement, corpus, authorship, construction-claim, correct/wrong-variant, and o
 manifests with separate typed identity domains. Executed oracle admission, mandatory base-case
 execution, the historical reduction control, candidate judgment, and the first unified migration
 are not implemented yet. `cairn-migration` now supplies the first strongly typed operator-domain
-body plus trusted quantitative and dtype-pattern derivation. Floating special-value families retain
-explicit supported/invalid/excluded/unknown dispositions. Pointer/error-surface, historical
-target-failure obligations, and executable case materialization remain unfinished.
+body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivation. Floating
+special-value and memory conditions retain explicit supported/invalid/excluded/unknown
+dispositions. Historical target-failure obligations and executable case materialization remain
+unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
