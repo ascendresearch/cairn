@@ -1002,15 +1002,16 @@ content-changed material. Explicitly excluded boundaries and explicitly-invalid 
 not admitted into this baseline assembly, preventing two independent invalid conditions from being
 silently assigned the boundary case's outcome.
 
-**Implemented explicitly-invalid dtype-case composition slice (2026-08-25).** A dtype obligation
-classified `Invalid` can now be assembled only over a quantitative case that trusted derivation
+**Implemented dtype-case composition slice (2026-08-25).** A dtype obligation classified
+`Supported` or `Invalid` can now be assembled only over a quantitative case that trusted derivation
 proves is both a member of the exact caller domain and expected to succeed. The targeted
-materialized buffer must validate against the exact dtype-obligation identity and disposition;
-every other input-capable buffer must remain `Supported`. The strict V1 dtype-case manifest uses a
-content-identity domain distinct from quantitative boundary manifests, binds the domain, successful
-baseline, dtype obligation, copied typed target/outcome, and the complete ABI argument set, and
-cross-validates the canonical bundle files. Unknown, excluded, supported-as-invalid, underived, and
-multi-invalid compositions fail closed. Supported dtype-pattern case composition, isolated
+materialized buffer must validate against the exact dtype-obligation and materialization identities,
+target, and disposition; every other input-capable buffer must remain `Supported`. The strict V1
+dtype-case manifest uses a content-identity domain distinct from quantitative boundary manifests,
+binds the domain, successful baseline, dtype obligation, target materialization, copied typed
+target/outcome, and complete ABI argument set, and cross-validates the canonical bundle files.
+Supported recipes expect success; invalid recipes retain their caller-declared behavior. Unknown,
+excluded, underived, wrong-target, and multi-invalid compositions fail closed. Isolated
 pointer/capacity/aliasing layouts, a call adapter, observations, and execution remain target work.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,

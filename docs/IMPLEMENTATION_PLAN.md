@@ -224,10 +224,11 @@ The remaining G slices, in dependency order, are:
    trusted quantitative boundary cases now rederive exact domain membership, resolve buffer shapes,
    encode scalar ABI files, describe output allocation lengths, and emit canonical ABI-ordered
    `InputBundleV1` artifacts with cross-validated manifest/source/file identities. Separate
-   explicitly-invalid dtype obligations now require a trusted successful quantitative baseline,
-   vary exactly one input buffer, retain their own typed manifest identity, and carry only the
-   caller-declared invalid outcome. Supported dtype-pattern composition, memory-surface realization,
-   call-adapter execution, and complete corpus orchestration are still pending.
+   supported and explicitly-invalid dtype obligations now share one manifest/assembly path, require
+   a trusted successful quantitative baseline, vary exactly one input buffer, bind that target's
+   materialization identity, and derive success or the caller-declared invalid outcome directly from
+   the obligation. Memory-surface realization, call-adapter execution, and complete corpus
+   orchestration are still pending.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

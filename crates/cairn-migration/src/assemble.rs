@@ -15,8 +15,9 @@ use crate::{
     DimensionSpec, ExtentValue, InputValueCaseTarget, InputValueDisposition, IntegerValue,
     MandatoryInputValueCaseArtifact, MandatoryInputValueCaseV1, MaterializedCorpusBuffer,
     MaterializedCorpusBufferArtifact, MaterializedCorpusBufferBytesArtifact,
-    MigrationDomainCaseArtifact, MigrationDomainCaseV1, MigrationDomainContractV1,
-    ScalarParameterName, derive_mandatory_base_cases, derive_mandatory_input_value_cases,
+    MaterializedCorpusBufferV1, MigrationDomainCaseArtifact, MigrationDomainCaseV1,
+    MigrationDomainContractV1, ScalarParameterName, derive_mandatory_base_cases,
+    derive_mandatory_input_value_cases,
 };
 use crate::{CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount};
 
@@ -39,8 +40,8 @@ pub enum CorpusCaseAssemblyError {
     /// The quantitative baseline is not a trusted successful case for this caller domain.
     #[error("input-value case requires a trusted successful quantitative baseline")]
     InvalidQuantitativeBaseline,
-    /// The input-value case is absent from trusted dtype derivation or is not explicitly invalid.
-    #[error("input-value case is not a trusted explicitly-invalid dtype obligation")]
+    /// The input-value case is absent from trusted derivation or is unknown/excluded.
+    #[error("input-value case is not a trusted executable dtype obligation")]
     UntrustedInputValueCase,
     /// Input-capable domain buffers and supplied materialized values do not match exactly.
     #[error("materialized input buffers do not exactly cover the input ABI")]
@@ -369,7 +370,7 @@ impl TryFrom<MaterializedBoundaryCaseWire> for MaterializedBoundaryCaseV1 {
     }
 }
 
-/// Content identity domain for one materialized explicitly-invalid dtype invocation manifest.
+/// Content identity domain for one materialized supported or invalid dtype invocation manifest.
 ///
 /// ```compile_fail
 /// use cairn_migration::{MaterializedBoundaryCaseArtifact, MaterializedInputValueCaseArtifact};
@@ -385,7 +386,7 @@ impl ContentType for MaterializedInputValueCaseArtifact {
     const DOMAIN: &'static str = "migration.materialized-input-value-case.v1";
 }
 
-/// Strict V1 invocation manifest for one explicitly-invalid dtype obligation.
+/// Strict V1 invocation manifest for one executable dtype obligation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "MaterializedInputValueCaseWire")]
 pub struct MaterializedInputValueCaseV1 {
@@ -393,6 +394,7 @@ pub struct MaterializedInputValueCaseV1 {
     domain: ContentId<CallerDomainBodyArtifact>,
     quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
     input_value_case: ContentId<MandatoryInputValueCaseArtifact>,
+    target_materialization: ContentId<MaterializedCorpusBufferArtifact>,
     target: InputValueCaseTarget,
     expected_outcome: CaseExpectedOutcome,
     arguments: Vec<MaterializedAbiArgumentV1>,
@@ -405,6 +407,7 @@ struct MaterializedInputValueCaseWire {
     domain: ContentId<CallerDomainBodyArtifact>,
     quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
     input_value_case: ContentId<MandatoryInputValueCaseArtifact>,
+    target_materialization: ContentId<MaterializedCorpusBufferArtifact>,
     target: InputValueCaseTarget,
     expected_outcome: CaseExpectedOutcome,
     arguments: Vec<MaterializedAbiArgumentV1>,
@@ -415,12 +418,18 @@ impl MaterializedInputValueCaseV1 {
         domain: ContentId<CallerDomainBodyArtifact>,
         quantitative_baseline: ContentId<MigrationDomainCaseArtifact>,
         input_value_case: ContentId<MandatoryInputValueCaseArtifact>,
+        target_materialization: ContentId<MaterializedCorpusBufferArtifact>,
         target: InputValueCaseTarget,
         expected_outcome: CaseExpectedOutcome,
         arguments: Vec<MaterializedAbiArgumentV1>,
     ) -> Result<Self, BoundaryCaseAssemblyError> {
         if !argument_collection_is_consistent(&arguments)
-            || !arguments_match_invalid_target(&arguments, &target, &expected_outcome)
+            || !arguments_match_input_target(
+                &arguments,
+                &target,
+                target_materialization,
+                &expected_outcome,
+            )
         {
             return Err(BoundaryCaseAssemblyError::InconsistentManifest);
         }
@@ -429,6 +438,7 @@ impl MaterializedInputValueCaseV1 {
             domain,
             quantitative_baseline,
             input_value_case,
+            target_materialization,
             target,
             expected_outcome,
             arguments,
@@ -453,13 +463,19 @@ impl MaterializedInputValueCaseV1 {
         self.input_value_case
     }
 
+    /// Returns the exact target buffer materialization selected for this dtype obligation.
+    #[must_use]
+    pub const fn target_materialization(&self) -> ContentId<MaterializedCorpusBufferArtifact> {
+        self.target_materialization
+    }
+
     /// Returns the only input buffer and dtype recipe varied by this invocation.
     #[must_use]
     pub const fn target(&self) -> &InputValueCaseTarget {
         &self.target
     }
 
-    /// Returns the caller-declared invalid-input outcome.
+    /// Returns success for supported values or the caller-declared invalid-input outcome.
     #[must_use]
     pub const fn expected_outcome(&self) -> &CaseExpectedOutcome {
         &self.expected_outcome
@@ -495,11 +511,32 @@ impl MaterializedInputValueCaseV1 {
             || !quantitative.cases().contains(baseline)
             || !input_values.cases().contains(input_case)
             || input_case.target() != &self.target
-            || invalid_input_outcome(input_case.disposition()).as_ref()
+            || input_value_outcome(input_case.disposition()).as_ref()
                 != Some(&self.expected_outcome)
             || !arguments_match_domain(&self.arguments, domain, baseline)
         {
             return Err(BoundaryCaseAssemblyError::UntrustedInputValueCase);
+        }
+        Ok(())
+    }
+
+    /// Verifies the target buffer materialization against this manifest and dtype obligation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a different materialization identity, source case, target, or disposition.
+    pub fn validate_target_materialization(
+        &self,
+        materialization: &MaterializedCorpusBufferV1,
+        input_case: &MandatoryInputValueCaseV1,
+    ) -> Result<(), CorpusCaseAssemblyError> {
+        let identity = canonical_id::<MaterializedCorpusBufferArtifact, _>(materialization)?;
+        if identity != self.target_materialization
+            || materialization.target() != &self.target
+            || materialization.disposition() != input_case.disposition()
+            || materialization.validate_source_case(input_case).is_err()
+        {
+            return Err(BoundaryCaseAssemblyError::InputBufferMismatch);
         }
         Ok(())
     }
@@ -526,6 +563,7 @@ impl TryFrom<MaterializedInputValueCaseWire> for MaterializedInputValueCaseV1 {
             wire.domain,
             wire.quantitative_baseline,
             wire.input_value_case,
+            wire.target_materialization,
             wire.target,
             wire.expected_outcome,
             wire.arguments,
@@ -575,7 +613,7 @@ impl AssembledBoundaryCaseInput {
     }
 }
 
-/// Complete explicitly-invalid dtype invocation ready for input-bundle archival.
+/// Complete supported or invalid dtype invocation ready for input-bundle archival.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssembledInputValueCaseInput {
     manifest: MaterializedInputValueCaseV1,
@@ -685,17 +723,17 @@ pub fn assemble_boundary_case_input(
     })
 }
 
-/// Assembles one explicitly-invalid dtype obligation over a trusted successful baseline.
+/// Assembles one supported or invalid dtype obligation over a trusted successful baseline.
 ///
-/// Exactly the target buffer may use the invalid recipe; all other input-capable buffers must use
-/// supported values. This preserves single-variable attribution and gives the invocation the
-/// caller-declared invalid-input outcome from the dtype obligation.
+/// Exactly the target buffer is bound to the selected recipe; all other input-capable buffers must
+/// use supported values. This preserves single-variable attribution. Supported recipes expect
+/// success, while invalid recipes retain their caller-declared behavior.
 ///
 /// # Errors
 ///
-/// Rejects a non-successful/underived quantitative baseline, a supported/unknown/excluded or
-/// underived dtype case, incomplete input coverage, contradictory materialized bytes, size/limit
-/// failures, and canonical bundle or identity failures.
+/// Rejects a non-successful/underived quantitative baseline, an unknown/excluded or underived dtype
+/// case, incomplete input coverage, contradictory materialized bytes, size/limit failures, and
+/// canonical bundle or identity failures.
 pub fn assemble_input_value_case_input(
     domain: &MigrationDomainContractV1,
     quantitative_baseline: &MigrationDomainCaseV1,
@@ -710,9 +748,17 @@ pub fn assemble_input_value_case_input(
         return Err(BoundaryCaseAssemblyError::InvalidQuantitativeBaseline);
     }
     let input_values = derive_mandatory_input_value_cases(domain).map_err(codec_error)?;
-    let expected_outcome = invalid_input_outcome(input_case.disposition())
+    let expected_outcome = input_value_outcome(input_case.disposition())
         .filter(|_| input_values.cases().contains(input_case))
         .ok_or(BoundaryCaseAssemblyError::UntrustedInputValueCase)?;
+    let target_materialized = materialized_inputs
+        .iter()
+        .find(|materialized| {
+            materialized.manifest().target().buffer() == input_case.target().buffer()
+        })
+        .ok_or(BoundaryCaseAssemblyError::InputCoverageMismatch)?;
+    let target_materialization =
+        canonical_id::<MaterializedCorpusBufferArtifact, _>(target_materialized.manifest())?;
 
     let domain_id = canonical_id::<CallerDomainBodyArtifact, _>(domain)?;
     let baseline_id = canonical_id::<MigrationDomainCaseArtifact, _>(quantitative_baseline)?;
@@ -722,7 +768,7 @@ pub fn assemble_input_value_case_input(
         quantitative_baseline,
         materialized_inputs,
         per_buffer_limit,
-        InputComposition::OneInvalid(input_case),
+        InputComposition::OneTarget(input_case),
     )?;
     let (scalar_arguments, scalar_files) =
         assemble_scalar_arguments(domain, quantitative_baseline)?;
@@ -735,6 +781,7 @@ pub fn assemble_input_value_case_input(
         domain_id,
         baseline_id,
         input_case_id,
+        target_materialization,
         input_case.target().clone(),
         expected_outcome,
         arguments,
@@ -757,7 +804,7 @@ pub fn assemble_input_value_case_input(
 #[derive(Clone, Copy)]
 enum InputComposition<'a> {
     SupportedOnly,
-    OneInvalid(&'a MandatoryInputValueCaseV1),
+    OneTarget(&'a MandatoryInputValueCaseV1),
 }
 
 fn assemble_buffer_arguments(
@@ -956,11 +1003,11 @@ fn validate_materialized_input(
 ) -> Result<(), BoundaryCaseAssemblyError> {
     let manifest = materialized.manifest();
     let disposition_matches = match composition {
-        InputComposition::OneInvalid(input_case) if input_case.target().buffer() == buffer => {
+        InputComposition::OneTarget(input_case) if input_case.target().buffer() == buffer => {
             manifest.disposition() == input_case.disposition()
                 && manifest.validate_source_case(input_case).is_ok()
         }
-        InputComposition::SupportedOnly | InputComposition::OneInvalid(_) => {
+        InputComposition::SupportedOnly | InputComposition::OneTarget(_) => {
             manifest.disposition() == &InputValueDisposition::Supported
         }
     };
@@ -976,14 +1023,13 @@ fn validate_materialized_input(
     Ok(())
 }
 
-fn invalid_input_outcome(disposition: &InputValueDisposition) -> Option<CaseExpectedOutcome> {
+fn input_value_outcome(disposition: &InputValueDisposition) -> Option<CaseExpectedOutcome> {
     match disposition {
+        InputValueDisposition::Supported => Some(CaseExpectedOutcome::Success),
         InputValueDisposition::Invalid { behavior } => Some(CaseExpectedOutcome::Invalid {
             behavior: behavior.clone(),
         }),
-        InputValueDisposition::Supported
-        | InputValueDisposition::ExplicitlyExcluded { .. }
-        | InputValueDisposition::Unknown => None,
+        InputValueDisposition::ExplicitlyExcluded { .. } | InputValueDisposition::Unknown => None,
     }
 }
 
@@ -1016,54 +1062,57 @@ fn argument_input_disposition(
     }
 }
 
-fn arguments_match_invalid_target(
+fn arguments_match_input_target(
     arguments: &[MaterializedAbiArgumentV1],
     target: &InputValueCaseTarget,
+    target_materialization: ContentId<MaterializedCorpusBufferArtifact>,
     expected_outcome: &CaseExpectedOutcome,
 ) -> bool {
-    let mut invalid_count = 0;
+    let mut target_count = 0;
     for argument in arguments {
-        let Some((buffer, data_type, disposition)) = argument_input_metadata(argument) else {
+        let Some((buffer, data_type, materialization, disposition)) =
+            argument_input_metadata(argument)
+        else {
             continue;
         };
-        match disposition {
-            InputValueDisposition::Supported => {}
-            InputValueDisposition::Invalid { behavior } => {
-                invalid_count += 1;
-                if buffer != target.buffer()
-                    || data_type != target_data_type(target)
-                    || expected_outcome
-                        != &(CaseExpectedOutcome::Invalid {
-                            behavior: behavior.clone(),
-                        })
-                {
-                    return false;
-                }
-            }
-            InputValueDisposition::ExplicitlyExcluded { .. } | InputValueDisposition::Unknown => {
+        if buffer == target.buffer() {
+            target_count += 1;
+            if data_type != target_data_type(target)
+                || materialization != target_materialization
+                || input_value_outcome(disposition).as_ref() != Some(expected_outcome)
+            {
                 return false;
             }
+        } else if disposition != &InputValueDisposition::Supported {
+            return false;
         }
     }
-    invalid_count == 1
+    target_count == 1
 }
 
 fn argument_input_metadata(
     argument: &MaterializedAbiArgumentV1,
-) -> Option<(&BufferName, DataType, &InputValueDisposition)> {
+) -> Option<(
+    &BufferName,
+    DataType,
+    ContentId<MaterializedCorpusBufferArtifact>,
+    &InputValueDisposition,
+)> {
     match argument {
         MaterializedAbiArgumentV1::InputBuffer {
             buffer,
             data_type,
+            materialization,
             disposition,
             ..
         }
         | MaterializedAbiArgumentV1::InputOutputBuffer {
             buffer,
             data_type,
+            materialization,
             disposition,
             ..
-        } => Some((buffer, *data_type, disposition)),
+        } => Some((buffer, *data_type, *materialization, disposition)),
         MaterializedAbiArgumentV1::OutputBuffer { .. }
         | MaterializedAbiArgumentV1::Scalar { .. } => None,
     }
@@ -1892,6 +1941,52 @@ mod tests {
     }
 
     #[test]
+    fn supported_dtype_case_reuses_the_same_manifest_and_expects_success() {
+        let domain = domain(InvalidInputBehavior::RejectBeforeExecution);
+        let baseline = boundary_case(&domain, 3);
+        let input_case =
+            derived_input_case(&domain, FloatingInputPattern::MixedFiniteScaleCancellation);
+        let materialized = materialize_input_value_case(
+            &input_case,
+            CorpusElementCount::new(3),
+            CorpusBufferByteLimit::new(128).expect("limit"),
+        )
+        .expect("materialize supported dtype case");
+        let assembled = assemble_input_value_case_input(
+            &domain,
+            &baseline,
+            &input_case,
+            std::slice::from_ref(&materialized),
+            CorpusBufferByteLimit::new(128).expect("limit"),
+        )
+        .expect("assemble supported dtype case");
+
+        assert_eq!(
+            assembled.manifest().expected_outcome(),
+            &CaseExpectedOutcome::Success
+        );
+        assert_eq!(
+            assembled.manifest().target_materialization(),
+            ContentId::<crate::MaterializedCorpusBufferArtifact>::derive(
+                &cairn_codec::to_vec(materialized.manifest()).expect("materialization bytes")
+            )
+            .expect("materialization identity")
+        );
+        assembled
+            .manifest()
+            .validate_sources(&domain, &baseline, &input_case)
+            .expect("source graph");
+        assembled
+            .manifest()
+            .validate_target_materialization(materialized.manifest(), &input_case)
+            .expect("target materialization");
+        assembled
+            .manifest()
+            .validate_input_bundle(assembled.input_bundle())
+            .expect("bundle graph");
+    }
+
+    #[test]
     fn invalid_dtype_composition_and_persistence_fail_closed() {
         let domain = domain_with_subnormal(
             InvalidInputBehavior::RejectBeforeExecution,
@@ -1926,7 +2021,7 @@ mod tests {
                 &[invalid_bytes],
                 limit,
             ),
-            Err(BoundaryCaseAssemblyError::UntrustedInputValueCase)
+            Err(BoundaryCaseAssemblyError::InputBufferMismatch)
         );
 
         let supported_bytes =

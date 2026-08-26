@@ -59,10 +59,11 @@ materialize into bounded deterministic little-endian bytes with typed element/by
 content-bound source/byte manifests. Trusted quantitative boundary cases can now rederive their
 domain membership, resolve shapes, encode scalar arguments, describe output allocations, and build
 an ABI-ordered canonical `InputBundleV1`; bundle/manifest/source identities and exact files are
-cross-validated. Explicitly-invalid dtype obligations now compose over a separately proven
-successful quantitative baseline, vary exactly one input buffer, and inherit only that obligation's
-declared invalid outcome. Supported dtype-pattern case composition, memory-surface realization,
-call-adapter execution, and complete corpus orchestration remain unfinished.
+cross-validated. Supported and explicitly-invalid dtype obligations now share one composition path
+over a separately proven successful quantitative baseline, vary exactly one input buffer, and bind
+that buffer's exact materialization identity. Supported recipes expect success; invalid recipes
+inherit only their declared behavior. Memory-surface realization, call-adapter execution, and
+complete corpus orchestration remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
