@@ -964,8 +964,7 @@ maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid 
 first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
 typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
 rather than inventing an expected status. Dtype and memory-surface patterns are derived by separate
-typed policies described below; historical target-failure families and executable case
-materialization remain target work.
+typed policies described below; complete executable case assembly remains target work.
 
 Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
 integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
@@ -974,7 +973,21 @@ infinities, quiet/signaling NaN, unit cancellation, and a deterministic mixed-sc
 sequence. The caller must classify negative zero, subnormal, infinity, and NaN families separately
 as supported, invalid with explicit behavior, explicitly excluded with a content identity, or
 unknown. Exclusion identities must also occur in the domain's canonical exclusion set. These are
-construction obligations, not yet concrete corpus bytes or executed observations.
+construction obligations; the supported and explicitly-invalid subset can now cross the raw-byte
+materialization boundary described next, but they are not yet executed observations.
+
+**Implemented deterministic input-byte materialization slice (2026-08-25).** A typed input-value
+obligation plus an explicit element count and positive per-buffer byte limit now produces exact
+little-endian raw bytes for every current floating, signed-integer, unsigned-integer, and boolean
+recipe. Floating special values use canonical dtype bit patterns, including signed zero,
+subnormals, infinity, quiet/signaling NaN, unit cancellation, and the exact
+`[2^(p+1), 1, -2^(p+1), 1]` mixed-scale sequence. Element count, byte length, and byte limit remain
+distinct Rust types; multiplication, host-size conversion, and allocation fail closed. The strict
+V1 manifest binds the canonical source-case identity, copied typed target/disposition, exact byte
+length/order, and raw-byte content identity, and validators recompute both source and byte
+bindings. Unknown and explicitly-excluded obligations cannot be materialized. This slice does not
+yet choose shape assignments, serialize scalar ABI arguments, assemble `InputBundleV1`, realize
+unsafe pointer/aliasing layouts, or execute a case.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at

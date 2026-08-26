@@ -3,6 +3,7 @@
 mod domain;
 mod historical;
 mod input_values;
+mod materialize;
 mod memory_surface;
 
 pub use domain::{
@@ -34,6 +35,12 @@ pub use input_values::{
     MandatoryInputValueCaseV1, MandatoryInputValueCasesArtifact, MandatoryInputValueCasesV1,
     SignedIntegerDataType, SignedIntegerInputPattern, UnsignedIntegerDataType,
     UnsignedIntegerInputPattern, derive_mandatory_input_value_cases,
+};
+pub use materialize::{
+    CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount,
+    CorpusMaterializationError, MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
+    MaterializedCorpusBufferBytesArtifact, MaterializedCorpusBufferV1,
+    materialize_input_value_case,
 };
 pub use memory_surface::{
     BufferAliasingContractInput, BufferAliasingContractV1, BufferAliasingPattern,

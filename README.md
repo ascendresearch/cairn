@@ -54,7 +54,10 @@ body plus trusted quantitative, dtype-pattern, and pointer/error-surface derivat
 special-value and memory conditions retain explicit supported/invalid/excluded/unknown
 dispositions. Historical target/oracle failure records and exact-domain coverage obligations now
 retain typed provenance, scope, stage, and detection requirements. Populating and executing the
-historical fixtures, plus general executable case materialization, remain unfinished.
+historical fixtures remain unfinished. Supported and explicitly-invalid dtype recipes now
+materialize into bounded deterministic little-endian bytes with typed element/byte quantities and
+content-bound source/byte manifests. Shape/scalar ABI assembly, complete input bundles,
+memory-surface realization, and execution remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

@@ -218,7 +218,11 @@ The remaining G slices, in dependency order, are:
    min/max/zero/one/interiors, invalid neighbors, first/last tile tails, dtype extrema, signed zero,
    non-finite/subnormal inputs, cancellation, mixed finite scales, null/misaligned pointers,
    insufficient capacity, exact aliasing, and applicable partial overlap. Remaining mandatory work
-   includes populating/reproducing historical fixtures and executable corpus-case materialization.
+   includes populating/reproducing historical fixtures and completing executable corpus-case
+   assembly. Exact dtype recipes now materialize into caller-bounded deterministic bytes with
+   typed element/byte quantities, checked overflow/allocation, and source/byte content identities;
+   shape/scalar ABI assembly, complete input bundles, memory-surface realization, and execution are
+   still pending.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;

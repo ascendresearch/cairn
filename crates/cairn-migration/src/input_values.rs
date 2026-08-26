@@ -401,7 +401,10 @@ struct MandatoryInputValueCaseWire {
 }
 
 impl MandatoryInputValueCaseV1 {
-    const fn new(target: InputValueCaseTarget, disposition: InputValueDisposition) -> Self {
+    pub(crate) const fn new(
+        target: InputValueCaseTarget,
+        disposition: InputValueDisposition,
+    ) -> Self {
         Self {
             schema_version: InputValueSchemaV1,
             target,
