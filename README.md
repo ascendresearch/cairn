@@ -77,7 +77,9 @@ identity; migration tiers remain outside worker records. Real CUDA/Ascend C adap
 and complete corpus orchestration remain unfinished. An authoritative generic execution receipt can
 now be bound back to the exact prepared job, loaded through typed declared-output identities, and
 validated as the adapter result plus ABI observation; a CAS object alone is not execution
-authority.
+authority. A deterministic Rust host fixture now exercises this entire transport path with an
+actual adapter process, durable coordinator facts, restart recovery, and exact output-byte identity.
+It is a protocol fixture, not an admitted oracle or a production unsandboxed executor.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

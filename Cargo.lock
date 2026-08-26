@@ -176,9 +176,11 @@ dependencies = [
  "cairn-execution",
  "cairn-protocol",
  "cairn-record",
+ "cairn-store-sqlite",
  "cairn-verification",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
 ]
 

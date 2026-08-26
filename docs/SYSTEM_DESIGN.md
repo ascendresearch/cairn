@@ -1078,6 +1078,19 @@ already be an authoritative execution fact; merely placing receipt-shaped bytes 
 does not prove execution, and stdout/stderr or process exit are never reinterpreted as an operator
 status.
 
+**Implemented executable host-fixture transport gate (2026-08-26).** A deterministic Rust fixture
+adapter now implements the same fixed process CLI used by future CUDA and Ascend C adapters. It
+strictly decodes the request and the invocation-manifest variant selected by its typed identity,
+recomputes the matching manifest and request identities, writes exact declared ABI output lengths,
+and emits the normal strict result. The integration gate embeds those exact executable bytes in the
+canonical input bundle, materializes the bundle into host test roots that represent the three
+sandbox mounts, launches the executable without a shell or inherited environment, and returns its
+capture through the generic executor boundary. The coordinator archives and commits the attempt;
+the test then recovers the durable completed job and validates its receipt back into an exact
+operator observation. A changed invocation file fails before any result is written. This is a
+transport/conformance fixture only: zero-filled fixture outputs have no oracle authority, the host
+harness is not a production unsandboxed executor, and real vendor/device execution remains pending.
+
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
 valid non-empty shapes. Required alignment, misalignment offset, capacity shortfall, overlap offset,

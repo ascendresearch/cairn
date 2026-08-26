@@ -253,7 +253,12 @@ The remaining G slices, in dependency order, are:
    the exact job/contract/input/command/output-declaration binding, requires a successful terminal
    outcome, reads every declared result through the typed content store, and then reuses strict
    adapter-result/ABI-byte validation. Content archival without the generic execution fact does not
-   confer authority.
+   confer authority. A deterministic Rust host fixture now supplies the first executable transport
+   gate: a real fixture process validates the typed invocation identity, emits bounded declared
+   outputs, runs through generic execution start/completion and durable recovery, and is finally
+   admitted as the exact receipt-bound observation. Tampered invocation bytes are rejected before a
+   result is written. This fixture does not substitute for CUDA/Ascend C adapters, device isolation,
+   semantic comparison, or oracle admission.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;
