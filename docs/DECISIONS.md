@@ -479,8 +479,11 @@ uses total input, uncached input, output, latency, and task quality rather than 
 The blue role receives a read-only `oracle_search_external_tests` product tool. The model supplies a
 bounded query and operator-approved repository scopes; trusted adapters own endpoints, credentials,
 redirect policy, response bounds, and repository allowlists. Results retain exact query, source,
-immutable upstream revision/blob identity where available, fetched bytes or bounded excerpt,
-retrieval provenance, and truncation.
+immutable upstream revision/blob identity where available, exact fetched bytes, retrieval
+provenance, and truncation. Exact bytes are archived for reconstruction; the model receives a
+deterministically selected, line-addressed excerpt capped per result and bound to the exact byte and
+search-result identities. Full source files are never copied into a prompt merely because code
+search matched them.
 
 PyTorch and other upstream tests are research context, not truth or import candidates. Search
 snippets and fetched bytes cannot become executable cases; Blue must independently author Cairn's

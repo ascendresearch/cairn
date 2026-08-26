@@ -12,20 +12,21 @@ use cairn_agent::{
     HttpModelTransport, InstructionBlock, ModelName, ModelOutputTokenLimit, ModelProtocolKind,
     ModelSelection, ModelTemplate, ModelTemplateRegistry, NativeProtocolCodec, NativeToolResult,
     OperationResult, PolicyDocument, ProviderName, ReceivedModelResponse,
-    ResolvedRuntimeModelArtifact, RuntimeModelCatalog, ToolCatalog, TurnInputDecision,
-    authorize_model_request, authorize_tool_operation, begin_model_dispatch, begin_tool_operation,
-    execute_model_dispatch, execute_tool_operation, prepare_native_dispatch_request,
-    prepare_tool_operation,
+    ResolvedRuntimeModelArtifact, RuntimeModelCatalog, SemanticModelTurn, SemanticOutputItem,
+    ToolCatalog, TurnInputDecision, authorize_model_request, authorize_tool_operation,
+    begin_model_dispatch, begin_tool_operation, execute_model_dispatch, execute_tool_operation,
+    prepare_native_dispatch_request, prepare_tool_operation,
 };
 use cairn_migration::{
     ExternalResearchPolicy, ExternalResearchProvider, ExternalResearchProviderError,
-    ExternalTestCaseV1, ExternalTestSearchGateway, ExternalTestSearchRequestArtifact,
-    ExternalTestSearchRequestV1, ExternalTestSearchResultV1, GitHubBlobIdentity,
-    GitHubExternalResearchProvider, GitHubRepository, OracleAgentRole, OracleRoleEpisodeInput,
-    OracleRolePromptInput, OracleSearchPlanInput, OracleSearchPlanV1,
+    ExternalTestCaseV1, ExternalTestResearchContextV1, ExternalTestSearchGateway,
+    ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1, ExternalTestSearchResultV1,
+    GitHubBlobIdentity, GitHubExternalResearchProvider, GitHubRepository, OracleAgentRole,
+    OracleRoleEpisodeInput, OracleRolePromptInput, OracleSearchPlanInput, OracleSearchPlanV1,
     RecordedExternalResearchExchange, RecordedExternalResearchProvider, SearchResultLimit,
-    SourcePath, archive_oracle_role_tool_catalog, external_test_search_registration,
-    materialize_oracle_prompt, prepare_oracle_role_episode, prepare_oracle_role_prompt,
+    SourcePath, archive_external_test_evidence, archive_oracle_role_tool_catalog,
+    external_test_search_registration, materialize_oracle_prompt, prepare_oracle_role_episode,
+    prepare_oracle_role_prompt,
 };
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, EpisodeId,
@@ -37,7 +38,155 @@ use cairn_verification::{
     AdmissionPolicyArtifact, DeclaredDomainArtifact, ModelConfigurationArtifact,
     OracleTaskInputArtifact,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+enum BlueDogfoodDraftArtifact {}
+
+impl ContentType for BlueDogfoodDraftArtifact {
+    const DOMAIN: &'static str = "migration.blue-dogfood-draft.v1";
+}
+
+enum RedDogfoodReviewArtifact {}
+
+impl ContentType for RedDogfoodReviewArtifact {
+    const DOMAIN: &'static str = "migration.red-dogfood-review.v1";
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BlueDogfoodDraftV1 {
+    schema_version: u16,
+    case_name: String,
+    input: String,
+    invocation: String,
+    expectation: DraftExpectationV1,
+    comparison: DraftComparisonV1,
+    rationale: String,
+    evidence_assessment: String,
+    assumptions: Vec<String>,
+    unverified: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+enum DraftExpectationV1 {
+    Exact { output: String },
+    Property { predicate: String },
+    Reject { error_behavior: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+enum DraftComparisonV1 {
+    Exact,
+    Numeric {
+        absolute_tolerance: String,
+        relative_tolerance: String,
+        ulp_tolerance: u64,
+        nan_equal: bool,
+    },
+    Property,
+    NotApplicable,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RedDogfoodReviewV1 {
+    schema_version: u16,
+    verdict: RedReviewVerdict,
+    strengths: Vec<String>,
+    blocking_findings: Vec<RedReviewFindingV1>,
+    advisories: Vec<RedReviewFindingV1>,
+    recommended_revision: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum RedReviewVerdict {
+    Pass,
+    Revise,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RedReviewFindingV1 {
+    kind: RedReviewFindingKind,
+    detail: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum RedReviewFindingKind {
+    FalseAccept,
+    FalseReject,
+    Underspecified,
+}
+
+impl RedDogfoodReviewV1 {
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1
+            || self.recommended_revision.trim().is_empty()
+            || self.strengths.len() > 16
+            || self.strengths.iter().any(|item| item.trim().is_empty())
+            || [&self.blocking_findings, &self.advisories]
+                .iter()
+                .any(|items| {
+                    items.len() > 16 || items.iter().any(|finding| finding.detail.trim().is_empty())
+                })
+            || matches!(self.verdict, RedReviewVerdict::Pass) != self.blocking_findings.is_empty()
+        {
+            return Err("Red dogfood review violates the bounded V1 shape");
+        }
+        Ok(())
+    }
+}
+
+impl BlueDogfoodDraftV1 {
+    fn validate(&self) -> Result<(), &'static str> {
+        let required = [
+            self.case_name.as_str(),
+            self.input.as_str(),
+            self.invocation.as_str(),
+            self.rationale.as_str(),
+            self.evidence_assessment.as_str(),
+        ];
+        if self.schema_version != 1
+            || required
+                .iter()
+                .any(|value| value.trim().is_empty() || value.chars().any(char::is_control))
+            || self.assumptions.len() > 16
+            || self.unverified.len() > 16
+        {
+            return Err("Blue dogfood draft violates the bounded V1 shape");
+        }
+        let coherent = matches!(
+            (&self.expectation, &self.comparison),
+            (
+                DraftExpectationV1::Exact { .. },
+                DraftComparisonV1::Exact | DraftComparisonV1::Numeric { .. }
+            ) | (
+                DraftExpectationV1::Property { .. },
+                DraftComparisonV1::Property
+            ) | (
+                DraftExpectationV1::Reject { .. },
+                DraftComparisonV1::NotApplicable
+            )
+        );
+        if !coherent {
+            return Err("Blue dogfood expectation and comparison are incoherent");
+        }
+        Ok(())
+    }
+}
+
+struct DogfoodSample {
+    name: &'static str,
+    operator: &'static str,
+    query: &'static str,
+    caller: serde_json::Value,
+    source: serde_json::Value,
+    task: &'static str,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +261,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "config/oracle-blue-dogfood.example.json".to_owned());
+    let sample_name = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "sum-empty-axis".to_owned());
+    let sample = dogfood_sample(&sample_name)?;
     let live: LiveConfig = serde_json::from_slice(&std::fs::read(root.join(config_path))?)?;
     if live.schema_version != 1 || live.research.repositories.is_empty() {
         return Err("unsupported live dogfood configuration".into());
@@ -156,28 +309,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let blue_instruction = put_json::<InstructionBlock>(
         &mut content,
-        &serde_json::json!({"text":"You are Blue. First use the bounded research tool exactly once. After its result, explain one independently authored empty-reduction test idea without calling another tool."}),
+        &serde_json::json!({"text":"You are Blue. First use the bounded research tool exactly once. After its result, independently author one oracle case. Return only a JSON object with exactly these fields: schema_version=1; case_name, input, invocation, rationale, evidence_assessment as nonempty strings; expectation as one tagged object {kind: exact, output: string} or {kind: property, predicate: string} or {kind: reject, error_behavior: string}; comparison as one tagged object {kind: exact}, {kind: numeric, absolute_tolerance: decimal string, relative_tolerance: decimal string, ulp_tolerance: integer, nan_equal: boolean}, {kind: property}, or {kind: not-applicable}; assumptions and unverified as string arrays. Exact expectations require exact or numeric comparison, properties require property comparison, and rejection requires not-applicable. Do not copy an upstream test and do not emit markdown."}),
     )?;
     let red_instruction = put_json::<InstructionBlock>(
         &mut content,
-        &serde_json::json!({"text":"You are Red and cannot access Blue private history."}),
+        &serde_json::json!({"text":"You are Red. You cannot access Blue private history. Attack only the frozen Blue draft and shared caller/source contracts. Return only a JSON object with exactly: schema_version=1; verdict as pass or revise; strengths as a string array; blocking_findings and advisories as arrays of objects with exactly kind (false-accept, false-reject, or underspecified) and nonempty detail; recommended_revision as a nonempty string. Put only defects that make this draft unsafe to admit in blocking_findings; put optional hardening or intentionally out-of-contract concerns in advisories. verdict must be pass exactly when blocking_findings is empty, otherwise revise. Never use placeholder findings such as 'none identified'. Do not emit markdown and do not call tools."}),
     )?;
-    let caller = put_json::<ContextBlock>(
-        &mut content,
-        &serde_json::json!({"kind":"caller-contract","operator":"sum","dtype":"f32","unknowns":["target-device rounding"]}),
-    )?;
-    let source = put_json::<ContextBlock>(
-        &mut content,
-        &serde_json::json!({"kind":"source-snapshot","entry":"reduce_sum","empty-input-behavior":"unspecified"}),
-    )?;
+    let caller = put_json::<ContextBlock>(&mut content, &sample.caller)?;
+    let source = put_json::<ContextBlock>(&mut content, &sample.source)?;
     let repository_request = serde_json::to_string(&live.research.repositories)?;
     let request = put_json::<HistoryItem>(
         &mut content,
         &serde_json::json!({
             "role":"user",
             "content": format!(
-                "Call oracle_search_external_tests with schema_version 1, query 'reduction sum empty float32', repositories {repository_request}, and max_results {}. Then use the returned research only to independently formulate a Cairn test idea.",
+                "For sample '{}', first call oracle_search_external_tests with schema_version 1, query '{}', repositories {repository_request}, and max_results {}. Then use the result only as research and independently produce this oracle draft: {}",
+                sample.name,
+                sample.query,
                 live.research.max_results_per_search
+                ,sample.task
             )
         }),
     )?;
@@ -211,9 +361,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let plan = OracleSearchPlanV1::new(OracleSearchPlanInput {
         task_id: TaskId::new(),
-        task_inputs: ContentId::<OracleTaskInputArtifact>::derive(b"blue dogfood inputs")?,
-        declared_domain: ContentId::<DeclaredDomainArtifact>::derive(b"blue dogfood domain")?,
-        admission_policy: ContentId::<AdmissionPolicyArtifact>::derive(b"blue dogfood policy")?,
+        task_inputs: ContentId::<OracleTaskInputArtifact>::derive(sample.name.as_bytes())?,
+        declared_domain: ContentId::<DeclaredDomainArtifact>::derive(sample.operator.as_bytes())?,
+        admission_policy: ContentId::<AdmissionPolicyArtifact>::derive(b"blue dogfood policy v1")?,
         common_instructions: vec![common],
         shared_context: vec![caller, source],
         blue,
@@ -337,8 +487,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cairn_agent::ToolOperationCompletion::Completed { result_id, .. } = completion else {
         return Err("recorded Blue research did not complete".into());
     };
+    let exact_research = gateway
+        .result()
+        .ok_or("research gateway completed without an exact result")?
+        .clone();
+    let _evidence = archive_external_test_evidence(&mut content, &search_request, &exact_research)?;
     let mut result_bytes = Vec::new();
     content.write_to(&result_id, &mut result_bytes)?;
+    let research_context: ExternalTestResearchContextV1 = cairn_codec::from_slice(&result_bytes)?;
     let result_text = String::from_utf8(result_bytes)?;
     let call_id = decoded
         .continuation()
@@ -395,24 +551,239 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !second_decoded.semantic().proposals().is_empty() {
         return Err("Blue called another tool instead of completing the research synthesis".into());
     }
+    let mut semantic_bytes = Vec::new();
+    content.write_to(&second_decoded.semantic().turn_id(), &mut semantic_bytes)?;
+    let semantic: SemanticModelTurn = cairn_codec::from_slice(&semantic_bytes)?;
+    let answers = semantic
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            SemanticOutputItem::Text { text } => Some(text),
+            SemanticOutputItem::ToolCall { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    if answers.is_empty() {
+        return Err("Blue returned no semantic draft body".into());
+    }
+    let draft_text = answers.join("");
+    let draft: BlueDogfoodDraftV1 = decode_draft(&draft_text).map_err(|error| {
+        format!(
+            "Blue draft decode failed after {} semantic characters: {error}",
+            draft_text.len()
+        )
+    })?;
+    draft.validate()?;
+    let draft_bytes = cairn_codec::to_vec(&draft)?;
+    let draft_descriptor =
+        content.put::<BlueDogfoodDraftArtifact>(&mut Cursor::new(draft_bytes))?;
+    let red_request = put_json::<HistoryItem>(
+        &mut content,
+        &serde_json::json!({
+            "role":"user",
+            "content": format!(
+                "Review this frozen Blue oracle draft against the shared contracts and its cited bounded research evidence. Draft: {}. Research evidence: {}",
+                serde_json::to_string(&draft)?,
+                serde_json::to_string(&research_context)?
+            )
+        }),
+    )?;
+    let red_projection = prepare_oracle_role_prompt(
+        &plan,
+        OracleRolePromptInput {
+            role: OracleAgentRole::Red,
+            append_only_context: Vec::new(),
+            diagnostic_context: Vec::new(),
+            current_request: red_request,
+            policy: policy_document,
+        },
+    )?;
+    let red_prompt = materialize_oracle_prompt(&content, &red_projection)?;
+    let red_spec = red_prompt.native_spec(
+        OracleAgentRole::Red,
+        ModelName::new(model.wire_model().as_str())?,
+        ModelOutputTokenLimit::new(live.red.output_tokens_per_turn)?,
+    )?;
+    let red_initial = codec.prepare_initial(&red_spec, red_prompt.user_text())?;
+    let red_attempt = ModelAttemptId::new();
+    let red_received = dispatch(
+        &mut events,
+        &mut content,
+        &mut transport,
+        &stream(red_attempt)?,
+        red_attempt,
+        &red_projection.turn_input_decision(selection(&model)?),
+        &red_initial,
+    )?;
+    let red_usage = red_received.usage();
+    let red_decoded = codec.decode_recovered_received(
+        &mut events,
+        &mut content,
+        red_received,
+        &CommandId::new(),
+        now()?,
+    )?;
+    if !red_decoded.semantic().proposals().is_empty() {
+        return Err("Red called a tool instead of reviewing the frozen draft".into());
+    }
+    let mut red_semantic_bytes = Vec::new();
+    content.write_to(&red_decoded.semantic().turn_id(), &mut red_semantic_bytes)?;
+    let red_semantic: SemanticModelTurn = cairn_codec::from_slice(&red_semantic_bytes)?;
+    let red_text = red_semantic
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            SemanticOutputItem::Text { text } => Some(text),
+            SemanticOutputItem::ToolCall { .. } => None,
+        })
+        .collect::<String>();
+    let review: RedDogfoodReviewV1 = decode_json_object(&red_text).map_err(|error| {
+        format!(
+            "Red review decode failed after {} semantic characters: {error}",
+            red_text.len()
+        )
+    })?;
+    review.validate()?;
+    let review_descriptor =
+        content.put::<RedDogfoodReviewArtifact>(&mut Cursor::new(cairn_codec::to_vec(&review)?))?;
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "model": model.wire_model().as_str(),
+            "sample": sample.name,
             "blue_episode_id": plan.blue().episode_id(),
             "red_episode_is_distinct": plan.blue().episode_id() != plan.red().episode_id(),
             "research_request_id": search_request_id,
-            "research_result_id": result_id,
+            "research_operation_result_id": result_id,
+            "research_result_id": research_context.search_result(),
+            "research_snippet_count": research_context.snippets().len(),
             "first_usage": first_usage,
             "second_usage": second_usage,
+            "red_usage": red_usage,
+            "blue_draft_id": draft_descriptor.content_id,
+            "blue_draft": draft,
+            "red_review_id": review_descriptor.content_id,
+            "red_review": review,
             "restart_request_byte_identical": true,
             "research_tool_loop_completed": true,
             "upstream_license_queried": false,
             "upstream_bytes_promoted_to_corpus": false,
-            "thinking_or_answer_content_printed": false
+            "reasoning_content_printed": false
         }))?
     );
     Ok(())
+}
+
+fn decode_draft(text: &str) -> Result<BlueDogfoodDraftV1, Box<dyn std::error::Error>> {
+    decode_json_object(text)
+}
+
+fn decode_json_object<T>(text: &str) -> Result<T, Box<dyn std::error::Error>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let trimmed = text.trim();
+    let json = if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        trimmed
+    } else {
+        let start = trimmed.find('{').ok_or("model output has no JSON object")?;
+        let end = trimmed
+            .rfind('}')
+            .ok_or("model output has no JSON object")?;
+        &trimmed[start..=end]
+    };
+    Ok(serde_json::from_str(json)?)
+}
+
+fn dogfood_sample(name: &str) -> Result<DogfoodSample, Box<dyn std::error::Error>> {
+    let sample = match name {
+        "sum-empty-axis" => DogfoodSample {
+            name: "sum-empty-axis",
+            operator: "sum",
+            query: "reduction sum empty float32",
+            caller: serde_json::json!({
+                "kind":"caller-contract", "operator":"sum", "dtype":"f32",
+                "shape":[2,0,3], "axis":1, "keepdim":false,
+                "required":"each output cell reduces an empty axis and must use the additive identity",
+                "unknowns":["target-device rounding"]
+            }),
+            source: serde_json::json!({
+                "kind":"source-snapshot", "entry":"reduce_sum",
+                "empty-input-behavior":"unspecified", "accumulation-order":"unspecified"
+            }),
+            task: "pin the output shape and value semantics for reduction over the zero-length axis; avoid a vacuous zero-element output",
+        },
+        "max-empty-axis" => DogfoodSample {
+            name: "max-empty-axis",
+            operator: "max",
+            query: "test_empty_tensor_empty_slice",
+            caller: serde_json::json!({
+                "kind":"caller-contract", "operator":"max", "dtype":"f32",
+                "shape":[2,0,3], "axis":1, "keepdim":false,
+                "required":"no caller-supplied identity value exists",
+                "unknowns":["error class and message text"]
+            }),
+            source: serde_json::json!({
+                "kind":"source-snapshot", "entry":"reduce_max",
+                "empty-input-behavior":"unspecified"
+            }),
+            task: "decide whether the empty-axis call returns or rejects, while avoiding brittle dependence on exact error prose",
+        },
+        "sum-noncontiguous" => DogfoodSample {
+            name: "sum-noncontiguous",
+            operator: "sum",
+            query: "sum noncontiguous transpose test",
+            caller: serde_json::json!({
+                "kind":"caller-contract", "operator":"sum", "dtype":"f32",
+                "logical-input":[[0,3],[1,4],[2,5]], "shape":[3,2],
+                "strides-in-elements":[1,3], "axis":1, "keepdim":false,
+                "required":"logical values, not contiguous reinterpretation, determine the result"
+            }),
+            source: serde_json::json!({
+                "kind":"source-snapshot", "entry":"reduce_sum",
+                "stride-support":"claimed", "layout-normalization":"unknown"
+            }),
+            task: "pin a layout-sensitive exact result that distinguishes correct strided indexing from contiguous reinterpretation",
+        },
+        "sum-nan" => DogfoodSample {
+            name: "sum-nan",
+            operator: "sum",
+            query: "sum nan propagation test",
+            caller: serde_json::json!({
+                "kind":"caller-contract", "operator":"sum", "dtype":"f32",
+                "shape":[4], "values":["1.0","NaN","-2.0","3.0"], "axis":0,
+                "required":"ordinary sum is not a NaN-ignoring reduction",
+                "unknowns":["NaN payload", "NaN sign"]
+            }),
+            source: serde_json::json!({
+                "kind":"source-snapshot", "entry":"reduce_sum",
+                "nan-policy":"unspecified", "accumulation-order":"unspecified"
+            }),
+            task: "pin NaN propagation without overconstraining payload bits or sign",
+        },
+        "matmul-zero-k" => DogfoodSample {
+            name: "matmul-zero-k",
+            operator: "matmul",
+            query: "matmul zero size dimension test",
+            caller: serde_json::json!({
+                "kind":"caller-contract", "operator":"matmul", "dtype":"f32",
+                "lhs-shape":[2,0], "rhs-shape":[0,3],
+                "required":"the zero-length inner product uses the additive identity",
+                "unknowns":["kernel dispatch for zero work"]
+            }),
+            source: serde_json::json!({
+                "kind":"source-snapshot", "entry":"matmul",
+                "zero-k-fast-path":"unknown"
+            }),
+            task: "pin output shape and every output value for a zero-K matrix product",
+        },
+        _ => {
+            return Err(format!(
+                "unknown sample {name}; expected sum-empty-axis, max-empty-axis, sum-noncontiguous, sum-nan, or matmul-zero-k"
+            )
+            .into());
+        }
+    };
+    Ok(sample)
 }
 
 fn selection(

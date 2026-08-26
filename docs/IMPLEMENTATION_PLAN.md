@@ -484,7 +484,8 @@ dogfood.
 
 #### G13 — full Oracle Agent dogfood
 
-Status: active 2026-08-26; Blue research rung complete, full loop incomplete.
+Status: active 2026-08-26; live Blue research and Blue/Red draft-quality matrix complete, full
+proposal/admission loop incomplete.
 
 1. Put Blue and Red limits for turns, logical tool operations, cumulative provider tokens, and
    output tokens per turn in strict configuration. Configure external research provider,
@@ -501,6 +502,13 @@ Status: active 2026-08-26; Blue research rung complete, full loop incomplete.
    immutable Blue revision, and hardware-free admission using actual model tool calls.
 6. Repeat multi-turn runs and compare provider-reported cache reads, uncached input, total cost, and
    task quality without using cache hits as correctness evidence.
+7. Treat exact upstream bytes and bounded model context separately. Select line-addressed snippets
+   deterministically from query matches and retain the full blob and result identities outside the
+   prompt.
+8. Dogfood a semantic matrix covering identity, rejection, layout, special values, and zero-work
+   behavior. Freeze a typed Blue draft, then let an isolated Red episode inspect only shared
+   contracts, the frozen draft, and its cited bounded evidence. Red must classify findings as
+   blockers or advisories; repeated verdict disagreement cannot pass admission.
 
 Acceptance: both recorded and live-model paths traverse the same product gateways; one opt-in run
 uses live GitHub; every advertised tool has an executable gateway; restart and budget controls are
@@ -512,7 +520,15 @@ missing tool-catalog CAS write, provider-incompatible dotted tool names, and dis
 diagnostics. After those fixes, a two-turn run selected the bounded research tool, executed a
 recorded PyTorch result through the durable read-only gateway, reconstructed a byte-identical
 continuation after restart, and reported 896 cache-read tokens on the second turn. The detailed
-ledger and GitHub credential contract are in `ORACLE_DOGFOOD.md`.
+ledger and GitHub credential contract are in `ORACLE_DOGFOOD.md`. Live GitHub dogfood then exposed
+an 82,287-token full-file prompt, a vacuous empty-reduction proposal, provider output split across
+multiple semantic text items, and insufficient 2k/8k reasoning-output limits. V1 now sends at most
+4 KiB of query-centered source per result while archiving the full blob; the same run fell to 3,112
+input tokens. Five typed Blue samples and isolated Red reviews now exercise empty-sum identity,
+empty-max rejection, non-contiguous strides, NaN propagation, and zero-K matmul. Exact PyTorch test
+identifiers improved evidence retrieval; blocker/advisory typing closes internally inconsistent Red
+passes. The generic durable episode, full `OracleProposalV1`, revision, attack variants, and trusted
+admission graph remain unfinished.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.

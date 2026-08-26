@@ -31,6 +31,8 @@ const MAX_REPOSITORIES: usize = 8;
 const MAX_RESULTS: u16 = 10;
 const MAX_PATH_BYTES: usize = 1_024;
 const MAX_SOURCE_BYTES: usize = 256 * 1_024;
+const MAX_MODEL_SNIPPET_BYTES: usize = 4 * 1_024;
+const SNIPPET_CONTEXT_LINES: usize = 24;
 
 /// Semantic domain for an exact external-test search request.
 pub enum ExternalTestSearchRequestArtifact {}
@@ -439,6 +441,172 @@ pub struct ExternalTestSearchResultV1 {
     omitted_results: u64,
 }
 
+/// Bounded excerpt of one exact upstream blob returned to Blue as model context.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalTestResearchSnippetV1 {
+    repository: GitHubRepository,
+    path: SourcePath,
+    blob: GitHubBlobIdentity,
+    source_bytes: ContentId<ExternalTestSourceBytesArtifact>,
+    start_line: u64,
+    end_line: u64,
+    source_text: String,
+    truncated: bool,
+}
+
+/// Bounded model-visible view of an exact, separately archivable research result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    try_from = "ExternalTestResearchContextWire",
+    into = "ExternalTestResearchContextWire"
+)]
+pub struct ExternalTestResearchContextV1 {
+    schema_version: u16,
+    search_result: ContentId<ExternalTestSearchResultArtifact>,
+    snippets: Vec<ExternalTestResearchSnippetV1>,
+    omitted_results: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExternalTestResearchContextWire {
+    schema_version: u16,
+    search_result: ContentId<ExternalTestSearchResultArtifact>,
+    snippets: Vec<ExternalTestResearchSnippetV1>,
+    omitted_results: u64,
+}
+
+impl ExternalTestResearchContextV1 {
+    fn from_result(
+        request: &ExternalTestSearchRequestV1,
+        result: &ExternalTestSearchResultV1,
+    ) -> Result<Self, ExternalResearchContractError> {
+        let result_bytes = cairn_codec::to_vec(result)
+            .map_err(|error| ExternalResearchContractError::Encoding(error.to_string()))?;
+        let search_result = ContentId::derive(&result_bytes)
+            .map_err(|error| ExternalResearchContractError::Encoding(error.to_string()))?;
+        Self::try_from(ExternalTestResearchContextWire {
+            schema_version: SCHEMA_V1,
+            search_result,
+            snippets: result
+                .cases
+                .iter()
+                .map(|case| research_snippet(request.query.as_str(), case))
+                .collect(),
+            omitted_results: result.omitted_results,
+        })
+    }
+
+    /// Returns the exact full research-result identity represented by this bounded view.
+    #[must_use]
+    pub const fn search_result(&self) -> ContentId<ExternalTestSearchResultArtifact> {
+        self.search_result
+    }
+
+    /// Returns bounded, provenance-bearing excerpts in provider ranking order.
+    #[must_use]
+    pub fn snippets(&self) -> &[ExternalTestResearchSnippetV1] {
+        &self.snippets
+    }
+}
+
+impl TryFrom<ExternalTestResearchContextWire> for ExternalTestResearchContextV1 {
+    type Error = ExternalResearchContractError;
+
+    fn try_from(wire: ExternalTestResearchContextWire) -> Result<Self, Self::Error> {
+        if wire.schema_version != SCHEMA_V1 || wire.snippets.len() > usize::from(MAX_RESULTS) {
+            return Err(ExternalResearchContractError::InvalidSearchResult);
+        }
+        let mut seen = HashSet::new();
+        for snippet in &wire.snippets {
+            if snippet.source_text.is_empty()
+                || snippet.source_text.len() > MAX_MODEL_SNIPPET_BYTES
+                || snippet.start_line == 0
+                || snippet.end_line < snippet.start_line
+                || !seen.insert((
+                    snippet.repository.as_str(),
+                    snippet.path.as_str(),
+                    snippet.blob.as_str(),
+                ))
+            {
+                return Err(ExternalResearchContractError::InvalidSearchResult);
+            }
+        }
+        Ok(Self {
+            schema_version: wire.schema_version,
+            search_result: wire.search_result,
+            snippets: wire.snippets,
+            omitted_results: wire.omitted_results,
+        })
+    }
+}
+
+impl From<ExternalTestResearchContextV1> for ExternalTestResearchContextWire {
+    fn from(value: ExternalTestResearchContextV1) -> Self {
+        Self {
+            schema_version: value.schema_version,
+            search_result: value.search_result,
+            snippets: value.snippets,
+            omitted_results: value.omitted_results,
+        }
+    }
+}
+
+fn research_snippet(query: &str, case: &ExternalTestCaseV1) -> ExternalTestResearchSnippetV1 {
+    let lines = case.source_text.lines().collect::<Vec<_>>();
+    let terms = query
+        .split_ascii_whitespace()
+        .filter(|term| term.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let mut center = 0;
+    let mut best_score = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let lower = line.to_ascii_lowercase();
+        let score = terms
+            .iter()
+            .filter(|term| lower.contains(term.as_str()))
+            .count();
+        if score > best_score {
+            center = index;
+            best_score = score;
+        }
+    }
+    let mut start = center.saturating_sub(SNIPPET_CONTEXT_LINES);
+    let mut end = lines
+        .len()
+        .min(center.saturating_add(SNIPPET_CONTEXT_LINES + 1));
+    let mut source_text = lines[start..end].join("\n");
+    while source_text.len() > MAX_MODEL_SNIPPET_BYTES && end > start + 1 {
+        if center.saturating_sub(start) > end.saturating_sub(center + 1) {
+            start += 1;
+        } else {
+            end -= 1;
+        }
+        source_text = lines[start..end].join("\n");
+    }
+    if source_text.len() > MAX_MODEL_SNIPPET_BYTES {
+        let boundary = source_text
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= MAX_MODEL_SNIPPET_BYTES)
+            .last()
+            .unwrap_or(0);
+        source_text.truncate(boundary);
+    }
+    ExternalTestResearchSnippetV1 {
+        repository: case.repository.clone(),
+        path: case.path.clone(),
+        blob: case.blob.clone(),
+        source_bytes: case.source_bytes,
+        start_line: u64::try_from(start).unwrap_or(u64::MAX).saturating_add(1),
+        end_line: u64::try_from(end).unwrap_or(u64::MAX),
+        source_text,
+        truncated: start != 0 || end != lines.len(),
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ExternalTestSearchResultWire {
@@ -509,6 +677,20 @@ impl ExternalTestSearchResultV1 {
     #[must_use]
     pub const fn omitted_results(&self) -> u64 {
         self.omitted_results
+    }
+
+    /// Derives the exact typed identity of this normalized full result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when canonical encoding or identity derivation fails.
+    pub fn content_id(
+        &self,
+    ) -> Result<ContentId<ExternalTestSearchResultArtifact>, ExternalResearchContractError> {
+        let bytes = cairn_codec::to_vec(self)
+            .map_err(|error| ExternalResearchContractError::Encoding(error.to_string()))?;
+        ContentId::derive(&bytes)
+            .map_err(|error| ExternalResearchContractError::Encoding(error.to_string()))
     }
 
     fn validate(
@@ -777,13 +959,24 @@ impl ExternalResearchProvider for RecordedExternalResearchProvider {
 pub struct ExternalTestSearchGateway<P> {
     policy: ExternalResearchPolicy,
     provider: P,
+    result: Option<ExternalTestSearchResultV1>,
 }
 
 impl<P> ExternalTestSearchGateway<P> {
     /// Creates a gateway with immutable task policy and one provider adapter.
     #[must_use]
     pub const fn new(policy: ExternalResearchPolicy, provider: P) -> Self {
-        Self { policy, provider }
+        Self {
+            policy,
+            provider,
+            result: None,
+        }
+    }
+
+    /// Returns the exact provider result after a successful invocation.
+    #[must_use]
+    pub const fn result(&self) -> Option<&ExternalTestSearchResultV1> {
+        self.result.as_ref()
     }
 }
 
@@ -829,10 +1022,14 @@ impl<P: ExternalResearchProvider> ToolGateway for ExternalTestSearchGateway<P> {
         result
             .validate(&request)
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
-        let value = serde_json::to_value(result)
+        let context = ExternalTestResearchContextV1::from_result(&request, &result)
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
-        CanonicalToolResult::from_value(&value)
-            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+        let value = serde_json::to_value(context)
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        let output = CanonicalToolResult::from_value(&value)
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        self.result = Some(result);
+        Ok(output)
     }
 }
 
@@ -1158,9 +1355,10 @@ mod tests {
 
     use super::ExternalResearchProvider as _;
     use super::{
-        ExternalResearchPolicy, ExternalTestCaseV1, ExternalTestSearchGateway,
-        ExternalTestSearchRequestV1, ExternalTestSearchResultV1, GitHubBlobIdentity,
-        GitHubExternalResearchProvider, GitHubRepository, RecordedExternalResearchExchange,
+        ExternalResearchPolicy, ExternalTestCaseV1, ExternalTestResearchContextV1,
+        ExternalTestSearchGateway, ExternalTestSearchRequestV1, ExternalTestSearchResultV1,
+        GitHubBlobIdentity, GitHubExternalResearchProvider, GitHubRepository,
+        MAX_MODEL_SNIPPET_BYTES, RecordedExternalResearchExchange,
         RecordedExternalResearchProvider, SearchQuery, SearchResultLimit, SourcePath,
         archive_external_test_evidence, external_test_search_registration,
     };
@@ -1256,15 +1454,65 @@ mod tests {
         content
             .write_to(&result_id, &mut bytes)
             .expect("read result");
-        let archived: ExternalTestSearchResultV1 =
+        let archived: ExternalTestResearchContextV1 =
             cairn_codec::from_slice(&bytes).expect("strict result");
-        assert_eq!(archived.request(), request_id);
-        assert_eq!(archived.cases().len(), 1);
+        assert_eq!(
+            archived.search_result(),
+            gateway
+                .result()
+                .expect("exact result")
+                .content_id()
+                .expect("result identity")
+        );
+        assert_eq!(archived.snippets().len(), 1);
+        assert!(archived.snippets()[0].source_text.len() <= MAX_MODEL_SNIPPET_BYTES);
         assert!(matches!(
             cairn_agent::recover_tool_operation(&events, operation_id).expect("recover"),
             cairn_agent::ToolOperationState::Completed { result_id: recovered, .. }
                 if recovered == result_id
         ));
+    }
+
+    #[test]
+    fn model_context_is_bounded_and_centered_on_the_query_match() {
+        let request = ExternalTestSearchRequestV1::new(
+            SearchQuery::new("test_empty_tensor_empty_slice").expect("query"),
+            vec![GitHubRepository::new("pytorch/pytorch").expect("repository")],
+            SearchResultLimit::new(1).expect("limit"),
+        )
+        .expect("request");
+        let mut lines = (0..180)
+            .map(|index| format!("line_{index:03} = '{}'", "x".repeat(96)))
+            .collect::<Vec<_>>();
+        lines[150] = "def test_empty_tensor_empty_slice(self): pass".to_owned();
+        let case = ExternalTestCaseV1::new(
+            GitHubRepository::new("pytorch/pytorch").expect("repository"),
+            SourcePath::new("test/test_reductions.py").expect("path"),
+            GitHubBlobIdentity::new("0123456789abcdef0123456789abcdef01234567").expect("blob"),
+            lines.join("\n"),
+        )
+        .expect("case");
+        let result = ExternalTestSearchResultV1::new(
+            &request,
+            "recorded-github".to_owned(),
+            cairn_protocol::ObservedAtUnixMillis::new(7),
+            vec![case],
+            0,
+        )
+        .expect("result");
+        let context =
+            ExternalTestResearchContextV1::from_result(&request, &result).expect("context");
+        let snippet = &context.snippets()[0];
+        assert!(
+            snippet
+                .source_text
+                .contains("test_empty_tensor_empty_slice")
+        );
+        assert!(snippet.source_text.len() <= MAX_MODEL_SNIPPET_BYTES);
+        assert!(snippet.truncated);
+        assert!(snippet.start_line > 1);
+        assert!(snippet.end_line < 180);
+        assert_eq!(context.search_result(), result.content_id().expect("id"));
     }
 
     #[test]
@@ -1353,6 +1601,12 @@ mod tests {
         assert!(serde_json::from_value::<ExternalTestSearchRequestV1>(value).is_err());
 
         let result = result(&request);
+        let context =
+            ExternalTestResearchContextV1::from_result(&request, &result).expect("context");
+        let mut value = serde_json::to_value(context).expect("context JSON");
+        value["schema_version"] = serde_json::json!(2);
+        assert!(serde_json::from_value::<ExternalTestResearchContextV1>(value).is_err());
+
         assert!(
             !cairn_codec::to_vec(&result)
                 .expect("result bytes")

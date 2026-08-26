@@ -73,12 +73,13 @@ pub use exact_comparison::{
 };
 pub use external_research::{
     ArchivedExternalTestEvidence, ExternalResearchPolicy, ExternalResearchProvider,
-    ExternalResearchProviderError, ExternalTestCaseV1, ExternalTestSearchGateway,
-    ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1,
-    ExternalTestSearchResultArtifact, ExternalTestSearchResultV1, GitHubBlobIdentity,
-    GitHubExternalResearchProvider, GitHubRepository, RecordedExternalResearchExchange,
-    RecordedExternalResearchProvider, SearchQuery, SearchResultLimit, SourcePath,
-    archive_external_test_evidence, external_test_search_registration,
+    ExternalResearchProviderError, ExternalTestCaseV1, ExternalTestResearchContextV1,
+    ExternalTestResearchSnippetV1, ExternalTestSearchGateway, ExternalTestSearchRequestArtifact,
+    ExternalTestSearchRequestV1, ExternalTestSearchResultArtifact, ExternalTestSearchResultV1,
+    GitHubBlobIdentity, GitHubExternalResearchProvider, GitHubRepository,
+    RecordedExternalResearchExchange, RecordedExternalResearchProvider, SearchQuery,
+    SearchResultLimit, SourcePath, archive_external_test_evidence,
+    external_test_search_registration,
 };
 pub use historical::{
     HistoricalDetectionRequirement, HistoricalDiagnosticClassName, HistoricalFailureClassName,

@@ -192,7 +192,9 @@ The result contains, for each fetched test proposal:
 
 - repository identity and file path;
 - immutable upstream blob/revision identity where the source supports it;
-- canonical source URL and exact fetched bytes or a bounded excerpt plus exact byte identity;
+- canonical source URL and exact fetched-byte identity;
+- a deterministic line-addressed excerpt capped per result for model context, while the full exact
+  blob is archived outside the prompt;
 - retrieval observation time and provider attribution;
 - truncation and omitted-result facts;
 - the exact query and scope that produced it.
@@ -201,6 +203,13 @@ Search-result snippets and fetched bytes cannot become executable corpus cases. 
 model-visible research context. Blue must independently express the learned boundary, invariant,
 or failure mode in a Cairn-authored structured test proposal and cite the research-result identity
 that informed it. The research archive deliberately has no `CorpusCaseArtifact` edge.
+
+Red does not receive Blue's private continuation or unsubmitted reasoning. It may receive the
+frozen proposal's cited bounded research context because that evidence is part of the public
+proposal boundary. Red findings distinguish admission-blocking defects from optional advisories;
+trusted validation requires `pass` exactly when the blocking set is empty. Repeated reviews that
+disagree on the verdict are instability evidence and force revision or further evidence rather than
+majority-vote admission.
 
 ### 6.2 Research-to-proposal boundary
 
