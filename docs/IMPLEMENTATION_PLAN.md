@@ -282,8 +282,19 @@ The remaining G slices, in dependency order, are:
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;
-3. versioned mutation-grid trials and recomputed proof obligations that ignore stored `passed`
-   metadata;
+3. **Implemented 2026-08-26:** versioned trusted-mutant sets, complete Cartesian mutation-grid
+   trials, and recomputed proof obligations. The admission policy now selects one exact
+   content-addressed mutant set. Every grid binds that policy, the tested implementation, frozen
+   admission corpus, canonical mutant and case axes, and exactly one trial per cell; missing,
+   duplicated, reordered, extra, or cross-axis cells fail closed. Applied trials retain separately
+   typed injection, execution, and comparison evidence plus their exact execution scopes. One batch
+   evidence artifact may support multiple cells. Policy-sized and scale-free misses become
+   fatal proof failures, case-dependent misses become mandatory blind spots, explicit
+   non-injectability remains visible, required fault-class coverage is recomputed, an empty
+   applicable grid fails, and comparator-only trials fail the implementation-path obligation. The
+   proof has no stored `passed` field and validates only by recomputation against its exact policy,
+   mutant set, and grid. This is the trusted evidence/adjudication contract; actual mutant injection
+   and execution are part of the next composition slice;
 4. execution-port composition for correct and deliberately wrong variants through the complete
    build/execute/observe/compare path;
 5. the offline historical reduction control required by `ORACLE_ADMISSION.md` section 18;

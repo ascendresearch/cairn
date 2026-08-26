@@ -7,12 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cairn-codec.workspace = true
 cairn-protocol.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-cairn-codec.workspace = true
 serde_json.workspace = true
 
 [lints]

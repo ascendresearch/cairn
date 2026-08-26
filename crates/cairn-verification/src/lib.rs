@@ -290,6 +290,7 @@ pub enum BudgetExhaustionOutcome {
 #[serde(try_from = "AdmissionPolicyWire")]
 pub struct AdmissionPolicyV1 {
     schema_version: VerificationSchemaV1,
+    mutant_set: ContentId<mutation::GenericMutantSetArtifact>,
     minimum_correct_variants: CorrectVariantMinimum,
     minimum_incorrect_variants: IncorrectVariantMinimum,
     required_construction_classes: Vec<ConstructionClassName>,
@@ -304,6 +305,8 @@ pub struct AdmissionPolicyV1 {
 /// Constructor input for one immutable admission policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionPolicyInput {
+    /// Exact trusted generic-mutant definitions and versions selected by this policy.
+    pub mutant_set: ContentId<mutation::GenericMutantSetArtifact>,
     /// Minimum correct variants the receipt must prove accepted.
     pub minimum_correct_variants: CorrectVariantMinimum,
     /// Minimum incorrect variants the receipt must prove rejected.
@@ -328,6 +331,7 @@ pub struct AdmissionPolicyInput {
 #[serde(deny_unknown_fields)]
 struct AdmissionPolicyWire {
     schema_version: VerificationSchemaV1,
+    mutant_set: ContentId<mutation::GenericMutantSetArtifact>,
     minimum_correct_variants: CorrectVariantMinimum,
     minimum_incorrect_variants: IncorrectVariantMinimum,
     required_construction_classes: Vec<ConstructionClassName>,
@@ -367,6 +371,7 @@ impl AdmissionPolicyV1 {
         )?;
         Ok(Self {
             schema_version: VerificationSchemaV1,
+            mutant_set: input.mutant_set,
             minimum_correct_variants: input.minimum_correct_variants,
             minimum_incorrect_variants: input.minimum_incorrect_variants,
             required_construction_classes: input.required_construction_classes,
@@ -377,6 +382,12 @@ impl AdmissionPolicyV1 {
             required_execution_scopes: input.required_execution_scopes,
             budget_exhaustion_outcome: input.budget_exhaustion_outcome,
         })
+    }
+
+    /// Returns the exact trusted generic-mutant set selected by this policy.
+    #[must_use]
+    pub const fn mutant_set(&self) -> ContentId<mutation::GenericMutantSetArtifact> {
+        self.mutant_set
     }
 
     /// Returns the configured minimum accepted correct-variant count.
@@ -440,6 +451,7 @@ impl TryFrom<AdmissionPolicyWire> for AdmissionPolicyV1 {
     fn try_from(wire: AdmissionPolicyWire) -> Result<Self, Self::Error> {
         let _ = wire.schema_version;
         Self::new(AdmissionPolicyInput {
+            mutant_set: wire.mutant_set,
             minimum_correct_variants: wire.minimum_correct_variants,
             minimum_incorrect_variants: wire.minimum_incorrect_variants,
             required_construction_classes: wire.required_construction_classes,
@@ -812,7 +824,18 @@ impl ContentType for NumericalAllowanceArtifact {
     const DOMAIN: &'static str = "verification.numerical-allowance.v1";
 }
 
+mod mutation;
 mod proposal;
+
+pub use mutation::{
+    GenericMutantSetArtifact, GenericMutantSetV1, MutationCaseArtifact, MutationComparisonArtifact,
+    MutationDetection, MutationExecutionArtifact, MutationGridArtifact, MutationGridCellV1,
+    MutationGridError, MutationGridProofArtifact, MutationGridProofFailureV1, MutationGridProofV1,
+    MutationGridV1, MutationInjectionArtifact, MutationSizing, MutationTrialResultV1,
+    MutationTrialV1, NonInjectableReasonArtifact, PreparedGenericMutantSet, PreparedMutationGrid,
+    PreparedMutationGridProof, TrustedMutantDefinitionArtifact, TrustedMutantV1,
+    prepare_generic_mutant_set, prepare_mutation_grid, recompute_mutation_grid_proof,
+};
 
 pub use proposal::{
     ArtifactAuthorId, ArtifactAuthorshipV1, AuthorshipOrigin, CallerDomainBodyArtifact,
@@ -838,13 +861,16 @@ mod tests {
         AdmissionCorpusArtifact, AdmissionExecutionScope, AdmissionPolicyArtifact,
         AdmissionPolicyInput, AdmissionPolicyV1, AllowanceAssurance, AllowanceClaimClass,
         AllowanceMagnitude, AllowanceProvenance, BudgetExhaustionOutcome, ConstructionClassName,
-        CorrectVariantMinimum, DomainRegionName, FaultClassName, IncorrectVariantMinimum,
-        NumericalAllowanceArtifact, NumericalAllowanceInput, NumericalAllowanceV1, OracleStrength,
-        SaturationRoundCount, StructuralIndependenceRequirement, VerificationContractError,
+        CorrectVariantMinimum, DomainRegionName, FaultClassName, GenericMutantSetArtifact,
+        IncorrectVariantMinimum, NumericalAllowanceArtifact, NumericalAllowanceInput,
+        NumericalAllowanceV1, OracleStrength, SaturationRoundCount,
+        StructuralIndependenceRequirement, VerificationContractError,
     };
 
     fn policy(minimum_correct: u32) -> AdmissionPolicyV1 {
         AdmissionPolicyV1::new(AdmissionPolicyInput {
+            mutant_set: ContentId::<GenericMutantSetArtifact>::derive(b"policy-mutants")
+                .expect("mutant set"),
             minimum_correct_variants: CorrectVariantMinimum::new(minimum_correct)
                 .expect("correct minimum"),
             minimum_incorrect_variants: IncorrectVariantMinimum::new(3).expect("incorrect minimum"),
@@ -926,6 +952,8 @@ mod tests {
     fn policy_sets_and_counts_fail_closed_instead_of_becoming_verifier_defaults() {
         assert!(CorrectVariantMinimum::new(0).is_err());
         let mut input = AdmissionPolicyInput {
+            mutant_set: ContentId::<GenericMutantSetArtifact>::derive(b"policy-mutants")
+                .expect("mutant set"),
             minimum_correct_variants: CorrectVariantMinimum::new(2).expect("minimum"),
             minimum_incorrect_variants: IncorrectVariantMinimum::new(3).expect("minimum"),
             required_construction_classes: vec![

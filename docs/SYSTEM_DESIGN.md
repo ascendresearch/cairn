@@ -1135,6 +1135,22 @@ recomputed from those facts at output, case, and corpus level; there is no store
 The artifact rejects verdict fields. It is useful comparison evidence, but a proposed reference has
 not thereby passed oracle admission and an all-match result is not yet a candidate verdict.
 
+**Implemented mutation-grid contract slice (2026-08-26).** `AdmissionPolicyV1` now cites one exact
+content-addressed trusted generic-mutant set. A strict V1 mutation grid binds that policy, the tested
+implementation, frozen admission corpus, canonical mutant and case axes, and the complete Cartesian
+set of trial cells.
+Applied cells retain separate injection, authoritative execution, and trusted comparison identities,
+the exact execution scopes traversed, a policy-sized/scale-free/case-dependent sizing class, and the
+observed detected/missed fact. A non-injectable cell instead requires an exact reviewed reason.
+Missing, duplicate, reordered, or cross-axis cells fail closed; one underlying batch execution or
+comparison artifact may support multiple cells. Trusted proof
+recomputation derives empty-applicable-grid failure, required fault-class coverage, implementation-
+path failures, fatal policy-sized/scale-free misses, mandatory case-dependent blind spots, and every
+non-injectable cell. The strict proof rejects a stored `passed` field and validates only by full
+recomputation against the cited policy, mutant set, and grid. These contracts do not yet inject or
+execute mutants; correct/wrong variant and mutation execution through the shared execution port
+remain the next M2 composition slice.
+
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
 valid non-empty shapes. Required alignment, misalignment offset, capacity shortfall, overlap offset,

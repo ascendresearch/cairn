@@ -42,8 +42,9 @@ It executes content-addressed input in Docker and proves that replaying the same
 returns a byte-identical capture. See [`docs/WORKER_EXECUTION.md`](docs/WORKER_EXECUTION.md).
 
 M2 has begun in `cairn-verification`. Its current V1 foundation keeps admission-policy counts,
-required construction/fault classes, execution scope, and budget-exhaustion behavior in immutable
-configuration. Numerical allowance provenance and assurance are independent typed facts;
+the exact trusted generic-mutant set, required construction/fault classes, execution scope, and
+budget-exhaustion behavior in immutable configuration. Numerical allowance provenance and assurance
+are independent typed facts;
 held-out evidence requires identity-disjoint corpora, and asserted or external-prior-only values
 cannot be promoted by assurance metadata. The proposal side now has immutable caller-domain,
 refinement, corpus, authorship, construction-claim, correct/wrong-variant, and oracle-proposal
@@ -94,6 +95,14 @@ slice now accepts only `Reference` versus `Candidate` plans over identical manda
 aligns every typed case, and records both completion values plus both exact ABI-output identities.
 Match status is recomputed from those facts; the artifact has no stored `passed` field and does not
 promote a proposed reference into an admitted oracle or candidate verdict.
+Trusted mutation evidence now has its own domain-neutral V1 contracts. A policy selects one exact
+content-addressed generic-mutant set; a complete grid requires every mutant/case cell and records
+policy-sized, scale-free, case-dependent, or explicitly non-injectable trials with separately typed
+injection, execution, and comparison evidence. Proof obligations are recomputed from the grid:
+policy-sized and scale-free misses are fatal, case-dependent misses remain mandatory blind spots,
+an empty applicable grid fails, and comparator-only evidence cannot claim to have exercised the
+implementation observation path. The proof artifact has no stored `passed` field. Actual mutant
+injection and variant execution through vendor adapters remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.
