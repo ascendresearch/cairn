@@ -70,6 +70,12 @@ so an expired historical startup observation does not prevent recovery when curr
 available. Setting refresh to `null` is explicit: finite evidence then becomes ineligible at its
 exclusive deadline, while `freshness_ms: null` remains valid for the incarnation.
 
+The controller's `resource_clock_skew_tolerance_ms` is an independently configured positive bound,
+or `null` for zero tolerance. A worker observation may lead the controller clock only within that
+bound; a larger lead fails registration or refresh. An admitted lead uses the worker timestamp as
+the durable observation time so the domain freshness check remains strict rather than silently
+rewriting evidence.
+
 ## Scheduler reservation behavior
 
 Candidate filtering and assignment grant evaluate resource freshness at their own controller

@@ -860,6 +860,15 @@ transfer, Docker supervision, bounded capture, terminal publication, and worker-
 implemented. Accelerator device exposure, additional network modes, concurrency greater than one,
 and service deployment remain later demand-driven slices.
 
+**Implemented real heterogeneous enrollment gate (2026-08-26).** One AArch64 NVIDIA GB10 worker
+and one x86-64 Ascend worker now enroll through the same V1 managed-identity path, connect through
+independent operator-owned reverse tunnels, and produce durable registration and heartbeat facts.
+The controller admits a worker resource timestamp ahead of its own clock only within the optional
+positive `resource_clock_skew_tolerance_ms`; `null` preserves zero tolerance, an excess lead fails
+closed, and accepted evidence is never silently retimestamped. Both hardware workers remain
+unavailable/draining until accelerator device exposure is represented by an explicit execution
+policy rather than inferred from host inventory.
+
 **Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
 cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
 builds `cairn-server` and `cairn-worker` for both `x86_64-unknown-linux-gnu` and

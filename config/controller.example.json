@@ -32,6 +32,7 @@
   "listen": "0.0.0.0:7443",
   "outbox_poll_interval_ms": 100,
   "protocol_version": 1,
+  "resource_clock_skew_tolerance_ms": null,
   "schema_version": 1,
   "scheduler": {
     "assignment_lease_duration_ms": 120000,

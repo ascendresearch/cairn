@@ -342,6 +342,12 @@ property variants. Open questions OQ-004 and OQ-007 remain
 unresolved; implementation must preserve derivation and disagreement evidence rather than selecting
 an independence or automatic disagreement policy.
 
+The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
+and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.
+They deliberately remain unavailable/draining because the current `docker-v1` adapter has no typed
+accelerator-device exposure policy. The next production-adapter slice must add that policy and prove
+device-visible CUDA and Ascend container controls before scheduling migration work to either pool.
+
 ## Cross-cutting gates
 
 Every phase must keep strong domain IDs, strict versioned JSON, append-only causal facts, secret-free

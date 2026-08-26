@@ -630,6 +630,7 @@ fn server_config(
         idle_timeout_ms: None,
         outbox_poll_interval_ms: None,
         authority_poll_interval_ms: NonZeroU64::new(25).expect("authority poll"),
+        resource_clock_skew_tolerance_ms: None,
         transport: TransportPolicy::default(),
         diagnostic_byte_limit: NonZeroU64::new(256),
     })

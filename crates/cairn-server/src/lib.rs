@@ -81,6 +81,9 @@ pub struct ServerConfig {
     pub idle_timeout_ms: Option<NonZeroU64>,
     pub outbox_poll_interval_ms: Option<NonZeroU64>,
     pub authority_poll_interval_ms: NonZeroU64,
+    /// Maximum admitted worker clock lead. `null` requires the worker clock not to be ahead.
+    #[serde(default)]
+    pub resource_clock_skew_tolerance_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
@@ -1016,7 +1019,11 @@ async fn handle_connection(
         .await;
         return Err(ServerError::Session("hello availability is invalid".into()));
     }
-    let now = observed_now()?;
+    let now = admitted_resource_observation_time(
+        observed_now()?,
+        hello.resource_observation().observed_at(),
+        config.resource_clock_skew_tolerance_ms,
+    )?;
     let connection_id = ControlConnectionId::new();
     let subject = WorkerAuthenticationSubject::new(enrolled_worker.worker_id.to_string())
         .map_err(|error| ServerError::Session(error.to_string()))?;
@@ -1202,7 +1209,11 @@ async fn controller_session_loop(
                 .map_err(|error| ServerError::Session(error.to_string()))?;
             }
             WorkerWireMessage::ResourcesObserved { observation } => {
-                let now = observed_now()?;
+                let now = admitted_resource_observation_time(
+                    observed_now()?,
+                    observation.observed_at(),
+                    config.resource_clock_skew_tolerance_ms,
+                )?;
                 let observation_id = {
                     let mut locked = state.lock().await;
                     let ControllerState { events, content } = &mut *locked;
@@ -1562,6 +1573,28 @@ fn observed_now() -> Result<ObservedAtUnixMillis, ServerError> {
     Ok(ObservedAtUnixMillis::new(millis))
 }
 
+fn admitted_resource_observation_time(
+    controller_time: ObservedAtUnixMillis,
+    worker_time: ObservedAtUnixMillis,
+    tolerance_ms: Option<NonZeroU64>,
+) -> Result<ObservedAtUnixMillis, ServerError> {
+    if worker_time <= controller_time {
+        return Ok(controller_time);
+    }
+    let lead_ms = worker_time
+        .get()
+        .checked_sub(controller_time.get())
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| ServerError::Session("worker resource clock lead overflowed".into()))?;
+    if tolerance_ms.is_some_and(|tolerance| lead_ms <= tolerance.get()) {
+        Ok(worker_time)
+    } else {
+        Err(ServerError::Session(format!(
+            "worker resource clock leads controller by {lead_ms} ms"
+        )))
+    }
+}
+
 fn command(_purpose: &str) -> CommandId {
     CommandId::new()
 }
@@ -1588,7 +1621,31 @@ fn bound(value: &str, limit: Option<NonZeroU64>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ServerConfig, write_new_secret_file};
+    use std::num::NonZeroU64;
+
+    use cairn_protocol::ObservedAtUnixMillis;
+
+    use super::{ServerConfig, admitted_resource_observation_time, write_new_secret_file};
+
+    #[test]
+    fn resource_clock_lead_requires_an_explicit_bound() {
+        let controller = ObservedAtUnixMillis::new(1_000);
+        let worker = ObservedAtUnixMillis::new(1_250);
+        assert!(admitted_resource_observation_time(controller, worker, None).is_err());
+        assert_eq!(
+            admitted_resource_observation_time(controller, worker, NonZeroU64::new(250),)
+                .expect("lead at configured boundary"),
+            worker
+        );
+        assert!(
+            admitted_resource_observation_time(controller, worker, NonZeroU64::new(249),).is_err()
+        );
+        assert_eq!(
+            admitted_resource_observation_time(controller, ObservedAtUnixMillis::new(900), None,)
+                .expect("worker behind controller"),
+            controller
+        );
+    }
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
