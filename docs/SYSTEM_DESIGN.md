@@ -947,8 +947,25 @@ identity domains.
 reference/property proposals, source-admission plan, valid-family plan, observation plan, requested
 strength, and authorship. Its strict schema has no admission policy, allowance, trusted mutant,
 comparison policy, or decision field. This graph establishes immutable proposal inputs only: the
-product-adapter structured domain body, trusted mandatory-case derivation, execution, admission
-receipt, and adjudication remain unfinished.
+full mandatory corpus, execution, admission receipt, and adjudication remain unfinished.
+
+**Implemented strongly typed migration-domain slice (2026-08-25).** `cairn-migration` now defines a
+strict V1 caller-domain body for operator entry point, ABI-ordered buffers and scalar parameters,
+buffer roles, dtypes, fixed/symbolic shapes, logical shape-symbol sources and ranges, tile/alignment
+moduli, invalid-input behavior, requested semantics, claim kind, and explicit exclusions. Buffer
+name, scalar-parameter name, shape-symbol name, argument index, dimension axis, rank, extent,
+ordinary integer, modulus, and status code are distinct Rust types; compile-fail controls prevent
+cross-unit assignment. Domain validation rejects duplicate ABI positions/names, dtype/range
+mismatch, unknown shape symbols, disagreement between logical and ABI ranges, and ambiguous
+shape-parameter bindings.
+
+Trusted `BoundaryV1` derivation emits complete one-variable-at-a-time assignments for valid minima,
+maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid neighbors, and the
+first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
+typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
+rather than inventing an expected status. This is not yet the complete mandatory corpus: dtype
+extrema, signed zero, non-finite/denormal/cancellation patterns, pointer/error surfaces, historical
+target-failure families, and executable case materialization remain target work.
 
 Its core modules are expected to include:
 

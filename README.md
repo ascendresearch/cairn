@@ -48,8 +48,10 @@ held-out evidence requires identity-disjoint corpora, and asserted or external-p
 cannot be promoted by assurance metadata. The proposal side now has immutable caller-domain,
 refinement, corpus, authorship, construction-claim, correct/wrong-variant, and oracle-proposal
 manifests with separate typed identity domains. Executed oracle admission, mandatory base-case
-derivation, the historical reduction control, candidate judgment, and the first unified migration
-are not implemented yet.
+execution, the historical reduction control, candidate judgment, and the first unified migration
+are not implemented yet. `cairn-migration` now supplies the first strongly typed operator-domain
+body and trusted quantitative boundary-case derivation; dtype-special, pointer/error-surface, and
+historical target-failure case families remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

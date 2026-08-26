@@ -1,5 +1,21 @@
 //! Operator-migration product semantics and translation into domain-neutral execution requests.
 
+mod domain;
+
+pub use domain::{
+    ArgumentIndex, BufferContractInput, BufferContractV1, BufferName, BufferRole,
+    CaseExpectedOutcome, CaseTarget, DataType, DimensionAxis, DimensionSpec, DomainContractError,
+    EntryPointName, ExtentModulus, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
+    IntegerValue, InvalidInputBehavior, MandatoryCaseDerivationPolicy, MigrationDomainCaseArtifact,
+    MigrationDomainCaseV1, MigrationDomainContractInput, MigrationDomainContractV1,
+    MigrationDomainExclusionArtifact, MigrationMandatoryCasesArtifact, MigrationMandatoryCasesV1,
+    RequestedSemanticsArtifact, ScalarAssignment, ScalarBoundaryObligation,
+    ScalarParameterContractInput, ScalarParameterContractV1, ScalarParameterName,
+    ScalarParameterRole, SemanticClaimKind, ShapeAssignment, ShapeBoundaryObligation, ShapeRank,
+    ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
+    StatusCode, derive_mandatory_base_cases,
+};
+
 use cairn_execution::{
     ArchitectureName, CapabilityRequirement, ContractValueError, ExecutionBackend,
     ExecutionPlatformRequirement, ExecutionTimeoutMillis, OperatingSystemName, PlacementRequest,
