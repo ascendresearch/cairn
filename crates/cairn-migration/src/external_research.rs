@@ -1,7 +1,7 @@
 //! Bounded external-test research for the Oracle Agent blue role.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     fs,
     io::Read,
     path::PathBuf,
@@ -15,9 +15,8 @@ use cairn_agent::{
 };
 use cairn_protocol::{ContentId, ContentType, ObservedAtUnixMillis};
 use cairn_record::{ContentStore, ContentStoreError};
-use cairn_verification::{CorpusCaseProvenanceArtifact, LicenseProvenanceArtifact};
+use cairn_verification::CorpusCaseProvenanceArtifact;
 use reqwest::{
-    StatusCode,
     blocking::Client,
     header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT},
 };
@@ -25,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_V1: u16 = 1;
-const SEARCH_TOOL_NAME: &str = "oracle.search_external_tests";
+const SEARCH_TOOL_NAME: &str = "oracle_search_external_tests";
 const SEARCH_TOOL_VERSION: &str = "github-v1";
 const MAX_QUERY_BYTES: usize = 256;
 const MAX_REPOSITORIES: usize = 8;
@@ -301,49 +300,7 @@ impl From<ExternalTestSearchRequestV1> for ExternalTestSearchRequestWire {
     }
 }
 
-/// Repository license evidence. Unknown remains explicit and cannot authorize redistribution.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum ExternalLicenseEvidenceV1 {
-    /// Repository API declared one SPDX identifier and canonical license URL.
-    RepositoryDeclared {
-        /// Exact SPDX identifier returned by the provider.
-        spdx_id: String,
-        /// Canonical provider URL for the declaration.
-        source_url: String,
-    },
-    /// No usable license declaration was available.
-    Unknown,
-}
-
-impl ExternalLicenseEvidenceV1 {
-    fn validate(&self) -> Result<(), ExternalResearchContractError> {
-        match self {
-            Self::RepositoryDeclared {
-                spdx_id,
-                source_url,
-            } => {
-                if spdx_id.is_empty()
-                    || spdx_id.len() > 128
-                    || spdx_id.chars().any(char::is_control)
-                    || !source_url.starts_with("https://api.github.com/")
-                {
-                    return Err(ExternalResearchContractError::InvalidLicenseEvidence);
-                }
-                Ok(())
-            }
-            Self::Unknown => Ok(()),
-        }
-    }
-
-    /// Returns whether source-byte redistribution remains unproven.
-    #[must_use]
-    pub const fn is_unknown(&self) -> bool {
-        matches!(self, Self::Unknown)
-    }
-}
-
-/// One exact fetched upstream test proposal.
+/// One exact fetched upstream test used only as Blue research context.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "ExternalTestCaseWire", into = "ExternalTestCaseWire")]
 pub struct ExternalTestCaseV1 {
@@ -353,7 +310,6 @@ pub struct ExternalTestCaseV1 {
     source_url: String,
     source_text: String,
     source_bytes: ContentId<ExternalTestSourceBytesArtifact>,
-    license: ExternalLicenseEvidenceV1,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -365,7 +321,6 @@ struct ExternalTestCaseWire {
     source_url: String,
     source_text: String,
     source_bytes: ContentId<ExternalTestSourceBytesArtifact>,
-    license: ExternalLicenseEvidenceV1,
 }
 
 impl ExternalTestCaseV1 {
@@ -373,26 +328,15 @@ impl ExternalTestCaseV1 {
     ///
     /// # Errors
     ///
-    /// Rejects empty/oversized source, inconsistent GitHub URL, or invalid license evidence.
+    /// Rejects empty/oversized source or an inconsistent GitHub identity.
     pub fn new(
         repository: GitHubRepository,
         path: SourcePath,
         blob: GitHubBlobIdentity,
         source_text: String,
-        license: ExternalLicenseEvidenceV1,
     ) -> Result<Self, ExternalResearchContractError> {
         if source_text.is_empty() || source_text.len() > MAX_SOURCE_BYTES {
             return Err(ExternalResearchContractError::InvalidSourceBytes);
-        }
-        license.validate()?;
-        if let ExternalLicenseEvidenceV1::RepositoryDeclared { source_url, .. } = &license {
-            let expected_license_url = format!(
-                "https://api.github.com/repos/{}/license",
-                repository.as_str()
-            );
-            if source_url != &expected_license_url {
-                return Err(ExternalResearchContractError::InvalidLicenseEvidence);
-            }
         }
         let source_url = format!(
             "https://api.github.com/repos/{}/git/blobs/{}",
@@ -409,7 +353,6 @@ impl ExternalTestCaseV1 {
             source_url,
             source_text,
             source_bytes,
-            license,
         })
     }
 
@@ -437,19 +380,12 @@ impl ExternalTestCaseV1 {
         self.source_bytes
     }
 
-    /// Returns license evidence without promoting it to policy acceptance.
-    #[must_use]
-    pub const fn license(&self) -> &ExternalLicenseEvidenceV1 {
-        &self.license
-    }
-
     fn validate(&self) -> Result<(), ExternalResearchContractError> {
         let expected = Self::new(
             self.repository.clone(),
             self.path.clone(),
             self.blob.clone(),
             self.source_text.clone(),
-            self.license.clone(),
         )?;
         if expected.source_url != self.source_url || expected.source_bytes != self.source_bytes {
             return Err(ExternalResearchContractError::InconsistentSourceIdentity);
@@ -469,7 +405,6 @@ impl TryFrom<ExternalTestCaseWire> for ExternalTestCaseV1 {
             source_url: wire.source_url,
             source_text: wire.source_text,
             source_bytes: wire.source_bytes,
-            license: wire.license,
         };
         value.validate()?;
         Ok(value)
@@ -485,7 +420,6 @@ impl From<ExternalTestCaseV1> for ExternalTestCaseWire {
             source_url: value.source_url,
             source_text: value.source_text,
             source_bytes: value.source_bytes,
-            license: value.license,
         }
     }
 }
@@ -647,10 +581,9 @@ struct ExternalTestProvenanceV1 {
     path: SourcePath,
     blob: GitHubBlobIdentity,
     source_bytes: ContentId<ExternalTestSourceBytesArtifact>,
-    license: ContentId<LicenseProvenanceArtifact>,
 }
 
-/// Archived external source and separate provenance/license identities ready for a later proposal.
+/// Archived external source and provenance identities available only as Blue research context.
 ///
 /// This value deliberately contains no `CorpusCaseArtifact`: research evidence cannot promote
 /// itself into an executable case.
@@ -659,8 +592,6 @@ pub struct ArchivedExternalTestEvidence {
     search_result: ContentId<ExternalTestSearchResultArtifact>,
     source_bytes: ContentId<ExternalTestSourceBytesArtifact>,
     provenance: ContentId<CorpusCaseProvenanceArtifact>,
-    license: ContentId<LicenseProvenanceArtifact>,
-    has_declared_license: bool,
 }
 
 impl ArchivedExternalTestEvidence {
@@ -676,27 +607,15 @@ impl ArchivedExternalTestEvidence {
         self.source_bytes
     }
 
-    /// Returns external source provenance suitable for a later corpus proposal edge.
+    /// Returns provenance for the research context that informed a later Blue proposal.
     #[must_use]
     pub const fn provenance(&self) -> ContentId<CorpusCaseProvenanceArtifact> {
         self.provenance
     }
-
-    /// Returns the separately archived license evidence.
-    #[must_use]
-    pub const fn license(&self) -> ContentId<LicenseProvenanceArtifact> {
-        self.license
-    }
-
-    /// Returns whether the provider supplied non-unknown license evidence.
-    #[must_use]
-    pub const fn has_declared_license(&self) -> bool {
-        self.has_declared_license
-    }
 }
 
-/// Archives a validated research result, exact source bytes, and separate provenance/license
-/// artifacts without creating an executable corpus case.
+/// Archives a validated research result, exact source bytes, and provenance without creating an
+/// executable corpus case.
 ///
 /// # Errors
 ///
@@ -720,10 +639,6 @@ pub fn archive_external_test_evidence<S: ContentStore>(
         if source_descriptor.content_id != case.source_bytes {
             return Err(ExternalResearchContractError::InconsistentSourceIdentity);
         }
-        let license_bytes = cairn_codec::to_vec(&case.license)
-            .map_err(|error| ExternalResearchContractError::Encoding(error.to_string()))?;
-        let license_descriptor =
-            content.put::<LicenseProvenanceArtifact>(&mut std::io::Cursor::new(license_bytes))?;
         let provenance = ExternalTestProvenanceV1 {
             schema_version: SCHEMA_V1,
             search_result: result_descriptor.content_id,
@@ -732,7 +647,6 @@ pub fn archive_external_test_evidence<S: ContentStore>(
             path: case.path.clone(),
             blob: case.blob.clone(),
             source_bytes: case.source_bytes,
-            license: license_descriptor.content_id,
         };
         let provenance_bytes = cairn_codec::to_vec(&provenance)
             .map_err(|error| ExternalResearchContractError::Encoding(error.to_string()))?;
@@ -742,8 +656,6 @@ pub fn archive_external_test_evidence<S: ContentStore>(
             search_result: result_descriptor.content_id,
             source_bytes: source_descriptor.content_id,
             provenance: provenance_descriptor.content_id,
-            license: license_descriptor.content_id,
-            has_declared_license: !case.license.is_unknown(),
         });
     }
     Ok(archived)
@@ -1012,19 +924,6 @@ impl GitHubExternalResearchProvider {
         url: &str,
         query: &[(&str, String)],
     ) -> Result<serde_json::Value, ExternalResearchProviderError> {
-        self.fetch_json(url, query, false)?.ok_or_else(|| {
-            ExternalResearchProviderError::Rejected(
-                "GitHub resource unexpectedly disappeared".to_owned(),
-            )
-        })
-    }
-
-    fn fetch_json(
-        &self,
-        url: &str,
-        query: &[(&str, String)],
-        allow_not_found: bool,
-    ) -> Result<Option<serde_json::Value>, ExternalResearchProviderError> {
         let response = self
             .client
             .get(url)
@@ -1046,48 +945,20 @@ impl GitHubExternalResearchProvider {
                 "GitHub response exceeded configured bound".to_owned(),
             ));
         }
-        if allow_not_found && status == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
         if !status.is_success() {
             return Err(ExternalResearchProviderError::Rejected(format!(
                 "GitHub returned HTTP {status}"
             )));
         }
         serde_json::from_slice(&bytes)
-            .map(Some)
             .map_err(|error| ExternalResearchProviderError::Rejected(error.to_string()))
-    }
-
-    fn repository_license(
-        &self,
-        repository: &GitHubRepository,
-    ) -> Result<ExternalLicenseEvidenceV1, ExternalResearchProviderError> {
-        let url = format!(
-            "https://api.github.com/repos/{}/license",
-            repository.as_str()
-        );
-        let Some(value) = self.fetch_json(&url, &[], true)? else {
-            return Ok(ExternalLicenseEvidenceV1::Unknown);
-        };
-        let spdx = value
-            .get("license")
-            .and_then(|license| license.get("spdx_id"))
-            .and_then(serde_json::Value::as_str);
-        if matches!(spdx, None | Some("NOASSERTION")) {
-            return Ok(ExternalLicenseEvidenceV1::Unknown);
-        }
-        Ok(ExternalLicenseEvidenceV1::RepositoryDeclared {
-            spdx_id: spdx.unwrap_or_default().to_owned(),
-            source_url: url,
-        })
     }
 }
 
 impl ExternalResearchProvider for GitHubExternalResearchProvider {
     #[expect(
         clippy::too_many_lines,
-        reason = "the live adapter keeps bounded search, immutable blob fetch, license fetch, and normalized result construction visibly sequenced"
+        reason = "the live adapter keeps bounded search, immutable blob fetch, and normalized result construction visibly sequenced"
     )]
     fn search(
         &mut self,
@@ -1149,7 +1020,6 @@ impl ExternalResearchProvider for GitHubExternalResearchProvider {
             }
         }
 
-        let mut licenses: HashMap<GitHubRepository, ExternalLicenseEvidenceV1> = HashMap::new();
         let mut cases = Vec::with_capacity(candidates.len());
         for (repository, path, blob) in candidates {
             let url = format!(
@@ -1184,15 +1054,8 @@ impl ExternalResearchProvider for GitHubExternalResearchProvider {
                     "GitHub test source is not UTF-8".to_owned(),
                 )
             })?;
-            let license = if let Some(license) = licenses.get(&repository) {
-                license.clone()
-            } else {
-                let license = self.repository_license(&repository)?;
-                licenses.insert(repository.clone(), license.clone());
-                license
-            };
             cases.push(
-                ExternalTestCaseV1::new(repository, path, blob, source, license)
+                ExternalTestCaseV1::new(repository, path, blob, source)
                     .map_err(|error| contract_rejected(&error))?,
             );
         }
@@ -1263,9 +1126,6 @@ pub enum ExternalResearchContractError {
     /// Source bytes are empty or exceed the V1 bound.
     #[error("external research source bytes are invalid")]
     InvalidSourceBytes,
-    /// License evidence is malformed.
-    #[error("external research license evidence is invalid")]
-    InvalidLicenseEvidence,
     /// Stored source URL or identity disagrees with exact source bytes.
     #[error("external research source identity is inconsistent")]
     InconsistentSourceIdentity,
@@ -1298,12 +1158,11 @@ mod tests {
 
     use super::ExternalResearchProvider as _;
     use super::{
-        ExternalLicenseEvidenceV1, ExternalResearchPolicy, ExternalTestCaseV1,
-        ExternalTestSearchGateway, ExternalTestSearchRequestV1, ExternalTestSearchResultV1,
-        GitHubBlobIdentity, GitHubExternalResearchProvider, GitHubRepository,
-        RecordedExternalResearchExchange, RecordedExternalResearchProvider, SearchQuery,
-        SearchResultLimit, SourcePath, archive_external_test_evidence,
-        external_test_search_registration,
+        ExternalResearchPolicy, ExternalTestCaseV1, ExternalTestSearchGateway,
+        ExternalTestSearchRequestV1, ExternalTestSearchResultV1, GitHubBlobIdentity,
+        GitHubExternalResearchProvider, GitHubRepository, RecordedExternalResearchExchange,
+        RecordedExternalResearchProvider, SearchQuery, SearchResultLimit, SourcePath,
+        archive_external_test_evidence, external_test_search_registration,
     };
 
     fn request() -> ExternalTestSearchRequestV1 {
@@ -1315,24 +1174,12 @@ mod tests {
         .expect("request")
     }
 
-    fn result(
-        request: &ExternalTestSearchRequestV1,
-        unknown_license: bool,
-    ) -> ExternalTestSearchResultV1 {
-        let license = if unknown_license {
-            ExternalLicenseEvidenceV1::Unknown
-        } else {
-            ExternalLicenseEvidenceV1::RepositoryDeclared {
-                spdx_id: "BSD-3-Clause".to_owned(),
-                source_url: "https://api.github.com/repos/pytorch/pytorch/license".to_owned(),
-            }
-        };
+    fn result(request: &ExternalTestSearchRequestV1) -> ExternalTestSearchResultV1 {
         let case = ExternalTestCaseV1::new(
             GitHubRepository::new("pytorch/pytorch").expect("repository"),
             SourcePath::new("test/test_reductions.py").expect("path"),
             GitHubBlobIdentity::new("0123456789abcdef0123456789abcdef01234567").expect("blob"),
             "def test_sum_empty(self):\n    assert torch.empty(0).sum() == 0\n".to_owned(),
-            license,
         )
         .expect("case");
         ExternalTestSearchResultV1::new(
@@ -1385,7 +1232,7 @@ mod tests {
         .expect("begin");
         let provider = RecordedExternalResearchProvider::new([RecordedExternalResearchExchange {
             request: request_id,
-            result: result(&request, false),
+            result: result(&request),
         }]);
         let policy = ExternalResearchPolicy::new(
             [GitHubRepository::new("pytorch/pytorch").expect("repository")],
@@ -1413,7 +1260,6 @@ mod tests {
             cairn_codec::from_slice(&bytes).expect("strict result");
         assert_eq!(archived.request(), request_id);
         assert_eq!(archived.cases().len(), 1);
-        assert!(!archived.cases()[0].license().is_unknown());
         assert!(matches!(
             cairn_agent::recover_tool_operation(&events, operation_id).expect("recover"),
             cairn_agent::ToolOperationState::Completed { result_id: recovered, .. }
@@ -1434,10 +1280,9 @@ mod tests {
     }
 
     #[test]
-    fn unknown_license_is_visible_and_source_identity_is_recomputed() {
+    fn research_bytes_are_archived_but_cannot_become_a_corpus_case() {
         let request = request();
-        let result = result(&request, true);
-        assert!(result.cases()[0].license().is_unknown());
+        let result = result(&request);
         let directory = tempfile::tempdir().expect("tempdir");
         let mut content = SqliteContentStore::open(
             directory.path().join("content.db"),
@@ -1447,7 +1292,6 @@ mod tests {
         let archived =
             archive_external_test_evidence(&mut content, &request, &result).expect("archive");
         assert_eq!(archived.len(), 1);
-        assert!(!archived[0].has_declared_license());
         let mut source = Vec::new();
         content
             .write_to(&archived[0].source_bytes(), &mut source)
@@ -1508,7 +1352,7 @@ mod tests {
         value["url"] = serde_json::json!("http://127.0.0.1/private");
         assert!(serde_json::from_value::<ExternalTestSearchRequestV1>(value).is_err());
 
-        let result = result(&request, false);
+        let result = result(&request);
         assert!(
             !cairn_codec::to_vec(&result)
                 .expect("result bytes")

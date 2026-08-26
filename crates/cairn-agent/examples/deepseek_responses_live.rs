@@ -256,9 +256,9 @@ fn dispatch(
         now()?,
     )? {
         DispatchCompletion::Response(received) => Ok(received),
-        DispatchCompletion::NotSent => Err("live request was not sent".into()),
-        DispatchCompletion::Rejected => Err("live request was rejected".into()),
-        DispatchCompletion::Ambiguous => Err("live request outcome is ambiguous".into()),
+        DispatchCompletion::NotSent { diagnostic }
+        | DispatchCompletion::Rejected { diagnostic }
+        | DispatchCompletion::Ambiguous { diagnostic } => Err(diagnostic.into()),
     }
 }
 

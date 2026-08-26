@@ -216,8 +216,10 @@ Trusted code derives mandatory base cases from the structured declaration:
 - declared invalid pointers, sizes, shapes, and status behavior;
 - target-failure coverage obligations attached to the domain family.
 
-Blue, red, upstream tests, OpInfo-like sources, and fuzzing may add proposed cases. Proposed cases do
-not become truth by source. They enter admission with provenance and license metadata.
+Blue, red, OpInfo-like sources, and fuzzing may add proposed cases. Upstream tests may inform a
+separately authored Blue case but their fetched bytes do not enter the corpus through the research
+tool. Proposed cases do not become truth by source. Cairn-authored cases enter admission with their
+own provenance; any actually imported material remains subject to the ordinary import controls.
 
 ### 7.3 Real-domain interrogation
 

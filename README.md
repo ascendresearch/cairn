@@ -47,14 +47,20 @@ cases on the GB10 twice; the Ascend gate compiles and links `dav-3510` code twic
 device-free build worker. These are authoritative execution receipts for the source reference and
 target compiler substrate, not yet a generated target reduction candidate or device verdict.
 
-M2 now includes the first model-authored Oracle Agent control. Separate cache-aware Blue and Red
+M2 now includes the first typed model-authorship Oracle Agent control. Separate cache-aware Blue and Red
 episodes freeze independent model, budget, private-context, and tool-catalog edges. Blue can search
-bounded operator-approved GitHub repositories for exact upstream test bytes and license/provenance
-evidence; those results remain proposals and cannot bypass trusted admission. Provider cache usage
+bounded operator-approved GitHub repositories for exact upstream test bytes and retrieval
+provenance. Those bytes are research context only: Blue must independently author Cairn test cases,
+and a search result cannot become an executable corpus case. Provider cache usage
 is retained as optional metering evidence, and native role prefixes reconstruct byte-identically
 across restart. Blue proposals and Red correct/wrong attacks carry exact model authorship into an
-immutable revision/feedback graph. The historical reduction gate now traverses that model-authored
-boundary before producing its hardware-free admitted oracle.
+immutable revision/feedback graph. The historical reduction gate traverses that authorship boundary
+with recorded test-authored proposals before producing its hardware-free admitted oracle; it is not
+itself evidence of a complete live model loop.
+
+The opt-in Blue dogfood gate and its configurable role/research budgets are documented in
+[`docs/ORACLE_DOGFOOD.md`](docs/ORACLE_DOGFOOD.md). It uses a real model with either recorded or
+live GitHub research and records cache usage without printing source or model content.
 
 The current V1 verification foundation keeps admission-policy counts,
 the exact trusted generic-mutant set, required construction/fault classes, execution scope, and

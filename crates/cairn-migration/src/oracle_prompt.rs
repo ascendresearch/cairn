@@ -374,7 +374,6 @@ mod tests {
         ContextBlock, EpisodeBudget, HistoryItem, InstructionBlock, ModelName,
         ModelOutputTokenLimit, ModelProtocolConfig, NativeProtocolCodec, NativeToolResult,
         PolicyDocument, ProviderToolCallId, ResolvedRuntimeModelArtifact, ResponsesReasoningReplay,
-        ToolCatalog,
     };
     use cairn_protocol::{ContentId, ContentType, EpisodeId, TaskId};
     use cairn_record::ContentStore;
@@ -387,7 +386,7 @@ mod tests {
     use super::{OracleRolePromptInput, materialize_oracle_prompt, prepare_oracle_role_prompt};
     use crate::{
         OracleAgentRole, OracleRoleEpisodeInput, OracleSearchPlanInput, OracleSearchPlanV1,
-        oracle_role_tool_catalog_bytes, prepare_oracle_role_episode,
+        archive_oracle_role_tool_catalog, prepare_oracle_role_episode,
     };
 
     fn put<T: ContentType>(
@@ -409,11 +408,7 @@ mod tests {
                 OracleAgentRole::Red => "break the frozen proposal"
             }}),
         );
-        let catalog = oracle_role_tool_catalog_bytes(role).expect("catalog bytes");
-        let catalog_id = store
-            .put::<ToolCatalog>(&mut Cursor::new(catalog))
-            .expect("catalog")
-            .content_id;
+        let catalog_id = archive_oracle_role_tool_catalog(store, role).expect("catalog");
         let prepared = prepare_oracle_role_episode(OracleRoleEpisodeInput {
             role,
             episode_id: EpisodeId::new(),
@@ -516,15 +511,15 @@ mod tests {
         assert!(initial_json["tools"].as_array().is_some_and(|tools| {
             tools
                 .iter()
-                .any(|tool| tool["name"] == "oracle.search_external_tests")
+                .any(|tool| tool["name"] == "oracle_search_external_tests")
         }));
         assert!(!initial_json["tools"].as_array().is_some_and(|tools| {
             tools
                 .iter()
-                .any(|tool| tool["name"] == "oracle.submit_wrong_variant")
+                .any(|tool| tool["name"] == "oracle_submit_wrong_variant")
         }));
 
-        let response = br#"{"output":[{"type":"function_call","call_id":"search-1","name":"oracle.search_external_tests","arguments":"{\"schema_version\":1,\"query\":\"reduction edge case\",\"repositories\":[\"pytorch/pytorch\"],\"max_results\":2}"}]}"#;
+        let response = br#"{"output":[{"type":"function_call","call_id":"search-1","name":"oracle_search_external_tests","arguments":"{\"schema_version\":1,\"query\":\"reduction edge case\",\"repositories\":[\"pytorch/pytorch\"],\"max_results\":2}"}]}"#;
         let response_id = ContentId::derive(response).expect("response identity");
         let decoded = codec
             .decode_turn(&initial, response_id, response)

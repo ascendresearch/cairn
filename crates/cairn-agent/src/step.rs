@@ -249,9 +249,9 @@ pub fn recover_agent_step<E: EventStore, C: ContentStore>(
         ModelAttemptState::Completed { .. } => {
             recover_completed_step(events, content, step, attempt_id, &history)
         }
-        ModelAttemptState::NotSent => Ok(AgentStepState::ModelNotSent),
-        ModelAttemptState::Rejected => Ok(AgentStepState::ModelRejected),
-        ModelAttemptState::Ambiguous => Ok(AgentStepState::ModelAmbiguous),
+        ModelAttemptState::NotSent { .. } => Ok(AgentStepState::ModelNotSent),
+        ModelAttemptState::Rejected { .. } => Ok(AgentStepState::ModelRejected),
+        ModelAttemptState::Ambiguous { .. } => Ok(AgentStepState::ModelAmbiguous),
     }
 }
 

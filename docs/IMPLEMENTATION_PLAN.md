@@ -342,7 +342,7 @@ property variants. Open questions OQ-004 and OQ-007 remain
 unresolved; implementation must preserve derivation and disagreement evidence rather than selecting
 an independence or automatic disagreement policy.
 
-### Phase G7–G12 — model-authored Oracle Agent
+### Phase G7–G13 — model-authored Oracle Agent and dogfood
 
 These slices close the gap between the fixed historical proposal control and a real OracleSearch.
 They are ordered so that paid/live model work begins only after its cache cost and external research
@@ -392,27 +392,27 @@ leaks, changed identities, unknown fields, and non-V1 input.
 
 Status: implemented 2026-08-26.
 
-1. Register `oracle.search_external_tests` for blue as `ReadOnly` with a pinned implementation
+1. Register `oracle_search_external_tests` for blue as `ReadOnly` with a pinned implementation
    version.
 2. Define bounded strict request/result contracts for query, approved repository scopes, maximum
    results, exact upstream path/blob/revision, fetched bytes or excerpt, retrieval provenance,
-   truncation, and known/unknown license evidence.
+   and truncation.
 3. Implement a replaceable provider port, an offline recorded provider, and a live GitHub adapter
    whose endpoint, credentials, redirects, repositories, and response sizes are trusted
    configuration rather than model arguments.
 4. Validate the typed result before it becomes model-visible. Search snippets alone never become
    executable corpus material.
-5. Archive imported-case and license provenance separately so downstream `CorpusCaseSource::Upstream`
-   or `External` retains origin without trust promotion.
+5. Archive research source and retrieval provenance without creating `CorpusCaseArtifact`; require
+   Blue to author a separate structured Cairn case that may cite the research-result identity.
 
 Acceptance: a recorded PyTorch-like result traverses the normal durable tool operation; query,
-scope, blob, bytes, and license mutations fail; unknown license remains visible but non-promotable.
-The live adapter has an opt-in test only.
+scope, blob, and byte mutations fail; research bytes have no typed corpus-promotion path. The live
+adapter has an opt-in test only.
 
 Implemented evidence: the recorded PyTorch-like GitHub search traverses the normal durable
-read-only operation lifecycle; exact source, blob, retrieval, license, and provenance artifacts are
-archived separately. The fixed-authority live adapter has an ignored opt-in test and propagates
-network/license lookup failures rather than silently reporting them as unknown licenses.
+read-only operation lifecycle; exact source, blob, retrieval, and provenance artifacts are archived
+separately from executable corpus cases. The fixed-authority live adapter has an ignored opt-in test
+and does not spend a request on repository-license lookup.
 
 #### G10 — Blue proposal episode
 
@@ -468,13 +468,51 @@ Status: implemented 2026-08-26 for the hardware-free control.
    device verdict.
 
 Acceptance: the full hardware-free model/tool replay is deterministic over recorded external
-outcomes and has a complete evidence graph. Only after this gate does M3 candidate search begin.
+outcomes and has a complete evidence graph. The typed control closes G12, but M3 does not begin
+until the live/recorded product loop in G13 has eaten enough dogfood to prove that real model output
+can traverse it.
 
 Implemented evidence: the historical reduction integration now creates the ordinary proposal with
 Blue model authorship, creates all two correct and three wrong controls with Red model authorship,
 passes both through revision/attack validation, and then reuses the complete executed admission
 graph. Its admitted oracle judges the existing host candidates while retaining target-device
 behavior as unverified and omitting `TargetDevice` from executed scopes.
+
+This evidence validates the model-authorship contract but its proposal and variants are constructed
+by recorded test code, not emitted by a live model. It must not be cited as full Oracle Agent
+dogfood.
+
+#### G13 — full Oracle Agent dogfood
+
+Status: active 2026-08-26; Blue research rung complete, full loop incomplete.
+
+1. Put Blue and Red limits for turns, logical tool operations, cumulative provider tokens, and
+   output tokens per turn in strict configuration. Configure external research provider,
+   repository allowlist, result count, response bytes, and credential-file reference separately.
+2. Run real Blue model dispatch through the production-native catalog, durable external-research
+   operation, continuation restart, and cache metering. Keep a recorded research counterpart for
+   ordinary CI and add opt-in live GitHub research.
+3. Materialize independently authored model drafts and their referenced bodies before accepting a
+   domain refinement or corpus proposal; never ask a model to invent a content ID for content that
+   Cairn has not archived.
+4. Drive Blue and Red through generic durable `AgentEpisode` coordination so configured budgets are
+   enforced by durable facts rather than merely frozen in the search plan.
+5. Complete Blue proposal, separate Red correct/wrong/adversarial attack, trusted diagnostics,
+   immutable Blue revision, and hardware-free admission using actual model tool calls.
+6. Repeat multi-turn runs and compare provider-reported cache reads, uncached input, total cost, and
+   task quality without using cache hits as correctness evidence.
+
+Acceptance: both recorded and live-model paths traverse the same product gateways; one opt-in run
+uses live GitHub; every advertised tool has an executable gateway; restart and budget controls are
+durable; fetched upstream bytes never become corpus artifacts; and the final hardware-free oracle
+has a complete reconstructable Blue/Red/admission graph.
+
+Implemented evidence so far: the first real DeepSeek Blue run exposed and led to fixes for a
+missing tool-catalog CAS write, provider-incompatible dotted tool names, and discarded transport
+diagnostics. After those fixes, a two-turn run selected the bounded research tool, executed a
+recorded PyTorch result through the durable read-only gateway, reconstructed a byte-identical
+continuation after restart, and reported 896 cache-read tokens on the second turn. The detailed
+ledger and GitHub credential contract are in `ORACLE_DOGFOOD.md`.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.

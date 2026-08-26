@@ -174,7 +174,7 @@ counts and must retain protocol/provider attribution.
 
 ### 6.1 Blue tool contract
 
-The first tool is `oracle.search_external_tests`. It is registered as `ReadOnly` and receives a
+The first tool is `oracle_search_external_tests`. It is registered as `ReadOnly` and receives a
 strict canonical request containing:
 
 - a bounded textual query;
@@ -194,23 +194,25 @@ The result contains, for each fetched test proposal:
 - immutable upstream blob/revision identity where the source supports it;
 - canonical source URL and exact fetched bytes or a bounded excerpt plus exact byte identity;
 - retrieval observation time and provider attribution;
-- license/SPDX evidence or an explicit unknown-license disposition;
 - truncation and omitted-result facts;
 - the exact query and scope that produced it.
 
-Search-result snippets alone cannot become executable corpus cases. A proposed imported case must
-cite fetched immutable bytes and license provenance.
+Search-result snippets and fetched bytes cannot become executable corpus cases. They are
+model-visible research context. Blue must independently express the learned boundary, invariant,
+or failure mode in a Cairn-authored structured test proposal and cite the research-result identity
+that informed it. The research archive deliberately has no `CorpusCaseArtifact` edge.
 
-### 6.2 Trust and license rules
+### 6.2 Research-to-proposal boundary
 
-PyTorch and other upstream tests are evidence proposals. They may reveal shape boundaries, dtype
+PyTorch and other upstream tests are research inputs. They may reveal shape boundaries, dtype
 behavior, error behavior, numerical expectations, and historical bugs, but admission must reconcile
 them with caller intent, source observations, and independent semantics.
 
-Unknown or incompatible license provenance prevents source bytes from being copied into a
-redistributable Cairn fixture. The semantic idea may still be represented as a separately authored
-case when legally and technically justified, with the external source retained only as provenance.
-Repository name or popularity never promotes a case to trusted status.
+Cairn does not perform repository-license lookup in this research loop because the retrieved source
+is not imported as a fixture or implementation. Repository/path/blob/byte provenance is retained so
+we can reconstruct what Blue saw. If any future workflow actually vendors or distributes upstream
+material, the ordinary imported-material release controls apply outside this loop. Repository name,
+popularity, or retrieval success never promotes a case to trusted status.
 
 ### 6.3 Network and security boundary
 
@@ -252,8 +254,8 @@ triggers. It cannot claim target-specific coverage that was not executed.
 
 ## 8. Strong types at necessary boundaries
 
-The product layer uses closed types for `Blue` versus `Red`, external-source kind, license
-disposition, search request/result identity, proposal revision, admission outcome, and cache token
+The product layer uses closed types for `Blue` versus `Red`, external-source kind, search
+request/result identity, proposal revision, admission outcome, and cache token
 observations. It reuses generic `EpisodeId`, `OperationId`, `ContentId<T>`, token quantities, and
 tool-effect types rather than wrapping every internal string or integer.
 
@@ -270,7 +272,6 @@ projection, and the process manager that connects role outputs to verification.
 | disallowed repository or host | policy rejection | no network authority |
 | definite HTTP rejection | read-only attempt rejected | diagnostic; policy may authorize retry |
 | timeout after request may have completed | read-only ambiguous attempt | retry only through durable operation policy |
-| missing/unknown license | evidence limitation | do not import bytes as redistributable fixture |
 | conflicting upstream and source behavior | admission disagreement | weaken, reject, or request evidence |
 | cache detail absent | observability gap | no fabricated zero/hit ratio |
 | NPU unavailable | infrastructure block for target evidence | continue device-free oracle work; retain trigger |
@@ -282,11 +283,11 @@ The Oracle Agent slice is accepted only when tests demonstrate:
 1. an incomplete-but-honest caller contract retains explicit unknowns;
 2. blue and red use distinct episodes and cannot exchange private histories;
 3. blue is offered the external-test tool and red is denied it by the first role policy;
-4. a recorded PyTorch-like search returns exact source/provenance/license facts;
-5. changed query, repository, path, blob identity, bytes, or license changes evidence identity;
-6. an external test remains a proposal and cannot bypass trusted admission;
-7. a search result with unknown license remains visible but cannot be promoted as a distributable
-   fixture;
+4. a recorded PyTorch-like search returns exact source and retrieval-provenance facts;
+5. changed query, repository, path, blob identity, or bytes changes evidence identity;
+6. external research bytes have no typed promotion path to an executable corpus case;
+7. a separately authored Blue proposal may cite research-result identity without copying the
+   research artifact into the corpus;
 8. two turns reconstruct byte-identical stable prefixes after restart;
 9. provider cache usage is recorded when present and remains explicitly unknown when absent;
 10. admission rejection returns typed diagnostics to the correct role and creates a new immutable
@@ -299,7 +300,7 @@ The Oracle Agent slice is accepted only when tests demonstrate:
 
 - general-purpose web crawling or browser automation;
 - arbitrary model-selected URLs or network credentials;
-- automatic license conclusions from repository popularity;
+- importing or distributing upstream source through the research tool;
 - cross-provider cache equivalence claims;
 - role merging for cost reasons;
 - target-device execution, which remains a later validation tier;

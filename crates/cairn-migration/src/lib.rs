@@ -72,9 +72,9 @@ pub use exact_comparison::{
     compare_exact_corpus_observations,
 };
 pub use external_research::{
-    ArchivedExternalTestEvidence, ExternalLicenseEvidenceV1, ExternalResearchPolicy,
-    ExternalResearchProvider, ExternalResearchProviderError, ExternalTestCaseV1,
-    ExternalTestSearchGateway, ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1,
+    ArchivedExternalTestEvidence, ExternalResearchPolicy, ExternalResearchProvider,
+    ExternalResearchProviderError, ExternalTestCaseV1, ExternalTestSearchGateway,
+    ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1,
     ExternalTestSearchResultArtifact, ExternalTestSearchResultV1, GitHubBlobIdentity,
     GitHubExternalResearchProvider, GitHubRepository, RecordedExternalResearchExchange,
     RecordedExternalResearchProvider, SearchQuery, SearchResultLimit, SourcePath,
@@ -120,11 +120,13 @@ pub use oracle_prompt::{
 pub use oracle_search::{
     OracleAgentRole, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleRoleTool,
     OracleSearchPlanArtifact, OracleSearchPlanError, OracleSearchPlanInput, OracleSearchPlanV1,
-    oracle_role_tool_catalog_bytes, oracle_role_tool_catalog_id, prepare_oracle_role_episode,
+    archive_oracle_role_tool_catalog, oracle_role_tool_catalog_bytes, oracle_role_tool_catalog_id,
+    prepare_oracle_role_episode,
 };
 pub use oracle_tools::{
-    BlueProposalGateway, BlueProposalSubmissionV1, OracleToolError, RedSubmissionGateway,
-    blue_proposal_registration, oracle_role_native_tools, red_submission_registrations,
+    BlueDomainRefinementGateway, BlueProposalGateway, BlueProposalSubmissionV1, OracleToolError,
+    RedSubmissionGateway, blue_domain_refinement_registration, blue_proposal_registration,
+    oracle_role_native_tools, red_submission_registrations,
 };
 pub use oracle_workflow::{
     OracleAdmissionAttemptArtifact, OracleAdmissionFeedbackArtifact, OracleAdmissionFeedbackV1,

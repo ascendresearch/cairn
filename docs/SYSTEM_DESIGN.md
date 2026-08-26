@@ -293,7 +293,9 @@ only submitted proposal/attack artifacts and trusted diagnostics, never private 
 or unsubmitted reasoning. Their model-input projections keep deterministic append-only prefixes so
 role isolation does not require abandoning provider prompt caching. Blue has a bounded read-only
 external-test research tool; PyTorch and other upstream cases retain exact source, revision,
-retrieval, and license provenance and remain proposals until admission.
+and retrieval provenance as research context. Blue independently authors Cairn test proposals;
+fetched source has no executable-corpus promotion edge and repository-license lookup is not part of
+this loop.
 
 The role, cache, network-research, and feedback contract is in
 [`ORACLE_AGENT.md`](ORACLE_AGENT.md). The adjudication contract is in

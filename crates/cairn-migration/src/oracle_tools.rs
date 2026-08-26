@@ -6,8 +6,8 @@ use cairn_agent::{
 };
 use cairn_protocol::{ContentId, ContentType};
 use cairn_verification::{
-    AuthorshipOrigin, CorpusCaseArtifact, ImplementationVariantArtifact, ImplementationVariantV1,
-    OracleProposalV1, VariantExpectation,
+    AuthorshipOrigin, CorpusCaseArtifact, DomainRefinementArtifact, DomainRefinementV1,
+    ImplementationVariantArtifact, ImplementationVariantV1, OracleProposalV1, VariantExpectation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,12 +22,12 @@ use crate::{
 const SCHEMA_V1: u16 = 1;
 const TOOL_VERSION: &str = "oracle-workflow-v1";
 
-const SEARCH: &str = "oracle.search_external_tests";
-const SUBMIT_DOMAIN_REFINEMENT: &str = "oracle.submit_domain_refinement";
-const SUBMIT_PROPOSAL: &str = "oracle.submit_oracle_proposal";
-const SUBMIT_CORRECT: &str = "oracle.submit_correct_variant";
-const SUBMIT_WRONG: &str = "oracle.submit_wrong_variant";
-const SUBMIT_ADVERSARIAL: &str = "oracle.submit_adversarial_case";
+const SEARCH: &str = "oracle_search_external_tests";
+const SUBMIT_DOMAIN_REFINEMENT: &str = "oracle_submit_domain_refinement";
+const SUBMIT_PROPOSAL: &str = "oracle_submit_oracle_proposal";
+const SUBMIT_CORRECT: &str = "oracle_submit_correct_variant";
+const SUBMIT_WRONG: &str = "oracle_submit_wrong_variant";
+const SUBMIT_ADVERSARIAL: &str = "oracle_submit_adversarial_case";
 
 /// Canonical serializable model-visible contract from which both catalog identity and wire tools
 /// are derived.
@@ -185,6 +185,71 @@ pub struct BlueProposalSubmissionV1 {
     pub proposal: OracleProposalV1,
     /// Exact external research results cited by this revision, in canonical wire order.
     pub external_research: Vec<ContentId<ExternalTestSearchResultArtifact>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BlueDomainRefinementSubmissionV1 {
+    schema_version: u16,
+    refinement_json: String,
+}
+
+/// Pure collector for independently model-authored Blue domain refinements.
+pub struct BlueDomainRefinementGateway {
+    plan: OracleSearchPlanV1,
+    accepted: Vec<(ContentId<DomainRefinementArtifact>, DomainRefinementV1)>,
+}
+
+impl BlueDomainRefinementGateway {
+    /// Creates an empty collector bound to one exact Blue episode and declared domain.
+    #[must_use]
+    pub const fn new(plan: OracleSearchPlanV1) -> Self {
+        Self {
+            plan,
+            accepted: Vec::new(),
+        }
+    }
+
+    /// Returns accepted refinement identities and validated bodies in submission order.
+    #[must_use]
+    pub fn accepted(&self) -> &[(ContentId<DomainRefinementArtifact>, DomainRefinementV1)] {
+        &self.accepted
+    }
+}
+
+impl ToolGateway for BlueDomainRefinementGateway {
+    fn invoke(
+        &mut self,
+        operation: &PreparedToolOperation,
+    ) -> Result<CanonicalToolResult, ToolGatewayError> {
+        validate_operation(operation, SUBMIT_DOMAIN_REFINEMENT)?;
+        let input: BlueDomainRefinementSubmissionV1 = decode_canonical(operation.argument_bytes())?;
+        if input.schema_version != SCHEMA_V1 {
+            return rejected("unsupported Blue domain-refinement submission schema");
+        }
+        let refinement: DomainRefinementV1 =
+            cairn_codec::from_slice(input.refinement_json.as_bytes())
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        let canonical = cairn_codec::to_vec(&refinement)
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        if canonical != input.refinement_json.as_bytes() {
+            return rejected("Blue domain-refinement JSON is not canonical");
+        }
+        if refinement.declared_domain() != self.plan.declared_domain()
+            || refinement.authorship().origin() != AuthorshipOrigin::Model
+            || refinement.authorship().episode_id() != Some(self.plan.blue().episode_id())
+            || refinement.authorship().model_configuration()
+                != Some(self.plan.blue().authorship_configuration())
+        {
+            return rejected("Blue refinement domain, role, or model is inconsistent");
+        }
+        let id = content_id::<DomainRefinementArtifact>(&refinement)?;
+        if self.accepted.iter().any(|(accepted, _)| *accepted == id) {
+            return rejected("Blue domain refinement was already submitted");
+        }
+        self.accepted.push((id, refinement));
+        accepted_identity(&id.to_wire())
+    }
 }
 
 impl BlueProposalSubmissionV1 {
@@ -365,6 +430,15 @@ pub fn blue_proposal_registration() -> Result<ToolRegistration, OracleToolError>
     registration(SUBMIT_PROPOSAL)
 }
 
+/// Returns the trusted Blue domain-refinement registration.
+///
+/// # Errors
+///
+/// Returns an error only for an invalid built-in name.
+pub fn blue_domain_refinement_registration() -> Result<ToolRegistration, OracleToolError> {
+    registration(SUBMIT_DOMAIN_REFINEMENT)
+}
+
 /// Returns the trusted registrations for the exact three model-visible Red tools.
 ///
 /// # Errors
@@ -471,4 +545,115 @@ pub enum OracleToolError {
     /// A repository-owned tool name or implementation label violates the generic boundary.
     #[error("invalid built-in Oracle Agent tool contract")]
     BuiltInContract,
+}
+
+#[cfg(test)]
+mod tests {
+    use cairn_agent::{
+        ContextBlock, EpisodeBudget, InstructionBlock, ResolvedRuntimeModelArtifact,
+        ToolGateway as _, prepare_tool_operation,
+    };
+    use cairn_protocol::{ContentId, ContentType, EpisodeId, OperationId, TaskId};
+    use cairn_store_sqlite::SqliteContentStore;
+    use cairn_verification::{
+        AdmissionPolicyArtifact, ArtifactAuthorId, ArtifactAuthorshipV1, AuthorshipOrigin,
+        DeclaredDomainArtifact, DomainDifferenceArtifact, DomainRefinementEvidenceArtifact,
+        DomainRefinementV1, ModelConfigurationArtifact, OracleTaskInputArtifact,
+    };
+
+    use super::{BlueDomainRefinementGateway, blue_domain_refinement_registration};
+    use crate::{
+        OracleAgentRole, OracleRoleEpisodeInput, OracleSearchPlanInput, OracleSearchPlanV1,
+        prepare_oracle_role_episode,
+    };
+
+    fn id<T: ContentType>(label: &str) -> ContentId<T> {
+        ContentId::derive(label.as_bytes()).expect("content id")
+    }
+
+    fn plan() -> OracleSearchPlanV1 {
+        let blue = prepare_oracle_role_episode(OracleRoleEpisodeInput {
+            role: OracleAgentRole::Blue,
+            episode_id: EpisodeId::new(),
+            model_configuration: id::<ResolvedRuntimeModelArtifact>("blue runtime"),
+            authorship_configuration: id::<ModelConfigurationArtifact>("blue authorship"),
+            role_instruction: id::<InstructionBlock>("blue role"),
+            private_context: Vec::new(),
+            budget: EpisodeBudget::default(),
+        })
+        .expect("blue role");
+        let red = prepare_oracle_role_episode(OracleRoleEpisodeInput {
+            role: OracleAgentRole::Red,
+            episode_id: EpisodeId::new(),
+            model_configuration: id::<ResolvedRuntimeModelArtifact>("red runtime"),
+            authorship_configuration: id::<ModelConfigurationArtifact>("red authorship"),
+            role_instruction: id::<InstructionBlock>("red role"),
+            private_context: Vec::new(),
+            budget: EpisodeBudget::default(),
+        })
+        .expect("red role");
+        OracleSearchPlanV1::new(OracleSearchPlanInput {
+            task_id: TaskId::new(),
+            task_inputs: id::<OracleTaskInputArtifact>("task inputs"),
+            declared_domain: id::<DeclaredDomainArtifact>("declared domain"),
+            admission_policy: id::<AdmissionPolicyArtifact>("admission policy"),
+            common_instructions: vec![id::<InstructionBlock>("common")],
+            shared_context: vec![id::<ContextBlock>("caller and source context")],
+            blue,
+            red,
+        })
+        .expect("plan")
+    }
+
+    fn refinement(plan: &OracleSearchPlanV1) -> DomainRefinementV1 {
+        let authorship = ArtifactAuthorshipV1::new(
+            AuthorshipOrigin::Model,
+            ArtifactAuthorId::new("recorded-blue").expect("author"),
+            Some(plan.blue().episode_id()),
+            Some(plan.blue().authorship_configuration()),
+        )
+        .expect("authorship");
+        DomainRefinementV1::new(
+            plan.declared_domain(),
+            id::<DomainDifferenceArtifact>("empty reduction returns additive identity"),
+            vec![id::<DomainRefinementEvidenceArtifact>(
+                "recorded upstream research",
+            )],
+            authorship,
+        )
+        .expect("refinement")
+    }
+
+    #[test]
+    fn advertised_blue_refinement_tool_has_an_executable_typed_gateway() {
+        let plan = plan();
+        let refinement = refinement(&plan);
+        let refinement_json =
+            String::from_utf8(cairn_codec::to_vec(&refinement).expect("refinement JSON"))
+                .expect("UTF-8");
+        let arguments = serde_json::json!({
+            "schema_version": 1,
+            "refinement_json": refinement_json,
+        });
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut content = SqliteContentStore::open(
+            directory.path().join("content.db"),
+            directory.path().join("cas"),
+        )
+        .expect("content");
+        let registration = blue_domain_refinement_registration().expect("registration");
+        let operation = prepare_tool_operation(
+            &mut content,
+            OperationId::new(),
+            registration.name().clone(),
+            registration.implementation_version().clone(),
+            registration.effect(),
+            &arguments,
+        )
+        .expect("operation");
+        let mut gateway = BlueDomainRefinementGateway::new(plan);
+        gateway.invoke(&operation).expect("accepted refinement");
+        assert_eq!(gateway.accepted().len(), 1);
+        assert!(gateway.invoke(&operation).is_err());
+    }
 }

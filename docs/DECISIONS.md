@@ -476,13 +476,16 @@ uses total input, uncached input, output, latency, and task quality rather than 
 
 - Decision: accepted
 
-The blue role receives a read-only `oracle.search_external_tests` product tool. The model supplies a
+The blue role receives a read-only `oracle_search_external_tests` product tool. The model supplies a
 bounded query and operator-approved repository scopes; trusted adapters own endpoints, credentials,
 redirect policy, response bounds, and repository allowlists. Results retain exact query, source,
 immutable upstream revision/blob identity where available, fetched bytes or bounded excerpt,
-retrieval provenance, truncation, and license/SPDX evidence or an explicit unknown.
+retrieval provenance, and truncation.
 
-PyTorch and other upstream tests are proposals, not truth. Search snippets cannot become executable
-cases, source origin cannot bypass admission, and unknown/incompatible license provenance prevents
-copying bytes into distributable fixtures. Recorded providers drive offline CI and replay through
-the same generic tool-operation seam as live providers.
+PyTorch and other upstream tests are research context, not truth or import candidates. Search
+snippets and fetched bytes cannot become executable cases; Blue must independently author Cairn's
+structured test proposal and may cite only the research-result identity that informed it. The tool
+does not query repository licenses because this path does not vendor or distribute upstream bytes.
+Any future importing workflow remains subject to the ordinary release controls in D-006. Recorded
+providers drive offline CI and replay through the same generic tool-operation seam as live
+providers.

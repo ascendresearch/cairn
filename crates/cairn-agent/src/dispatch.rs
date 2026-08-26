@@ -154,11 +154,20 @@ pub enum DispatchCompletion {
     /// Exact response bytes were archived and cited by a durable event.
     Response(ReceivedModelResponse),
     /// Transport proved the request was not sent.
-    NotSent,
+    NotSent {
+        /// Provider/transport diagnostic retained by the terminal event.
+        diagnostic: String,
+    },
     /// Provider definitively rejected the request.
-    Rejected,
+    Rejected {
+        /// Provider/transport diagnostic retained by the terminal event.
+        diagnostic: String,
+    },
     /// External outcome cannot be determined.
-    Ambiguous,
+    Ambiguous {
+        /// Provider/transport diagnostic retained by the terminal event.
+        diagnostic: String,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -378,6 +387,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
         }
         Err(error) => {
             let class = error.failure_class();
+            let diagnostic = error.to_string();
             let schema = match class {
                 TransportFailureClass::NotSent => NOT_SENT,
                 TransportFailureClass::Rejected => REJECTED,
@@ -386,7 +396,7 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
             let payload = OutcomePayload {
                 attempt_id,
                 response_id: None,
-                diagnostic: Some(error.to_string()),
+                diagnostic: Some(diagnostic.clone()),
                 usage: None,
             };
             append_terminal(
@@ -405,9 +415,9 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 }
             })?;
             Ok(match class {
-                TransportFailureClass::NotSent => DispatchCompletion::NotSent,
-                TransportFailureClass::Rejected => DispatchCompletion::Rejected,
-                TransportFailureClass::Ambiguous => DispatchCompletion::Ambiguous,
+                TransportFailureClass::NotSent => DispatchCompletion::NotSent { diagnostic },
+                TransportFailureClass::Rejected => DispatchCompletion::Rejected { diagnostic },
+                TransportFailureClass::Ambiguous => DispatchCompletion::Ambiguous { diagnostic },
             })
         }
     }
@@ -478,11 +488,20 @@ pub enum ModelAttemptState {
         usage: Option<ProviderTokenUsage>,
     },
     /// Transport proved no request was sent.
-    NotSent,
+    NotSent {
+        /// Provider/transport diagnostic retained by the terminal event.
+        diagnostic: String,
+    },
     /// Provider rejected the request.
-    Rejected,
+    Rejected {
+        /// Provider/transport diagnostic retained by the terminal event.
+        diagnostic: String,
+    },
     /// Transport outcome was explicitly ambiguous.
-    Ambiguous,
+    Ambiguous {
+        /// Provider/transport diagnostic retained by the terminal event.
+        diagnostic: String,
+    },
 }
 
 /// Rebuilds model-attempt state only from committed event facts.
@@ -556,9 +575,15 @@ pub fn recover_model_attempt(
                 NOT_SENT | REJECTED | AMBIGUOUS if payload.diagnostic.is_none() => {
                     return invalid_history("failure event lacks a diagnostic");
                 }
-                NOT_SENT => ModelAttemptState::NotSent,
-                REJECTED => ModelAttemptState::Rejected,
-                AMBIGUOUS => ModelAttemptState::Ambiguous,
+                NOT_SENT => ModelAttemptState::NotSent {
+                    diagnostic: payload.diagnostic.unwrap_or_default(),
+                },
+                REJECTED => ModelAttemptState::Rejected {
+                    diagnostic: payload.diagnostic.unwrap_or_default(),
+                },
+                AMBIGUOUS => ModelAttemptState::Ambiguous {
+                    diagnostic: payload.diagnostic.unwrap_or_default(),
+                },
                 _ => unreachable!("schema was filtered above"),
             };
         }
@@ -975,13 +1000,18 @@ mod tests {
             cairn_protocol::ObservedAtUnixMillis::new(3),
         )
         .expect("record ambiguous result");
-        assert!(matches!(completion, DispatchCompletion::Ambiguous));
+        assert!(matches!(
+            completion,
+            DispatchCompletion::Ambiguous { ref diagnostic }
+                if diagnostic.contains("connection lost")
+        ));
 
         let history = events.read_stream(&stream, None).expect("read ambiguous");
-        assert_eq!(
+        assert!(matches!(
             recover_model_attempt(&history, attempt).expect("recover ambiguous"),
-            ModelAttemptState::Ambiguous
-        );
+            ModelAttemptState::Ambiguous { ref diagnostic }
+                if diagnostic.contains("connection lost")
+        ));
     }
 
     #[test]

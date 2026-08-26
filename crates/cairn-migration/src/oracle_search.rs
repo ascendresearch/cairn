@@ -1,11 +1,12 @@
 //! Product-owned blue/red `OracleSearch` plan and cache-stable role projections.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, io::Cursor};
 
 use cairn_agent::{
     ContextBlock, EpisodeBudget, InstructionBlock, ResolvedRuntimeModelArtifact, ToolCatalog,
 };
 use cairn_protocol::{ContentId, ContentType, EpisodeId, TaskId};
+use cairn_record::{ContentStore, ContentStoreError};
 use cairn_verification::{
     AdmissionPolicyArtifact, DeclaredDomainArtifact, ModelConfigurationArtifact,
     OracleTaskInputArtifact,
@@ -475,6 +476,24 @@ pub fn oracle_role_tool_catalog_id(
         .map_err(|error| OracleSearchPlanError::Encoding(error.to_string()))
 }
 
+/// Archives the trusted role tool catalog and verifies that storage preserved its frozen identity.
+///
+/// # Errors
+///
+/// Returns an error when canonical encoding or content storage fails.
+pub fn archive_oracle_role_tool_catalog<S: ContentStore>(
+    store: &mut S,
+    role: OracleAgentRole,
+) -> Result<ContentId<ToolCatalog>, OracleSearchPlanError> {
+    let bytes = oracle_role_tool_catalog_bytes(role)?;
+    let expected = oracle_role_tool_catalog_id(role)?;
+    let descriptor = store.put::<ToolCatalog>(&mut Cursor::new(bytes))?;
+    if descriptor.content_id != expected {
+        return Err(OracleSearchPlanError::RoleCapabilityMismatch);
+    }
+    Ok(descriptor.content_id)
+}
+
 fn validate_unique<T: ContentType>(
     values: &[ContentId<T>],
     field: &'static str,
@@ -489,6 +508,9 @@ fn validate_unique<T: ContentType>(
 /// Invalid `OracleSearch` composition or strict V1 input.
 #[derive(Debug, Error)]
 pub enum OracleSearchPlanError {
+    /// Trusted role catalog archival failed.
+    #[error(transparent)]
+    Storage(#[from] ContentStoreError),
     /// A schema other than the single current V1 was supplied.
     #[error("unsupported OracleSearch schema version {0}")]
     UnsupportedSchema(u16),

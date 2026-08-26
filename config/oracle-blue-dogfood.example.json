@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "blue": {
+    "max_turns": 8,
+    "max_tool_operations": 16,
+    "max_provider_tokens": 100000,
+    "max_output_tokens_per_turn": 2048
+  },
+  "red": {
+    "max_turns": 8,
+    "max_tool_operations": 16,
+    "max_provider_tokens": 100000,
+    "max_output_tokens_per_turn": 2048
+  },
+  "research": {
+    "provider": {
+      "kind": "recorded"
+    },
+    "repositories": [
+      "pytorch/pytorch"
+    ],
+    "max_results_per_search": 3,
+    "max_response_bytes": 1048576
+  }
+}
