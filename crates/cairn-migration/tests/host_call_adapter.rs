@@ -21,27 +21,36 @@ use cairn_migration::{
     CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusExecutionSubjectV1,
     CorpusObservationSetArtifact, CorpusObservationSetError, CorpusObservationSetV1, DataType,
     DimensionSpec, EntryPointName, ExactCorpusComparisonArtifact, ExactCorpusComparisonError,
-    ExactCorpusComparisonV1, ExtentValue, InclusiveExtentRange, InclusiveIntegerRange,
-    InputValueCaseTarget, InputValueDisposition, InputValueDomainV1, IntegerValue,
-    InvalidInputBehavior, MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1,
-    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
-    MigrationExecutionNeed, MigrationMandatoryCasesV1, MigrationValidationTier,
-    PointerAlignmentContractV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
-    PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan, RequestedSemanticsArtifact,
-    ScalarParameterContractInput, ScalarParameterContractV1, ScalarParameterName,
-    ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput, ShapeSymbolContractV1,
-    ShapeSymbolName, ShapeSymbolSource, ValidatedCorpusExecutionCase,
-    ValidatedCorpusObservationSet, assemble_boundary_case_input, assemble_input_value_case_input,
+    ExactCorpusComparisonV1, ExactVariantTrialArtifact, ExactVariantTrialV1, ExtentValue,
+    InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition,
+    InputValueDomainV1, IntegerValue, InvalidInputBehavior, MandatoryInputValueCasesV1,
+    MandatoryMemorySurfaceCasesV1, MemoryConditionDisposition, MigrationDomainContractInput,
+    MigrationDomainContractV1, MigrationExecutionNeed, MigrationMandatoryCasesV1,
+    MigrationValidationTier, PointerAlignmentContractV1, PreparedCallAdapterInput,
+    PreparedCallAdapterJob, PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan,
+    RequestedSemanticsArtifact, ScalarParameterContractInput, ScalarParameterContractV1,
+    ScalarParameterName, ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput,
+    ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource, ValidatedCorpusExecutionCase,
+    ValidatedCorpusObservationSet, ValidatedVariantBuild, VariantBuildCaptureLimits,
+    VariantBuildDriverByteLimit, VariantBuildPlanArtifact, VariantBuildPlanV1,
+    VariantBuildReceiptArtifact, VariantBuildReceiptV1, VariantExecutionError,
+    VariantImplementationByteLimit, assemble_boundary_case_input, assemble_input_value_case_input,
     assemble_memory_surface_case_input, compare_exact_corpus_observations,
-    compose_call_adapter_job, derive_mandatory_base_cases, derive_mandatory_input_value_cases,
-    derive_mandatory_memory_surface_cases, materialize_input_value_case,
-    prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
+    compose_call_adapter_job, compose_exact_variant_trial, derive_mandatory_base_cases,
+    derive_mandatory_input_value_cases, derive_mandatory_memory_surface_cases,
+    materialize_input_value_case, prepare_boundary_call_adapter_input,
+    prepare_corpus_execution_plan, prepare_variant_build_job,
     validate_boundary_call_adapter_receipt, validate_corpus_execution_receipts,
+    validate_variant_build_receipt,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-use cairn_verification::{ImplementationBundleArtifact, ReferenceArtifact};
+use cairn_verification::{
+    ArtifactAuthorId, ArtifactAuthorshipV1, AuthorshipOrigin, ConstructionClaimArtifact,
+    FaultClassName, FaultInjectionEvidenceArtifact, ImplementationBundleArtifact,
+    ImplementationVariantArtifact, ImplementationVariantV1, ReferenceArtifact, VariantExpectation,
+};
 
 const HOST_FIXTURE_BACKEND: &str = "host-fixture-v1";
 
@@ -65,6 +74,20 @@ struct CompletedCorpus {
     content: SqliteContentStore,
     plan: PreparedCorpusExecutionPlan,
     receipts: Vec<CorpusExecutionReceipt>,
+}
+
+struct ExecutedVariantControls {
+    domain: MigrationDomainContractV1,
+    correct: ImplementationVariantV1,
+    wrong: ImplementationVariantV1,
+    correct_build: ValidatedVariantBuild,
+    wrong_build: ValidatedVariantBuild,
+    reference: CompletedCorpus,
+    correct_run: CompletedCorpus,
+    wrong_run: CompletedCorpus,
+    reference_observations: ValidatedCorpusObservationSet,
+    correct_observations: ValidatedCorpusObservationSet,
+    wrong_observations: ValidatedCorpusObservationSet,
 }
 
 #[test]
@@ -247,6 +270,181 @@ fn exact_comparison_aligns_roles_obligations_and_value_identities() {
             &matching_observations,
         ),
         Err(ExactCorpusComparisonError::NonExactDomain)
+    );
+}
+
+#[test]
+fn admission_variants_build_execute_observe_and_compare_through_shared_ports() {
+    let fixture = executed_variant_controls();
+    let correct_comparison = compare_exact_corpus_observations(
+        &fixture.domain,
+        &fixture.reference.plan,
+        &fixture.reference_observations,
+        &fixture.correct_run.plan,
+        &fixture.correct_observations,
+    )
+    .expect("correct variant comparison");
+    let wrong_comparison = compare_exact_corpus_observations(
+        &fixture.domain,
+        &fixture.reference.plan,
+        &fixture.reference_observations,
+        &fixture.wrong_run.plan,
+        &fixture.wrong_observations,
+    )
+    .expect("wrong variant comparison");
+    let correct_trial = compose_exact_variant_trial(
+        &fixture.domain,
+        &fixture.correct,
+        &fixture.correct_build,
+        &fixture.reference.plan,
+        &fixture.reference_observations,
+        &fixture.correct_run.plan,
+        &fixture.correct_observations,
+        &correct_comparison,
+    )
+    .expect("correct variant trial");
+    let wrong_trial = compose_exact_variant_trial(
+        &fixture.domain,
+        &fixture.wrong,
+        &fixture.wrong_build,
+        &fixture.reference.plan,
+        &fixture.reference_observations,
+        &fixture.wrong_run.plan,
+        &fixture.wrong_observations,
+        &wrong_comparison,
+    )
+    .expect("wrong variant trial");
+
+    assert!(correct_comparison.comparison().all_match());
+    assert!(!wrong_comparison.comparison().all_match());
+    assert!(
+        correct_trial
+            .trial()
+            .expectation_satisfied(&correct_comparison)
+    );
+    assert!(wrong_trial.trial().expectation_satisfied(&wrong_comparison));
+    assert_eq!(
+        correct_trial.trial_id(),
+        ContentId::<ExactVariantTrialArtifact>::derive(correct_trial.trial_bytes())
+            .expect("variant trial identity")
+    );
+    correct_trial
+        .trial()
+        .validate_inputs(
+            &fixture.domain,
+            &fixture.correct,
+            &fixture.correct_build,
+            &fixture.reference.plan,
+            &fixture.reference_observations,
+            &fixture.correct_run.plan,
+            &fixture.correct_observations,
+            &correct_comparison,
+        )
+        .expect("recomputed correct trial");
+    assert_exact_variant_trial_is_strict(correct_trial.trial());
+
+    assert_eq!(
+        compose_exact_variant_trial(
+            &fixture.domain,
+            &fixture.correct,
+            &fixture.correct_build,
+            &fixture.reference.plan,
+            &fixture.reference_observations,
+            &fixture.wrong_run.plan,
+            &fixture.wrong_observations,
+            &wrong_comparison,
+        ),
+        Err(VariantExecutionError::InconsistentVariantPlan)
+    );
+}
+
+fn executed_variant_controls() -> ExecutedVariantControls {
+    let domain = domain();
+    let correct_executable = stripped_fixture(env!("CARGO_BIN_EXE_cairn-call-adapter-fixture"));
+    let wrong_executable = stripped_fixture(env!("CARGO_BIN_EXE_cairn-call-adapter-wrong-fixture"));
+    let correct = implementation_variant(
+        &correct_executable,
+        VariantExpectation::MustAccept {
+            construction_claim: ContentId::<ConstructionClaimArtifact>::derive(
+                b"fixture construction claim",
+            )
+            .expect("construction claim"),
+        },
+    );
+    let wrong = implementation_variant(
+        &wrong_executable,
+        VariantExpectation::MustReject {
+            fault_class: FaultClassName::new("zero-to-one-output").expect("fault class"),
+            fault_evidence: ContentId::<FaultInjectionEvidenceArtifact>::derive(
+                b"fixture one-output injection",
+            )
+            .expect("fault evidence"),
+        },
+    );
+    assert_variant_implementation_mismatch(&correct, &wrong_executable);
+
+    let correct_build = execute_variant_build(&correct, &correct_executable);
+    let wrong_build = execute_variant_build(&wrong, &wrong_executable);
+    assert_built_adapter_process(&correct_build, 0);
+    assert_built_adapter_process(&wrong_build, 1);
+    let reference = complete_synthetic_corpus_for_with_executable(
+        CorpusExecutionSubjectV1::Reference {
+            reference: ContentId::<ReferenceArtifact>::derive(b"exact fixture reference")
+                .expect("reference"),
+        },
+        0,
+        &correct_executable,
+    );
+    let correct_run = complete_synthetic_corpus_for_with_executable(
+        CorpusExecutionSubjectV1::AdmissionVariant {
+            variant: implementation_variant_id(&correct),
+        },
+        0,
+        correct_build.executable_bytes(),
+    );
+    let wrong_run = complete_synthetic_corpus_for_with_executable(
+        CorpusExecutionSubjectV1::AdmissionVariant {
+            variant: implementation_variant_id(&wrong),
+        },
+        1,
+        wrong_build.executable_bytes(),
+    );
+    let reference_observations = collect_completed_corpus(&reference);
+    let correct_observations = collect_completed_corpus(&correct_run);
+    let wrong_observations = collect_completed_corpus(&wrong_run);
+    ExecutedVariantControls {
+        domain,
+        correct,
+        wrong,
+        correct_build,
+        wrong_build,
+        reference,
+        correct_run,
+        wrong_run,
+        reference_observations,
+        correct_observations,
+        wrong_observations,
+    }
+}
+
+fn assert_variant_implementation_mismatch(
+    correct: &ImplementationVariantV1,
+    wrong_executable: &[u8],
+) {
+    assert_eq!(
+        prepare_variant_build_job(
+            JobId::new(),
+            correct,
+            wrong_executable,
+            byte_limit_for_implementation(wrong_executable),
+            b"driver",
+            VariantBuildDriverByteLimit::new(16).expect("driver limit"),
+            ContentId::<ExecutionEnvironmentArtifact>::derive(b"build environment")
+                .expect("environment"),
+            &host_need(),
+            variant_build_capture_limits(wrong_executable),
+        ),
+        Err(VariantExecutionError::ImplementationIdentityMismatch)
     );
 }
 
@@ -510,7 +708,280 @@ fn assert_exact_comparison_is_strict(comparison: &ExactCorpusComparisonV1) {
     assert!(serde_json::from_value::<ExactCorpusComparisonV1>(verdict).is_err());
 }
 
+fn assert_exact_variant_trial_is_strict(trial: &ExactVariantTrialV1) {
+    let value = serde_json::to_value(trial).expect("variant trial JSON");
+    let mut wrong_version = value.clone();
+    wrong_version["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<ExactVariantTrialV1>(wrong_version).is_err());
+    let mut verdict = value;
+    verdict["passed"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<ExactVariantTrialV1>(verdict).is_err());
+}
+
+fn assert_variant_build_plan_is_strict(plan: &VariantBuildPlanV1) {
+    let bytes = cairn_codec::to_vec(plan).expect("build plan bytes");
+    assert_eq!(
+        cairn_codec::from_slice::<VariantBuildPlanV1>(&bytes).expect("build plan round trip"),
+        *plan
+    );
+    let value = serde_json::to_value(plan).expect("build plan JSON");
+    let mut wrong_version = value.clone();
+    wrong_version["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<VariantBuildPlanV1>(wrong_version).is_err());
+    let mut unknown = value;
+    unknown["fallback_builder"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<VariantBuildPlanV1>(unknown).is_err());
+}
+
+fn assert_variant_build_receipt_is_strict(receipt: &VariantBuildReceiptV1) {
+    let bytes = cairn_codec::to_vec(receipt).expect("build receipt bytes");
+    assert_eq!(
+        cairn_codec::from_slice::<VariantBuildReceiptV1>(&bytes).expect("build receipt round trip"),
+        *receipt
+    );
+    let value = serde_json::to_value(receipt).expect("build receipt JSON");
+    let mut wrong_version = value.clone();
+    wrong_version["schema_version"] = serde_json::json!(2);
+    assert!(serde_json::from_value::<VariantBuildReceiptV1>(wrong_version).is_err());
+    let mut verdict = value;
+    verdict["passed"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<VariantBuildReceiptV1>(verdict).is_err());
+}
+
+fn stripped_fixture(source: &str) -> Vec<u8> {
+    let directory = tempfile::tempdir().expect("stripped fixture directory");
+    let output = directory.path().join("fixture");
+    let status = Command::new("strip")
+        .args(["--strip-all", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .expect("GNU strip is required by the Linux host-fixture gate");
+    assert!(status.success());
+    fs::read(output).expect("stripped fixture bytes")
+}
+
+fn implementation_variant(
+    executable: &[u8],
+    expectation: VariantExpectation,
+) -> ImplementationVariantV1 {
+    ImplementationVariantV1::new(
+        ContentId::<ImplementationBundleArtifact>::derive(executable)
+            .expect("implementation identity"),
+        expectation,
+        ArtifactAuthorshipV1::new(
+            AuthorshipOrigin::Repository,
+            ArtifactAuthorId::new("host-variant-fixture").expect("author"),
+            None,
+            None,
+        )
+        .expect("authorship"),
+    )
+}
+
+fn implementation_variant_id(
+    variant: &ImplementationVariantV1,
+) -> ContentId<ImplementationVariantArtifact> {
+    ContentId::derive(&cairn_codec::to_vec(variant).expect("variant bytes"))
+        .expect("variant identity")
+}
+
+fn host_need() -> MigrationExecutionNeed {
+    MigrationExecutionNeed::new(
+        MigrationValidationTier::V0Cpu,
+        ExecutionBackend::new(HOST_FIXTURE_BACKEND).expect("backend"),
+        cairn_execution::ExecutionTimeoutMillis::new(5_000).expect("timeout"),
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("execution need")
+}
+
+fn byte_limit_for_implementation(bytes: &[u8]) -> VariantImplementationByteLimit {
+    VariantImplementationByteLimit::new(
+        u64::try_from(bytes.len()).expect("implementation byte length"),
+    )
+    .expect("implementation byte limit")
+}
+
+fn variant_build_capture_limits(bytes: &[u8]) -> VariantBuildCaptureLimits {
+    VariantBuildCaptureLimits {
+        stdout: OutputByteLimit::new(1_024).expect("stdout"),
+        stderr: OutputByteLimit::new(1_024).expect("stderr"),
+        executable: OutputByteLimit::new(
+            u64::try_from(bytes.len()).expect("executable byte length"),
+        )
+        .expect("executable limit"),
+        diagnostic: DiagnosticByteLimit::new(1_024).expect("diagnostic"),
+        evidence: EvidenceByteLimit::new(4_096).expect("evidence"),
+    }
+}
+
+fn execute_variant_build(
+    variant: &ImplementationVariantV1,
+    implementation: &[u8],
+) -> ValidatedVariantBuild {
+    let directory = tempfile::tempdir().expect("variant build state");
+    let mut content = SqliteContentStore::open(
+        directory.path().join("content.db"),
+        directory.path().join("cas"),
+    )
+    .expect("content store");
+    let mut events =
+        SqliteEventStore::open(directory.path().join("events.db")).expect("event store");
+    let environment = put::<ExecutionEnvironmentArtifact>(&mut content, b"build environment");
+    let driver = stripped_fixture(env!("CARGO_BIN_EXE_cairn-variant-build-fixture"));
+    let build = prepare_variant_build_job(
+        JobId::new(),
+        variant,
+        implementation,
+        byte_limit_for_implementation(implementation),
+        &driver,
+        VariantBuildDriverByteLimit::new(u64::try_from(driver.len()).expect("driver byte length"))
+            .expect("driver limit"),
+        environment,
+        &host_need(),
+        variant_build_capture_limits(implementation),
+    )
+    .expect("prepared variant build");
+    assert_variant_build_plan_is_strict(build.plan());
+    assert_eq!(
+        put::<InputBundleArtifact>(&mut content, build.input_bundle_bytes()),
+        build.input_bundle_id()
+    );
+    assert_eq!(
+        put::<VariantBuildPlanArtifact>(&mut content, build.plan_bytes()),
+        build.plan_id()
+    );
+    assert_variant_build_process(&build, implementation);
+    let prepared = prepare_execution_job(&mut content, build.contract()).expect("prepared build");
+    let authority = authorize_execution_attempt(
+        &mut events,
+        prepared,
+        AttemptId::new(),
+        &CommandId::new(),
+        ObservedAtUnixMillis::new(1),
+    )
+    .expect("build authority");
+    let started = begin_execution_attempt(
+        &mut events,
+        authority,
+        &CommandId::new(),
+        ObservedAtUnixMillis::new(2),
+    )
+    .expect("build start");
+    let capture = synthetic_variant_build_capture(&build, environment, implementation);
+    let mut executor =
+        ScriptedExecutor::new(move |_input: &ExecutionInput<'_>| Ok(capture.clone()));
+    let ExecutionCompletion::Completed {
+        receipt_id,
+        receipt,
+    } = execute_execution_attempt(
+        &mut events,
+        &mut content,
+        &mut executor,
+        started,
+        &CommandId::new(),
+        ObservedAtUnixMillis::new(3),
+    )
+    .expect("build completion")
+    else {
+        panic!("expected completed build");
+    };
+    let validated = validate_variant_build_receipt(&build, receipt_id, &receipt, &content)
+        .expect("validated variant build");
+    validated
+        .build_receipt()
+        .validate_inputs(&build, receipt_id, &receipt, &content)
+        .expect("recomputed build receipt");
+    assert_variant_build_receipt_is_strict(validated.build_receipt());
+    let mut changed: serde_json::Value =
+        serde_json::to_value(&receipt).expect("generic build receipt JSON");
+    changed["job_id"] = serde_json::to_value(JobId::new()).expect("job identity JSON");
+    let changed: ExecutionReceipt =
+        serde_json::from_value(changed).expect("changed generic build receipt");
+    let changed_bytes = cairn_codec::to_vec(&changed).expect("changed receipt bytes");
+    let changed_id = ContentId::<ExecutionReceiptArtifact>::derive(&changed_bytes)
+        .expect("changed receipt identity");
+    assert_eq!(
+        validate_variant_build_receipt(&build, changed_id, &changed, &content),
+        Err(VariantExecutionError::InconsistentBuildReceipt)
+    );
+    assert_eq!(validated.executable_bytes(), implementation);
+    assert_eq!(
+        put::<VariantBuildReceiptArtifact>(&mut content, validated.build_receipt_bytes()),
+        validated.build_receipt_id()
+    );
+    validated
+}
+
+fn assert_variant_build_process(
+    build: &cairn_migration::PreparedVariantBuildJob,
+    implementation: &[u8],
+) {
+    let directory = tempfile::tempdir().expect("direct build fixture root");
+    let input = directory.path().join("input");
+    let output = directory.path().join("output");
+    let work = directory.path().join("work");
+    materialize_bundle(&input, build.input_bundle()).expect("materialized build fixture");
+    fs::create_dir(&output).expect("build output root");
+    fs::create_dir(&work).expect("build work root");
+    let command = build.contract().command();
+    let process = Command::new(input.join(command.program().as_str()))
+        .args(
+            command
+                .arguments()
+                .iter()
+                .map(|argument| translate_argument(argument.as_str(), &input, &output)),
+        )
+        .current_dir(work)
+        .env_clear()
+        .output()
+        .expect("build fixture process");
+    assert!(process.status.success());
+    assert_eq!(
+        fs::read(output.join("cairn/call-adapter")).expect("built executable"),
+        implementation
+    );
+}
+
+fn synthetic_variant_build_capture(
+    build: &cairn_migration::PreparedVariantBuildJob,
+    environment: ContentId<ExecutionEnvironmentArtifact>,
+    implementation: &[u8],
+) -> ExecutionCapture {
+    let expected = &build.contract().capture().expected_outputs()[0];
+    let evidence = TrustedExecutionEvidence::new(
+        ExecutionBackend::new(HOST_FIXTURE_BACKEND).expect("backend"),
+        environment,
+        ResolvedProgramIdentity::new("variant-build-fixture-v1").expect("program identity"),
+        Vec::new(),
+    )
+    .expect("build evidence");
+    ExecutionCapture::new(
+        ExecutionOutcome::Succeeded,
+        Some(0),
+        ExecutionElapsedMillis::new(1),
+        Vec::new(),
+        Vec::new(),
+        vec![CapturedOutput {
+            name: expected.name.clone(),
+            bytes: implementation.to_vec(),
+        }],
+        evidence,
+    )
+}
+
 fn prepared_host_case() -> PreparedHostCase {
+    let executable = fs::read(env!("CARGO_BIN_EXE_cairn-call-adapter-fixture"))
+        .expect("fixture executable bytes");
+    prepared_host_case_with_executable(&executable)
+}
+
+fn prepared_host_case_with_executable(executable: &[u8]) -> PreparedHostCase {
     let domain = domain();
     let boundary = derive_mandatory_base_cases(&domain)
         .expect("boundary derivation")
@@ -554,11 +1025,9 @@ fn prepared_host_case() -> PreparedHostCase {
     )
     .expect("assembled case");
 
-    let executable = fs::read(env!("CARGO_BIN_EXE_cairn-call-adapter-fixture"))
-        .expect("fixture executable bytes");
     let adapter = prepare_boundary_call_adapter_input(
         &assembled,
-        &executable,
+        executable,
         CallAdapterExecutableByteLimit::new(
             u64::try_from(executable.len()).expect("executable length"),
         )
@@ -697,6 +1166,34 @@ fn assert_tampered_invocation_is_rejected(prepared: &PreparedHostCase) {
     assert!(!output.join("cairn/call-adapter-result.json").exists());
 }
 
+fn assert_built_adapter_process(build: &ValidatedVariantBuild, output_byte: u8) {
+    let prepared = prepared_host_case_with_executable(build.executable_bytes());
+    let directory = tempfile::tempdir().expect("direct built adapter root");
+    let input = directory.path().join("input");
+    let output = directory.path().join("output");
+    let work = directory.path().join("work");
+    materialize_bundle(&input, prepared.adapter.input_bundle()).expect("materialized adapter");
+    fs::create_dir(&output).expect("adapter output root");
+    fs::create_dir(&work).expect("adapter work root");
+    let command = prepared.adapter.command();
+    let process = Command::new(input.join(command.program().as_str()))
+        .args(
+            command
+                .arguments()
+                .iter()
+                .map(|argument| translate_argument(argument.as_str(), &input, &output)),
+        )
+        .current_dir(work)
+        .env_clear()
+        .output()
+        .expect("built adapter process");
+    assert!(process.status.success());
+    for expected in prepared.adapter.request().expected_outputs() {
+        let bytes = fs::read(output.join(expected.path().as_str())).expect("ABI output");
+        assert_eq!(bytes, vec![output_byte; bytes.len()]);
+    }
+}
+
 fn assembled_corpus(
     domain: &MigrationDomainContractV1,
 ) -> (
@@ -814,6 +1311,24 @@ fn prepare_plan_for_subject(
     subject: CorpusExecutionSubjectV1,
     cases: Vec<AssembledCorpusExecutionCase>,
 ) -> Result<PreparedCorpusExecutionPlan, CorpusExecutionPlanError> {
+    prepare_plan_for_subject_with_executable(
+        quantitative,
+        input_values,
+        memory_surfaces,
+        subject,
+        cases,
+        b"ELF",
+    )
+}
+
+fn prepare_plan_for_subject_with_executable(
+    quantitative: &MigrationMandatoryCasesV1,
+    input_values: &MandatoryInputValueCasesV1,
+    memory_surfaces: &MandatoryMemorySurfaceCasesV1,
+    subject: CorpusExecutionSubjectV1,
+    cases: Vec<AssembledCorpusExecutionCase>,
+    executable: &[u8],
+) -> Result<PreparedCorpusExecutionPlan, CorpusExecutionPlanError> {
     let need = MigrationExecutionNeed::new(
         MigrationValidationTier::V0Cpu,
         ExecutionBackend::new(HOST_FIXTURE_BACKEND).expect("backend"),
@@ -831,8 +1346,11 @@ fn prepare_plan_for_subject(
         memory_surfaces,
         subject,
         cases,
-        b"ELF",
-        CallAdapterExecutableByteLimit::new(16).expect("executable limit"),
+        executable,
+        CallAdapterExecutableByteLimit::new(
+            u64::try_from(executable.len()).expect("executable length"),
+        )
+        .expect("executable limit"),
         ContentId::<ExecutionEnvironmentArtifact>::derive(b"corpus environment")
             .expect("environment"),
         &need,
@@ -862,6 +1380,14 @@ fn complete_synthetic_corpus_for(
     subject: CorpusExecutionSubjectV1,
     output_byte: u8,
 ) -> CompletedCorpus {
+    complete_synthetic_corpus_for_with_executable(subject, output_byte, b"ELF")
+}
+
+fn complete_synthetic_corpus_for_with_executable(
+    subject: CorpusExecutionSubjectV1,
+    output_byte: u8,
+    executable: &[u8],
+) -> CompletedCorpus {
     let directory = tempfile::tempdir().expect("temporary corpus execution state");
     let mut content = SqliteContentStore::open(
         directory.path().join("content.db"),
@@ -873,12 +1399,13 @@ fn complete_synthetic_corpus_for(
     let environment = put::<ExecutionEnvironmentArtifact>(&mut content, b"corpus environment");
     let domain = domain();
     let (quantitative, input_values, memory_surfaces, cases) = assembled_corpus(&domain);
-    let plan = prepare_plan_for_subject(
+    let plan = prepare_plan_for_subject_with_executable(
         &quantitative,
         &input_values,
         &memory_surfaces,
         subject,
         cases,
+        executable,
     )
     .expect("prepared corpus plan");
     assert_eq!(
@@ -1205,6 +1732,8 @@ fn materialize_bundle(root: &Path, bundle: &InputBundleV1) -> Result<(), Executo
 fn translate_argument(value: &str, input: &Path, output: &Path) -> OsString {
     if value == "/cairn/output" {
         output.as_os_str().to_owned()
+    } else if let Some(relative) = value.strip_prefix("/cairn/output/") {
+        output.join(relative).into_os_string()
     } else if let Some(relative) = value.strip_prefix("/cairn/input/") {
         input.join(relative).into_os_string()
     } else {

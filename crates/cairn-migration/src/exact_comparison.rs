@@ -1,4 +1,4 @@
-//! Exact semantic comparison of reference and candidate corpus observations.
+//! Exact semantic comparison of reference and judged-subject corpus observations.
 
 use std::collections::BTreeSet;
 
@@ -15,7 +15,7 @@ use crate::{
     ValidatedCorpusObservationSet,
 };
 
-/// Failure to produce an exact, role-safe reference/candidate comparison.
+/// Failure to produce an exact, role-safe reference/subject comparison.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum ExactCorpusComparisonError {
     /// Only the current pre-release V1 comparison is accepted.
@@ -27,17 +27,17 @@ pub enum ExactCorpusComparisonError {
     /// The baseline plan is not explicitly bound to a reference artifact.
     #[error("exact comparison baseline must have the reference subject role")]
     ReferenceRoleRequired,
-    /// The judged plan is not explicitly bound to a candidate artifact.
-    #[error("exact comparison subject must have the candidate role")]
-    CandidateRoleRequired,
+    /// The judged plan is neither a candidate nor an admission variant.
+    #[error("exact comparison subject must have a candidate or admission-variant role")]
+    JudgedSubjectRoleRequired,
     /// Plans do not cover the same domain and mandatory obligations.
-    #[error("reference and candidate corpus plans are incompatible")]
+    #[error("reference and judged-subject corpus plans are incompatible")]
     IncompatiblePlans,
     /// Prepared plan or observation-set bytes/identities no longer agree.
     #[error("exact comparison input identity is inconsistent")]
     InconsistentInputIdentity,
     /// Paired observations disagree on ABI output metadata rather than only values.
-    #[error("reference and candidate observation shapes are incompatible")]
+    #[error("reference and judged-subject observation shapes are incompatible")]
     IncompatibleObservations,
     /// Persisted comparison collections are non-canonical or contradictory.
     #[error("exact corpus comparison is inconsistent")]
@@ -55,7 +55,7 @@ pub struct ExactOutputComparisonV1 {
     buffer: BufferName,
     byte_length: CorpusBufferByteLength,
     reference: ContentId<CallAdapterOutputBytesArtifact>,
-    candidate: ContentId<CallAdapterOutputBytesArtifact>,
+    subject: ContentId<CallAdapterOutputBytesArtifact>,
 }
 
 impl ExactOutputComparisonV1 {
@@ -80,14 +80,14 @@ impl ExactOutputComparisonV1 {
     }
 
     #[must_use]
-    pub const fn candidate(&self) -> ContentId<CallAdapterOutputBytesArtifact> {
-        self.candidate
+    pub const fn subject(&self) -> ContentId<CallAdapterOutputBytesArtifact> {
+        self.subject
     }
 
     /// Recomputes equality from the two immutable value identities.
     #[must_use]
     pub fn matches(&self) -> bool {
-        self.reference == self.candidate
+        self.reference == self.subject
     }
 }
 
@@ -97,9 +97,9 @@ impl ExactOutputComparisonV1 {
 pub struct ExactCaseComparisonV1 {
     obligation: CorpusObligationIdentityV1,
     reference_result: ContentId<CallAdapterResultArtifact>,
-    candidate_result: ContentId<CallAdapterResultArtifact>,
+    subject_result: ContentId<CallAdapterResultArtifact>,
     reference_completion: CallAdapterCompletionV1,
-    candidate_completion: CallAdapterCompletionV1,
+    subject_completion: CallAdapterCompletionV1,
     outputs: Vec<ExactOutputComparisonV1>,
 }
 
@@ -131,8 +131,8 @@ impl ExactCaseComparisonV1 {
     }
 
     #[must_use]
-    pub const fn candidate_result(&self) -> ContentId<CallAdapterResultArtifact> {
-        self.candidate_result
+    pub const fn subject_result(&self) -> ContentId<CallAdapterResultArtifact> {
+        self.subject_result
     }
 
     #[must_use]
@@ -141,8 +141,8 @@ impl ExactCaseComparisonV1 {
     }
 
     #[must_use]
-    pub const fn candidate_completion(&self) -> &CallAdapterCompletionV1 {
-        &self.candidate_completion
+    pub const fn subject_completion(&self) -> &CallAdapterCompletionV1 {
+        &self.subject_completion
     }
 
     #[must_use]
@@ -153,21 +153,21 @@ impl ExactCaseComparisonV1 {
     /// Recomputes the case-level exact match; no stored `passed` field is trusted.
     #[must_use]
     pub fn matches(&self) -> bool {
-        self.reference_completion == self.candidate_completion
+        self.reference_completion == self.subject_completion
             && self.outputs.iter().all(ExactOutputComparisonV1::matches)
     }
 }
 
-/// Strict V1 exact-comparison facts with no oracle admission or candidate verdict field.
+/// Strict V1 exact-comparison facts with no oracle admission or subject verdict field.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "ExactCorpusComparisonWire")]
 pub struct ExactCorpusComparisonV1 {
     schema_version: u16,
     domain: ContentId<CallerDomainBodyArtifact>,
     reference_plan: ContentId<CorpusExecutionPlanArtifact>,
-    candidate_plan: ContentId<CorpusExecutionPlanArtifact>,
+    subject_plan: ContentId<CorpusExecutionPlanArtifact>,
     reference_observations: ContentId<CorpusObservationSetArtifact>,
-    candidate_observations: ContentId<CorpusObservationSetArtifact>,
+    subject_observations: ContentId<CorpusObservationSetArtifact>,
     comparisons: Vec<ExactCaseComparisonV1>,
 }
 
@@ -177,9 +177,9 @@ struct ExactCorpusComparisonWire {
     schema_version: u16,
     domain: ContentId<CallerDomainBodyArtifact>,
     reference_plan: ContentId<CorpusExecutionPlanArtifact>,
-    candidate_plan: ContentId<CorpusExecutionPlanArtifact>,
+    subject_plan: ContentId<CorpusExecutionPlanArtifact>,
     reference_observations: ContentId<CorpusObservationSetArtifact>,
-    candidate_observations: ContentId<CorpusObservationSetArtifact>,
+    subject_observations: ContentId<CorpusObservationSetArtifact>,
     comparisons: Vec<ExactCaseComparisonV1>,
 }
 
@@ -187,13 +187,13 @@ impl ExactCorpusComparisonV1 {
     fn new(
         domain: ContentId<CallerDomainBodyArtifact>,
         reference_plan: ContentId<CorpusExecutionPlanArtifact>,
-        candidate_plan: ContentId<CorpusExecutionPlanArtifact>,
+        subject_plan: ContentId<CorpusExecutionPlanArtifact>,
         reference_observations: ContentId<CorpusObservationSetArtifact>,
-        candidate_observations: ContentId<CorpusObservationSetArtifact>,
+        subject_observations: ContentId<CorpusObservationSetArtifact>,
         comparisons: Vec<ExactCaseComparisonV1>,
     ) -> Result<Self, ExactCorpusComparisonError> {
-        if reference_plan == candidate_plan
-            || reference_observations == candidate_observations
+        if reference_plan == subject_plan
+            || reference_observations == subject_observations
             || comparisons.is_empty()
             || comparisons.windows(2).any(|pair| {
                 obligation_key(pair[0].obligation) >= obligation_key(pair[1].obligation)
@@ -205,10 +205,10 @@ impl ExactCorpusComparisonV1 {
             return Err(ExactCorpusComparisonError::InconsistentComparison);
         }
         let mut reference_results = BTreeSet::new();
-        let mut candidate_results = BTreeSet::new();
+        let mut subject_results = BTreeSet::new();
         if comparisons.iter().any(|comparison| {
             !reference_results.insert(comparison.reference_result.to_wire())
-                || !candidate_results.insert(comparison.candidate_result.to_wire())
+                || !subject_results.insert(comparison.subject_result.to_wire())
         }) {
             return Err(ExactCorpusComparisonError::InconsistentComparison);
         }
@@ -216,9 +216,9 @@ impl ExactCorpusComparisonV1 {
             schema_version: 1,
             domain,
             reference_plan,
-            candidate_plan,
+            subject_plan,
             reference_observations,
-            candidate_observations,
+            subject_observations,
             comparisons,
         })
     }
@@ -234,8 +234,8 @@ impl ExactCorpusComparisonV1 {
     }
 
     #[must_use]
-    pub const fn candidate_plan(&self) -> ContentId<CorpusExecutionPlanArtifact> {
-        self.candidate_plan
+    pub const fn subject_plan(&self) -> ContentId<CorpusExecutionPlanArtifact> {
+        self.subject_plan
     }
 
     #[must_use]
@@ -244,8 +244,8 @@ impl ExactCorpusComparisonV1 {
     }
 
     #[must_use]
-    pub const fn candidate_observations(&self) -> ContentId<CorpusObservationSetArtifact> {
-        self.candidate_observations
+    pub const fn subject_observations(&self) -> ContentId<CorpusObservationSetArtifact> {
+        self.subject_observations
     }
 
     #[must_use]
@@ -255,7 +255,7 @@ impl ExactCorpusComparisonV1 {
 
     /// Recomputes whether every recorded exact fact matches.
     ///
-    /// This is not an oracle admission or candidate verdict.
+    /// This is not an oracle admission or trusted adjudication.
     #[must_use]
     pub fn all_match(&self) -> bool {
         self.comparisons.iter().all(ExactCaseComparisonV1::matches)
@@ -271,15 +271,15 @@ impl ExactCorpusComparisonV1 {
         domain: &MigrationDomainContractV1,
         reference_plan: &PreparedCorpusExecutionPlan,
         reference: &ValidatedCorpusObservationSet,
-        candidate_plan: &PreparedCorpusExecutionPlan,
-        candidate: &ValidatedCorpusObservationSet,
+        subject_plan: &PreparedCorpusExecutionPlan,
+        subject: &ValidatedCorpusObservationSet,
     ) -> Result<(), ExactCorpusComparisonError> {
         let recomputed = compare_exact_corpus_observations(
             domain,
             reference_plan,
             reference,
-            candidate_plan,
-            candidate,
+            subject_plan,
+            subject,
         )?;
         if recomputed.comparison != *self {
             return Err(ExactCorpusComparisonError::InconsistentComparison);
@@ -298,15 +298,15 @@ impl TryFrom<ExactCorpusComparisonWire> for ExactCorpusComparisonV1 {
         Self::new(
             wire.domain,
             wire.reference_plan,
-            wire.candidate_plan,
+            wire.subject_plan,
             wire.reference_observations,
-            wire.candidate_observations,
+            wire.subject_observations,
             wire.comparisons,
         )
     }
 }
 
-/// Content domain for exact reference/candidate corpus-comparison facts.
+/// Content domain for exact reference/subject corpus-comparison facts.
 pub enum ExactCorpusComparisonArtifact {}
 
 impl ContentType for ExactCorpusComparisonArtifact {
@@ -338,10 +338,10 @@ impl PreparedExactCorpusComparison {
     }
 }
 
-/// Compares a proposed reference observation set with a candidate observation set byte-exactly.
+/// Compares a proposed reference observation set with a candidate or admission variant byte-exactly.
 ///
-/// The result is comparison evidence only. Reference admission and candidate verdict production
-/// remain separate trusted stages.
+/// The result is comparison evidence only. Reference admission and terminal adjudication remain
+/// separate trusted stages.
 ///
 /// # Errors
 ///
@@ -351,24 +351,24 @@ pub fn compare_exact_corpus_observations(
     domain: &MigrationDomainContractV1,
     reference_plan: &PreparedCorpusExecutionPlan,
     reference: &ValidatedCorpusObservationSet,
-    candidate_plan: &PreparedCorpusExecutionPlan,
-    candidate: &ValidatedCorpusObservationSet,
+    subject_plan: &PreparedCorpusExecutionPlan,
+    subject: &ValidatedCorpusObservationSet,
 ) -> Result<PreparedExactCorpusComparison, ExactCorpusComparisonError> {
-    validate_comparison_inputs(domain, reference_plan, reference, candidate_plan, candidate)?;
+    validate_comparison_inputs(domain, reference_plan, reference, subject_plan, subject)?;
     let comparisons = reference
         .cases()
         .iter()
-        .zip(candidate.cases())
-        .map(|(reference, candidate)| compare_case(reference, candidate))
+        .zip(subject.cases())
+        .map(|(reference, subject)| compare_case(reference, subject))
         .collect::<Result<Vec<_>, _>>()?;
     let domain_bytes = cairn_codec::to_vec(domain).map_err(codec)?;
     let domain_id = ContentId::<CallerDomainBodyArtifact>::derive(&domain_bytes).map_err(codec)?;
     let comparison = ExactCorpusComparisonV1::new(
         domain_id,
         reference_plan.plan_id(),
-        candidate_plan.plan_id(),
+        subject_plan.plan_id(),
         reference.observation_set_id(),
-        candidate.observation_set_id(),
+        subject.observation_set_id(),
         comparisons,
     )?;
     let comparison_bytes = cairn_codec::to_vec(&comparison).map_err(codec)?;
@@ -385,8 +385,8 @@ fn validate_comparison_inputs(
     domain: &MigrationDomainContractV1,
     reference_plan: &PreparedCorpusExecutionPlan,
     reference: &ValidatedCorpusObservationSet,
-    candidate_plan: &PreparedCorpusExecutionPlan,
-    candidate: &ValidatedCorpusObservationSet,
+    subject_plan: &PreparedCorpusExecutionPlan,
+    subject: &ValidatedCorpusObservationSet,
 ) -> Result<(), ExactCorpusComparisonError> {
     if domain.semantic_claim() != SemanticClaimKind::Exact {
         return Err(ExactCorpusComparisonError::NonExactDomain);
@@ -398,33 +398,34 @@ fn validate_comparison_inputs(
         return Err(ExactCorpusComparisonError::ReferenceRoleRequired);
     }
     if !matches!(
-        candidate_plan.plan().subject(),
+        subject_plan.plan().subject(),
         CorpusExecutionSubjectV1::Candidate { .. }
+            | CorpusExecutionSubjectV1::AdmissionVariant { .. }
     ) {
-        return Err(ExactCorpusComparisonError::CandidateRoleRequired);
+        return Err(ExactCorpusComparisonError::JudgedSubjectRoleRequired);
     }
     validate_plan_identity(reference_plan)?;
-    validate_plan_identity(candidate_plan)?;
+    validate_plan_identity(subject_plan)?;
     validate_observation_identity(reference_plan, reference)?;
-    validate_observation_identity(candidate_plan, candidate)?;
+    validate_observation_identity(subject_plan, subject)?;
     let domain_id =
         ContentId::<CallerDomainBodyArtifact>::derive(&cairn_codec::to_vec(domain).map_err(codec)?)
             .map_err(codec)?;
     let reference = reference_plan.plan();
-    let candidate = candidate_plan.plan();
+    let subject = subject_plan.plan();
     if reference.domain() != domain_id
-        || candidate.domain() != domain_id
-        || reference.quantitative_obligations() != candidate.quantitative_obligations()
-        || reference.input_value_obligations() != candidate.input_value_obligations()
-        || reference.memory_surface_obligations() != candidate.memory_surface_obligations()
-        || reference.items().len() != candidate.items().len()
+        || subject.domain() != domain_id
+        || reference.quantitative_obligations() != subject.quantitative_obligations()
+        || reference.input_value_obligations() != subject.input_value_obligations()
+        || reference.memory_surface_obligations() != subject.memory_surface_obligations()
+        || reference.items().len() != subject.items().len()
         || reference
             .items()
             .iter()
-            .zip(candidate.items())
-            .any(|(reference, candidate)| {
-                reference.obligation() != candidate.obligation()
-                    || reference.expected_outcome() != candidate.expected_outcome()
+            .zip(subject.items())
+            .any(|(reference, subject)| {
+                reference.obligation() != subject.obligation()
+                    || reference.expected_outcome() != subject.expected_outcome()
             })
     {
         return Err(ExactCorpusComparisonError::IncompatiblePlans);
@@ -471,24 +472,24 @@ fn validate_observation_identity(
 
 fn compare_case(
     reference: &crate::ValidatedCorpusExecutionCase,
-    candidate: &crate::ValidatedCorpusExecutionCase,
+    subject: &crate::ValidatedCorpusExecutionCase,
 ) -> Result<ExactCaseComparisonV1, ExactCorpusComparisonError> {
-    if reference.observation().obligation() != candidate.observation().obligation() {
+    if reference.observation().obligation() != subject.observation().obligation() {
         return Err(ExactCorpusComparisonError::IncompatibleObservations);
     }
     let reference_result = reference.execution().observation().result();
-    let candidate_result = candidate.execution().observation().result();
-    if reference_result.outputs().len() != candidate_result.outputs().len() {
+    let subject_result = subject.execution().observation().result();
+    if reference_result.outputs().len() != subject_result.outputs().len() {
         return Err(ExactCorpusComparisonError::IncompatibleObservations);
     }
     let outputs = reference_result
         .outputs()
         .iter()
-        .zip(candidate_result.outputs())
-        .map(|(reference, candidate)| {
-            if reference.argument_index() != candidate.argument_index()
-                || reference.buffer() != candidate.buffer()
-                || reference.byte_length() != candidate.byte_length()
+        .zip(subject_result.outputs())
+        .map(|(reference, subject)| {
+            if reference.argument_index() != subject.argument_index()
+                || reference.buffer() != subject.buffer()
+                || reference.byte_length() != subject.byte_length()
             {
                 return Err(ExactCorpusComparisonError::IncompatibleObservations);
             }
@@ -497,16 +498,16 @@ fn compare_case(
                 buffer: reference.buffer().clone(),
                 byte_length: reference.byte_length(),
                 reference: reference.bytes(),
-                candidate: candidate.bytes(),
+                subject: subject.bytes(),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ExactCaseComparisonV1 {
         obligation: reference.observation().obligation(),
         reference_result: reference.observation().result(),
-        candidate_result: candidate.observation().result(),
+        subject_result: subject.observation().result(),
         reference_completion: reference_result.completion().clone(),
-        candidate_completion: candidate_result.completion().clone(),
+        subject_completion: subject_result.completion().clone(),
         outputs,
     })
 }

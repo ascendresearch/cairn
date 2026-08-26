@@ -10,6 +10,7 @@ mod historical;
 mod input_values;
 mod materialize;
 mod memory_surface;
+mod variant_execution;
 
 pub use assemble::{
     AssembledBoundaryCaseInput, AssembledInputValueCaseInput, AssembledMemorySurfaceCaseInput,
@@ -92,6 +93,14 @@ pub use memory_surface::{
     MemorySurfaceCaseTarget, MemorySurfaceDerivationPolicy, MisalignmentOffsetBytes,
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
+};
+pub use variant_execution::{
+    ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,
+    PreparedVariantBuildJob, ValidatedVariantBuild, VariantBuildCaptureLimits,
+    VariantBuildDriverArtifact, VariantBuildDriverByteLimit, VariantBuildPlanArtifact,
+    VariantBuildPlanV1, VariantBuildReceiptArtifact, VariantBuildReceiptV1, VariantExecutionError,
+    VariantImplementationByteLimit, compose_exact_variant_trial, prepare_variant_build_job,
+    validate_variant_build_receipt,
 };
 
 use cairn_execution::{

@@ -274,11 +274,11 @@ The remaining G slices, in dependency order, are:
    collector do not substitute for CUDA/Ascend C adapters, device isolation, complete-plan dispatch,
    general numerical/property comparison, or oracle admission. The first exact-only comparison slice
    is implemented for caller domains whose semantic claim is `Exact`: it requires a `Reference` plan
-   and a `Candidate` plan over the same domain and mandatory roots, validates both observation-set
-   identities, aligns typed obligations, and records paired completion values and exact ABI-output
-   identities. Per-output, per-case, and full-set matches are recomputed rather than trusted as
-   persisted booleans. The strict comparison artifact rejects verdict fields and remains evidence,
-   not reference admission or candidate judgment.
+   and either a `Candidate` or `AdmissionVariant` subject plan over the same domain and mandatory
+   roots, validates both observation-set identities, aligns typed obligations, and records paired
+   completion values and exact ABI-output identities. Per-output, per-case, and full-set matches are
+   recomputed rather than trusted as persisted booleans. The strict comparison artifact rejects
+   verdict fields and remains evidence, not reference admission or trusted adjudication.
    Strict historical record/obligation/coverage contracts now bind provenance, target-oracle scope,
    observed stage, required detector, exact record identity, domain family, and caller-domain
    identity;
@@ -295,8 +295,13 @@ The remaining G slices, in dependency order, are:
    proof has no stored `passed` field and validates only by recomputation against its exact policy,
    mutant set, and grid. This is the trusted evidence/adjudication contract; actual mutant injection
    and execution are part of the next composition slice;
-4. execution-port composition for correct and deliberately wrong variants through the complete
-   build/execute/observe/compare path;
+4. **In progress:** exact host execution-port composition now binds correct and deliberately wrong
+   variants to implementation bytes, fixed build jobs, authoritative generic receipts, exact built
+   adapter identities, complete admission-variant plans, observation sets, comparisons, and
+   recomputed `MustAccept`/`MustReject` expectations. The fixture directly executes the build driver
+   and representative built adapters, while deterministic generic captures keep the complete host
+   corpus gate bounded. It emits no admission verdict. Real compiler/vendor/device adapters,
+   numerical/property variants, and mutation injection remain pending;
 5. the offline historical reduction control required by `ORACLE_ADMISSION.md` section 18;
 6. immutable admitted-oracle and candidate-verdict receipts with complete identity-graph audit.
 

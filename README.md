@@ -91,18 +91,25 @@ revalidates every category-specific adapter result and declared output, and emit
 observation-set identity bound to the exact plan. The set records execution observations, never a
 pass/fail verdict. The host adapter is a protocol fixture, not an admitted oracle or a production
 unsandboxed executor. For domains explicitly requesting exact semantics, a role-safe comparison
-slice now accepts only `Reference` versus `Candidate` plans over identical mandatory obligations,
-aligns every typed case, and records both completion values plus both exact ABI-output identities.
-Match status is recomputed from those facts; the artifact has no stored `passed` field and does not
-promote a proposed reference into an admitted oracle or candidate verdict.
+slice now accepts `Reference` versus either `Candidate` or `AdmissionVariant` plans over identical
+mandatory obligations, aligns every typed case, and records reference and subject completion values
+plus exact ABI-output identities. Match status is recomputed from those facts; the artifact has no
+stored `passed` field and does not promote a proposed reference into an admitted oracle or trusted
+adjudication.
 Trusted mutation evidence now has its own domain-neutral V1 contracts. A policy selects one exact
 content-addressed generic-mutant set; a complete grid requires every mutant/case cell and records
 policy-sized, scale-free, case-dependent, or explicitly non-injectable trials with separately typed
 injection, execution, and comparison evidence. Proof obligations are recomputed from the grid:
 policy-sized and scale-free misses are fatal, case-dependent misses remain mandatory blind spots,
 an empty applicable grid fails, and comparator-only evidence cannot claim to have exercised the
-implementation observation path. The proof artifact has no stored `passed` field. Actual mutant
-injection and variant execution through vendor adapters remain unfinished.
+implementation observation path. The proof artifact has no stored `passed` field. An exact host
+composition gate now binds each correct or deliberately wrong admission variant to its implementation
+bytes, a fixed no-shell build job, an authoritative generic receipt, the exact produced adapter
+executable, a complete admission-variant corpus plan, observations, comparison, and recomputed
+`MustAccept`/`MustReject` expectation. Its build fixture is an identity-preserving host fixture rather
+than a compiler, and the complete corpus uses deterministic execution captures after separately
+exercising the real build and representative adapter processes. Actual mutant injection, CUDA/Ascend
+C compilation, and full device execution through vendor adapters remain unfinished.
 
 The remaining architecture in the normative documents is target design. Old Cairn and Alloyport are
 evidence references, not source trees to copy mechanically.

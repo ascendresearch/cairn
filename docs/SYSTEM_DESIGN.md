@@ -1124,16 +1124,32 @@ category and full validated execution. This is an execution-completeness record 
 cannot carry a pass/fail verdict, numerical comparison, oracle admission, or candidate judgment.
 
 **Implemented exact corpus-comparison slice (2026-08-26).** For a caller domain explicitly marked
-`Exact`, trusted product comparison now accepts only a `Reference` execution plan and a `Candidate`
-plan. Both plans must cite the exact caller-domain identity and identical quantitative, dtype, and
-memory obligation roots; every obligation and expected outcome must align even though executable,
-tier, job, contract, receipt, and result identities may differ. Both observation sets are rechecked
-against their own plans and canonical identities before comparison. Each strict V1 case fact records
-the typed obligation, both adapter-result identities, both completion values, and for every ABI
-output its shared typed metadata plus reference and candidate byte identities. Equality is always
-recomputed from those facts at output, case, and corpus level; there is no stored `passed` summary.
-The artifact rejects verdict fields. It is useful comparison evidence, but a proposed reference has
-not thereby passed oracle admission and an all-match result is not yet a candidate verdict.
+`Exact`, trusted product comparison now accepts a `Reference` execution plan and either a `Candidate`
+or `AdmissionVariant` subject plan. Both plans must cite the exact caller-domain identity and
+identical quantitative, dtype, and memory obligation roots; every obligation and expected outcome
+must align even though executable, tier, job, contract, receipt, and result identities may differ.
+Both observation sets are rechecked against their own plans and canonical identities before
+comparison. Each strict V1 case fact records the typed obligation, both adapter-result identities,
+both completion values, and for every ABI output its shared typed metadata plus reference and subject
+byte identities. Equality is always recomputed from those facts at output, case, and corpus level;
+there is no stored `passed` summary. The artifact rejects verdict fields. It is useful comparison
+evidence, but a proposed reference has not thereby passed oracle admission and an all-match result
+is not yet trusted adjudication.
+
+**Implemented exact admission-variant host composition slice (2026-08-26).** A strict variant-build
+plan now binds one correct or deliberately wrong admission variant, its exact implementation bytes,
+a bounded build-driver executable, canonical input bundle, fixed no-shell command, environment,
+resources, capture limits, migration tier, and generic job contract. An authoritative successful
+generic receipt is checked against those identities, and the declared product bytes are loaded from
+typed content storage to derive the exact call-adapter executable identity. A complete corpus plan
+then uses the `AdmissionVariant` role and that executable. The resulting exact trial binds the
+proposal expectation, build receipt, reference and subject plans and observations, and recomputed
+comparison; `MustAccept` means the complete comparison matches and `MustReject` means it does not.
+No persisted `passed` field or admission verdict exists. The host gate executes its identity build
+fixture and representative built adapters as real processes, but uses bounded deterministic generic
+captures for the complete corpus. It proves composition and identity flow, not compilation or
+device semantics; CUDA/Ascend C compiler adapters, full device execution, numerical/property
+comparison, and mutation injection remain pending.
 
 **Implemented mutation-grid contract slice (2026-08-26).** `AdmissionPolicyV1` now cites one exact
 content-addressed trusted generic-mutant set. A strict V1 mutation grid binds that policy, the tested
@@ -1148,8 +1164,9 @@ recomputation derives empty-applicable-grid failure, required fault-class covera
 path failures, fatal policy-sized/scale-free misses, mandatory case-dependent blind spots, and every
 non-injectable cell. The strict proof rejects a stored `passed` field and validates only by full
 recomputation against the cited policy, mutant set, and grid. These contracts do not yet inject or
-execute mutants; correct/wrong variant and mutation execution through the shared execution port
-remain the next M2 composition slice.
+execute mutants. The exact correct/wrong host composition slice above now exercises the shared
+execution contracts; real compiler/vendor/device variant execution and mutation injection remain
+the next M2 work.
 
 Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
 one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
