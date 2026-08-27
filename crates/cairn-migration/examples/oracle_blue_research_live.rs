@@ -908,6 +908,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal_reason = %debate_terminal_reason,
         "oracle debate completed"
     );
+    let ascend_c_test_blockers = [
+        "Blue draft input is descriptive text, not a typed ABI-ordered input manifest",
+        "the invocation names a framework call rather than an archived call-adapter contract",
+        "expected dtype, shape, and values are not separate typed fields with materialized bytes",
+        "no typed comparison artifact binds candidate output bytes to this draft",
+    ];
+    tracing::warn!(
+        target: "cairn.oracle.dogfood",
+        event = "oracle_downstream_not_ready",
+        sample = sample.name,
+        blocker_count = ascend_c_test_blockers.len(),
+        "dogfood draft is not an executable Ascend C test artifact"
+    );
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
@@ -932,6 +945,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "stability_rechecks": stability_rechecks,
             "debate_converged": debate_converged,
             "debate_terminal_reason": debate_terminal_reason,
+            "ascend_c_test_readiness": {
+                "ready": false,
+                "blocking_contracts": ascend_c_test_blockers,
+                "semantic_debate_is_not_admission": true
+            },
             "restart_request_byte_identical": true,
             "research_tool_loop_completed": true,
             "upstream_license_queried": false,
@@ -998,15 +1016,16 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
     {
         let mut usage = Vec::new();
         for repair in 0..=max_repairs {
+            let attempt = ModelAttemptId::new();
             tracing::info!(
                 target: "cairn.oracle.submission",
                 event = "structured_submission_attempt_started",
                 role,
+                model_attempt_id = %attempt,
                 attempt = repair + 1,
                 maximum_attempts = max_repairs + 1,
                 "structured model submission attempt started"
             );
-            let attempt = ModelAttemptId::new();
             let received = dispatch(
                 self.events,
                 self.content,
@@ -1058,6 +1077,7 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
                                 target: "cairn.oracle.submission",
                                 event = "structured_submission_accepted",
                                 role,
+                                model_attempt_id = %attempt,
                                 repairs = repair,
                                 "structured model submission accepted"
                             );
@@ -1080,6 +1100,7 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
                 target: "cairn.oracle.submission",
                 event = "structured_submission_rejected",
                 role,
+                model_attempt_id = %attempt,
                 attempt = repair + 1,
                 maximum_attempts = max_repairs + 1,
                 diagnostic = %diagnostic,

@@ -161,6 +161,23 @@ evidence. Observed outputs exceeded the former 8k ceiling once, directly validat
 limit. No response approached 131,072 tokens, so the new value remains headroom for complete future
 artifacts rather than expected per-turn consumption.
 
+The first post-logging `matmul-zero-k` live-GitHub run made six model requests and one research tool
+call in 353 seconds wall time. Structured events attributed 88,472 input tokens, 17,159 output
+tokens, 67,072 cache-read tokens, 348 seconds of provider time, and 4.5 seconds of GitHub tool time.
+Blue needed no JSON repair; Red passed the first draft and all three focused stability rechecks.
+The draft correctly specified `[2,0] x [0,3] -> [2,3]`, six exact `f32` zeros, caller-contract
+identity semantics, irrelevant retrieved evidence, and unverified zero-work kernel dispatch.
+
+That run also proved that semantic convergence is not downstream readiness. The draft still encoded
+input, framework invocation, expected dtype/shape/values, and comparison intent as descriptive
+strings. It had no ABI-ordered typed input manifest, materialized buffer bytes, archived Ascend C
+call-adapter contract, or candidate-output comparison artifact; Red's final advisory independently
+noticed that output dtype was only inferable. The gate now emits an explicit
+`ascend_c_test_readiness.ready=false` body and `oracle_downstream_not_ready` warning with these
+missing contracts. A Red pass cannot be mistaken for production admission or an executable target
+test. Structured submission events also cite their exact model-attempt identity, so a long provider
+request no longer requires adjacency-based correlation.
+
 This still does not accept the complete Oracle Agent:
 
 - move the dogfood-only typed draft/review bodies into the production Blue/Red submission gateways

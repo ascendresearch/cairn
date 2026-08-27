@@ -545,6 +545,12 @@ Post-audit live runs over non-contiguous sum, empty-axis max, and NaN sum made 6
 requests respectively. Empty-axis max exercised a real Red-blocker/changed-Blue-revision round;
 all three then completed three blocker-free stability rechecks. One Red response used 14,868 output
 tokens, exceeding the former 8k ceiling and providing direct evidence for the enlarged headroom.
+The first run after structured logging covered zero-K matmul in six provider requests with no
+submission repair or Red blocker. It produced the correct semantic result, but a downstream audit
+failed it explicitly because the dogfood draft still lacks typed ABI arguments, materialized bytes,
+an archived call adapter, and comparison evidence. The gate now reports this separately from debate
+convergence. G13 cannot complete until a live model-authored draft materializes through those
+existing execution ports.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.
