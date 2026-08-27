@@ -6,6 +6,7 @@ mod corpus_execution;
 mod corpus_observation;
 mod domain;
 mod exact_comparison;
+mod executable_oracle;
 mod external_research;
 mod historical;
 mod input_values;
@@ -36,9 +37,11 @@ pub use call_adapter::{
     CallAdapterRequestV1, CallAdapterResultArtifact, CallAdapterResultV1,
     CorpusInvocationIdentityV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
     ValidatedCallAdapterExecution, ValidatedCallAdapterObservation, compose_call_adapter_job,
-    prepare_boundary_call_adapter_input, prepare_input_value_call_adapter_input,
-    prepare_memory_surface_call_adapter_input, validate_boundary_call_adapter_capture,
-    validate_boundary_call_adapter_receipt, validate_input_value_call_adapter_capture,
+    prepare_boundary_call_adapter_input, prepare_executable_oracle_call_adapter_input,
+    prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
+    validate_boundary_call_adapter_capture, validate_boundary_call_adapter_receipt,
+    validate_executable_oracle_call_adapter_capture,
+    validate_executable_oracle_call_adapter_receipt, validate_input_value_call_adapter_capture,
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
     validate_memory_surface_call_adapter_receipt,
 };
@@ -70,6 +73,15 @@ pub use exact_comparison::{
     ExactCaseComparisonV1, ExactCorpusComparisonArtifact, ExactCorpusComparisonError,
     ExactCorpusComparisonV1, ExactOutputComparisonV1, PreparedExactCorpusComparison,
     compare_exact_corpus_observations,
+};
+pub use executable_oracle::{
+    AssembledExecutableOracleCaseInput, ExecutableOracleComparisonV1, ExecutableOracleError,
+    ExecutableOracleInputBufferV1, ExecutableOracleInputBytesArtifact,
+    ExecutableOracleInvocationArtifact, ExecutableOracleInvocationV1,
+    ExecutableOracleOutputBufferV1, ExecutableOracleOutputComparisonArtifact,
+    ExecutableOracleOutputComparisonV1, OracleF32Bits, OracleMatrixShapeV1,
+    PreparedExecutableOracleOutputComparison, ZeroKMatmulF32OracleCaseV1,
+    assemble_zero_k_matmul_f32_oracle, compare_executable_oracle_output,
 };
 pub use external_research::{
     ArchivedExternalTestEvidence, ExternalResearchPolicy, ExternalResearchProvider,

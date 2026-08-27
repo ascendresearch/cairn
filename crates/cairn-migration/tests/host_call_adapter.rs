@@ -34,14 +34,16 @@ use cairn_migration::{
     ValidatedCorpusObservationSet, ValidatedVariantBuild, VariantBuildCaptureLimits,
     VariantBuildDriverByteLimit, VariantBuildPlanArtifact, VariantBuildPlanV1,
     VariantBuildReceiptArtifact, VariantBuildReceiptV1, VariantExecutionError,
-    VariantImplementationByteLimit, assemble_boundary_case_input, assemble_input_value_case_input,
-    assemble_memory_surface_case_input, compare_exact_corpus_observations,
-    compose_call_adapter_job, compose_exact_variant_trial, derive_mandatory_base_cases,
-    derive_mandatory_input_value_cases, derive_mandatory_memory_surface_cases,
-    materialize_input_value_case, prepare_boundary_call_adapter_input,
-    prepare_corpus_execution_plan, prepare_variant_build_job,
+    VariantImplementationByteLimit, ZeroKMatmulF32OracleCaseV1, assemble_boundary_case_input,
+    assemble_input_value_case_input, assemble_memory_surface_case_input,
+    assemble_zero_k_matmul_f32_oracle, compare_exact_corpus_observations,
+    compare_executable_oracle_output, compose_call_adapter_job, compose_exact_variant_trial,
+    derive_mandatory_base_cases, derive_mandatory_input_value_cases,
+    derive_mandatory_memory_surface_cases, materialize_input_value_case,
+    prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
+    prepare_executable_oracle_call_adapter_input, prepare_variant_build_job,
     validate_boundary_call_adapter_receipt, validate_corpus_execution_receipts,
-    validate_variant_build_receipt,
+    validate_executable_oracle_call_adapter_capture, validate_variant_build_receipt,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
@@ -53,6 +55,86 @@ use cairn_verification::{
 };
 
 const HOST_FIXTURE_BACKEND: &str = "host-fixture-v1";
+
+#[test]
+fn model_authored_zero_k_oracle_runs_through_the_real_adapter_protocol() {
+    let proposal: ZeroKMatmulF32OracleCaseV1 = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "case_name": "matmul-zero-k",
+        "lhs_argument": 0,
+        "rhs_argument": 1,
+        "output_argument": 2,
+        "lhs_shape": {"rows": 2, "columns": 0},
+        "rhs_shape": {"rows": 0, "columns": 3},
+        "output_shape": {"rows": 2, "columns": 3},
+        "lhs_bits": [],
+        "rhs_bits": [],
+        "expected_output_bits": [0, 0, 0, 0, 0, 0],
+        "comparison": "f32-numeric-exact"
+    }))
+    .expect("typed Blue proposal");
+    proposal
+        .validate_matmul_zero_k_sample()
+        .expect("sample contract");
+    let assembled = assemble_zero_k_matmul_f32_oracle(&proposal).expect("materialized Oracle");
+    let executable = fs::read(env!("CARGO_BIN_EXE_cairn-call-adapter-fixture"))
+        .expect("fixture executable bytes");
+    let prepared = prepare_executable_oracle_call_adapter_input(
+        &assembled,
+        &executable,
+        CallAdapterExecutableByteLimit::new(
+            u64::try_from(executable.len()).expect("executable length"),
+        )
+        .expect("executable limit"),
+    )
+    .expect("call-adapter input");
+
+    let directory = tempfile::tempdir().expect("adapter roots");
+    let input_root = directory.path().join("input");
+    let output_root = directory.path().join("output");
+    materialize_bundle(&input_root, prepared.input_bundle()).expect("materialize adapter input");
+    fs::create_dir_all(&output_root).expect("output root");
+    let process = Command::new(input_root.join("cairn/bin/call-adapter"))
+        .args([
+            "--request",
+            input_root
+                .join("cairn/call-adapter-request.json")
+                .to_str()
+                .expect("request path"),
+            "--output-root",
+            output_root.to_str().expect("output root path"),
+        ])
+        .env_clear()
+        .output()
+        .expect("run adapter");
+    assert!(
+        process.status.success(),
+        "adapter stderr: {}",
+        String::from_utf8_lossy(&process.stderr)
+    );
+    let observed_bytes =
+        fs::read(output_root.join("cairn/abi/arg-00002.bin")).expect("observed output");
+    let captured = vec![
+        CapturedOutput {
+            name: cairn_execution::OutputName::new("call-adapter-result").expect("result name"),
+            bytes: fs::read(output_root.join("cairn/call-adapter-result.json"))
+                .expect("result manifest"),
+        },
+        CapturedOutput {
+            name: cairn_execution::OutputName::new("abi-output-00002").expect("output name"),
+            bytes: observed_bytes.clone(),
+        },
+    ];
+    let observation =
+        validate_executable_oracle_call_adapter_capture(&assembled, &prepared, &captured)
+            .expect("validated capture");
+    assert_eq!(observation.result().outputs().len(), 1);
+    assert!(
+        compare_executable_oracle_output(&assembled, &observed_bytes)
+            .expect("exact comparison")
+            .matches()
+    );
+}
 
 struct PreparedHostCase {
     assembled: AssembledBoundaryCaseInput,

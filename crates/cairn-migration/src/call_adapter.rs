@@ -15,9 +15,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::{
-    ArgumentIndex, AssembledBoundaryCaseInput, AssembledInputValueCaseInput,
-    AssembledMemorySurfaceCaseInput, BufferName, CaseExpectedOutcome, CorpusBufferByteLength,
-    InvalidInputBehavior, MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact,
+    ArgumentIndex, AssembledBoundaryCaseInput, AssembledExecutableOracleCaseInput,
+    AssembledInputValueCaseInput, AssembledMemorySurfaceCaseInput, BufferName, CaseExpectedOutcome,
+    CorpusBufferByteLength, ExecutableOracleInvocationArtifact, InvalidInputBehavior,
+    MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact,
     MaterializedInputValueCaseArtifact, MaterializedMemorySurfaceCaseArtifact,
     MigrationExecutionNeed, MigrationValidationTier, StatusCode,
 };
@@ -108,6 +109,10 @@ impl ContentType for CallAdapterExecutableArtifact {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CorpusInvocationIdentityV1 {
+    /// Model-authored proposal materialized into an adapter-visible typed invocation.
+    ExecutableOracle {
+        manifest: ContentId<ExecutableOracleInvocationArtifact>,
+    },
     /// Quantitative boundary invocation.
     Boundary {
         manifest: ContentId<MaterializedBoundaryCaseArtifact>,
@@ -733,6 +738,38 @@ pub fn prepare_memory_surface_call_adapter_input(
     )
 }
 
+/// Binds one materialized executable-Oracle proposal to an exact isolated adapter executable.
+///
+/// The expected bytes remain in the assembled Oracle case and are not copied into the adapter
+/// input bundle. Only output allocation metadata enters the process request.
+///
+/// # Errors
+///
+/// Rejects empty/oversized executable bytes, contradictory source material, or protocol failure.
+pub fn prepare_executable_oracle_call_adapter_input(
+    case: &AssembledExecutableOracleCaseInput,
+    executable: &[u8],
+    limit: CallAdapterExecutableByteLimit,
+) -> Result<PreparedCallAdapterInput, CallAdapterProtocolError> {
+    let output = case.invocation().output();
+    prepare_with_outputs(
+        case.input_bundle(),
+        case.input_bundle_bytes(),
+        case.input_bundle_id(),
+        CorpusInvocationIdentityV1::ExecutableOracle {
+            manifest: case.invocation_id(),
+        },
+        vec![CallAdapterExpectedOutputV1 {
+            argument_index: output.argument_index(),
+            buffer: output.buffer().clone(),
+            byte_length: output.byte_length(),
+            path: output_path(output.argument_index())?,
+        }],
+        executable,
+        limit,
+    )
+}
+
 /// Validates a boundary-case adapter capture against its exact request and expected outcome.
 ///
 /// # Errors
@@ -792,6 +829,26 @@ pub fn validate_memory_surface_call_adapter_capture(
             manifest: case.manifest_id(),
         },
         case.manifest().expected_outcome(),
+        captured,
+    )
+}
+
+/// Validates an executable-Oracle adapter capture against its exact typed request.
+///
+/// # Errors
+///
+/// Rejects request/case mismatch, missing/extra/tampered files, or non-invocation completion.
+pub fn validate_executable_oracle_call_adapter_capture(
+    case: &AssembledExecutableOracleCaseInput,
+    prepared: &PreparedCallAdapterInput,
+    captured: &[CapturedOutput],
+) -> Result<ValidatedCallAdapterObservation, CallAdapterProtocolError> {
+    validate_capture(
+        prepared,
+        CorpusInvocationIdentityV1::ExecutableOracle {
+            manifest: case.invocation_id(),
+        },
+        &CaseExpectedOutcome::Success,
         captured,
     )
 }
@@ -880,6 +937,32 @@ pub fn validate_memory_surface_call_adapter_receipt<C: ContentStore>(
             manifest: case.manifest_id(),
         },
         case.manifest().expected_outcome(),
+    )
+}
+
+/// Validates an authoritative successful execution receipt for an executable-Oracle case.
+///
+/// # Errors
+///
+/// Rejects mismatched execution authority, unreadable content, or invalid adapter capture.
+pub fn validate_executable_oracle_call_adapter_receipt<C: ContentStore>(
+    case: &AssembledExecutableOracleCaseInput,
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    content: &C,
+) -> Result<ValidatedCallAdapterExecution, CallAdapterProtocolError> {
+    validate_receipt(
+        input,
+        job,
+        receipt_id,
+        receipt,
+        content,
+        CorpusInvocationIdentityV1::ExecutableOracle {
+            manifest: case.invocation_id(),
+        },
+        &CaseExpectedOutcome::Success,
     )
 }
 
@@ -1076,6 +1159,31 @@ fn prepare(
     executable: &[u8],
     limit: CallAdapterExecutableByteLimit,
 ) -> Result<PreparedCallAdapterInput, CallAdapterProtocolError> {
+    let outputs = if expected_outcome == &CaseExpectedOutcome::Success {
+        expected_outputs(arguments)?
+    } else {
+        Vec::new()
+    };
+    prepare_with_outputs(
+        source,
+        source_bytes,
+        source_id,
+        invocation,
+        outputs,
+        executable,
+        limit,
+    )
+}
+
+fn prepare_with_outputs(
+    source: &InputBundleV1,
+    source_bytes: &[u8],
+    source_id: ContentId<InputBundleArtifact>,
+    invocation: CorpusInvocationIdentityV1,
+    outputs: Vec<CallAdapterExpectedOutputV1>,
+    executable: &[u8],
+    limit: CallAdapterExecutableByteLimit,
+) -> Result<PreparedCallAdapterInput, CallAdapterProtocolError> {
     if executable.is_empty() {
         return Err(CallAdapterProtocolError::EmptyExecutable);
     }
@@ -1089,11 +1197,6 @@ fn prepare(
     }
     let executable_id =
         ContentId::<CallAdapterExecutableArtifact>::derive(executable).map_err(codec)?;
-    let outputs = if expected_outcome == &CaseExpectedOutcome::Success {
-        expected_outputs(arguments)?
-    } else {
-        Vec::new()
-    };
     let request = CallAdapterRequestV1::new(source_id, invocation, executable_id, outputs)?;
     let request_bytes = cairn_codec::to_vec(&request).map_err(codec)?;
     let request_id =

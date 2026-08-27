@@ -178,11 +178,44 @@ missing contracts. A Red pass cannot be mistaken for production admission or an 
 test. Structured submission events also cite their exact model-attempt identity, so a long provider
 request no longer requires adjacency-based correlation.
 
+The next V1 slice closes those four material-readiness defects specifically for
+`matmul-zero-k`. Blue now includes a strict `executable_case` with ABI indices, rank-two shapes,
+raw IEEE-754 `f32` bit arrays, and a typed comparator. Cairn—not the model—revalidates
+`[2,0] x [0,3] -> [2,3]`, zero input element counts, six numerical-zero output values, comparator
+strength, and all byte arithmetic. It deterministically emits the adapter-visible invocation, two
+empty input files, a canonical input bundle, 24 expected-output bytes held outside that bundle, and
+typed content identities. The `f32-numeric-exact` comparator retains raw expected/observed
+identities but normalizes signed zero before recomputing equality; a unit control proves `-0.0`
+passes numeric exact and fails bit exact. A real host call-adapter integration test consumes the
+same model-shaped JSON through the fixed process CLI and output comparator.
+
+Four consecutive live runs were intentionally retained because each exposed a different contract
+edge. The first produced executable bit-exact material but Red advised that signed-zero semantics
+were ambiguous. A mistakenly hard-coded `exact-bits` output instruction then caused six Blue/Red
+revision rounds to exhaust: Blue cited the format instruction as semantic authority while Red
+correctly observed that the caller only required an additive identity. After the prompt stopped
+hard-coding the answer, another run passed because Red inconsistently accepted the same signed-zero
+overconstraint. This proved that model debate cannot be the trusted claim-strength gate. V1 now
+deterministically rejects bit exactness for this caller contract, which leaves zero sign
+unspecified, while retaining the closed comparator variant for a future caller that explicitly
+requires it.
+
+The final live-GitHub run used seven model requests and one research operation. It consumed 128,419
+input tokens, 34,024 output tokens, and 106,240 cache-read tokens. Blue repaired one invalid string
+ABI index in the same continuation, then submitted zero-tolerance numeric comparison paired with
+`f32-numeric-exact`; Red passed the frozen draft and all three focused stability rechecks. Cairn
+materialized a 24-byte reference held outside the candidate bundle and emitted
+`ascend_c_test_readiness.ready=true` with no blocking material contracts. Readiness is explicitly
+scoped to one executable case: it is not sufficient for a candidate verdict. A nonzero-K matmul
+with nonzero expected values remains a mandatory corpus companion so an unconditional zero-fill
+implementation cannot pass. A candidate-specific CUDA or Ascend C adapter executable and Oracle
+admission are also still required.
+
 This still does not accept the complete Oracle Agent:
 
-- move the dogfood-only typed draft/review bodies into the production Blue/Red submission gateways
-  and materialize every referenced executable body, rather than asking the model to invent
-  pre-existing content IDs;
+- move the remaining dogfood-only draft/review envelope into the production Blue/Red submission
+  gateways and generalize the proven zero-K executable body to other admitted case kinds; Cairn
+  must continue deriving all content IDs from locally materialized bytes;
 - drive the loop through the generic durable `AgentEpisode` coordinator under the configured turn
   and cumulative-token budgets;
 - execute complete Blue proposal submission, isolated Red attacks, trusted feedback/revision, and

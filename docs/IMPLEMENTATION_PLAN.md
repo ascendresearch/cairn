@@ -548,9 +548,19 @@ tokens, exceeding the former 8k ceiling and providing direct evidence for the en
 The first run after structured logging covered zero-K matmul in six provider requests with no
 submission repair or Red blocker. It produced the correct semantic result, but a downstream audit
 failed it explicitly because the dogfood draft still lacks typed ABI arguments, materialized bytes,
-an archived call adapter, and comparison evidence. The gate now reports this separately from debate
-convergence. G13 cannot complete until a live model-authored draft materializes through those
-existing execution ports.
+an archived call adapter, and comparison evidence. The gate reported this separately from debate
+convergence and made materialization through the existing execution ports the next gate. The
+current V1 implementation now requires a model-authored typed zero-K `f32` body, revalidates the
+fixed caller sample and claim strength, materializes little-endian input/reference bytes and typed
+identities, excludes reference bytes from the candidate bundle, and binds the invocation to the
+existing call-adapter protocol. Numeric exact comparison normalizes signed zero while retaining raw
+content identities. Integration controls launch the real host fixture and prove capture validation,
+`+0/-0` equivalence under numeric exact, and inequality under bit exact. Four live iterations then
+exposed and fixed the signed-zero authority boundary: Red disagreement is not trusted admission
+policy. The final run repaired one typed ABI-index error, converged without a Blue/Red revision,
+completed three stability rechecks, and materialized a downstream-ready single case. G13 remains
+incomplete until the production proposal/admission graph consumes this material and a nonzero-K
+companion prevents an unconditional-zero false accept.
 
 The real execution deployment prerequisite is now in place: managed V1 workers on the AArch64 GB10
 and x86-64 Ascend hosts are durably registered and heartbeating through isolated reverse tunnels.

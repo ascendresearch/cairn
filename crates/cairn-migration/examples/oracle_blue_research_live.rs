@@ -18,15 +18,17 @@ use cairn_agent::{
     execute_tool_operation, prepare_native_dispatch_request, prepare_tool_operation,
 };
 use cairn_migration::{
-    ExternalResearchPolicy, ExternalResearchProvider, ExternalResearchProviderError,
-    ExternalTestCaseV1, ExternalTestResearchContextV1, ExternalTestSearchGateway,
-    ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1, ExternalTestSearchResultV1,
-    GitHubBlobIdentity, GitHubExternalResearchProvider, GitHubRepository, OracleAgentRole,
-    OracleRoleEpisodeInput, OracleRolePromptInput, OracleSearchPlanInput, OracleSearchPlanV1,
-    RecordedExternalResearchExchange, RecordedExternalResearchProvider, SearchResultLimit,
-    SourcePath, archive_external_test_evidence, archive_oracle_role_tool_catalog,
-    archive_standard_oracle_instructions, external_test_search_registration,
-    materialize_oracle_prompt, prepare_oracle_role_episode, prepare_oracle_role_prompt,
+    ExecutableOracleComparisonV1, ExternalResearchPolicy, ExternalResearchProvider,
+    ExternalResearchProviderError, ExternalTestCaseV1, ExternalTestResearchContextV1,
+    ExternalTestSearchGateway, ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1,
+    ExternalTestSearchResultV1, GitHubBlobIdentity, GitHubExternalResearchProvider,
+    GitHubRepository, OracleAgentRole, OracleRoleEpisodeInput, OracleRolePromptInput,
+    OracleSearchPlanInput, OracleSearchPlanV1, RecordedExternalResearchExchange,
+    RecordedExternalResearchProvider, SearchResultLimit, SourcePath, ZeroKMatmulF32OracleCaseV1,
+    archive_external_test_evidence, archive_oracle_role_tool_catalog,
+    archive_standard_oracle_instructions, assemble_zero_k_matmul_f32_oracle,
+    external_test_search_registration, materialize_oracle_prompt, prepare_oracle_role_episode,
+    prepare_oracle_role_prompt,
 };
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, EpisodeId,
@@ -65,6 +67,7 @@ struct BlueDogfoodDraftV1 {
     evidence_assessment: String,
     assumptions: Vec<String>,
     unverified: Vec<String>,
+    executable_case: Option<ZeroKMatmulF32OracleCaseV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -79,6 +82,7 @@ enum DraftExpectationV1 {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum DraftComparisonV1 {
     Exact,
+    ExactBits,
     Numeric {
         absolute_tolerance: String,
         relative_tolerance: String,
@@ -220,7 +224,9 @@ impl BlueDogfoodDraftV1 {
             (&self.expectation, &self.comparison),
             (
                 DraftExpectationV1::Exact { .. },
-                DraftComparisonV1::Exact | DraftComparisonV1::Numeric { .. }
+                DraftComparisonV1::Exact
+                    | DraftComparisonV1::ExactBits
+                    | DraftComparisonV1::Numeric { .. }
             ) | (
                 DraftExpectationV1::Property { .. },
                 DraftComparisonV1::Property
@@ -254,6 +260,51 @@ impl BlueDogfoodDraftV1 {
             }
         }
         Ok(())
+    }
+
+    fn validate_for_sample(&self, sample: &DogfoodSample) -> Result<(), String> {
+        self.validate()?;
+        if self.case_name != sample.name {
+            return Err(format!(
+                "case_name must equal the selected sample name {}; received {}",
+                sample.name, self.case_name
+            ));
+        }
+        match (sample.name, &self.executable_case) {
+            ("matmul-zero-k", Some(case)) => {
+                case.validate_matmul_zero_k_sample()
+                    .map_err(|error| format!("executable_case is invalid: {error}"))?;
+                let aligned = match (&self.comparison, case.comparison()) {
+                    (DraftComparisonV1::ExactBits, ExecutableOracleComparisonV1::ExactBits) => true,
+                    (
+                        DraftComparisonV1::Numeric {
+                            absolute_tolerance,
+                            relative_tolerance,
+                            ulp_tolerance: 0,
+                            nan_equal: false,
+                        },
+                        ExecutableOracleComparisonV1::F32NumericExact,
+                    ) => decimal_is_zero(absolute_tolerance) && decimal_is_zero(relative_tolerance),
+                    _ => false,
+                };
+                if !aligned {
+                    return Err(
+                        "top-level and executable_case comparators disagree; use exact-bits with exact-bits, or zero-tolerance numeric with f32-numeric-exact"
+                            .to_owned(),
+                    );
+                }
+                Ok(())
+            }
+            ("matmul-zero-k", None) => Err(
+                "executable_case is required for matmul-zero-k and must be a typed zero-K f32 case"
+                    .to_owned(),
+            ),
+            (_, Some(_)) => Err(format!(
+                "executable_case must be null for sample {}; this dogfood slice only materializes matmul-zero-k",
+                sample.name
+            )),
+            (_, None) => Ok(()),
+        }
     }
 }
 
@@ -660,7 +711,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         live.workflow.blue_submission_repairs,
         "Blue draft",
         blue_dogfood_contract(),
-        BlueDogfoodDraftV1::validate,
+        |candidate: &BlueDogfoodDraftV1| candidate.validate_for_sample(&sample),
     )?;
     let mut blue_usage = blue_turn.usage;
     let mut blue_repairs = blue_turn.repairs;
@@ -769,7 +820,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Blue revision",
                     blue_dogfood_contract(),
                     |candidate: &BlueDogfoodDraftV1| {
-                        candidate.validate()?;
+                        candidate.validate_for_sample(&sample)?;
                         let bytes = cairn_codec::to_vec(candidate)
                             .map_err(|error| format!("cannot encode candidate revision: {error}"))?;
                         let candidate_id = ContentId::<BlueDogfoodDraftArtifact>::derive(&bytes)
@@ -908,19 +959,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal_reason = %debate_terminal_reason,
         "oracle debate completed"
     );
-    let ascend_c_test_blockers = [
-        "Blue draft input is descriptive text, not a typed ABI-ordered input manifest",
-        "the invocation names a framework call rather than an archived call-adapter contract",
-        "expected dtype, shape, and values are not separate typed fields with materialized bytes",
-        "no typed comparison artifact binds candidate output bytes to this draft",
-    ];
-    tracing::warn!(
-        target: "cairn.oracle.dogfood",
-        event = "oracle_downstream_not_ready",
-        sample = sample.name,
-        blocker_count = ascend_c_test_blockers.len(),
-        "dogfood draft is not an executable Ascend C test artifact"
-    );
+    let materialized_oracle = draft
+        .executable_case
+        .as_ref()
+        .map(assemble_zero_k_matmul_f32_oracle)
+        .transpose()?;
+    let mut ascend_c_test_blockers = Vec::new();
+    if !debate_converged {
+        ascend_c_test_blockers.push("Red/Blue semantic debate did not converge");
+    }
+    if materialized_oracle.is_none() {
+        ascend_c_test_blockers
+            .push("this dogfood sample has no supported typed executable Oracle materialization");
+    }
+    let ascend_c_test_ready = ascend_c_test_blockers.is_empty();
+    if ascend_c_test_ready {
+        let ready_oracle = materialized_oracle
+            .as_ref()
+            .ok_or("ready Oracle is missing materialized content")?;
+        let invocation_id = ready_oracle.invocation_id();
+        let input_bundle_id = ready_oracle.input_bundle_id();
+        tracing::info!(
+            target: "cairn.oracle.dogfood",
+            event = "oracle_downstream_material_ready",
+            sample = sample.name,
+            invocation_id = %invocation_id,
+            input_bundle_id = %input_bundle_id,
+            "typed Oracle material is ready for candidate call-adapter binding"
+        );
+    } else {
+        tracing::warn!(
+            target: "cairn.oracle.dogfood",
+            event = "oracle_downstream_not_ready",
+            sample = sample.name,
+            blocker_count = ascend_c_test_blockers.len(),
+            "dogfood draft is not ready for Ascend C adapter binding"
+        );
+    }
+    let materialized_oracle_summary = materialized_oracle.as_ref().map(|case| {
+        serde_json::json!({
+            "invocation_id": case.invocation_id(),
+            "input_bundle_id": case.input_bundle_id(),
+            "expected_output_id": case.expected_output_id(),
+            "expected_output_byte_length": case.expected_output_bytes().len(),
+            "comparison": case.comparison(),
+            "expected_bytes_are_excluded_from_input_bundle": true
+        })
+    });
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
@@ -946,8 +1031,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "debate_converged": debate_converged,
             "debate_terminal_reason": debate_terminal_reason,
             "ascend_c_test_readiness": {
-                "ready": false,
+                "ready": ascend_c_test_ready,
                 "blocking_contracts": ascend_c_test_blockers,
+                "materialized_oracle": materialized_oracle_summary,
+                "candidate_call_adapter_executable_required": true,
+                "scope": "single-case-execution-material",
+                "sufficient_for_candidate_verdict": false,
+                "remaining_corpus_obligations": [
+                    "a nonzero-K matmul with nonzero expected values must reject unconditional zero-fill implementations"
+                ],
                 "semantic_debate_is_not_admission": true
             },
             "restart_request_byte_identical": true,
@@ -961,7 +1053,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn blue_dogfood_contract() -> &'static str {
-    "Return only one JSON object with exactly: schema_version=1; nonempty strings case_name, input, invocation, rationale, evidence_assessment; expectation as {kind:exact,output:string}, {kind:property,predicate:string}, or {kind:reject,error_behavior:string}; comparison as {kind:exact}, {kind:numeric,absolute_tolerance:string,relative_tolerance:string,ulp_tolerance:integer,nan_equal:boolean}, {kind:property}, or {kind:not-applicable}; assumptions and unverified as string arrays. Exact expectations require exact/numeric comparison, property requires property, and reject requires not-applicable. No markdown."
+    "Return only one JSON object with exactly: schema_version=1; nonempty strings case_name, input, invocation, rationale, evidence_assessment; expectation as {kind:exact,output:string}, {kind:property,predicate:string}, or {kind:reject,error_behavior:string}; comparison as {kind:exact}, {kind:exact-bits}, {kind:numeric,absolute_tolerance:string,relative_tolerance:string,ulp_tolerance:integer,nan_equal:boolean}, {kind:property}, or {kind:not-applicable}; assumptions and unverified as string arrays; executable_case. Exact expectations require exact/exact-bits/numeric comparison, property requires property, and reject requires not-applicable. For matmul-zero-k, executable_case is required with exactly these fields: schema_version=1; case_name string; lhs_argument=0, rhs_argument=1, and output_argument=2 as JSON integers, never names or strings; lhs_shape, rhs_shape, and output_shape as {rows:unsigned integer,columns:unsigned integer}; lhs_bits, rhs_bits, and expected_output_bits as arrays of raw IEEE-754 f32 u32 integers; and comparison. Derive every shape and value from the caller contract; this output-format instruction is not semantic evidence. The caller contract leaves signed zero unspecified, so the trusted claim-strength policy requires top-level numeric with absolute_tolerance=0, relative_tolerance=0, ulp_tolerance=0, nan_equal=false and executable comparison f32-numeric-exact; exact-bits would falsely reject a legal negative zero. Facts directly entailed by the caller contract or executable shape belong in rationale, not assumptions. For every other sample executable_case must be null because this dogfood implementation does not yet materialize it. No markdown."
+}
+
+fn decimal_is_zero(value: &str) -> bool {
+    value
+        .parse::<f64>()
+        .is_ok_and(|parsed| parsed == 0.0 && !parsed.is_sign_negative())
 }
 
 fn red_dogfood_contract() -> &'static str {
@@ -1479,6 +1577,7 @@ mod tests {
             evidence_assessment: "evidence".to_owned(),
             assumptions: Vec::new(),
             unverified: Vec::new(),
+            executable_case: None,
         };
         assert!(
             draft
@@ -1503,5 +1602,64 @@ mod tests {
                 .expect_err("mismatch")
                 .contains("pass requires zero blockers")
         );
+    }
+
+    #[test]
+    fn matmul_sample_requires_an_execution_materializable_blue_case() {
+        let sample = dogfood_sample("matmul-zero-k").expect("sample");
+        let draft: BlueDogfoodDraftV1 = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "case_name": "matmul-zero-k",
+            "input": "lhs f32 [2,0], rhs f32 [0,3]",
+            "invocation": "matmul(lhs, rhs)",
+            "expectation": {"kind":"exact", "output":"f32 [2,3] numerical zeros"},
+            "comparison": {"kind":"numeric","absolute_tolerance":"0","relative_tolerance":"0","ulp_tolerance":0,"nan_equal":false},
+            "rationale": "zero terms use the additive identity",
+            "evidence_assessment": "caller contract is authoritative",
+            "assumptions": [],
+            "unverified": ["device dispatch"],
+            "executable_case": null
+        }))
+        .expect("draft");
+        assert!(
+            draft
+                .validate_for_sample(&sample)
+                .expect_err("missing executable case")
+                .contains("executable_case is required")
+        );
+
+        let fixed: BlueDogfoodDraftV1 = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "case_name": "matmul-zero-k",
+            "input": "lhs f32 [2,0], rhs f32 [0,3]",
+            "invocation": "matmul(lhs, rhs)",
+            "expectation": {"kind":"exact", "output":"f32 [2,3] numerical zeros"},
+            "comparison": {"kind":"numeric","absolute_tolerance":"0","relative_tolerance":"0","ulp_tolerance":0,"nan_equal":false},
+            "rationale": "zero terms use the additive identity",
+            "evidence_assessment": "caller contract is authoritative",
+            "assumptions": [],
+            "unverified": ["device dispatch"],
+            "executable_case": {
+                "schema_version": 1,
+                "case_name": "matmul-zero-k",
+                "lhs_argument": 0,
+                "rhs_argument": 1,
+                "output_argument": 2,
+                "lhs_shape": {"rows":2,"columns":0},
+                "rhs_shape": {"rows":0,"columns":3},
+                "output_shape": {"rows":2,"columns":3},
+                "lhs_bits": [],
+                "rhs_bits": [],
+                "expected_output_bits": [0,0,0,0,0,0],
+                "comparison": "f32-numeric-exact"
+            }
+        }))
+        .expect("fixed draft");
+        fixed.validate_for_sample(&sample).expect("valid draft");
+        let assembled = assemble_zero_k_matmul_f32_oracle(
+            fixed.executable_case.as_ref().expect("executable case"),
+        )
+        .expect("materialization");
+        assert_eq!(assembled.expected_output_bytes(), &[0; 24]);
     }
 }

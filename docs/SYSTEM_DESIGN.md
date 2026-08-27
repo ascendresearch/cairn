@@ -1158,6 +1158,24 @@ operator observation. A changed invocation file fails before any result is writt
 transport/conformance fixture only: zero-filled fixture outputs have no oracle authority, the host
 harness is not a production unsandboxed executor, and real vendor/device execution remains pending.
 
+**Implemented model-authored executable-Oracle material slice (2026-08-27).** The first closed
+proposal-to-execution bridge accepts only the `matmul-zero-k` `f32` case. Its V1 proposal names the
+three ABI positions, fixed matrix shapes, raw IEEE-754 bit vectors, and exact-bit comparator; it
+does not contain invented artifact identities. Trusted deterministic code validates the zero shared
+extent, matrix shape relation, vector lengths, canonical ABI order, six numerical-zero results, and
+caller-authorized comparison strength before deriving the adapter-visible invocation and content
+IDs. Input buffers and the
+invocation enter the canonical source bundle, while expected output bytes are held separately so a
+candidate cannot read its answer. The normal call-adapter request/capture protocol now carries a
+typed executable-Oracle invocation variant. Its bit-exact comparator uses raw identities; its
+`f32-numeric-exact` comparator retains raw identities but normalizes signed zero into separate
+comparison identities before recomputing equality. The current caller contract leaves zero sign
+unspecified, so trusted validation rejects bit exactness independently of model debate. The
+integration gate starts the real fixture process over this model-shaped JSON and validates its
+output through the same capture port. This proves single-case downstream material usability, not
+correctness of an unadmitted proposal, corpus sufficiency against unconditional zero-fill, or
+availability of a CUDA/Ascend C candidate adapter.
+
 **Implemented complete-corpus execution-plan slice (2026-08-26).** A strict V1 plan now binds the
 shared caller domain, exact identities of the quantitative, dtype-pattern, and memory-surface
 mandatory sets, a closed typed execution subject, adapter executable identity, migration validation

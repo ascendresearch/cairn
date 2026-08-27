@@ -9,6 +9,7 @@ use std::{
 use cairn_migration::{
     CallAdapterCompletionV1, CallAdapterObservedOutputV1, CallAdapterRequestArtifact,
     CallAdapterRequestV1, CallAdapterResultV1, CorpusInvocationIdentityV1,
+    ExecutableOracleInvocationArtifact, ExecutableOracleInvocationV1,
     MaterializedBoundaryCaseArtifact, MaterializedBoundaryCaseV1,
     MaterializedInputValueCaseArtifact, MaterializedInputValueCaseV1,
     MaterializedMemorySurfaceCaseArtifact, MaterializedMemorySurfaceCaseV1,
@@ -77,6 +78,10 @@ fn validate_invocation(
         .ok_or("request path has no Cairn input root")?;
     let bytes = fs::read(input_root.join(request.invocation_path().as_str()))?;
     match request.invocation() {
+        CorpusInvocationIdentityV1::ExecutableOracle { manifest } => {
+            let _: ExecutableOracleInvocationV1 = cairn_codec::from_slice(&bytes)?;
+            require_identity::<ExecutableOracleInvocationArtifact>(&bytes, manifest)
+        }
         CorpusInvocationIdentityV1::Boundary { manifest } => {
             let _: MaterializedBoundaryCaseV1 = cairn_codec::from_slice(&bytes)?;
             require_identity::<MaterializedBoundaryCaseArtifact>(&bytes, manifest)
