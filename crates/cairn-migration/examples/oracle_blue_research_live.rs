@@ -727,11 +727,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (debate_converged, debate_terminal_reason) = loop {
         match review.verdict {
             RedReviewVerdict::Revise => {
+                let frozen_draft_id = draft_ids.last().map(ToString::to_string);
                 tracing::warn!(
                     target: "cairn.oracle.debate",
                     event = "red_blockers_reported",
                     sample = sample.name,
-                    frozen_draft_id = %draft_ids.last().ok_or("missing Blue draft identity")?,
+                    frozen_draft_id,
                     blocker_count = review.blocking_findings.len(),
                     completed_revision_rounds = adversarial_rounds,
                     "Red requested a Blue revision"
@@ -846,11 +847,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 let focus = stability_focus(stability_rechecks);
+                let frozen_draft_id = *draft_ids.last().ok_or("missing Blue draft identity")?;
                 tracing::info!(
                     target: "cairn.oracle.debate",
                     event = "red_stability_recheck_started",
                     sample = sample.name,
-                    frozen_draft_id = %draft_ids.last().ok_or("missing Blue draft identity")?,
+                    frozen_draft_id = %frozen_draft_id,
                     recheck = stability_rechecks + 1,
                     configured_rechecks = live.workflow.stability_rechecks,
                     focus,
@@ -860,7 +862,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Perform stability recheck {} of {} over the same frozen Blue draft {}. Independently focus on {focus}. A prior pass is not authority: return revise if you find a concrete blocker, otherwise pass with only genuine advisories. Draft: {}. Cited bounded research: {}. {}",
                     stability_rechecks + 1,
                     live.workflow.stability_rechecks,
-                    draft_ids.last().ok_or("missing Blue draft identity")?,
+                    frozen_draft_id,
                     serde_json::to_string(&draft)?,
                     serde_json::to_string(&research_context)?,
                     red_dogfood_contract()

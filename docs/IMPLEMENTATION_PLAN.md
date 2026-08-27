@@ -587,7 +587,10 @@ for model dispatch, tool operations, agent episode opening/completion, Oracle de
 worker sessions, assignment transfer, local execution, and controller reconciliation. Events cite
 typed correlation identities, usage/counts, elapsed time, and outcomes without printing prompt,
 provider/tool/source/workload bodies or credentials. A captured model-dispatch test uses secret
-sentinels to enforce that boundary. The detailed field/level/coverage ledger is
+sentinels to enforce that boundary. An enabled/disabled subscriber parity control compares exact
+durable event histories, content identity, and provider-call count. CI also rejects tracing spans
+and mechanically detectable fallible, asynchronous, or stateful work inside logging events. The
+detailed field/level/coverage ledger is
 [`OBSERVABILITY.md`](OBSERVABILITY.md).
 
 Next observability work lands with its owning product slice: candidate/admission lifecycle events,

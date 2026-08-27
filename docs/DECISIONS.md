@@ -537,3 +537,11 @@ detail. Request/response bodies, prompts, reasoning, credentials, tool arguments
 bytes, and workload output bytes are forbidden. Logs may state that a diagnostic was archived and
 where its typed identity or attempt can be found, but generic boundaries do not print opaque
 diagnostic text that might contain a secret.
+
+Logging is also semantically subordinate in source layout. An event may borrow an immutable typed
+identity or an already-computed outcome and may compute only an infallible bounded scalar
+projection. It may not invoke an external capability, generate an identity, obtain an authoritative
+clock value, classify a lifecycle outcome a second time, mutate state, await, or propagate an
+error. Business operations commit outside logging constructs. Cairn V1 does not use tracing spans
+or `instrument` in business crates, so deleting an observability scope cannot delete the work it
+described. A future distributed-tracing decision must preserve this ownership rule explicitly.

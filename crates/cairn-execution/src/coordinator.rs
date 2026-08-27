@@ -510,11 +510,12 @@ pub fn execute_execution_attempt<E: EventStore, C: ContentStore, X: Executor>(
     match executor.execute(&input) {
         Ok(capture) => publish_capture(events, content, &started, capture, command_id, observed_at),
         Err(error) => {
+            let failure_class = error.failure_class();
             let diagnostic = bounded_diagnostic(
                 &error.to_string(),
                 started.prepared.contract.capture().diagnostic_limit(),
             );
-            let (schema, completion) = match error.failure_class() {
+            let (schema, completion) = match failure_class {
                 ExecutorFailureClass::NotStarted => (
                     ATTEMPT_NOT_STARTED,
                     ExecutionCompletion::NotStarted {
@@ -557,7 +558,7 @@ pub fn execute_execution_attempt<E: EventStore, C: ContentStore, X: Executor>(
                 event = "execution_attempt_failed",
                 job_id = %started.prepared.contract.job_id(),
                 attempt_id = %started.attempt_id,
-                failure_class = ?error.failure_class(),
+                failure_class = ?failure_class,
                 diagnostic_archived = true,
                 "executor failed; diagnostic omitted from logs"
             );

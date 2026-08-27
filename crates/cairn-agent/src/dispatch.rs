@@ -853,11 +853,14 @@ fn transition(
 mod tests {
     use std::{
         io::Write,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use cairn_protocol::{AggregateId, AggregateKind, CommandId, ContentId, ModelAttemptId};
-    use cairn_record::{ContentStore, EventStore, ExpectedRevision, StreamId};
+    use cairn_record::{ContentStore, EventEnvelope, EventStore, ExpectedRevision, StreamId};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -866,9 +869,9 @@ mod tests {
         execute_model_dispatch, recover_model_attempt, recover_received_model_response,
     };
     use crate::{
-        MaterializedRequestArtifact, ModelTransportResponse, PreparedModelRequest,
-        ProviderCacheTokenUsage, ProviderTokenCount, ProviderTokenUsage, ScriptedModelTransport,
-        TransportError, TurnInputDecisionArtifact,
+        MaterializedRequestArtifact, ModelResponseArtifact, ModelTransportResponse,
+        PreparedModelRequest, ProviderCacheTokenUsage, ProviderTokenCount, ProviderTokenUsage,
+        ScriptedModelTransport, TransportError, TurnInputDecisionArtifact,
     };
 
     fn stream() -> StreamId {
@@ -918,6 +921,93 @@ mod tests {
         fn text(&self) -> String {
             String::from_utf8(self.0.lock().expect("log lock").clone()).expect("UTF-8 logs")
         }
+    }
+
+    fn run_dispatch_for_log_parity(
+        logging_enabled: bool,
+        attempt: ModelAttemptId,
+        commands: &[CommandId; 3],
+    ) -> (Vec<EventEnvelope>, ContentId<ModelResponseArtifact>, usize) {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut events = SqliteEventStore::in_memory().expect("event store");
+        let mut content = SqliteContentStore::open(
+            directory.path().join("content.db"),
+            directory.path().join("cas"),
+        )
+        .expect("content store");
+        let stream = stream();
+        let authority = authorize_model_request(
+            &mut events,
+            &stream,
+            ExpectedRevision::NoStream,
+            &commands[0],
+            attempt,
+            cairn_protocol::ObservedAtUnixMillis::new(1),
+            prepared(),
+        )
+        .expect("authorize");
+        let started = begin_model_dispatch(
+            &mut events,
+            authority,
+            &commands[1],
+            cairn_protocol::ObservedAtUnixMillis::new(2),
+        )
+        .expect("begin");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_calls = Arc::clone(&calls);
+        let mut transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
+            observed_calls.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, TransportError>(ModelTransportResponse::without_usage(
+                b"semantic-parity-response".to_vec(),
+            ))
+        });
+        let mut started = Some(started);
+        let mut invoke = || {
+            execute_model_dispatch(
+                &mut events,
+                &mut content,
+                &mut transport,
+                started.take().expect("one-shot dispatch authority"),
+                &commands[2],
+                cairn_protocol::ObservedAtUnixMillis::new(3),
+            )
+        };
+        let completion = if logging_enabled {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_writer(LogBuffer::default())
+                .finish();
+            tracing::subscriber::with_default(subscriber, &mut invoke)
+        } else {
+            tracing::subscriber::with_default(
+                tracing::subscriber::NoSubscriber::default(),
+                &mut invoke,
+            )
+        }
+        .expect("execute");
+        let DispatchCompletion::Response(received) = completion else {
+            panic!("expected response");
+        };
+        let history = events.read_stream(&stream, None).expect("read history");
+        (
+            history,
+            received.response_id(),
+            calls.load(Ordering::SeqCst),
+        )
+    }
+
+    #[test]
+    fn logging_filter_does_not_change_dispatch_semantics() {
+        let attempt = ModelAttemptId::new();
+        let commands = [CommandId::new(), CommandId::new(), CommandId::new()];
+        let disabled = run_dispatch_for_log_parity(false, attempt, &commands);
+        let enabled = run_dispatch_for_log_parity(true, attempt, &commands);
+
+        assert_eq!(disabled.0, enabled.0, "durable event histories differ");
+        assert_eq!(disabled.1, enabled.1, "response identities differ");
+        assert_eq!(disabled.2, 1, "disabled logging changed dispatch count");
+        assert_eq!(enabled.2, 1, "enabled logging changed dispatch count");
     }
 
     #[test]

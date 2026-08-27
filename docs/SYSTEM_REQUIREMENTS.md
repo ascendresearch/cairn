@@ -331,6 +331,7 @@ Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md
 | QR-OBS-006 | Logs MUST NOT contain credentials, authorization headers, prompt/request/response bodies, model reasoning, tool arguments/results, source blobs, workload stdout/stderr, private keys, certificates, or enrollment bundles. Safe logs MAY contain typed identities, bounded counts, classifications, and content identities. | Captured-log secret/body sentinels plus repository secret scan. |
 | QR-OBS-007 | Log production, loss, filtering, collection, or retention MUST NOT grant authority, change a state transition, establish replay, or affect a verdict. Durable facts and typed content remain the reconstruction authority. | Run with logging disabled by filter and compare durable output identities. |
 | QR-OBS-008 | Stable operational event names and common field names SHOULD be used across components for correlation, while log encoding itself remains an operational interface rather than a persisted Cairn content or wire schema. | Event/field inventory audit and collector fixture. |
+| QR-OBS-009 | Logging expressions MUST NOT perform fallible, asynchronous, state-mutating, external-effect, identity-generating, clock-authority, or lifecycle-classification work. Business work MUST NOT be owned by a logging span. Logging enabled, disabled, or deleted MUST leave external-call counts and durable identities unchanged. | Source isolation gate plus enabled/disabled semantic-parity controls. |
 
 ### 6.6 Open-source delivery
 

@@ -18,6 +18,14 @@ Logs are never replay input. Dropping or filtering every log must leave the same
 content identities. Conversely, a log line cannot prove that a model request, tool effect,
 assignment, execution, or verdict committed; the cited durable identity must be inspected.
 
+This is a source-code ownership rule as well as a runtime rule. Logging events may observe only
+immutable typed identities, already-computed classifications, and infallible bounded scalar
+projections. They must not execute or retry a capability, create an identity, obtain authoritative
+time, classify an outcome a second time, mutate state, await work, or propagate `?`. Cairn V1 uses
+no tracing spans or `instrument` in business crates: business work cannot live inside a logging
+scope whose later removal could remove the work. `scripts/check-log-isolation.sh` enforces the
+mechanically detectable part of this rule in CI.
+
 ## 2. Audit finding
 
 Before this slice, the workspace had no logging subscriber and no shared logging dependency.
