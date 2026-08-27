@@ -22,8 +22,8 @@
 5. 本目录的 focused designs 定义各子系统的更具体业务边界，但不能降低上层 requirement；
 6. [`../dev/README.md`](../dev/README.md) 及其开发计划文档定义未来 stage、slice、依赖和 gate，但不能
    覆盖目标设计或自行关闭 open question；
-7. [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) 记录实施事实、commit 和 evidence ledger，
-   不得把历史顺序升级为新架构授权；
+7. [`../dev/CURRENT_BASELINE.md`](../dev/CURRENT_BASELINE.md) 记录当前实施事实和 evidence 摘要；详细历史
+   通过 Git 追溯，不得把历史顺序升级为新架构授权；
 8. research reports 提供依据但不直接产生规范；
 9. [`../OPEN_QUESTIONS.md`](../OPEN_QUESTIONS.md) 是未决事项，不是自行选择某个答案的授权；
 10. 当前代码和历史 fixture 是 implementation evidence，不会因“已经存在”自动成为目标 requirement。

@@ -197,7 +197,8 @@ registry pool-assignment event into the execution-worker history before registra
 execution projection rejects that cross-link while the predecessor session is live, so an ordinary
 reconnect can never smuggle in an implicit pool change. If a controller died before recording the
 disconnect, reconnect waits for the configured `session_timeout_ms` boundary rather than replacing
-live authority. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+live authority. The implemented enrollment/scheduler foundation is summarized in
+[`dev/CURRENT_BASELINE.md`](dev/CURRENT_BASELINE.md); detailed historical delivery evidence is in Git.
 
 ## Inspect and audit registry authority
 

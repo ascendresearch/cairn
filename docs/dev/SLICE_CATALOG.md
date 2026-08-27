@@ -9,8 +9,8 @@
 ## 1. Catalog 规则
 
 本文件中的 `DEV-xxx` 是计划标识，不是 persisted schema version。所有 slice 默认还需通过通用 gate；
-表中只列专属目标和增量验收。状态变化必须记录到 [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md)
-的事实账本并引用 commit/evidence，不能只改本表。
+表中只列专属目标和增量验收。状态变化必须同步记录到
+[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 或其引用的状态记录，并引用 commit/evidence，不能只改本表。
 
 当前没有任何新架构代码 slice 被授权为 `InProgress`。决策/计划 slice 为 `Proposed`；依赖它们的代码
 slice 为 `Blocked`。

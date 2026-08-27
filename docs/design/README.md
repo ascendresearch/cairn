@@ -28,7 +28,7 @@
 3. 按当前任务进入代码、逻辑、运行、Agent 或 Admission 架构；
 4. 涉及 Oracle 实施前，再逐项检查
    [`../oracle/DESIGN_INVARIANTS.md`](../oracle/DESIGN_INVARIANTS.md) 和相应 focused design；
-5. 以 [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) 判断哪些目标已经实现。
+5. 以 [`../dev/CURRENT_BASELINE.md`](../dev/CURRENT_BASELINE.md) 判断哪些目标已经实现。
 
 规划实现顺序、slice、entry/exit gate 和并行 workstream 时，另读
 [`../dev/README.md`](../dev/README.md)；该目录不能降低本目录的架构边界。
@@ -40,8 +40,8 @@
 - System Design 决定总体 authority 和端到端结构；
 - 本目录细化软件组成，不得削弱上面三者；
 - `docs/oracle/` 决定各 Oracle 相关子系统的业务语义，本目录只决定其软件承载方式；
-- `docs/dev/` 记录未来实施顺序和 gate，Implementation Plan 记录已发生事实；两者都不得把目标目录树
-  误报为现状。
+- `docs/dev/` 同时区分未来实施顺序/gate 与当前事实基线，不得把目标目录树误报为现状；详细历史流水
+  通过 Git 追溯。
 
 发生冲突时遵循
 [`../oracle/DESIGN_INVARIANTS.md`](../oracle/DESIGN_INVARIANTS.md) 的规范冲突规则，暂停受影响的

@@ -4,8 +4,8 @@
 - 范围：仅限 CUDA → Ascend C 算子移植
 
 本目录区分调研依据和规范性目标设计。调研文档解释“为什么”；设计文档规定“系统边界和目标
-是什么”。设计完成不代表能力已经实现，实施状态以 [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md)
-为准。
+是什么”。设计完成不代表能力已经实现，实施状态以
+[`../dev/CURRENT_BASELINE.md`](../dev/CURRENT_BASELINE.md) 为准。
 
 后续会话在设计或实施前先检查
 [`DESIGN_INVARIANTS.md`](DESIGN_INVARIANTS.md)。它规定跨文档权威、不可妥协边界、hidden/feedback
@@ -37,9 +37,10 @@ Focused design 按对象分工：SIR 文档拥有 intent proposal 边界；Oracl
    生命周期、检索和撤回传播。
 
 具体 Oracle calibration、mutation、上一轮反馈和多平面准入机制由
-[`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md) 规定；Blue/Red agent loop 由
-[`../ORACLE_AGENT.md`](../ORACLE_AGENT.md) 与 [`../ORACLE_PROMPTS.md`](../ORACLE_PROMPTS.md) 规定。
-Blue/Red 是当前模型驱动的 synthesis/adversarial strategy profiles，不是永久固定 Agent 拓扑。
+[`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md) 规定；synthesis/adversarial interaction、profile、episode 和
+prompt/context 权限由 Oracle Explorer 与 Agent 软件架构共同规定。Blue/Red 是当前模型驱动的
+synthesis/adversarial strategy profiles，不是永久固定 Agent 拓扑；旧 prompt/dogfood 细节通过 Git
+历史追溯。
 Admission 的 Planner profiles、进程和 plan validation 见
 [`../design/ADMISSION_ARCHITECTURE.md`](../design/ADMISSION_ARCHITECTURE.md)。Agent-capable function、
 strategy、profile、episode、Host、process、authority 的区分和 artifact-mediated interaction 见

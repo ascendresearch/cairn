@@ -1,9 +1,13 @@
 # Cairn 当前开发基线与迁移分类
 
-- 状态：事实基线；以仓库代码、测试和 [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) 为证据
+- 状态：当前事实基线与开发状态账本；以仓库代码、测试、commit 和 durable artifacts 为证据
 - 日期：2026-08-27
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 说明：本文件不把目标设计误报为实现
+
+旧的完整 Phase A–G 实施流水、Blue/Red prompt 设计和 dogfood 记录保存在 Git commit `688b637` 及其
+历史中。本文件只保留当前开发决策所需的事实摘要；需要逐条追溯时使用 Git，不在当前文档集中复制
+历史叙事。
 
 ## 1. 基线结论
 

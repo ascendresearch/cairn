@@ -153,7 +153,7 @@ Comparator、adapter、runner、parser、redactor、profiler adapter、gate 和 
 - requirements、decisions、design、operator docs 和 examples 同步；
 - superseded V1 code/tests/fixtures 已删除；
 - `git diff --check` 与 secret/body scans 通过；
-- `IMPLEMENTATION_PLAN.md` 记录 commit、evidence、实际 scope 和 remaining gaps；
+- `CURRENT_BASELINE.md` 或其引用的状态记录写入 commit、evidence、实际 scope 和 remaining gaps；
 - slice conformance record 记录最终偏差；
 - 没有把下一 slice 的工作写成当前 slice 已完成。
 

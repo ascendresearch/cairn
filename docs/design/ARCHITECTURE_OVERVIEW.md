@@ -311,5 +311,5 @@ Candidate Search 之前停止。具体 operator、claim 和 hidden corpus 仍受
 - Hardware Performance Model、knowledge/skill registry 和 feedback routing 尚未形成目标模块；
 - 新架构的第一条 intent → Oracle claim 纵向路径尚未开始。
 
-实施必须从 [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) 重新切片，且每一片先形成
+实施必须从 [`../dev/SLICE_CATALOG.md`](../dev/SLICE_CATALOG.md) 选择 Ready slice，且每一片先形成
 `DesignConformanceRecord`。本文不授权直接实施。

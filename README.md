@@ -58,9 +58,9 @@ immutable revision/feedback graph. The historical reduction gate traverses that 
 with recorded test-authored proposals before producing its hardware-free admitted oracle; it is not
 itself evidence of a complete live model loop.
 
-The opt-in Blue dogfood gate and its configurable role/research budgets are documented in
-[`docs/ORACLE_DOGFOOD.md`](docs/ORACLE_DOGFOOD.md). It uses a real model with either recorded or
-live GitHub research and records cache usage without printing source or model content.
+The historical opt-in Blue/Red dogfood runs are summarized in
+[`docs/dev/CURRENT_BASELINE.md`](docs/dev/CURRENT_BASELINE.md). Their detailed run ledger remains
+available in Git history. Live model use records cache usage without printing source or model content.
 
 The current V1 verification foundation keeps admission-policy counts,
 the exact trusted generic-mutant set, required construction/fault classes, execution scope, and
@@ -168,7 +168,7 @@ Start with [`docs/README.md`](docs/README.md). The normative baseline is:
   requirement can be accepted.
 - [`docs/SYSTEM_DESIGN.md`](docs/SYSTEM_DESIGN.md) — the target architecture, data model, workflows,
   trust boundaries, and deployment shape.
-- [`docs/ORACLE_ADMISSION.md`](docs/ORACLE_ADMISSION.md) — how an oracle earns the right to judge a
+- [`docs/oracle/ORACLE_ADMISSION.md`](docs/oracle/ORACLE_ADMISSION.md) — how an oracle earns the right to judge a
   candidate.
 - [`docs/RECORD_REPLAY.md`](docs/RECORD_REPLAY.md) — the durable event record, content identities,
   reconstruction, replay, and counterfactual execution.
@@ -180,8 +180,8 @@ Start with [`docs/README.md`](docs/README.md). The normative baseline is:
   expectations, dynamic observation authority, and quantitative reservation accounting.
 - [`docs/WORKER_EXECUTION.md`](docs/WORKER_EXECUTION.md) — Docker activation, recovery, and the
   real Hello World gate.
-- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — the integrated authority,
-  scheduling, probing, registry, and onboarding delivery plan.
+- [`docs/dev/README.md`](docs/dev/README.md) — the staged development plan, slice catalog, quality
+  gates, current baseline, and workstream design.
 
 ## Project principle
 

@@ -135,11 +135,11 @@ Stage 不是“所有相关代码都写完”，而是满足一个系统能力�
 docs/dev/*
   owns desired order, slice contract, entry/exit gates
 
-docs/IMPLEMENTATION_PLAN.md
-  owns historical checkpoint, actual status, commit/evidence ledger
+docs/dev/CURRENT_BASELINE.md
+  owns current checkpoint, actual status, accepted commit/evidence summary
 
 git + durable test artifacts
-  own concrete implementation evidence
+  own detailed historical ledger and concrete implementation evidence
 ```
 
 一次状态更新必须同时检查：

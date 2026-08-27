@@ -30,9 +30,6 @@ document is complete.
 | [`oracle/PERFORMANCE_ORACLE_DESIGN.md`](oracle/PERFORMANCE_ORACLE_DESIGN.md) | How are hardware facts, microbenchmarks, profiling, conditional rooflines, and performance claims admitted? | Normative subsystem design |
 | [`oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md`](oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md) | How may agents retrieve knowledge and load skills without turning origin or retrieval into trust? | Normative subsystem design |
 | [`oracle/ORACLE_ADMISSION.md`](oracle/ORACLE_ADMISSION.md) | Why may an Oracle claim judge a candidate, and how do previous-round feedback and all validation planes enter admission? | Normative verification design |
-| [`ORACLE_AGENT.md`](ORACLE_AGENT.md) | How do isolated blue/red episodes research, propose, attack, and revise an oracle while preserving cache efficiency? | Normative agent/product design |
-| [`ORACLE_PROMPTS.md`](ORACLE_PROMPTS.md) | Which instruction layers, correction protocol, failure defenses, and budget assumptions govern Blue and Red? | Normative prompt design and audit |
-| [`ORACLE_DOGFOOD.md`](ORACLE_DOGFOOD.md) | How is the recorded/live Oracle loop configured, exercised, and accepted? | Active validation ledger |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md) | Which runtime events are logged, how are they correlated, and what data is forbidden? | Normative operational design and coverage audit |
 | [`RECORD_REPLAY.md`](RECORD_REPLAY.md) | What is recorded, reconstructed, replayed, and compared? | Normative record design |
 | [`DECISIONS.md`](DECISIONS.md) | Which formerly open choices have been resolved? | Normative decision register |
@@ -42,7 +39,6 @@ document is complete.
 | [`SCHEDULER.md`](SCHEDULER.md) | How are generic candidates selected, reserved, assigned, retried, and safely released? | Implemented scheduling trust boundary |
 | [`RESOURCE_PROBING.md`](RESOURCE_PROBING.md) | Which resource facts are observed, configured, matched, and still deferred? | Implemented D1 probe/operator contract |
 | [`WORKER_EXECUTION.md`](WORKER_EXECUTION.md) | How is Docker activated, recovered, and measured? | Implemented F2 operator boundary |
-| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | What is implemented, what old Phase G ordering is suspended, and what conformance evidence is required before a replacement slice starts? | Active implementation ledger and delivery gate |
 | [`oracle/ORACLE_RESEARCH_REPORT.md`](oracle/ORACLE_RESEARCH_REPORT.md) | What does the Oracle-generation literature and industry practice establish? | Research basis, non-normative |
 | [`oracle/BORROWABLE_DIRECTIONS.md`](oracle/BORROWABLE_DIRECTIONS.md) | Which external ideas are worth adapting, and which should not be copied? | Research synthesis, non-normative |
 

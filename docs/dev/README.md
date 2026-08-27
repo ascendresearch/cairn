@@ -43,18 +43,14 @@
 5. 开始 slice 前逐项执行 [`QUALITY_GATES.md`](QUALITY_GATES.md)，并填写 conformance record；
 6. 多条工作流并行时遵循 [`WORKSTREAMS.md`](WORKSTREAMS.md)。
 
-## 4. 与根目录实施计划的关系
+## 4. 计划与事实的关系
 
-[`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) 继续保存截至架构重置时的事实账本，包括
-已实现的 Worker/runtime 基础、旧 Phase G 片段和真实设备记录。它不是新架构的未来排序权威。
+[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 保存当前实现事实、已验证基础、历史控制摘要和目标差距；
+未来阶段、依赖、slice 和 gate 由本目录其他文档定义。Slice 开始、状态变化、accepted commit 和证据
+链接同步写入当前基线或由其引用的后续状态记录。
 
-从本目录建立后：
-
-- 已发生事实和历史证据仍引用 `IMPLEMENTATION_PLAN.md`；
-- 未来阶段、依赖、slice 和 gate 由 `docs/dev/` 定义；
-- slice 开始、状态变化、完成 commit 和证据链接仍写入事实账本；
-- 旧 Phase G 中未完成条目不能未经映射直接恢复；
-- 同一项工作若同时出现在两处，以本目录的目标边界为准，以事实账本的实际状态为准。
+旧 Phase G、Blue/Red prompt 和 dogfood 详细流水已从当前文档集删除，通过 Git 历史追溯。旧 Phase G
+未完成条目不能未经 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 映射直接恢复。
 
 ## 5. 固定开发边界
 

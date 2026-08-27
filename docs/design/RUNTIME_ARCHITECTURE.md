@@ -4,7 +4,7 @@
 - 日期：2026-08-27
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 说明：部署与进程均为目标形态；当前已实现状态见
-  [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md)
+  [`../dev/CURRENT_BASELINE.md`](../dev/CURRENT_BASELINE.md)
 - Agent 逻辑与交互：[`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)
 
 ## 1. 运行时结论

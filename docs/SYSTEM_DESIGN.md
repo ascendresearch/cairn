@@ -368,8 +368,9 @@ Oracle 至少覆盖 semantic、numerical、execution、safety、adequacy、perfo
 case 保存 `CaseIntent`；每个 comparator 保存适用 domain 和依据；每项 unknown/conflict 保持可见。
 
 当前模型驱动的 Blue/Red profile 是 synthesis/adversarial strategy 的一组实现证据，其 role、缓存、
-外部研究和 artifact-mediated 修订机制继续遵循 [ORACLE_AGENT.md](ORACLE_AGENT.md) 与
-[ORACLE_PROMPTS.md](ORACLE_PROMPTS.md)。它们不是永久固定的 Agent 拓扑；无论采用何种 strategy，
+外部研究和 artifact-mediated 修订机制必须遵循
+[Oracle Explorer 设计](oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md) 与
+[Agent 架构](design/AGENT_ARCHITECTURE.md)。它们不是永久固定的 Agent 拓扑；无论采用何种 strategy，
 都必须消费已准入意图并服从本设计更严格的 proposal/admission 边界。
 
 ## 10. Hardware Performance Model
@@ -416,9 +417,8 @@ Model transport 只完成一次 provider exchange；tool 执行、重试、预�
 role 不共享私有 continuation。Retrieved content 永远是 data，不获得 instruction authority。
 
 当前 OpenAI Responses、Chat Completions 和 Anthropic Messages 的 native continuation 设计继续
-有效；provider 选择与 CUDA→Ascend C 业务解耦。详见 [RECORD_REPLAY.md](RECORD_REPLAY.md) 和
-[ORACLE_AGENT.md](ORACLE_AGENT.md)。产品侧 Agent-capable function、strategy、profile、episode、Host、
-process 和 authority 的定义及当前派生 catalog 见
+有效；provider 选择与 CUDA→Ascend C 业务解耦。详见 [RECORD_REPLAY.md](RECORD_REPLAY.md)。产品侧
+Agent-capable function、strategy、profile、episode、Host、process 和 authority 的定义及当前派生 catalog 见
 [AGENT_ARCHITECTURE.md](design/AGENT_ARCHITECTURE.md)。Agent-capable 位置数量不等于模型调用数、并发数
 或进程数，功能存在也不等于必须使用 Agent。
 
@@ -732,8 +732,8 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 - 第二个真实 CUDA→Ascend C kernel 端到端控制。
 
 设计完成不等于这些能力已实现。未来开发顺序与 gate 由
-[开发计划设计](dev/README.md) 管理，已发生事实与证据由
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) 管理。
+[开发计划设计](dev/README.md) 管理，当前实现事实与历史控制摘要由
+[CURRENT_BASELINE.md](dev/CURRENT_BASELINE.md) 管理，详细旧账本通过 Git 历史追溯。
 
 ## 24. 被拒绝的架构方案
 
