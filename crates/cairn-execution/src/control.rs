@@ -4,7 +4,10 @@
 //! sides record a delivery mapping before returning a frame to a transport adapter, then compact
 //! logical messages only after a bounded, non-regressing cumulative acknowledgement.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 
@@ -494,6 +497,22 @@ pub struct WorkerExecutionObservation {
 
 impl WorkerExecutionObservation {
     /// Returns the exact attempt whose terminal observation is awaiting durable publication.
+    #[must_use]
+    pub const fn attempt_id(&self) -> AttemptId {
+        self.authority.binding.attempt_id()
+    }
+}
+
+impl WorkerExecutionAuthority {
+    /// Returns the exact attempt authorized for worker-local execution.
+    #[must_use]
+    pub const fn attempt_id(&self) -> AttemptId {
+        self.binding.attempt_id()
+    }
+}
+
+impl RecoveredWorkerExecutionAuthority {
+    /// Returns the exact previously started attempt requiring reconciliation.
     #[must_use]
     pub const fn attempt_id(&self) -> AttemptId {
         self.authority.binding.attempt_id()
@@ -1355,6 +1374,16 @@ pub fn invoke_worker_executor<X: Executor>(
     executor: &mut X,
     authority: WorkerExecutionAuthority,
 ) -> WorkerExecutionObservation {
+    let wall_started = Instant::now();
+    tracing::info!(
+        target: "cairn.execution.worker",
+        event = "worker_execution_started",
+        job_id = %authority.binding.job_id(),
+        attempt_id = %authority.binding.attempt_id(),
+        contract_id = %authority.binding.contract_id(),
+        recovered = false,
+        "worker executor invocation started"
+    );
     let input = ExecutionInput {
         job_id: authority.binding.job_id(),
         attempt_id: authority.binding.attempt_id(),
@@ -1378,6 +1407,7 @@ pub fn invoke_worker_executor<X: Executor>(
             }
         }
     };
+    log_worker_execution_result(&authority, &result, wall_started, false);
     WorkerExecutionObservation { authority, result }
 }
 
@@ -1389,6 +1419,16 @@ pub fn invoke_recovered_worker_executor<X: crate::RecoverableExecutor>(
     recovered: RecoveredWorkerExecutionAuthority,
 ) -> WorkerExecutionObservation {
     let authority = recovered.authority;
+    let wall_started = Instant::now();
+    tracing::info!(
+        target: "cairn.execution.worker",
+        event = "worker_execution_started",
+        job_id = %authority.binding.job_id(),
+        attempt_id = %authority.binding.attempt_id(),
+        contract_id = %authority.binding.contract_id(),
+        recovered = true,
+        "worker executor reconciliation started"
+    );
     let input = ExecutionInput {
         job_id: authority.binding.job_id(),
         attempt_id: authority.binding.attempt_id(),
@@ -1404,7 +1444,56 @@ pub fn invoke_recovered_worker_executor<X: crate::RecoverableExecutor>(
             ),
         },
     };
+    log_worker_execution_result(&authority, &result, wall_started, true);
     WorkerExecutionObservation { authority, result }
+}
+
+fn log_worker_execution_result(
+    authority: &WorkerExecutionAuthority,
+    result: &ReconciledExecutionResult,
+    wall_started: Instant,
+    recovered: bool,
+) {
+    let elapsed_ms = u64::try_from(wall_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match result {
+        ReconciledExecutionResult::Completed { capture } => tracing::info!(
+            target: "cairn.execution.worker",
+            event = "worker_execution_completed",
+            job_id = %authority.binding.job_id(),
+            attempt_id = %authority.binding.attempt_id(),
+            recovered,
+            wall_elapsed_ms = elapsed_ms,
+            workload_elapsed_ms = capture.elapsed_ms.get(),
+            outcome = ?capture.outcome,
+            exit_code = capture.exit_code,
+            output_count = capture.outputs.len(),
+            stdout_bytes = capture.stdout.len(),
+            stderr_bytes = capture.stderr.len(),
+            "worker executor invocation completed"
+        ),
+        ReconciledExecutionResult::NotStarted { .. } => tracing::warn!(
+            target: "cairn.execution.worker",
+            event = "worker_execution_failed",
+            job_id = %authority.binding.job_id(),
+            attempt_id = %authority.binding.attempt_id(),
+            recovered,
+            wall_elapsed_ms = elapsed_ms,
+            outcome = "not_started",
+            diagnostic_archived = true,
+            "worker executor did not start; diagnostic omitted from logs"
+        ),
+        ReconciledExecutionResult::Ambiguous { .. } => tracing::warn!(
+            target: "cairn.execution.worker",
+            event = "worker_execution_failed",
+            job_id = %authority.binding.job_id(),
+            attempt_id = %authority.binding.attempt_id(),
+            recovered,
+            wall_elapsed_ms = elapsed_ms,
+            outcome = "ambiguous",
+            diagnostic_archived = true,
+            "worker executor outcome is ambiguous; diagnostic omitted from logs"
+        ),
+    }
 }
 
 /// Appends one observed executor result after reloading any intervening delivery/acknowledgement

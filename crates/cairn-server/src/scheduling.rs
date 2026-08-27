@@ -133,6 +133,14 @@ pub fn schedule_execution_contract(
     loop {
         match schedule_execution_contract_at(config, contract, ids, observed_now()?) {
             Err(error) if retries > 0 && is_optimistic_revision_conflict(&error) => {
+                tracing::warn!(
+                    target: "cairn.server.scheduler",
+                    event = "scheduling_optimistic_retry",
+                    attempt_id = %ids.attempt_id,
+                    placement_id = %ids.placement_id,
+                    retries_remaining = retries,
+                    "scheduling hit an optimistic revision conflict"
+                );
                 retries -= 1;
                 if let Some(delay) = scheduler.optimistic_retry_delay_ms {
                     thread::sleep(Duration::from_millis(delay.get()));
@@ -176,6 +184,15 @@ pub fn schedule_execution_contract_at(
     let registry = EnrollmentRegistry::load(&events, observed_at)
         .map_err(|error| ServerError::Scheduling(error.to_string()))?;
     let candidate_worker_ids: Vec<_> = registry.worker_ids().into_iter().collect();
+    tracing::info!(
+        target: "cairn.server.scheduler",
+        event = "scheduling_started",
+        attempt_id = %ids.attempt_id,
+        placement_id = %ids.placement_id,
+        reservation_id = %ids.reservation_id,
+        candidate_count = candidate_worker_ids.len(),
+        "execution scheduling started"
+    );
     let authority = ControllerPlacementAuthority {
         event_database: config.storage.event_database.clone(),
     };
@@ -215,6 +232,15 @@ pub fn schedule_execution_contract_at(
     let placement = match placement {
         PlacementOutcome::Selected(placement) => placement,
         PlacementOutcome::NoCandidate(placement) => {
+            tracing::warn!(
+                target: "cairn.server.scheduler",
+                event = "scheduling_no_candidate",
+                attempt_id = %ids.attempt_id,
+                placement_id = %placement.placement_id(),
+                snapshot_id = %placement.snapshot_id(),
+                candidate_count = candidate_worker_ids.len(),
+                "no worker satisfied the frozen placement decision"
+            );
             return Ok(ControllerSchedulingOutcome::NoCandidate { placement });
         }
     };
@@ -309,6 +335,17 @@ pub fn schedule_execution_contract_at(
         )
         .map_err(|error| ServerError::Scheduling(error.to_string()))?;
     }
+    tracing::info!(
+        target: "cairn.server.scheduler",
+        event = "scheduling_completed",
+        attempt_id = %binding.attempt_id(),
+        placement_id = %placement.placement_id(),
+        reservation_id = placement.reservation_id().map(|value| value.to_string()),
+        assignment_id = %binding.assignment_id(),
+        worker_id = %binding.worker_id(),
+        phase = ?phase,
+        "execution scheduling completed"
+    );
     Ok(ControllerSchedulingOutcome::Scheduled {
         placement,
         binding,

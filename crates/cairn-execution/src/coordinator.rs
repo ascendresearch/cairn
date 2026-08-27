@@ -466,6 +466,14 @@ pub fn begin_execution_attempt<E: EventStore>(
         command_id,
         &[event],
     )?;
+    tracing::info!(
+        target: "cairn.execution",
+        event = "execution_attempt_started",
+        job_id = %authority.prepared.contract.job_id(),
+        attempt_id = %authority.attempt_id,
+        contract_id = %authority.prepared.contract_id,
+        "execution attempt durably started"
+    );
     Ok(StartedExecutionAttempt {
         stream: authority.stream,
         revision: revision(outcome.last_sequence)?,
@@ -544,6 +552,15 @@ pub fn execute_execution_attempt<E: EventStore, C: ContentStore, X: Executor>(
                     attempt_id: started.attempt_id,
                     record: record.to_string(),
                 })?;
+            tracing::warn!(
+                target: "cairn.execution",
+                event = "execution_attempt_failed",
+                job_id = %started.prepared.contract.job_id(),
+                attempt_id = %started.attempt_id,
+                failure_class = ?error.failure_class(),
+                diagnostic_archived = true,
+                "executor failed; diagnostic omitted from logs"
+            );
             Ok(completion)
         }
     }
@@ -728,6 +745,15 @@ fn publish_remote_failure<E: EventStore>(
             attempt_id: started.attempt_id,
             record: record.to_string(),
         })?;
+    tracing::warn!(
+        target: "cairn.execution",
+        event = "execution_reconciliation_failed",
+        job_id = %started.prepared.contract.job_id(),
+        attempt_id = %started.attempt_id,
+        failure_class = ?class,
+        diagnostic_archived = true,
+        "remote execution failure reconciled; diagnostic omitted from logs"
+    );
     Ok(completion)
 }
 
@@ -805,6 +831,18 @@ fn publish_capture<E: EventStore, C: ContentStore>(
             receipt_id,
             record: record.to_string(),
         })?;
+    tracing::info!(
+        target: "cairn.execution",
+        event = "execution_attempt_completed",
+        job_id = %receipt.job_id,
+        attempt_id = %receipt.attempt_id,
+        receipt_id = %receipt_id,
+        outcome = ?receipt.outcome,
+        exit_code = receipt.exit_code,
+        elapsed_ms = receipt.elapsed_ms.get(),
+        output_count = receipt.outputs.len(),
+        "execution attempt completed and receipt was published"
+    );
     Ok(ExecutionCompletion::Completed {
         receipt_id,
         receipt,

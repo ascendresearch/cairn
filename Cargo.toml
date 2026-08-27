@@ -5,6 +5,7 @@ members = [
     "crates/cairn-control-transport",
     "crates/cairn-execution",
     "crates/cairn-migration",
+    "crates/cairn-observability",
     "crates/cairn-protocol",
     "crates/cairn-record",
     "crates/cairn-server",
@@ -26,6 +27,7 @@ cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }
 cairn-migration = { path = "crates/cairn-migration" }
+cairn-observability = { path = "crates/cairn-observability" }
 cairn-control-transport = { path = "crates/cairn-control-transport" }
 cairn-protocol = { path = "crates/cairn-protocol" }
 cairn-record = { path = "crates/cairn-record" }
@@ -49,6 +51,8 @@ time = "0.3.45"
 tokio = { version = "1.49.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = "0.26.4"
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1", features = ["serde", "v7"] }
 x509-parser = "0.16.0"
 

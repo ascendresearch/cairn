@@ -362,6 +362,7 @@ impl ExternalResearchProvider for ConfiguredResearchProvider {
 
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    cairn_observability::init("oracle-blue-research-live")?;
     let root = std::env::current_dir()?;
     let config_path = std::env::args()
         .nth(1)
@@ -370,6 +371,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(2)
         .unwrap_or_else(|| "sum-empty-axis".to_owned());
     let sample = dogfood_sample(&sample_name)?;
+    tracing::info!(
+        target: "cairn.oracle.dogfood",
+        event = "oracle_dogfood_started",
+        sample = sample.name,
+        operator = sample.operator,
+        "oracle dogfood run started"
+    );
     let live: LiveConfig = serde_json::from_slice(&std::fs::read(root.join(config_path))?)?;
     if live.schema_version != 1 || live.research.repositories.is_empty() {
         return Err("unsupported live dogfood configuration".into());
@@ -589,6 +597,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cairn_agent::ToolOperationCompletion::Completed { result_id, .. } = completion else {
         return Err("recorded Blue research did not complete".into());
     };
+    tracing::info!(
+        target: "cairn.oracle.dogfood",
+        event = "blue_research_completed",
+        sample = sample.name,
+        research_request_id = %search_request_id,
+        operation_result_id = %result_id,
+        "Blue external research completed"
+    );
     let exact_research = gateway
         .result()
         .ok_or("research gateway completed without an exact result")?
@@ -711,6 +727,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (debate_converged, debate_terminal_reason) = loop {
         match review.verdict {
             RedReviewVerdict::Revise => {
+                tracing::warn!(
+                    target: "cairn.oracle.debate",
+                    event = "red_blockers_reported",
+                    sample = sample.name,
+                    frozen_draft_id = %draft_ids.last().ok_or("missing Blue draft identity")?,
+                    blocker_count = review.blocking_findings.len(),
+                    completed_revision_rounds = adversarial_rounds,
+                    "Red requested a Blue revision"
+                );
                 if adversarial_rounds == live.workflow.adversarial_rounds {
                     break (
                         false,
@@ -768,6 +793,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 draft_ids.push(descriptor.content_id);
                 adversarial_rounds = adversarial_rounds.saturating_add(1);
                 stability_rechecks = 0;
+                tracing::info!(
+                    target: "cairn.oracle.debate",
+                    event = "blue_revision_accepted",
+                    sample = sample.name,
+                    prior_draft_id = %prior_draft_id,
+                    revised_draft_id = %descriptor.content_id,
+                    adversarial_round = adversarial_rounds,
+                    "changed Blue revision accepted by dogfood validation"
+                );
 
                 let red_revision_request = format!(
                     "Blue submitted changed revision {} after your prior blockers. Re-evaluate the complete frozen revision, verify every prior blocker, and search for regressions. Draft: {}. Cited bounded research: {}. {}",
@@ -812,6 +846,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 let focus = stability_focus(stability_rechecks);
+                tracing::info!(
+                    target: "cairn.oracle.debate",
+                    event = "red_stability_recheck_started",
+                    sample = sample.name,
+                    frozen_draft_id = %draft_ids.last().ok_or("missing Blue draft identity")?,
+                    recheck = stability_rechecks + 1,
+                    configured_rechecks = live.workflow.stability_rechecks,
+                    focus,
+                    "Red stability recheck started"
+                );
                 let stability_request = format!(
                     "Perform stability recheck {} of {} over the same frozen Blue draft {}. Independently focus on {focus}. A prior pass is not authority: return revise if you find a concrete blocker, otherwise pass with only genuine advisories. Draft: {}. Cited bounded research: {}. {}",
                     stability_rechecks + 1,
@@ -850,6 +894,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+    tracing::info!(
+        target: "cairn.oracle.debate",
+        event = "oracle_debate_completed",
+        sample = sample.name,
+        converged = debate_converged,
+        adversarial_rounds,
+        stability_rechecks,
+        blue_submission_repairs = blue_repairs,
+        red_submission_repairs = red_repairs,
+        terminal_reason = %debate_terminal_reason,
+        "oracle debate completed"
+    );
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
@@ -940,6 +996,14 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
     {
         let mut usage = Vec::new();
         for repair in 0..=max_repairs {
+            tracing::info!(
+                target: "cairn.oracle.submission",
+                event = "structured_submission_attempt_started",
+                role,
+                attempt = repair + 1,
+                maximum_attempts = max_repairs + 1,
+                "structured model submission attempt started"
+            );
             let attempt = ModelAttemptId::new();
             let received = dispatch(
                 self.events,
@@ -988,6 +1052,13 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
                 match decode_json_object::<T>(&text) {
                     Ok(value) => match validate(&value) {
                         Ok(()) => {
+                            tracing::info!(
+                                target: "cairn.oracle.submission",
+                                event = "structured_submission_accepted",
+                                role,
+                                repairs = repair,
+                                "structured model submission accepted"
+                            );
                             return Ok(ValidatedJsonTurn {
                                 value,
                                 continuation: decoded.continuation().clone(),
@@ -1003,6 +1074,15 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
                     ),
                 }
             };
+            tracing::warn!(
+                target: "cairn.oracle.submission",
+                event = "structured_submission_rejected",
+                role,
+                attempt = repair + 1,
+                maximum_attempts = max_repairs + 1,
+                diagnostic = %diagnostic,
+                "structured model submission rejected atomically"
+            );
             if repair == max_repairs {
                 return Err(format!(
                     "{role} exhausted {max_repairs} submission repair(s); last diagnostic: {diagnostic}"

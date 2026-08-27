@@ -301,6 +301,10 @@ pub async fn run_from_arguments(
 ///
 /// Returns an error for invalid configuration, journal startup, or a terminal session failure when
 /// reconnect is disabled.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the worker incarnation/reconnect lifecycle includes paired operational events at its durable boundaries"
+)]
 pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     let profile = config.runtime_profile()?;
     config.validate(&profile)?;
@@ -372,10 +376,23 @@ pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
             Some(session.await)
         };
         let Some(outcome) = outcome else {
+            tracing::info!(
+                target: "cairn.worker.session",
+                event = "worker_identity_changed",
+                worker_id = %identity.worker_id,
+                "worker identity changed; reconnecting with a new incarnation when required"
+            );
             continue;
         };
         if let Err(error) = &outcome {
-            eprintln!("cairn-worker session: {error}");
+            tracing::warn!(
+                target: "cairn.worker.session",
+                event = "worker_session_failed",
+                worker_id = %identity.worker_id,
+                error = %error,
+                reconnect_enabled = config.reconnect_delay_ms.is_some(),
+                "worker session terminated with an error"
+            );
         }
         let Some(delay) = config.reconnect_delay_ms else {
             while execution_tasks.pending != 0 {
@@ -686,9 +703,14 @@ async fn run_session(
             "controller welcome changed protocol version".into(),
         ));
     }
-    eprintln!(
-        "cairn-worker {} connected as {}",
-        identity.worker_id, connection_id
+    tracing::info!(
+        target: "cairn.worker.session",
+        event = "worker_connected",
+        worker_id = %identity.worker_id,
+        connection_id = %connection_id,
+        incarnation_id = %incarnation_id,
+        protocol_version = protocol_version.get(),
+        "worker connected to controller"
     );
     let mut inbound = InboundControlSession::new(protocol_version, connection_id);
     let mut highest_sent = None;
@@ -726,15 +748,27 @@ async fn run_session(
                 record_execution_observation(journal, execution_tasks, *observation, config)?;
             }
             Wake::Heartbeat => {
+                let availability = config.availability(journal, identity.worker_id)?;
                 write_wire_message(
                     &mut socket,
                     &WorkerWireMessage::Heartbeat {
-                        availability: config.availability(journal, identity.worker_id)?,
+                        availability: availability.clone(),
                     },
                     config.transport,
                 )
                 .await
                 .map_err(|error| WorkerError::Session(error.to_string()))?;
+                tracing::debug!(
+                    target: "cairn.worker.session",
+                    event = "worker_heartbeat_sent",
+                    worker_id = %identity.worker_id,
+                    connection_id = %connection_id,
+                    health = ?availability.health(),
+                    draining = availability.draining(),
+                    available_slots = availability.available_slots(),
+                    active_attempts = availability.active_attempts().len(),
+                    "worker heartbeat sent"
+                );
             }
             Wake::ResourceRefresh => {
                 let observed_at = observed_now()?;
@@ -749,6 +783,14 @@ async fn run_session(
                 )
                 .await
                 .map_err(|error| WorkerError::Session(error.to_string()))?;
+                tracing::debug!(
+                    target: "cairn.worker.session",
+                    event = "worker_resources_sent",
+                    worker_id = %identity.worker_id,
+                    connection_id = %connection_id,
+                    observed_at_unix_ms = observed_at.get(),
+                    "worker resource refresh sent"
+                );
             }
             Wake::Message(message) => {
                 let message = message?.map_err(|error| WorkerError::Session(error.to_string()))?;
@@ -857,6 +899,13 @@ fn record_execution_observation(
         observed_now()?,
     )
     .map_err(|error| WorkerError::Session(error.to_string()))?;
+    tracing::info!(
+        target: "cairn.worker.execution",
+        event = "execution_observation_published",
+        attempt_id = %attempt_id,
+        remaining_execution_tasks = execution_tasks.pending,
+        "worker execution observation published to the durable outbox"
+    );
     docker::cleanup_published_attempt(&config.execution, attempt_id);
     Ok(())
 }
@@ -887,10 +936,22 @@ async fn process_controller_frame(
     };
     match &message.payload {
         ControllerControlMessage::AssignmentOffer {
+            binding,
             contract,
             materials,
             ..
         } => {
+            tracing::info!(
+                target: "cairn.worker.assignment",
+                event = "assignment_offer_received",
+                worker_id = %worker_id,
+                assignment_id = %binding.assignment_id(),
+                job_id = %binding.job_id(),
+                attempt_id = %binding.attempt_id(),
+                offer_message_id = %message.message_id,
+                material_bytes = materials.input_bundle_byte_len().saturating_add(materials.environment_byte_len()),
+                "worker received an assignment offer"
+            );
             let verified =
                 materialize_assignment_offer(socket, content, config, message, contract, materials)
                     .await?;
@@ -904,9 +965,26 @@ async fn process_controller_frame(
                 now,
             )
             .map_err(|error| WorkerError::Session(error.to_string()))?;
+            tracing::info!(
+                target: "cairn.worker.assignment",
+                event = "assignment_offer_admitted",
+                worker_id = %worker_id,
+                assignment_id = %binding.assignment_id(),
+                attempt_id = %binding.attempt_id(),
+                "worker durably admitted the assignment offer"
+            );
             Ok(None)
         }
-        ControllerControlMessage::StartExecution { .. } => {
+        ControllerControlMessage::StartExecution { binding } => {
+            tracing::info!(
+                target: "cairn.worker.assignment",
+                event = "execution_start_received",
+                worker_id = %worker_id,
+                assignment_id = %binding.assignment_id(),
+                job_id = %binding.job_id(),
+                attempt_id = %binding.attempt_id(),
+                "worker received authoritative execution start"
+            );
             let authority = record_worker_execution_start(
                 journal,
                 content,

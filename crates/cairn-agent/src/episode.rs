@@ -576,6 +576,20 @@ pub fn open_agent_episode<E: EventStore>(
         command_id,
         &[event],
     )?;
+    tracing::info!(
+        target: "cairn.agent.episode",
+        event = "agent_episode_opened",
+        episode_id = %episode.episode_id,
+        task_id = %task_id,
+        role = %payload.role.as_str(),
+        first_step_id = %first_step_id,
+        first_model_attempt_id = %first_model_attempt_id,
+        step_limit = payload.budget.step_limit.map(EpisodeStepLimit::get),
+        tool_operation_limit = payload.budget.tool_operation_limit.map(EpisodeToolOperationLimit::get),
+        provider_token_limit = payload.budget.provider_token_limit.map(EpisodeProviderTokenLimit::get),
+        deadline_unix_ms = payload.budget.deadline_unix_ms.map(EpisodeDeadlineUnixMillis::get),
+        "agent episode opened"
+    );
     step_authority(
         episode.episode_id,
         first_step_id,
@@ -1177,6 +1191,18 @@ fn complete_episode<E: EventStore>(
         command_id,
         &[event],
     )?;
+    tracing::info!(
+        target: "cairn.agent.episode",
+        event = "agent_episode_completed",
+        episode_id = %episode.episode_id,
+        last_step_id = %last_step_id,
+        reason = ?reason,
+        steps_started,
+        requested_tool_operations,
+        observed_provider_tokens,
+        missing_provider_usage_attempt_id = missing_provider_usage_attempt_id.map(|value| value.to_string()),
+        "agent episode completed"
+    );
     Ok(EpisodeAdvance::Completed {
         reason,
         steps_started,

@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{io::Cursor, time::Instant};
 
 use cairn_protocol::{
     CommandId, ContentId, EventId, ModelAttemptId, ObservedAtUnixMillis, SchemaName, SchemaVersion,
@@ -329,6 +329,10 @@ pub fn begin_model_dispatch<E: EventStore>(
 /// # Errors
 ///
 /// Returns [`DispatchCoordinatorError`] when response archival or terminal-fact recording fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "dispatch keeps the external effect, durable terminal publication, and paired operational lifecycle events in one visible boundary"
+)]
 pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>(
     events: &mut E,
     content: &mut C,
@@ -349,9 +353,20 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
         revision: started_revision,
         started_event_id,
     };
+    let wall_started = Instant::now();
+    tracing::info!(
+        target: "cairn.agent.model",
+        event = "model_dispatch_started",
+        attempt_id = %attempt_id,
+        request_id = %request.request_id,
+        decision_id = %request.decision_id,
+        adapter_version = %request.adapter_version.as_str(),
+        "model provider dispatch started"
+    );
     match transport.dispatch(&request) {
         Ok(response) => {
             let (response_bytes, usage) = response.into_parts();
+            let response_bytes_len = response_bytes.len();
             let descriptor =
                 content.put::<ModelResponseArtifact>(&mut Cursor::new(response_bytes))?;
             let payload = OutcomePayload {
@@ -374,6 +389,26 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                 usage: usage.clone(),
                 record: record.to_string(),
             })?;
+            let input_tokens = usage.as_ref().map(|value| value.input_tokens().get());
+            let output_tokens = usage.as_ref().map(|value| value.output_tokens().get());
+            let cache_read_tokens = usage
+                .as_ref()
+                .and_then(ProviderTokenUsage::cache_tokens)
+                .and_then(crate::ProviderCacheTokenUsage::read_tokens)
+                .map(crate::ProviderTokenCount::get);
+            tracing::info!(
+                target: "cairn.agent.model",
+                event = "model_dispatch_completed",
+                attempt_id = %attempt_id,
+                response_id = %descriptor.content_id,
+                elapsed_ms = elapsed_millis(wall_started),
+                response_bytes = response_bytes_len,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                usage_available = usage.is_some(),
+                "model provider dispatch completed"
+            );
             Ok(DispatchCompletion::Response(ReceivedModelResponse {
                 attempt_id,
                 stream: terminal.stream,
@@ -414,6 +449,20 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
                     record: record.to_string(),
                 }
             })?;
+            let outcome = match class {
+                TransportFailureClass::NotSent => "not_sent",
+                TransportFailureClass::Rejected => "rejected",
+                TransportFailureClass::Ambiguous => "ambiguous",
+            };
+            tracing::warn!(
+                target: "cairn.agent.model",
+                event = "model_dispatch_failed",
+                attempt_id = %attempt_id,
+                elapsed_ms = elapsed_millis(wall_started),
+                outcome,
+                diagnostic_archived = true,
+                "model provider dispatch failed; diagnostic omitted from logs"
+            );
             Ok(match class {
                 TransportFailureClass::NotSent => DispatchCompletion::NotSent { diagnostic },
                 TransportFailureClass::Rejected => DispatchCompletion::Rejected { diagnostic },
@@ -421,6 +470,10 @@ pub fn execute_model_dispatch<E: EventStore, C: ContentStore, T: ModelTransport>
             })
         }
     }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn append_terminal<E: EventStore>(
@@ -798,9 +851,15 @@ fn transition(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::Write,
+        sync::{Arc, Mutex},
+    };
+
     use cairn_protocol::{AggregateId, AggregateKind, CommandId, ContentId, ModelAttemptId};
     use cairn_record::{ContentStore, EventStore, ExpectedRevision, StreamId};
     use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::{
         DispatchCompletion, ModelAttemptState, authorize_model_request, begin_model_dispatch,
@@ -828,6 +887,36 @@ mod tests {
             adapter_version: crate::AdapterVersion::new("v1").expect("adapter"),
             native_state_id: None,
             request_bytes: b"request".to_vec(),
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuffer {
+        type Writer = LogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl LogBuffer {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("log lock").clone()).expect("UTF-8 logs")
         }
     }
 
@@ -867,6 +956,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the recovery control also captures structured logs and enforces request/response secret sentinels"
+    )]
     fn response_is_archived_before_completion_is_recoverable() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut events = SqliteEventStore::in_memory().expect("event store");
@@ -877,6 +970,8 @@ mod tests {
         .expect("content store");
         let stream = stream();
         let attempt = ModelAttemptId::new();
+        let mut exact_request = prepared();
+        exact_request.request_bytes = b"request-secret-must-not-be-logged".to_vec();
         let authority = authorize_model_request(
             &mut events,
             &stream,
@@ -884,7 +979,7 @@ mod tests {
             &CommandId::new(),
             attempt,
             cairn_protocol::ObservedAtUnixMillis::new(1),
-            prepared(),
+            exact_request,
         )
         .expect("authorize");
         let started = begin_model_dispatch(
@@ -908,18 +1003,26 @@ mod tests {
         let dispatched_usage = usage.clone();
         let mut transport = ScriptedModelTransport::new(move |_: &PreparedModelRequest| {
             Ok::<_, TransportError>(ModelTransportResponse::new(
-                b"provider response".to_vec(),
+                b"provider-response-secret-must-not-be-logged".to_vec(),
                 Some(dispatched_usage.clone()),
             ))
         });
-        let completion = execute_model_dispatch(
-            &mut events,
-            &mut content,
-            &mut transport,
-            started,
-            &CommandId::new(),
-            cairn_protocol::ObservedAtUnixMillis::new(3),
-        )
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_writer(logs.clone())
+            .finish();
+        let completion = tracing::subscriber::with_default(subscriber, || {
+            execute_model_dispatch(
+                &mut events,
+                &mut content,
+                &mut transport,
+                started,
+                &CommandId::new(),
+                cairn_protocol::ObservedAtUnixMillis::new(3),
+            )
+        })
         .expect("execute");
         let DispatchCompletion::Response(received) = completion else {
             panic!("expected response completion");
@@ -930,7 +1033,20 @@ mod tests {
         content
             .write_to(&response_id, &mut archived)
             .expect("read response");
-        assert_eq!(archived, b"provider response");
+        assert_eq!(archived, b"provider-response-secret-must-not-be-logged");
+        let log_text = logs.text();
+        assert!(
+            log_text.contains("model_dispatch_started"),
+            "captured logs: {log_text}"
+        );
+        assert!(
+            log_text.contains("model_dispatch_completed"),
+            "captured logs: {log_text}"
+        );
+        assert!(log_text.contains(&attempt.to_string()));
+        assert!(log_text.contains("\"input_tokens\":11"));
+        assert!(!log_text.contains("request-secret-must-not-be-logged"));
+        assert!(!log_text.contains("provider-response-secret-must-not-be-logged"));
 
         let history = events.read_stream(&stream, None).expect("read completed");
         assert_eq!(

@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     io::Cursor,
+    time::Instant,
 };
 
 use cairn_protocol::{
@@ -928,6 +929,10 @@ pub fn begin_tool_operation<E: EventStore>(
 /// # Errors
 ///
 /// Returns [`OperationCoordinatorError`] when archival or terminal recording fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "tool execution keeps the external effect, classified durable terminal, and paired operational lifecycle events in one boundary"
+)]
 pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
     events: &mut E,
     content: &mut C,
@@ -948,6 +953,18 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
         revision,
         started_event_id,
     };
+    let wall_started = Instant::now();
+    tracing::info!(
+        target: "cairn.agent.tool",
+        event = "tool_operation_started",
+        operation_id = %operation.operation_id,
+        attempt_id = %attempt_id,
+        tool = %operation.tool.as_str(),
+        implementation_version = %operation.implementation_version.as_str(),
+        effect = ?operation.effect,
+        arguments_id = %operation.arguments_id,
+        "tool operation started"
+    );
     match gateway.invoke(&operation) {
         Ok(result) => {
             let descriptor = content.put::<OperationResult>(&mut Cursor::new(result.as_bytes()))?;
@@ -970,6 +987,15 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
                 result_id: descriptor.content_id,
                 record: record.to_string(),
             })?;
+            tracing::info!(
+                target: "cairn.agent.tool",
+                event = "tool_operation_completed",
+                operation_id = %operation.operation_id,
+                attempt_id = %attempt_id,
+                result_id = %descriptor.content_id,
+                elapsed_ms = elapsed_millis(wall_started),
+                "tool operation completed"
+            );
             Ok(ToolOperationCompletion::Completed {
                 attempt_id,
                 result_id: descriptor.content_id,
@@ -996,6 +1022,21 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
                 },
             )?;
             let diagnostic = error.to_string();
+            let outcome = match class {
+                ToolGatewayFailureClass::NotStarted => "not_started",
+                ToolGatewayFailureClass::Rejected => "rejected",
+                ToolGatewayFailureClass::Ambiguous => "ambiguous",
+            };
+            tracing::warn!(
+                target: "cairn.agent.tool",
+                event = "tool_operation_failed",
+                operation_id = %operation.operation_id,
+                attempt_id = %attempt_id,
+                elapsed_ms = elapsed_millis(wall_started),
+                outcome,
+                diagnostic_archived = true,
+                "tool operation failed; diagnostic omitted from logs"
+            );
             Ok(match class {
                 ToolGatewayFailureClass::NotStarted => ToolOperationCompletion::NotStarted {
                     attempt_id,
@@ -1013,6 +1054,10 @@ pub fn execute_tool_operation<E: EventStore, C: ContentStore, G: ToolGateway>(
             })
         }
     }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 struct TerminalContext {

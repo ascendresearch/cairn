@@ -1,0 +1,15 @@
+[package]
+name = "cairn-observability"
+description = "Cairn process logging initialization and operational field policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

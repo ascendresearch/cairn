@@ -515,3 +515,25 @@ to repair a rejected structure, resolve a concrete blocker, or test a named inst
 The stable common and role instructions remain content-addressed prefixes; frozen artifacts and
 trusted diagnostics occupy the changing suffix so useful provider cache reuse does not require
 merging the two roles.
+
+## D-023 — Structured logs are an operational projection, not durable authority
+
+- Decision: accepted
+
+Cairn uses `tracing` events for live operator visibility and retains append-only domain events plus
+typed content as the only reconstruction, retry, scheduling, and verdict authority. Logging may be
+filtered, delayed, duplicated, collected, rotated, or lost without changing domain behavior. No
+component reads logs back into a state machine.
+
+Process binaries initialize one stderr subscriber. JSON is the default encoding; compact text is an
+operator option. `CAIRN_LOG` selects target/level directives and `CAIRN_LOG_FORMAT` selects `json`
+or `compact`. Machine-readable CLI results remain on stdout. Cairn does not implement its own log
+file rotation in V1; the process supervisor or collector owns transport, retention, and rotation.
+
+Operational events use stable names and typed identity values for correlation. INFO covers process
+and work lifecycle transitions, WARN covers recoverable or terminal adverse outcomes, ERROR covers
+process/subsystem termination, and DEBUG covers periodic heartbeat/resource or wire-adjacent
+detail. Request/response bodies, prompts, reasoning, credentials, tool arguments/results, source
+bytes, and workload output bytes are forbidden. Logs may state that a diagnostic was archived and
+where its typed identity or attempt can be found, but generic boundaries do not print opaque
+diagnostic text that might contain a secret.

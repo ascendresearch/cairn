@@ -34,11 +34,11 @@ use cairn_control_transport::{
 };
 use cairn_execution::{
     AcceptedExecutionAssignment, AssignmentLeaseRecord, AuthenticatedWorkerIdentity, ControlFrame,
-    ExecutionAssignmentState, InboundControlSession, RecordedWorkerAuthenticator,
-    RegisteredWorkerSession, SchedulerPolicyVersion, TrustedWorkerPoolAssignment,
-    WorkerAuthenticationSubject, WorkerControlMessage, WorkerPoolName, WorkerProtocolVersion,
-    WorkerResultReconciliation, WorkerSessionTimeoutMillis, accept_worker_assignment,
-    acknowledge_controller_messages, deliver_controller_acknowledgement,
+    ExecutionAssignmentState, ExecutionCompletion, InboundControlSession,
+    RecordedWorkerAuthenticator, RegisteredWorkerSession, SchedulerPolicyVersion,
+    TrustedWorkerPoolAssignment, WorkerAuthenticationSubject, WorkerControlMessage, WorkerPoolName,
+    WorkerProtocolVersion, WorkerResultReconciliation, WorkerSessionTimeoutMillis,
+    accept_worker_assignment, acknowledge_controller_messages, deliver_controller_acknowledgement,
     deliver_controller_messages, disconnect_worker, enqueue_controller_message,
     execution_start_message, read_assignment_material_chunk, reconcile_worker_result,
     record_worker_heartbeat, record_worker_resource_observation, recover_execution_assignment,
@@ -203,7 +203,13 @@ pub async fn run_from_arguments(
             reservation_id,
             &command_id,
         )?;
-        eprintln!("released reservation {reservation_id}: {reason:?}");
+        tracing::info!(
+            target: "cairn.server.registry",
+            event = "reservation_released",
+            reservation_id = %reservation_id,
+            reason = ?reason,
+            "scheduler reservation released"
+        );
         return Ok(());
     }
     if first == "registry" {
@@ -254,7 +260,11 @@ pub async fn run_from_arguments(
         let bytes = serde_json::to_vec_pretty(&bundle)
             .map_err(|error| ServerError::Configuration(error.to_string()))?;
         write_new_secret_file(&output_path, &bytes)?;
-        eprintln!("wrote enrollment bundle to {}", output_path.display());
+        tracing::info!(
+            target: "cairn.server.enrollment",
+            event = "enrollment_bundle_written",
+            "enrollment bundle written to operator-selected secret file"
+        );
         return Ok(());
     }
     if first == "credential" {
@@ -280,9 +290,11 @@ pub async fn run_from_arguments(
             let bytes = serde_json::to_vec_pretty(&bundle)
                 .map_err(|error| ServerError::Configuration(error.to_string()))?;
             write_new_secret_file(&output_path, &bytes)?;
-            eprintln!(
-                "wrote credential rotation bundle to {}",
-                output_path.display()
+            tracing::info!(
+                target: "cairn.server.enrollment",
+                event = "credential_rotation_bundle_written",
+                credential_id = %credential_id,
+                "credential rotation bundle written to operator-selected secret file"
             );
             return Ok(());
         }
@@ -394,14 +406,13 @@ fn parse_nonzero(value: Option<OsString>) -> Result<NonZeroU64, ServerError> {
 }
 
 fn report_registry_mutation(action: &str, outcome: RegistryMutationOutcome) {
-    eprintln!(
-        "{action} in {}{}",
-        outcome.event_id(),
-        if outcome.was_replay() {
-            " (idempotent replay)"
-        } else {
-            ""
-        }
+    tracing::info!(
+        target: "cairn.server.registry",
+        event = "registry_mutation_completed",
+        action,
+        event_id = %outcome.event_id(),
+        idempotent_replay = outcome.was_replay(),
+        "registry mutation completed"
     );
 }
 
@@ -669,15 +680,25 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
             )
             .await
             {
-                eprintln!("cairn-server enrollment listener: {error}");
+                tracing::error!(
+                    target: "cairn.server.enrollment",
+                    event = "enrollment_listener_failed",
+                    error = %error,
+                    "enrollment listener terminated"
+                );
             }
         });
     }
-    eprintln!(
-        "cairn-server listening on {}",
-        listener
-            .local_addr()
-            .map_err(|e| ServerError::Startup(e.to_string()))?
+    let local_address = listener
+        .local_addr()
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    tracing::info!(
+        target: "cairn.server",
+        event = "control_listener_ready",
+        listen_address = %local_address,
+        scheduler_enabled = config.scheduler.is_some(),
+        enrollment_enabled = config.enrollment_service.is_some(),
+        "controller control listener ready"
     );
     loop {
         let (tcp, _) = listener
@@ -696,7 +717,12 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
             ))
             .await
             {
-                eprintln!("cairn-server worker connection: {error}");
+                tracing::warn!(
+                    target: "cairn.server.session",
+                    event = "worker_connection_failed",
+                    error = %error,
+                    "worker connection terminated with an error"
+                );
             }
         });
     }
@@ -786,11 +812,14 @@ async fn enrollment_listener_loop(
     issuer: Arc<EnrollmentIssuer>,
     config: ServerConfig,
 ) -> Result<(), ServerError> {
-    eprintln!(
-        "cairn-server enrollment listening on {}",
-        listener
-            .local_addr()
-            .map_err(|error| ServerError::Startup(error.to_string()))?
+    let local_address = listener
+        .local_addr()
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    tracing::info!(
+        target: "cairn.server.enrollment",
+        event = "enrollment_listener_ready",
+        listen_address = %local_address,
+        "controller enrollment listener ready"
     );
     loop {
         let (tcp, _) = listener
@@ -811,7 +840,12 @@ async fn enrollment_listener_loop(
             ))
             .await
             {
-                eprintln!("cairn-server enrollment connection: {error}");
+                tracing::warn!(
+                    target: "cairn.server.enrollment",
+                    event = "enrollment_connection_failed",
+                    error = %error,
+                    "enrollment connection terminated with an error"
+                );
             }
         });
     }
@@ -1122,6 +1156,18 @@ async fn handle_connection(
     .await
     .map_err(|error| ServerError::Session(error.to_string()))?;
 
+    tracing::info!(
+        target: "cairn.server.session",
+        event = "worker_session_registered",
+        worker_id = %session.worker_id(),
+        connection_id = %connection_id,
+        incarnation_id = %session.incarnation_id(),
+        pool = %session.pool().as_str(),
+        available_slots = availability.available_slots(),
+        active_attempts = availability.active_attempts().len(),
+        "authenticated worker session registered"
+    );
+
     let mut inbound = InboundControlSession::new(config.protocol_version, connection_id);
     let mut highest_sent = None;
     let mut acknowledgement_sent = None;
@@ -1145,6 +1191,14 @@ async fn handle_connection(
         disconnect_at,
     )
     .map_err(|error| ServerError::Session(error.to_string()))?;
+    tracing::info!(
+        target: "cairn.server.session",
+        event = "worker_session_disconnected",
+        worker_id = %session.worker_id(),
+        connection_id = %connection_id,
+        clean = outcome.is_ok(),
+        "worker session disconnected and durable state was updated"
+    );
     outcome
 }
 
@@ -1226,6 +1280,17 @@ async fn controller_session_loop(
                 )
                 .await
                 .map_err(|error| ServerError::Session(error.to_string()))?;
+                tracing::debug!(
+                    target: "cairn.server.session",
+                    event = "worker_heartbeat_accepted",
+                    worker_id = %session.worker_id(),
+                    connection_id = %connection_id,
+                    health = ?availability.health(),
+                    draining = availability.draining(),
+                    available_slots = availability.available_slots(),
+                    active_attempts = availability.active_attempts().len(),
+                    "worker heartbeat accepted"
+                );
             }
             WorkerWireMessage::ResourcesObserved { observation } => {
                 let now = admitted_resource_observation_time(
@@ -1257,6 +1322,14 @@ async fn controller_session_loop(
                 )
                 .await
                 .map_err(|error| ServerError::Session(error.to_string()))?;
+                tracing::debug!(
+                    target: "cairn.server.session",
+                    event = "worker_resources_accepted",
+                    worker_id = %session.worker_id(),
+                    connection_id = %connection_id,
+                    observation_id = %observation_id,
+                    "worker resource refresh accepted"
+                );
             }
             WorkerWireMessage::Control { frame } => {
                 inbound
@@ -1331,6 +1404,10 @@ async fn session_credential_is_authorized(
     Ok(registry.credential_is_authorized(session.credential_id(), session.worker_id()))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "worker message validation, durable transition, and correlated lifecycle logging remain one linear trust boundary"
+)]
 async fn process_worker_frame(
     state: &Arc<Mutex<ControllerState>>,
     config: &ServerConfig,
@@ -1357,6 +1434,16 @@ async fn process_worker_frame(
     };
     match &message.payload {
         WorkerControlMessage::AssignmentAccepted { binding } => {
+            tracing::info!(
+                target: "cairn.server.assignment",
+                event = "assignment_acceptance_received",
+                worker_id = %session.worker_id(),
+                connection_id = %connection_id,
+                assignment_id = %binding.assignment_id(),
+                job_id = %binding.job_id(),
+                attempt_id = %binding.attempt_id(),
+                "controller received worker assignment acceptance"
+            );
             if binding.worker_id() != session.worker_id()
                 || binding.worker_incarnation_id() != session.incarnation_id()
             {
@@ -1402,8 +1489,8 @@ async fn process_worker_frame(
                 }
             }
         }
-        WorkerControlMessage::ExecutionResult { .. } => {
-            let _result: WorkerResultReconciliation = reconcile_worker_result(
+        WorkerControlMessage::ExecutionResult { binding, .. } => {
+            let result: WorkerResultReconciliation = reconcile_worker_result(
                 events,
                 content,
                 session.worker_id(),
@@ -1412,6 +1499,25 @@ async fn process_worker_frame(
                 now,
             )
             .map_err(|error| ServerError::Session(error.to_string()))?;
+            let reconciliation = match &result {
+                WorkerResultReconciliation::Published(completion) => match completion.as_ref() {
+                    ExecutionCompletion::Completed { .. } => "published_completed",
+                    ExecutionCompletion::NotStarted { .. } => "published_not_started",
+                    ExecutionCompletion::Ambiguous { .. } => "published_ambiguous",
+                },
+                WorkerResultReconciliation::AlreadyTerminal => "already_terminal",
+            };
+            tracing::info!(
+                target: "cairn.server.assignment",
+                event = "execution_result_reconciled",
+                worker_id = %session.worker_id(),
+                connection_id = %connection_id,
+                assignment_id = %binding.assignment_id(),
+                job_id = %binding.job_id(),
+                attempt_id = %binding.attempt_id(),
+                reconciliation,
+                "controller reconciled worker execution result"
+            );
         }
     }
     Ok(())

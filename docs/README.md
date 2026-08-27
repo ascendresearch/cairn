@@ -19,6 +19,7 @@ document is complete.
 | [`ORACLE_AGENT.md`](ORACLE_AGENT.md) | How do isolated blue/red episodes research, propose, attack, and revise an oracle while preserving cache efficiency? | Normative agent/product design |
 | [`ORACLE_PROMPTS.md`](ORACLE_PROMPTS.md) | Which instruction layers, correction protocol, failure defenses, and budget assumptions govern Blue and Red? | Normative prompt design and audit |
 | [`ORACLE_DOGFOOD.md`](ORACLE_DOGFOOD.md) | How is the recorded/live Oracle loop configured, exercised, and accepted? | Active validation ledger |
+| [`OBSERVABILITY.md`](OBSERVABILITY.md) | Which runtime events are logged, how are they correlated, and what data is forbidden? | Normative operational design and coverage audit |
 | [`RECORD_REPLAY.md`](RECORD_REPLAY.md) | What is recorded, reconstructed, replayed, and compared? | Normative record design |
 | [`DECISIONS.md`](DECISIONS.md) | Which formerly open choices have been resolved? | Normative decision register |
 | [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) | What has not been decided? | Explicitly non-normative decision backlog |

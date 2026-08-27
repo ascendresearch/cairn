@@ -13,6 +13,7 @@ cairn-protocol.workspace = true
 cairn-record.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 cairn-store-sqlite = { path = "../cairn-store-sqlite" }

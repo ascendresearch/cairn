@@ -33,6 +33,9 @@ pub enum HttpTransportConfigError {
 pub struct HttpModelTransport {
     client: Client,
     endpoint: String,
+    provider: String,
+    model: String,
+    deployment: String,
     credential: CredentialSource,
     credential_base: PathBuf,
     protocol: ModelProtocolKind,
@@ -69,6 +72,9 @@ impl HttpModelTransport {
         Ok(Self {
             client,
             endpoint: model.endpoint().as_str().to_owned(),
+            provider: model.provider().as_str().to_owned(),
+            model: model.wire_model().as_str().to_owned(),
+            deployment: model.deployment().as_str().to_owned(),
             credential: model.credential().clone(),
             credential_base: credential_base.as_ref().to_path_buf(),
             protocol: model.protocol().kind(),
@@ -138,6 +144,18 @@ impl ModelTransport for HttpModelTransport {
                 self.max_request_bytes
             )));
         }
+        tracing::debug!(
+            target: "cairn.agent.http",
+            event = "model_http_request_prepared",
+            request_id = %request.request_id,
+            provider = %self.provider,
+            model = %self.model,
+            deployment = %self.deployment,
+            protocol = ?self.protocol,
+            request_bytes = request_len,
+            response_byte_limit = self.max_response_bytes,
+            "bounded model HTTP request prepared"
+        );
         let headers = self.authorization_headers()?;
         let response = self
             .client

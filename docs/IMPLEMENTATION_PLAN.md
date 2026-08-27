@@ -577,6 +577,23 @@ returned a terminal receipt with trusted `docker:accelerator:none` evidence. Thi
 toolchain gate, not reduction-candidate build evidence or device correctness. The device worker
 remains unavailable/draining until a shared card is genuinely free.
 
+## Cross-cutting O1 — structured operational logging
+
+Status: implemented foundation 2026-08-26; broader product/API metrics remain active work.
+
+The initial audit found no subscriber and only sparse free-form server/worker stderr messages. The
+workspace now has a shared strict JSON/compact stderr initializer and structured lifecycle events
+for model dispatch, tool operations, agent episode opening/completion, Oracle debate, scheduling,
+worker sessions, assignment transfer, local execution, and controller reconciliation. Events cite
+typed correlation identities, usage/counts, elapsed time, and outcomes without printing prompt,
+provider/tool/source/workload bodies or credentials. A captured model-dispatch test uses secret
+sentinels to enforce that boundary. The detailed field/level/coverage ledger is
+[`OBSERVABILITY.md`](OBSERVABILITY.md).
+
+Next observability work lands with its owning product slice: candidate/admission lifecycle events,
+generic durable Oracle coordination, external API request propagation, metrics export, dashboards,
+and alerts. None may make logs or metrics verdict authority.
+
 ## Cross-cutting gates
 
 Every phase must keep strong domain IDs, strict versioned JSON, append-only causal facts, secret-free

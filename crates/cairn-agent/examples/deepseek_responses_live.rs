@@ -34,6 +34,7 @@ struct LiveConfig {
 
 #[allow(clippy::too_many_lines)] // Keep the end-to-end conformance narrative linear and auditable.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    cairn_observability::init("deepseek-responses-live")?;
     let root = std::env::current_dir()?;
     let config_path = std::env::args()
         .nth(1)

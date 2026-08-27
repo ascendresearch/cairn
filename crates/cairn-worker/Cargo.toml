@@ -10,6 +10,7 @@ license.workspace = true
 cairn-codec.workspace = true
 cairn-control-transport.workspace = true
 cairn-execution.workspace = true
+cairn-observability.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 cairn-store-sqlite.workspace = true
@@ -22,6 +23,7 @@ sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
