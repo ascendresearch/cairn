@@ -1,13 +1,62 @@
 # Integrated implementation plan
 
 - Status: active
-- Date: 2026-08-26
+- Date: 2026-08-27
 - Scope: integrated worker/runtime foundation and model-authored Oracle Agent delivery
 
 This plan combines the unfinished parts of resource-driven workers and managed enrollment into one
 dependency-ordered program. It is an implementation plan, not a replacement for the normative
 requirements and system design. A later phase may start only when the preceding phase's acceptance
 gate is durable across restart.
+
+## Current checkpoint and next-session entry
+
+Checkpoint commit: `44c1f36` (`feat: materialize executable oracle cases`). The worktree was clean
+after that commit. The current implemented frontier is one model-authored, execution-materializable
+`matmul-zero-k` `f32` Oracle case:
+
+- Blue emits a strict typed body; trusted code validates the fixed caller shape, ABI order, raw
+  vector lengths, numerical-zero semantics, and caller-authorized comparator strength;
+- Cairn derives the invocation, empty input buffers, 24-byte proposed reference, canonical input
+  bundle, and typed content identities without asking the model to invent identities;
+- reference bytes are absent from the candidate process bundle; the existing call-adapter V1 binds
+  the typed invocation and captures ABI output through the normal execution port;
+- `f32-numeric-exact` retains raw identities but normalizes signed zero before comparison, while
+  bit exactness remains available only for a future caller contract that explicitly authorizes the
+  zero sign;
+- a real host adapter integration test executes this model-shaped input, validates the capture, and
+  prepares canonical comparison bytes plus an archival identity;
+- the final live-GitHub run converged after one Blue structured-submission repair and three Red
+  stability rechecks. It used seven model requests, 128,419 input tokens, 34,024 output tokens, and
+  106,240 cache-read tokens. The detailed four-run learning ledger is in `ORACLE_DOGFOOD.md`.
+
+The next session should start with the corpus-level companion control, not device deployment and
+not further prompt tuning. Add a nonzero-K `f32` matmul case with nonzero expected values through
+the same typed materialization, adapter, capture, and comparison ports. Then introduce a typed
+corpus-sufficiency rule that requires the zero-K case and this nonzero control together, so an
+unconditional zero-fill implementation cannot receive a candidate verdict. Keep single-case
+`ascend_c_test_readiness.ready=true` scoped to execution-material readiness; it is deliberately
+`sufficient_for_candidate_verdict=false`.
+
+After that companion gate passes, move the proven typed body and correction path out of the live
+example into the production `OracleProposalV1`/Blue submission gateway and admission graph. Full
+G13 remains incomplete until production proposal/revision/attack/admission artifacts consume the
+material, generic durable `AgentEpisode` owns the loop budgets, and a candidate-specific CUDA or
+Ascend C adapter executes the resulting corpus. Do not schedule scarce GPU/NPU work merely to
+validate Oracle authoring or corpus construction; those remain hardware-free until the candidate
+execution stage.
+
+Carry these constraints into the next session:
+
+- modify current V1 definitions directly; add no compatibility readers, migrations, aliases, or
+  internal version increments during pre-release development;
+- preserve necessary strong types at trust and identity boundaries without generalizing the first
+  slice into a speculative universal operator schema;
+- Blue and Red keep distinct durable episodes/continuations, and model agreement never substitutes
+  for trusted claim-strength or admission policy;
+- logging remains observational: no fallible, async, stateful, or business-semantic work belongs in
+  tracing event fields or span lifetimes;
+- retrieved upstream tests are untrusted research context, not corpus or semantic authority.
 
 ## Ordering principle
 
