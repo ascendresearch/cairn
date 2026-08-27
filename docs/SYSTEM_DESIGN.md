@@ -1,1778 +1,769 @@
-# Cairn system design
+# Cairn 系统设计
 
-- Status: normative target design
-- Date: 2026-08-24
-- Satisfies: [`SYSTEM_REQUIREMENTS.md`](SYSTEM_REQUIREMENTS.md)
+- 状态：规范性目标设计
+- 日期：2026-08-27
+- 产品范围：CUDA → Ascend C 算子移植
+- 对应需求：[SYSTEM_REQUIREMENTS.md](SYSTEM_REQUIREMENTS.md)
+- 软件架构细化：[design/README.md](design/README.md)
+- Agent 架构细化：[design/AGENT_ARCHITECTURE.md](design/AGENT_ARCHITECTURE.md)
 
-## 1. Design objective
+## 1. 设计目标
 
-Cairn is one product with several internal authorities. It must let agents propose work without
-letting agents decide whether their own work is trustworthy. It must execute operator-submitted migration jobs on heterogeneous private machines without making
-remote workers understand product semantics. It must return a
-verdict without losing the requests, decisions, artifacts, failures, and assumptions that produced
-that verdict.
+Cairn 是一个专门的 CUDA → Ascend C 移植系统。它从 CUDA kernel 及其必要上下文中恢复用户
+真正希望保留的高阶语义，探索并准入能够判断这些语义的 Oracle，搜索 Ascend C 候选实现，
+在真实 CUDA/Ascend 环境中获取受控证据，并给出可审计、可反驳、可重放的多维迁移结论。
 
-The architecture therefore separates four kinds of responsibility:
+产品不是一段生成的 Ascend C 代码，而是：
 
-1. **proposal** — agents and external sources may propose semantics, cases, variants, and candidates;
-2. **execution** — workers run authorized opaque jobs and capture observations;
-3. **adjudication** — trusted verification code derives and applies admission/verdict policy;
-4. **record** — append-only facts and immutable content preserve what every other part did.
+```text
+Ascend C implementation
++ admitted user intent
++ admitted Oracle portfolio
++ correctness / numerical / execution / safety / performance evidence
++ real-model feedback and known blind spots
++ an independently adjudicated verdict
+```
 
-The single-repository decision removes release and deployment coupling between the earlier Cairn and
-Alloyport repositories. It does not erase these responsibility boundaries.
+本设计不把 Cairn 泛化为通用代码生成、通用异构迁移或通用 agent 平台。底层 agent runtime、
+record 和 worker 可以保持领域无关，以形成清晰依赖与复用边界；这只是内部工程性质，不扩大
+产品目标。只有用户将来作出新的产品决策，才讨论 CUDA → Ascend C 之外的范围。
 
-## 2. Design principles
+## 2. 核心设计原则
 
-### P1 — The product is a claim plus evidence
+后续设计和实施还必须逐项满足
+[Oracle 设计不变量与实施前检查清单](oracle/DESIGN_INVARIANTS.md)；当前代码或旧实施计划不能覆盖
+该清单。
 
-A generated kernel without an admitted oracle and a traversable evidence chain is an intermediate
-artifact, not a completed migration.
+### P1 — 首要目标是恢复用户意图
 
-### P2 — Models propose; code adjudicates
+CUDA 源码是意图证据，不是意图本身。Cairn 优先恢复算法、数值、模型/部署和可观察契约，区分
+必须保留的语义与 CUDA/特定硬件的实现伪影。
 
-Models may author domain claims, references, properties, variants, and target implementations. They
-may not author generic mutants, tolerance derivation, comparison, or the final admission/verdict
-decision used on their own work.
+### P2 — 提案与权威分离
 
-### P3 — Model-visible means durably reconstructable
+模型、skill、知识库、外部测试、CUDA 行为和 agent 都可以提出 claim。只有独立的准入边界可以
+授权 intent、Oracle、hardware fact 或 candidate verdict。
 
-The record, not mutable runtime memory, is the source from which model input is projected. Anything
-new that can affect a model request needs a durable representation before dispatch.
+### P3 — 正确性是多平面组合
 
-### P4 — Execution is opaque; meaning stays above it
+算法语义、数值接受域、真实执行、内存/并发安全和 Oracle 充分性分别判断。性能是同级产品目标，
+但不能补偿任何 required correctness plane 的失败。
 
-A worker executes a job contract. It does not know whether the job is an oracle calibration, source
-gate, build, correctness run, or performance measurement.
+### P4 — Oracle 是 claim portfolio，不是 expected bytes
 
-### P5 — Identity follows bytes and decisions
+Oracle 的基本单位是带 domain、authority、expected relation、comparator、coverage、strength 和
+blind spots 的 claim。固定 expected output 只是其中一种关系。
 
-Verdict-relevant content is immutable and content-addressed. Decisions that select content are
-recorded. Derived identities are explicit and never masquerade as stored bytes.
+### P5 — 反馈是证据，不是 reward 真值
 
-### P6 — Failure is information, not an inconvenience
+上一轮候选、Oracle 误判、profiling、真实模型接入和用户决策都进入下一轮探索，但必须先分类、
+归因和准入，不能静默改写已冻结意图、Oracle 或阈值。
 
-Recoverable subject defects, infrastructure failures, ambiguous effects, false rejects, blind spots,
-and unverifiable claims have different types and different recovery paths.
+### P6 — Hardware roofline 是条件化 ceiling family
 
-### P7 — Spend the cheapest decisive resource
+理论峰值、microbench 实测 ceiling、算法 roofline 和当前实现 roofline 必须分开。瓶颈结论绑定
+dtype、shape、数据流、引擎、memory level、工具链和 device state。
 
-For each proposal, validation stops at the cheapest layer that can decide it. Provider spend is a
-separate search budget, not the last rung of the hardware validation ladder.
+### P7 — 知识扩大探索，不扩大权限
 
-### P8 — Generality is demonstrated by a second real user
+文档、知识库和 skill 的作者与来源只是 provenance。信赖按具体 claim、证据、适用域和生命周期
+决定。检索排名、官方标签或模型信心都不是 admission。
 
-Neutral names do not make a framework. The second materially different operator must pass without
-modifying generic runtime, execution, or verification core types.
+### P8 — Model proposes; receipts and trusted code adjudicate
 
-## 3. System context
+Agent 可以编排、分析和提出下一步实验。机械 gate 从不可变 artifact 和权威 receipt 重算，拒绝
+applicant 自报的 `passed`、`trusted` 或“已在真实设备运行”。
+
+### P9 — Model-visible means durably reconstructable
+
+任何影响模型请求的 instructions、tools、history、knowledge/skill snapshot、evidence 和 policy 必须
+先有耐久表示。Live provider continuation 可能不同，不能冒充确定性 replay。
+
+### P10 — 强类型是 authority boundary
+
+不同身份、单位、角色、生命周期、证据强度、provenance 和 policy outcome 在 Rust 中是不同的
+验证类型。Raw wire/storage 值只存在于 codec 边界，反序列化重新执行构造约束。
+
+### P11 — 失败、未知和冲突都是产品结果
+
+Infrastructure failure、candidate violation、unverifiable claim、authority conflict、budget
+exhaustion 和 policy denial 不能互相转换。系统宁可输出窄结论或未知，也不制造虚假 pass。
+
+### P12 — 隔离支持未来优化
+
+高阶意图恢复、Oracle 探索、硬件模型、知识/skill、candidate search 和 admission 通过不可变协议
+连接。任何一个子系统可以被更强模型、静态分析或形式化方法替换，而不获得相邻 authority。
+
+## 3. 系统上下文
 
 ```mermaid
 flowchart LR
-    caller["Caller or human operator<br/>task, domain, constraints, budget"]
-    source["Source artifacts<br/>CUDA, definitions, upstream tests"]
-    provider["Model providers"]
-    cpu["CPU execution"]
-    srcaccel["Source accelerator<br/>initially CUDA"]
-    target["Target build and device<br/>initially Ascend"]
+    caller["用户/上游调用者\nCUDA 任务、意图、约束、预算"]
+    context["项目与模型上下文\ncaller/tests/docs/graph/traces"]
+    providers["模型、文档、知识、skills"]
+    cuda["CUDA build/device/tools"]
+    ascend["Ascend C build/NPU/tools"]
 
-    subgraph cairn["Cairn"]
-      app["Task + oracle + candidate search"]
-      evidence[("Event log + CAS")]
-      app --- evidence
+    subgraph cairn["Cairn — CUDA → Ascend C"]
+      product["Intent + Oracle + Candidate workflow"]
+      record[("Event store + CAS + evidence graph")]
+      product --- record
     end
 
     caller --> cairn
-    source --> cairn
-    cairn <--> provider
-    cairn <--> cpu
-    cairn <--> srcaccel
-    cairn <--> target
-    cairn -->|"implementation + verdict + evidence"| caller
+    context --> cairn
+    providers <--> cairn
+    cuda <--> cairn
+    ascend <--> cairn
+    cairn -->|"implementation + multidimensional verdict + evidence"| caller
 ```
 
-Cairn can be invoked directly through its CLI/API or by a larger migration system. Upstream
-feedback may constrain a new task or report a measurement. Method remains inside the search unless
-it is introduced as an explicit, versioned policy change.
+初始执行单元是“一个 CUDA kernel + 显式 host launch + 对应 Ascend C kernel”。为了恢复意图，
+分析窗口可以读取受限 caller slice、模型图和部署反馈；这不把候选执行单位扩大为整个模型。
 
-## 4. Vocabulary and containment
-
-| Term | Meaning |
-|---|---|
-| **Task** | One bounded migration objective and its immutable inputs. |
-| **Episode** | One role-scoped agent run within a task, such as oracle author, breaker, or candidate author. |
-| **Turn** | Work initiated by one admitted input to an episode and ending when the episode yields control. |
-| **Step** | One model request and the tool operations it causes before another model request. |
-| **Operation** | One durable tool invocation with effect and recovery semantics. |
-| **Job** | An opaque execution request suitable for a local executor or remote worker. |
-| **Attempt** | One concrete execution of a job. Retries are new attempts. |
-| **Artifact** | Immutable bytes with content identity and provenance. |
-| **Claim** | A statement whose subject, scope, strength, assumptions, and evidence are explicit. |
-| **Oracle proposal** | Unadmitted domain/reference/property bundle. It cannot judge a candidate. |
-| **Oracle artifact** | An immutable proposal version that passed admission for a stated scope. |
-| **Calibration** | Executed evidence that an oracle accepts required honest paths and rejects required attacks. |
-| **Candidate** | A target implementation proposed during kernel search. |
-| **Receipt** | A canonical record of one check or execution, citing its inputs and observations. |
-| **Verdict** | Cairn's adjudicated result over a candidate, oracle, domain, policy, and evidence set. |
-| **Projection** | A rebuildable view derived from durable events and immutable content. |
-| **Branch** | A new execution lineage derived from a historical boundary without changing its source. |
-
-The public API uses product resources (`Task`, `Episode`, `Attempt`, `Oracle`, `Artifact`, `Verdict`).
-Internal runtime event variants are not automatically public protocol commitments.
-
-Semantically different identities and states remain different Rust types throughout production
-logic. A `TaskId` is not an `EpisodeId`; a `ContentId<T>` is not an aggregate ID; a stream revision is
-not an event sequence; and an empirical assurance is not a proven bound. String, integer, and byte
-representations are confined to validated codec, protocol, and storage adapters. Generic `Id`, raw
-digest, and boolean status fields are not substitutes for domain types.
-
-## 5. Architectural layers
+## 4. 总体架构
 
 ```mermaid
 flowchart TD
-    L7["L7 Interfaces<br/>App Server, CLI, client SDKs"]
-    L6["L6 Product orchestration<br/>task lifecycle, oracle search, candidate search, reporting"]
-    L5["L5 Domain adapters<br/>CUDA/Ascend contracts and operator-specific artifacts"]
-    L4["L4 Verification<br/>admission, mutants, tolerance, comparison, verdict"]
-    L3["L3 Execution substrate<br/>jobs, attempts, workers, leases, execution evidence"]
-    L2["L2 Agent runtime<br/>loop, model, tools, context policy, role scopes"]
-    L1["L1 Record<br/>events, CAS, projections, audit, replay"]
-    L0["L0 Protocol foundations<br/>identity, envelopes, schemas, error taxonomy"]
+    intake["Task Intake & Evidence Resolution"]
+    sir["Semantic Intent Recovery\nproposal-only, isolated"]
+    ia{"Intent Admission"}
+    intent[["MigrationIntentContract"]]
+    oe["Oracle Explorer\nclaims/cases/references/comparators"]
+    oa{"Oracle Admission\nhidden controls + receipts"]
+    oracle[["AdmittedOraclePortfolio"]]
+    cs["Ascend C Candidate Search"]
+    ca{"Independent Candidate Admission"]
+    verdict[["MigrationVerdict"]]
 
-    L7 --> L6
-    L6 --> L5
-    L6 --> L4
-    L6 --> L3
-    L6 --> L2
-    L5 -. "content-addressed artifacts" .-> L4
-    L4 --> L3
-    L4 --> L1
-    L3 --> L1
-    L2 --> L1
-    L1 --> L0
-    L2 --> L0
-    L3 --> L0
-    L4 --> L0
+    hpm["Hardware Performance Model\nspec/microbench/profiler/rooflines"]
+    ks["Knowledge & Skill Registry\nclaim trust/lifecycle"]
+    feedback["Feedback & Learning\ncounterexamples/model integration"]
+    exec["Execution Substrate\nCUDA/CPU/Ascend jobs"]
+    rec[("Record/CAS/Evidence graph")]
+
+    intake --> sir --> ia
+    ia -->|admitted| intent --> oe --> oa
+    oa -->|admitted| oracle --> cs --> ca --> verdict
+    ia -->|revise/conflict| sir
+    oa -->|revise/reject| oe
+    ca -->|diagnostic| cs
+
+    hpm <--> oe
+    hpm --> ca
+    ks --> sir
+    ks --> oe
+    feedback --> sir
+    feedback --> oe
+    verdict --> feedback
+
+    sir -.jobs.-> exec
+    oe -.jobs.-> exec
+    oa -.jobs.-> exec
+    cs -.jobs.-> exec
+    ca -.jobs.-> exec
+    exec --> rec
+    sir --> rec
+    oe --> rec
+    oa --> rec
+    cs --> rec
+    ca --> rec
 ```
 
-The layer number expresses authority and dependency, not call-stack order. Product tools registered
-with the agent runtime may call verification and execution services, but `cairn-agent` does not
-import those services. Composition occurs in the product layer through ports.
+### 4.1 五个 authority domain
 
-### 5.1 Layer invariants
+| Authority domain | 可以做 | 不可以做 |
+| --- | --- | --- |
+| Proposal | 恢复假设、生成 Oracle/candidate、提出实验 | 授权自己的结论 |
+| Execution | 运行授权 job、捕获环境和观察 | 解释算子语义或给 verdict |
+| Admission | 验证 claim、运行 hidden controls、从 receipt 重算 | 凭空创造缺失语义 |
+| Record | 保存事实、内容、因果和身份 | 决定业务含义 |
+| Policy/User | 决定意图冲突、预算、发布阈值和数据权限 | 用主观决定冒充执行证据 |
 
-- L0 contains no workflow or domain policy.
-- L1 contains no product verdict logic.
-- L2 contains no migration, operator, CUDA, Ascend, or gate vocabulary.
-- L3 contains no operator mathematics or verdict adjudication.
-- L4 contains generic verification method but does not compile operator-specific mathematics into a
-  deployed worker.
-- L5 domain-specific behavior enters as immutable artifacts or product adapters.
-- L6 is the only layer that binds agent roles, tools, verification, execution, and task policy.
-- L7 translates stable resources and events; it does not own task truth.
+Agent 可以作为某一 authority domain 的编排器，但权限由 server-enforced capabilities 决定，不由
+prompt 中的角色名称决定。
 
-## 6. Proposed Rust workspace
-
-The first implementation should prefer a small number of stable boundaries over many single-purpose
-crates. The target decomposition is:
-
-| Crate | Owns | Must not own |
-|---|---|---|
-| `cairn-protocol` | identifiers, canonical envelopes, schema versions, shared error/effect vocabulary | persistence, runtime services, domain policy |
-| `cairn-codec` | canonical JSON encoding/decoding, strict V1 schema checks, conformance fixtures | domain decisions, persistence, workflow |
-| `cairn-record` | store ports, event semantics, projections, graph audit, replay loading | SQL, model calls, job execution, verdict policy |
-| `cairn-store-sqlite` | SQLite event/projection/coordination adapters and initial content metadata | product, agent, execution, or verdict policy |
-| `cairn-agent` | episodes, steps, model/tool/context capabilities, role scopes, budgets | CUDA/Ascend/gates/worker scheduling |
-| `cairn-execution` | job/attempt contracts, leases, capability matching, executor/worker ports, evidence capture | oracle meaning or operator mathematics |
-| `cairn-verification` | claim strength, oracle admission, tolerance provenance, mutants, comparison, calibration, verdict | provider SDKs, worker deployment, operator source |
-| `cairn-migration` | task aggregate, domain bundle schemas, oracle/candidate workflows, product tools, report assembly | storage/transport implementations |
-| `cairn-app-server-protocol` | stable external request/response/notification types and schema generation | runtime implementation |
-| `cairn-server` | composition root, API, stores, scheduler, provider adapters | reusable domain logic that belongs in libraries |
-| `cairn-worker` | remote worker process and supported execution backends | product adjudication |
-| `cairn-cli` | reference client and local operator experience | alternative implementation of server logic |
-| `cairn-testkit` | scripted/recorded providers, fake clock, fake executor, fault injection, fixtures | production shortcuts |
-
-Domain adapters may begin inside `cairn-migration` while only one source/target pair exists. A new
-crate is justified when a second adapter demonstrates a stable interface, not before.
-
-All production crates live in one workspace. A single verification entry point runs formatting,
-linting, tests, strict schema conformance, dependency boundaries, mutation controls, and documentation
-links while preserving each failing exit status.
-
-`cairn-protocol` exposes typed SHA-256 semantic identities and typed UUIDv7 lifecycle identities.
-The algorithm enum is deliberately closed to SHA-256 in V1. `cairn-record` owns canonical event
-identity material and derives `EventId` only after sequence allocation; storage adapters call that
-shared trusted function rather than inventing identity rules. Physical blob hashes remain an
-internal `ContentStore` concern and cannot satisfy an API requiring `ContentId<T>`.
-
-## 7. Top-level product state
-
-### 7.1 Task aggregate
-
-A task is a projection over immutable inputs and durable events. Its coarse state is:
-
-```text
-Created
-  → InputsResolved
-  → OracleSearch
-  → OracleAdmitted
-  → CandidateSearch
-  → VerdictReady
-  → Completed
-```
-
-From any active state it may also become `Suspending`, `Suspended`, `Cancelling`, `Cancelled`,
-`BudgetExhausted`, `Incomplete`, or `InfrastructureBlocked`. `Fail` is not a task infrastructure
-state; it is a candidate verdict.
-
-State transitions are accepted through commands with an expected aggregate revision. Successful
-commands append events atomically. Snapshots accelerate reads but carry the last applied event
-identity and can be discarded.
-
-### 7.2 Separate aggregates
-
-The system avoids one enormous task record. Independently consistent lifecycles have their own event
-streams:
-
-- task;
-- episode;
-- operation;
-- job and attempt;
-- oracle proposal and admission run;
-- candidate;
-- verdict.
-
-Relationships are immutable identities in events. Cross-aggregate workflows are driven by durable
-process managers that are idempotent under event replay.
-
-## 8. End-to-end workflow
-
-### 8.1 Intake
-
-1. The server validates a versioned task specification.
-2. Content inputs are archived in CAS; external secret references are classified and excluded.
-3. Canonical task identity is derived.
-4. The caller's minimum structured contract produces mandatory base cases and explicit unknowns.
-5. A role-scoped domain-analysis/blue episode may propose evidence-citing refinements without
-   rewriting the caller declaration.
-6. Source probing, upstream/external test proposals, and historical failure obligations challenge
-   both declarations and refinements.
-7. Oracle admission adjudicates these separate sources into an immutable admitted-domain artifact or
-   returns a conflict/insufficient-evidence result.
-8. Policy resolves allowed providers, tools, machines, budgets, oracle strength, and data boundary.
-9. `TaskInputsResolved` is appended only after all model-visible and verdict-relevant identities are
-   explainable.
-
-### 8.2 Oracle search
+## 5. 分层与依赖
 
 ```mermaid
-flowchart LR
-    spec["Task + structured domain"]
-    blue["Blue episode<br/>reference, properties, valid-family proposals"]
-    red["Red episode<br/>correct and incorrect variants"]
-    admit{"Executed admission<br/>trusted code"}
-    reject["Diagnostic + new proposal version"]
-    frozen[["Admitted oracle artifact"]]
+flowchart TD
+    L9["L9 Interfaces\nCLI / App Server / upstream integration"]
+    L8["L8 Product orchestration\nCUDA→Ascend C task lifecycle"]
+    L7["L7 Search and learning\nSIR / Oracle Explorer / Candidate Search / Feedback"]
+    L6["L6 Admission\nIntent / Oracle / Candidate / Performance"]
+    L5["L5 CUDA→Ascend C domain\ncontracts / adapters / claims / hardware model"]
+    L4["L4 Execution\njobs / workers / leases / evidence capture"]
+    L3["L3 Agent runtime\nmodel / tools / context / role capabilities"]
+    L2["L2 Knowledge and record\nKB / skills / events / CAS / replay"]
+    L1["L1 Protocol foundation\nstrong IDs / units / schemas / errors"]
 
-    spec --> blue
-    spec --> red
-    blue --> admit
-    red --> admit
-    admit -->|rejected| reject
-    reject --> blue
-    reject --> red
-    admit -->|admitted| frozen
-    admit -->|insufficient evidence| unverifiable["Unverifiable claim"]
+    L9 --> L8 --> L7
+    L7 --> L6
+    L7 --> L5
+    L6 --> L5
+    L6 --> L4
+    L7 --> L4
+    L7 --> L3
+    L7 --> L2
+    L6 --> L2
+    L4 --> L2
+    L3 --> L2
+    L2 --> L1
+    L3 --> L1
+    L4 --> L1
+    L5 --> L1
 ```
 
-Blue and red are role scopes, not necessarily model identities. Different model families reduce a
-shared-prior risk but are not the adjudication authority. Admission is code and executed evidence.
+层级表达依赖和 authority，不表达运行时调用顺序：
 
-Blue and red use distinct durable episodes. They share immutable task/source artifacts but exchange
-only submitted proposal/attack artifacts and trusted diagnostics, never private native continuation
-or unsubmitted reasoning. Their model-input projections keep deterministic append-only prefixes so
-role isolation does not require abandoning provider prompt caching. Blue has a bounded read-only
-external-test research tool; PyTorch and other upstream cases retain exact source, revision,
-and retrieval provenance as research context. Blue independently authors Cairn test proposals;
-fetched source has no executable-corpus promotion edge and repository-license lookup is not part of
-this loop.
+- Protocol 不知道业务生命周期；
+- Record 不产生 verdict；
+- Agent runtime 不含 CUDA、Ascend C、Oracle 或 gate 业务词汇；
+- Execution worker 不含算子数学、roofline 或 admission policy；
+- CUDA→Ascend C domain 层拥有 ABI、意图、Oracle claim、adapter 和硬件知识；
+- Admission 与 proposal 实现分离；
+- Product orchestration 是唯一组合各 capability 的位置。
 
-The role, cache, network-research, and feedback contract is in
-[`ORACLE_AGENT.md`](ORACLE_AGENT.md). The adjudication contract is in
-[`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md).
+## 6. 领域模型与强类型边界
 
-### 8.3 Candidate search
+### 6.1 核心 aggregate
 
-1. A candidate episode is opened with a frozen oracle identity and restricted product tools.
-2. The model proposes a candidate bundle.
-3. Source validation checks completeness and self-consistency without remote execution.
-4. A target build job compiles and links the bundle.
-5. An admitted correctness plan schedules only the still-needed source/reference and target runs.
-6. Trusted verification code compares observations and emits a receipt.
-7. Recoverable rejection is returned as typed diagnostic evidence to the same episode.
-8. The model may inspect, revise, and submit a new immutable candidate version within budget.
-9. A terminal candidate verdict and task result are assembled without discarding earlier attempts.
+独立生命周期分别拥有 event stream：
 
-The model should not retype candidate, manifest, gate, or job identities already present in a cited
-receipt. Product tools take the smallest independent input and derive the rest from trusted records.
+- `MigrationTask`；
+- `IntentRecoveryRun` 与 `IntentAdmissionRun`；
+- `OracleExplorationRun`、`OracleReviewRun` 与 `OracleAdmissionRun`；
+- `CandidateSearchEpisode` 与 `Candidate`；
+- `Job` 与 `Attempt`；
+- `KnowledgeClaim` 与 `SkillRecord`；
+- `HardwareMeasurementRun`；
+- `MigrationVerdict`。
 
-### 8.4 Result assembly
+它们通过 typed immutable identity 连接，不被塞进一个可变大对象。跨 aggregate 的 process manager
+从事件重建并在重放下幂等。
 
-The server walks the evidence graph before completing a task. A missing required edge yields
-`Unverifiable` or `InfrastructureFailure`, depending on whether evidence cannot exist or should exist
-but is missing. It never yields an incomplete `Pass`.
+### 6.2 提案类型与准入类型不可互换
 
-The exported result is a manifest pointing to canonical artifacts and receipts, not an archive whose
-directory layout defines semantics.
-
-## 9. Agent runtime design
-
-### 9.1 Capability seams
-
-A capability seam is complete only when it defines:
-
-1. a service contract;
-2. one or more providers;
-3. a consumer;
-4. durable facts required for reconstruction;
-5. permissions and failure/effect semantics.
-
-Initial seams:
-
-| Seam | Decides | Example providers |
-|---|---|---|
-| `ModelTransport` | which bytes are sent and returned | HTTP/provider SDK, recorded bytes, scripted fake |
-| `ModelAdapter` | what provider bytes mean semantically | Responses-like, chat-like, Anthropic-like, recorded turn |
-| `ToolGateway` | validation and result of a tool operation | product tool registry, recorded tools, scripted fake |
-| `TurnInputPolicy` | instructions, tools, context, pending results visible this step | full history, skill injection, recorded decision |
-| `ApprovalGateway` | whether a policy-sensitive action may proceed | static policy, interactive client, recorded decision |
-| `Clock/IdSource` | time and generated operational identity | system, deterministic test provider |
-
-Recorded providers are ordinary providers, not replay flags in the loop.
-
-### 9.2 Model provider stack
-
-Cairn does not define a universal provider message format. A provider-neutral semantic turn is useful
-for tool validation, the agent loop, replay, and inspection, but it cannot losslessly represent every
-protocol's continuation requirements. The model boundary therefore has two coordinated products:
-
-- a durable semantic turn consumed by domain-neutral runtime logic; and
-- a protocol-native continuation containing the exact ordered items, messages, blocks, and
-  correlation identities needed to materialize the next request.
-
-Model selection is resolved through independent layers:
-
-| Layer | Owns | Must not decide |
-|---|---|---|
-| model template | wire model plus per-protocol context/output bounds, tools, reasoning, parallel-call, schema capabilities, defaults, and model quirks | endpoint, account, or secrets |
-| runtime alias | operator-facing choice of template, deployment, and optional bounded generation overrides | model capabilities |
-| deployment | provider label, protocol choice, HTTPS endpoint, credential reference, transport bounds, and data boundary | model capability declarations or agent-loop behavior |
-| protocol codec | request encoding, response decoding, usage extraction, and native continuation | HTTP, retries, tools, or vendor routing |
-| transport | one bounded HTTP exchange and byte limits | response semantics or tool execution |
-| credential resolver | dispatch-time header value from an external reference | durable model configuration |
-
-The provider label is attribution, not dispatch logic. A deployment's `protocol` selects one of the
-initial codecs:
-
-| Protocol | Native continuation that must be preserved | Tool-result correlation |
-|---|---|---|
-| OpenAI Responses | typed output items, including reasoning and function-call items | function `call_id` |
-| OpenAI Chat Completions | ordered messages and the exact assistant tool-call message, including compatible reasoning extensions | `tool_call_id` |
-| Anthropic Messages | ordered content blocks, including `thinking`, `redacted_thinking`, and `tool_use` where returned | `tool_use_id` |
-
-Reasoning replay is protocol-native state, not normalized assistant text:
-
-| Family/profile | Local retention and resend rule |
-|---|---|
-| OpenAI Responses, stateless | Preserve every ordered output item. Profiles using OpenAI opaque reasoning add `include: ["reasoning.encrypted_content"]`, then retain and resend the returned encrypted field. |
-| DeepSeek Chat | Preserve the exact assistant message. When it contains tool calls, the DeepSeek template requires `reasoning_content`; Cairn refuses to prepare a continuation if it is absent. |
-| Anthropic Messages | Preserve ordered `thinking`, `redacted_thinking`, and `tool_use` blocks. Thinking text/signature and redacted data are returned without modification during the tool-use turn. |
-
-These artifacts use the content domain `agent.native-model-continuation-sensitive.v1`. Raw responses
-already contain the same material, so native continuations inherit the raw-response sensitivity
-classification: ordinary logs and default exports must cite identities, not print thinking content.
-Encryption at rest remains a deployment/storage responsibility until Cairn has an explicit encrypted
-CAS capability.
-
-The prepared request also cites `agent.native-model-request-state-sensitive.v1`, which binds the
-exact provider request identity to its base continuation, selected protocol, and offered tool names.
-This artifact is what makes a response decodable after process loss: recovery does not depend on an
-in-memory codec object retaining the previous request boundary.
-
-The codec must retain unrecognized but policy-allowed native blocks in the archived continuation or
-fail explicitly; it must not silently coerce them into text. Tool arguments remain untrusted bytes
-until Cairn's schema validator accepts them. The SDK/transport performs one provider turn only. Tool
-execution, retry authority, budgets, and episode termination remain in the generic runtime.
-
-V1 uses locally reconstructable continuation. OpenAI Responses deployments therefore set
-`store=false`; Chat Completions and Anthropic Messages replay their recorded native history. A future
-hosted continuation ID may be recorded as external evidence, but it cannot be the sole reconstruction
-authority. Changing model, template revision, deployment, protocol, or codec version creates a new
-episode or explicit counterfactual branch rather than mutating an episode's frozen selection.
-
-Model characteristics and operator deployment choices are stored separately. Repository-maintained
-`model-templates/<vendor>/<model>.json` files own the wire model, per-protocol capability profiles,
-protocol-specific request settings, and safe defaults. User configuration states which template is
-enabled, which protocol/output form to use, its endpoint and authentication reference, the data
-boundary and transport bounds, and optional generation overrides. It never asks the operator to
-retype whether the model supports tools, parallel calls, reasoning, or a context size.
-
-The initial DeepSeek V4 Pro template declares the OpenAI Responses, OpenAI Chat Completions, and
-Anthropic Messages combinations exercised or required by this project. The runtime example enables
-Responses, matching the prior Alloyport integration evidence; choosing Chat or Anthropic requires
-only a different deployment protocol and endpoint. A private deployment changes those user-owned
-fields without copying the model template. Future conformance receipts can qualify a particular
-endpoint's actual behavior without moving model capability declarations back into user config.
-
-Template files are versioned data rather than Rust constants. Resolution validates the selected
-protocol section and user overrides, then freezes the template's typed content identity, model
-capabilities/defaults, and user deployment into the episode snapshot. Updating a template affects
-new resolutions only; an old episode continues to cite its exact template revision.
-
-Authentication shape is also deployment configuration rather than a protocol inference: official
-OpenAI commonly uses Bearer and official Anthropic uses `x-api-key`, but a compatible gateway may
-make a different choice. Cairn validates that only an external secret reference is present; a live
-deployment check determines whether its configured endpoint accepts that authentication shape.
-
-**Implemented:** `cairn-agent` now has the strict runtime model catalog, strongly typed quantities,
-the separate `ModelTemplateRegistry`, three protocol-specific template sections, bounded preference
-overrides, capability and credential-reference validation, and a content-addressable frozen
-resolution. `model-templates/deepseek/deepseek-v4-pro.json` supplies model characteristics while
-`config/runtime-models.example.json` contains only the enabled Responses deployment. The native
-protocol slice now provides closed per-protocol history variants, typed tool-call correlations,
-model-template replay policies, and sensitive CAS archival for both continuation and prepared
-request state. One parse of immutable response bytes produces the native continuation and semantic
-turn; `agent.native-continuation-recorded`, `agent.model-response-decoded`, and every
-`agent.tool-call-proposed` fact commit in one optimistic event batch. The generic `AgentStep` and
-`AgentEpisode` paths reject independent semantic decoding for native requests and can recover the
-exact request context from events plus CAS after memory loss. A hardware-free two-step fixture runs
-model tool call → trusted binding/execution → durable result → native result correlation → second
-model yield, while checking byte-identical reconstruction. These tests do not claim that a fresh
-live model output is deterministic.
-The bounded HTTPS transport reads its credential file only at dispatch, marks authorization headers
-sensitive, disables redirects, applies configured connect/request/body limits, extracts validated
-usage receipts, and preserves not-sent/rejected/ambiguous effect classes. The opt-in DeepSeek
-Responses conformance executable performs a real tool call and tool-result continuation around a
-SQLite/CAS close-reopen boundary, checks byte identity before the second dispatch, and rejects a
-missing or repeated tool call. It emits identities, usage, and boolean checks only; thinking and
-answer bodies remain archived rather than printed.
-
-The wire rules are based on the provider documentation current at implementation time:
-
-- [OpenAI Responses create reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
-  requires reasoning items in manually managed context and documents encrypted reasoning for
-  stateless/ZDR operation.
-- [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/) requires
-  `reasoning_content` to be returned with tool-calling assistant messages, while ordinary completed
-  turns may omit it; [DeepSeek multi-round chat](https://api-docs.deepseek.com/guides/multi_round_chat/)
-  makes client-side history reconstruction explicit. Its
-  [Responses reference](https://api-docs.deepseek.com/api/create-response/) likewise describes the
-  endpoint as stateless and requires the client to supply complete input history.
-- [Anthropic extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
-  requires thinking blocks in a tool-use turn to be returned complete and unmodified.
-
-### 9.3 Durable versus live events
-
-The runtime distinguishes:
-
-- **durable facts** — admitted input, prompt block selected, model request committed, response bytes
-  received, tool call decoded, operation state changed;
-- **live interception points** — authorization, request decoration, streaming observation, telemetry;
-- **ephemeral UI updates** — partial token/output deltas that may be useful live but do not establish
-  durable truth unless committed into a final item.
-
-An interception point cannot be the only location of verdict-relevant or model-visible information.
-
-### 9.4 Step transaction boundary
-
-Before provider dispatch, Cairn appends a `ModelRequestPrepared` event citing the canonical request
-bytes and all input decision identities. Dispatch authority follows only after that append commits.
-
-After provider response:
-
-1. raw response bytes are stored;
-2. a response-received event cites them and provider metadata;
-3. semantic decoding creates a derived turn identity and records the decoded content;
-4. tool calls are validated into durable operations;
-5. the next request is projected from committed facts.
-
-A crash may produce an ambiguous provider attempt. Cairn records ambiguity; it does not invent a
-response or automatically bill a duplicate request without policy authority.
-
-### 9.5 Role scopes
-
-Each episode receives a typed capability set:
-
-- blue can read task/source semantics, perform policy-bounded external-test research, and submit
-  oracle proposals;
-- red can read the proposal contract needed to attack it and submit variants;
-- candidate author can read the frozen oracle's public contract and diagnostics but not modify
-  admission inputs;
-- no role receives store or worker credentials;
-- sensitive capabilities are enforced by server-side registration, not prompt text.
-
-Subagents, when introduced, create child episodes and return content-addressed reports. Their full
-events remain available without automatically spending parent model context.
-
-## 10. Execution substrate design
-
-### 10.1 Job contract
-
-A job contains:
-
-- schema version and logical job identity;
-- immutable input bundle root;
-- execution backend and environment/image identity;
-- argv/entry contract with no shell interpretation unless explicitly selected;
-- resource requirements and capability selectors;
-- sandbox, mount, network, timeout, output, and evidence policy;
-- expected output descriptors and size limits;
-- idempotency/effect classification.
-
-Product task kind is metadata owned by the workflow, not an execution enum variant.
-
-**Implemented controller kernel (2026-08-24).** `cairn-execution` archives the canonical V1 job
-contract only after verifying its typed input-bundle and environment references. Its current
-identity covers logical job, input, environment, backend, command, resources/capabilities, network,
-and configurable stdout, stderr, diagnostic, trusted-evidence, and declared-output bounds. Mount
-and richer sandbox/effect policy remain part of the target contract above. The command is an exact
-sandbox-relative program plus argv; there is no shell-string or host-path form in the contract.
-
-Attempt authority is linear and durable:
+关键编译期边界包括：
 
 ```text
-Authorized → Started → Completed(receipt)
-                     ↘ NotStarted → fresh AttemptId may be authorized
-                     ↘ Ambiguous  → reconciliation required
-restart after Started without a terminal fact → InDoubt
+IntentHypothesisSet      != MigrationIntentContract
+OraclePortfolioProposal != AdmittedOraclePortfolio
+HardwareFactProposal    != AdmittedHardwareFact
+CandidateObservation    != CandidateVerdict
+ExploratoryFeedback     != UserIntentDecision
+ReviewedSkill           != ValidatedSkill
+TheoreticalPeak         != MeasuredCeiling
+CorrectnessOutcome      != PerformanceOutcome
 ```
 
-The executor port receives authority only after `Started` commits. A recovered `Authorized` fact can
-reconstruct start authority, but a recovered `Started` fact cannot reconstruct execution authority.
-Completed recovery reloads every cited CAS artifact and revalidates outcome/exit semantics, byte
-bounds, output completeness, observed backend/environment, canonical output ordering, and receipt
-lineage against the frozen contract. Recorded and scripted executors provide deterministic seams.
-
-**Implemented F2 Docker path (2026-08-25).** `docker-v1` consumes strict input-bundle and Docker
-environment artifacts from worker-local CAS. It accepts only a full immutable local image ID and
-uses one deterministic container name per `AttemptId`. Worker startup recovers locally journaled
-starts and reconciles absent, created, running, or exited Docker state. Terminal streams and
-declared outputs are bounded by the job contract; the worker commits the terminal observation and
-outbox message before cleanup. The real Hello World gate is documented in
-[`WORKER_EXECUTION.md`](WORKER_EXECUTION.md).
-
-### 10.2 Worker protocol
-
-**Implemented durable control kernel (2026-08-24).** The domain layer now distinguishes stable
-`WorkerId`, process/boot `WorkerIncarnationId`, logical `AssignmentId`, bounded `LeaseId`, durable
-`ControlMessageId`, short-lived `ControlConnectionId`, and connection-local `ControlSequence`.
-Authentication is a replaceable trusted capability that resolves transport evidence to a stable
-principal, exact `CredentialId`, and operator-authorized worker pool; the controller permanently
-binds subject and pool to the logical worker while binding the credential to one incarnation.
-Static protocol, binary, observed platform, backend, capability, quantitative startup observation,
-provenance, and concurrency data is a canonical content-addressed profile.
-Dynamic health, drain state, available slots, and the worker's advisory active-attempt set are a
-separate content-addressed heartbeat snapshot.
-
-Registration rejects a second incarnation while the first is live. An incarnation replacement is
-accepted only after explicit disconnect or a configured session timeout, and the replacement fact
-records the old incarnation and exact expiry boundary so recovery can recheck the decision. Static
-placement and dynamic availability matching are generic and contain no product task kind.
-
-**Implemented resource-placement kernel (2026-08-25).** Native architecture, operating system, and
-target environment are strong extensible selector types. `cairn-worker` derives them from the
-compiled/running binary; serialized `expected_platform` fields are assertions that fail closed and
-cannot overwrite the observation. Every profile resource claim retains whether it came from a
-built-in probe, operator declaration, controller verification, or external attestation. The V1
-profile content domain prevents the new meaning from being confused with earlier flat capability
-bytes.
-
-A worker hello may introduce only built-in platform observations and operator-declared
-backend/capability claims. It cannot label its own bytes `ControllerVerified` or
-`ExternalAttestation`; those assurance levels require a later trusted controller challenge or
-attestation adapter and a separate authoritative fact.
-
-**Implemented startup resource observation (2026-08-25).** Worker profile V1 embeds one immutable,
-versioned startup observation for the process incarnation. The Linux host probe records logical
-CPU count, total memory bytes, available bytes on a configured scratch filesystem, accelerator
-namespace discovery completeness, and canonical device facts. Every device has a strong device ID
-and zero or more equality capabilities such as driver or PCI identity. CPU counts and each byte or
-device quantity are distinct positive Rust/wire types; a value from one unit cannot be passed as
-another without an explicit conversion.
-
-Operator configuration selects probe paths, independently optional expected minima, whether
-accelerator discovery is disabled, and an optional freshness duration. These values are assertions
-and policy only: they never become observed capacity. A missing configured accelerator namespace
-is a complete empty observation of that namespace; disabled discovery or an unreadable device is
-partial. Unit mismatch, arithmetic overflow, duplicate device/capability identity, expectation
-mismatch, future evidence, and expired evidence fail closed. The initial `/sys/class/accel`
-adapter is deliberately generic and does not claim to discover every vendor device class.
-
-Job contract V1 carries optional logical-CPU, memory-byte, scratch-byte, accelerator-count, and
-discovery-completeness requirements. An accelerator requirement also contains canonical per-device
-capabilities; only devices satisfying all of them contribute to its count. Scheduler filtering and
-assignment recheck use the caller's observation time, so expired evidence cannot remain eligible.
-
-**Implemented dynamic resource authority (2026-08-25).** The startup observation remains part of
-immutable profile identity, while a distinct typed CAS domain and `worker-resources-observed` fact
-hold the current observation. Worker refresh has an independently optional interval and never
-extends heartbeat liveness. Reconnect performs a new probe before hello. The projection retains the
-exact observation ContentId, worker-stream event revision, and optional controller/external
-admission evidence. Worker transport can submit only `BuiltinProbe`; higher assurance requires an
-on-demand trusted admission capability citing an independent evidence `EventId`.
-
-Placement snapshot V1 and scheduler event V1 freeze that resource evidence. A reservation owns its
-CPU, memory, scratch quantities and deterministic accelerator device IDs. Unreleased reservations
-are subtracted before selection, missing previously reserved devices fail closed, and SQLite
-optimistic concurrency serializes competing claims. Assignment grant requires the exact resource
-ContentId, revision, and admission evidence observed at placement; even a beneficial refresh makes
-the old snapshot stale rather than silently changing its meaning.
-
-All current job-contract, worker-profile, registration, scheduler, and snapshot formats are V1.
-During pre-release development an incompatible change replaces the V1 definition and requires
-development-state rebuild; runtime readers reject non-V1 data and contain no conversion path.
-
-An immutable `PlacementRequest` now separates optional platform constraints, an authenticated-pool
-allow-list, and additional capability equality from timeout and backend. Pool membership comes from
-controller enrollment rather than worker hello. Registration persists it beside the authenticated
-subject and rejects an implicit change on restart. `cairn-migration` will decide which evidence and
-opaque job are needed, then produce this domain-neutral request; the execution scheduler—not the
-migration adapter—selects a concrete worker. Agent role and migration stage never become worker
-profile fields.
-
-Assignment delivery uses a two-phase authority boundary:
-
-```text
-AttemptAuthorized
-  → AssignmentLeased (persist before send)
-  → AssignmentAccepted (worker has persisted admission; still cannot execute)
-  → AttemptStarted (controller grants the one-shot execution capability)
-```
-
-Each `AttemptId` owns exactly one assignment aggregate, so restart cannot create parallel active
-leases for the same attempt. Before `AttemptStarted`, an expired lease is reaped as
-`BeforeExecutionStart`; the same attempt authority may then be placed again using fresh assignment
-and lease identities. After `AttemptStarted`, lease expiry is `ExecutionInDoubt` and grants only a
-reconciliation requirement. Renewal requires an unexpired accepted lease, the current live worker
-incarnation, and a heartbeat no older than the accepted/renewed assignment state that names the
-attempt active. Heartbeat presence never establishes start, completion, or cancellation.
-
-The assignment grant freezes distinct offer/start logical message identities before either can be
-sent. The controller then has a durable event-sourced outbox: enqueue precedes delivery, delivery
-mappings precede transport send, and only a valid cumulative acknowledgement removes a logical
-message. Acknowledgements normally piggyback on logical traffic; an explicitly recorded
-acknowledgement-only frame closes the peer outbox when there is no message to send. A reconnect
-creates a fresh connection sequence while retaining the same logical message identity. A crash
-after `AttemptStarted` but before start-message enqueue can therefore reconstruct
-the exact start message from the persisted assignment binding instead of inventing a second
-execution identity.
-
-The worker journal is a separate storage authority. It atomically commits immutable admission plus
-the acceptance response before acknowledging an offer, commits start before constructing one-shot
-executor authority, and atomically commits a terminal observation plus its worker outbox response.
-A restart after local start without terminal observation is explicitly in doubt and cannot invoke
-the executor again. Remote terminal observations are not authoritative on arrival: the controller
-checks the exact worker/incarnation/assignment/lease/attempt/contract binding, accepts post-start
-lease expiry only as reconciliation state, reruns all capture/receipt validation, and publishes one
-terminal execution fact. Duplicate delivery after publication is recognized without overwriting the
-receipt.
-
-Assignment material is also a separate readiness boundary. The controller fully verifies the
-contract's typed `InputBundleArtifact` and `ExecutionEnvironmentArtifact` in CAS and freezes their
-identities, lengths, and chunk policy in the durable offer. While that offer remains pending, the
-authenticated assigned worker requests sequential ranges through an efficient `ContentRangeStore`
-port. Chunk messages are ephemeral protocol V1 data movement, never domain facts. One controller
-logical message remains in flight, preventing control/chunk interleaving. The worker syncs each
-range to a private per-offer regular file and resumes from exact length after reconnect. It derives
-both typed identities while publishing the assembled files into its own SQLite/CAS; only that
-persistence result can authorize admission and offer acknowledgement. Start does not trust this
-earlier proof: it reopens both local objects before appending the start fact. Aggregate limits are
-independently optional; positive chunk size and exact base64-expanded wire fit are startup-checked.
-Create-only sandbox-tree expansion remains later adapter work.
-
-V1 frames use strict canonical JSON behind explicit encode/decode functions. The frame byte budget
-is a typed configuration value with `None` as its disabled state. Logical outboxes and admissions
-persist storage-domain payloads rather than treating a network frame as a domain fact. A test uses
-independent controller and worker SQLite event stores, drops both directions' acknowledgements,
-reopens both stores, replays on fresh connections, executes once, reconciles the result, and proves
-both outboxes empty after another reopen.
-
-**Implemented outbound transport slice (2026-08-25).** `cairn-control-transport` now carries only
-binary canonical JSON over WebSocket on a mutually authenticated TLS stream. The worker verifies
-the controller certificate and DNS name; the controller verifies the client chain, hashes the
-verified leaf DER, and admits a hello only when that fingerprint is durably registered to the exact
-strong `WorkerId`. A `Welcome` freezes a fresh `ControlConnectionId`
-and negotiated protocol version before either side accepts control frames. TLS/WebSocket bytes
-never become execution facts by themselves.
-
-**Implemented enrollment bootstrap slice (2026-08-25).** Normal worker onboarding no longer
-requires an operator to create or copy a worker private key, certificate, and logical identity.
-`cairn-server enrollment create` first appends an expiring `EnrollmentId` offer with a secret digest
-and controller-authorized pool, then writes one non-overwriting `0600` bundle. The bundle pins a
-separate server-authenticated enrollment endpoint; the normal control endpoint continues to require
-a client certificate during TLS negotiation.
-
-`cairn-worker enroll` creates a `0700` state directory, persists its `0600` private key and exact
-CSR before network access, and submits the CSR with the one-shot authority. The issuer overwrites
-CSR subject, CA, usage, lifetime, and serial policy while retaining and verifying the worker public
-key. The serial is a rotatable `CredentialId`; the controller independently creates the stable
-`WorkerId` and binds the configured pool. Issuer certificate/key mismatch fails startup, and the
-worker verifies the returned leaf binds its staged key before committing public material.
-
-The append-only singleton registry stores offer and issuance events but never the bearer secret.
-An issuance records the CSR digest, certificate result, fingerprint, stable worker, credential, and
-pool. After a lost response, the same secret plus exact staged CSR returns the persisted result even
-after token expiry; another CSR is rejected. A fresh controller rebuilds
-fingerprint-to-credential/worker/pool authentication from that stream.
-
-**Implemented one-command join F1 (2026-08-25).** Enrollment bundle V1 carries two explicit trust
-domains: the one-shot bootstrap endpoint and the externally routable ordinary-control endpoint.
-Each includes its own TCP/WebSocket authority, TLS server name, and pinned CA, so isolating
-bootstrap does not force matching DNS or certificates and a worker does not reconstruct endpoint
-configuration from deployment convention.
-
-`cairn-worker join <bundle> <state-dir>` composes the existing enrollment port with a fixed local
-layout, running-binary SHA-256 identity, Linux host/platform probe, strict V1 configuration, and
-preflight validation. The identity private key remains worker-local under `identity/`; scratch and
-journal locations are relative to the fixed root. If a valid configuration already exists, join
-checks that it still names the bundle's controller and managed identity, probes it, and leaves its
-bytes untouched. The generated profile contains no model, oracle, migration stage, or product role.
-Because the executable backend remains unimplemented, initial availability is explicitly
-unavailable/draining with zero slots. Service integration and explicit backend activation remain
-F2 rather than being smuggled into bootstrap.
-
-**Implemented credential-authority foundation (2026-08-25).** Registration V1 records the exact
-`CredentialId` independently of stable subject, `WorkerId`, pool, and incarnation. The controller
-uses the managed certificate fingerprint only to find the credential record, then derives the
-stable principal from controller-owned worker identity. A live incarnation cannot switch
-credentials; after explicit disconnect or expiry, a replacement incarnation may use another
-credential while subject and pool remain fixed.
-
-The enrollment registry now projects independent append-only facts for credential revocation,
-logical-worker disablement, and unused-enrollment revocation. Inactive authority is checked before
-registration and on each active control-loop iteration, so an observed managed session is closed
-and its reconnect is rejected. This application check remains authoritative even when certificate
-chain validation succeeds. SQLite schema V1 uses WAL plus immediate writer transactions so a
-separate administrative command and the running controller serialize authority facts without a
-deferred read-to-write deadlock.
-
-**Implemented explicit registry lifecycle E2a (2026-08-25).** Credential and unused-enrollment
-revocation, worker disable/re-enable, and worker-pool reassignment now take an operator-supplied
-strong `CommandId`. Projecting the complete history precedes replay recognition, so corrupt history
-cannot be hidden behind an old command; exact schema and payload retry returns the original event,
-while command reuse with different input fails closed. Pool ownership is a separate per-worker
-projection with its own authority revision. Reassignment is admitted only while the worker is
-disabled and only when the pool changes.
-
-The controller resolves every new certificate handshake from the current durable registry rather
-than its startup enrollment snapshot. If pool authority changed, it first appends
-`execution.worker-pool-assigned`, citing the exact registry event. The execution projector admits
-that fact only after durable disconnect or the exact configured session expiry and then permits
-registration in the new pool. Authentication subject, credential/incarnation boundaries, and the
-rule rejecting implicit pool change remain intact. The managed mTLS integration exercises a live
-worker through disable, reassignment, re-enable, automatic reconnect, and restart-safe cross-link
-projection.
-
-**Implemented registry inspection E2b (2026-08-25).** Read-only inspection is another adapter over
-the same projector, not a parallel SQL read model. Every list/show/audit request reads and validates
-the complete singleton registry stream at one explicit wall-clock instant. The versioned report is
-ordered by strong IDs and exposes the current worker-pool authority revision, disabled state,
-credential fingerprint/provenance, rotation predecessor/successor and retirement boundary, plus
-the effective credential state. Audit returns causal head and aggregate counts only after all
-history invariants pass. Report DTOs reject unknown fields and unsupported versions; CLI stdout is
-JSON-only, while not-found and invalid-history diagnostics remain on stderr. Secret digests,
-certificate bodies and private material never enter the report boundary.
-
-**Implemented registry authority E1 (2026-08-25).** Controller schema V1 has no static enrollment
-array or import command. Normal authentication, liveness authority checks, candidate discovery,
-and grant rechecks consume only the persistent registry. An empty registry is a valid startup state
-for a fresh open-source deployment, and workers enter it only through managed enrollment.
-
-**Implemented safe credential rotation slice (2026-08-25).** Enrollment authority V1 distinguishes
-bootstrap from rotation. A rotation offer freezes the exact active predecessor credential,
-controller-owned worker/pool, and configured optional overlap. Issuance V1 creates a fresh
-`CredentialId` and certificate while recording predecessor lineage and its exact retirement
-instant. Registry replay admits both credentials inside the overlap, then derives predecessor
-retirement from the frozen fact; `null` disables automatic retirement and requires explicit
-revocation.
-
-Each worker rotation has an immutable `rotations/<EnrollmentId UUID>/` directory containing its
-fresh `0600` key, exact CSR, issued certificate, CA, and predecessor manifest. Only `identity.json`
-is atomically replaced. Exact staged-CSR replay closes response and local-commit loss windows.
-Worker configuration V1 includes a positive identity-manifest poll interval: a running process notices
-cutover, closes its old connection, reloads material, and reconnects under a new incarnation while
-the predecessor is still authorized.
-
-If a successor is revoked before predecessor retirement, registry projection cancels that pending
-retirement; the worker can then validate and atomically restore the predecessor manifest. Once the
-deadline passes, both authority projection and local rollback fail closed. The mTLS integration
-test exercises failed-successor rollback, another rotation, live-process cutover, exact issuance
-recovery, old-certificate rejection after overlap, and final successor revocation.
-
-**Implemented scheduler reservation kernel C1 (2026-08-25).** The execution layer now separates an
-immutable `PlacementId`, capacity-bearing `ReservationId`, downstream `AssignmentId`, and bounded
-`LeaseId`. A placement freezes a content-addressed snapshot of the canonical worker candidate set.
-Each entry cites exact incarnation, credential, profile, resource observation, availability, and
-heartbeat evidence, captures the controller-owned authority revision when the adapter has one, and
-records the first stable rejection reason or its capacity inputs. Policy
-`stable-worker-id-quantitative-v1` filters first and then chooses the lowest eligible stable
-`WorkerId`; selection is therefore replayable rather than a function of map iteration or connection
-arrival order.
-
-The reference C1 capacity authority is a singleton append-only scheduler ledger. Before assignment
-grant it commits one reservation against registered concurrency and current reported availability.
-Independent SQLite writers race through expected revision, so one physical slot cannot produce two
-successful reservations. Assignment grant then reloads the exact worker snapshot and rechecks
-current application credential authority; changed heartbeat/profile/incarnation/credential or
-revocation fails closed.
-
-Reservations are conservative. They are released only when assignment recovery proves terminal
-execution or expiry before start. A reservation never becomes reusable for an in-doubt started
-attempt. If a crash occurs after reservation but before assignment, a separately configured
-positive claim deadline permits release only while the assignment stream remains absent. The
-singleton ledger is an initial correctness boundary, not a permanent scale claim; it can be sharded
-later while retaining placement/snapshot/reservation identities.
-
-**Implemented scheduler composition C2 (2026-08-25).** The controller now derives its canonical
-candidate set from persistent registry enrollment, reloads the registry for every placement-
-authority observation, and cites the latest registry event. Contract preparation,
-placement reservation, conditional attempt authorization, assignment grant, and durable offer
-enqueue form one
-recoverable application service. Callers retain strong identities for every boundary; exact retry
-recovers the prior assignment phase and never invents a second lease. Revocation after snapshot but
-before grant fails closed, while reservation release remains limited to unclaimed, proven
-pre-start-expired, or terminal assignments and continues to reject execution-in-doubt state.
-
-The new `cairn-migration` translation layer retains V0–V3 validation meaning above the execution
-boundary and emits only generic platform, authenticated pool, backend, capability, timeout, and
-resource constraints. A SQLite-backed fixture reaches the selected worker's durable outbox without
-placing migration-stage vocabulary in execution types. Scheduler enablement, algorithm version,
-reservation claim time, lease time, and session time are explicit configuration; scheduler
-enablement may be turned off without disabling reconciliation.
-
-After a worker heartbeat is durably accepted, the controller returns an ephemeral
-`HeartbeatAccepted` message. This resets the worker's independently configurable controller-silence
-deadline without entering either durable control outbox. It conveys connection liveness only: it
-cannot acknowledge a control sequence, prove an execution attempt, renew a lease, or create a
-verdict-relevant fact.
-
-Runnable `cairn-server` and `cairn-worker` composition roots now connect this adapter to separate
-SQLite authorities. The server durably registers and heartbeats workers, validates inbound
-sequence/acknowledgement cursors, drains its durable outbox, and reconciles worker messages. The
-worker derives active-attempt heartbeats from its journal, durably admits offers, records start
-before executor authority, drains its result outbox, and supervises outbound reconnects. Managed
-mTLS integration reconstructs live authority through independent SQLite readers, while execution
-tests cover durable outbox/journal replay. All wire-size, handshake, idle, heartbeat,
-polling, reconnect, and diagnostic bounds are configured; `null` disables an optional control.
-
-Bootstrap intentionally composes a `NotStarted` executor and unavailable/draining availability.
-Schema-V1 configuration may activate `docker-v1` only by coherently changing execution mode, the
-exact advertised backend, and ready one-slot availability. Typed material replication, resumable
-transfer, Docker supervision, bounded capture, terminal publication, and worker-start recovery are
-implemented. Docker accelerator exposure is one closed worker-local policy: none, one indexed
-NVIDIA device, or one indexed Ascend device with fixed manager/driver bindings and an independently
-derived container-visible index. Jobs cannot inject device flags or host paths, and terminal
-evidence records the exact policy observation. Dynamic shared-device selection, additional network
-modes, concurrency greater than one, and service deployment remain later demand-driven slices.
-
-**Implemented real heterogeneous enrollment gate (2026-08-26).** One AArch64 NVIDIA GB10 worker
-and one x86-64 Ascend worker now enroll through the same V1 managed-identity path, connect through
-independent operator-owned reverse tunnels, and produce durable registration and heartbeat facts.
-The controller admits a worker resource timestamp ahead of its own clock only within the optional
-positive `resource_clock_skew_tolerance_ms`; `null` preserves zero tolerance, an excess lead fails
-closed, and accepted evidence is never silently retimestamped. Both hardware workers remain
-unavailable/draining until the operator activates one explicit accelerator policy rather than
-inferring exposure from host inventory. Activation on a shared host additionally requires an
-actually free device; static policy never claims or evicts another process's device.
-
-The GB10 worker is now activated as `docker-v1`, ready with one slot, and declares exact NVIDIA
-device-0 capabilities. Two consecutive live scheduler runs transferred a content-addressed probe,
-executed it in the remote GPU container, recovered stdout `NVIDIA GB10` plus trusted
-`docker:accelerator:nvidia:0` evidence, and released each terminal reservation. The Ascend worker
-remains unavailable/draining because all seven shared devices were observed carrying other
-processes; Cairn did not claim or disturb one for this gate.
-
-The same live run exposed acknowledgement-only ping-pong: treating an acknowledgement-only frame
-as requiring another acknowledgement grew both durable outboxes continuously and starved
-optimistic scheduling writes. Connection sequence validation still observes every frame, but the
-cumulative acknowledgement watermark now advances only for frames containing a logical message.
-This terminates the exchange without weakening gap detection; the live outbox remained unchanged
-while idle after deployment.
-
-The first real source fixture now traverses the same managed path. The integration gate accepts a
-closed inventory of five files from Alloyport's original `cuda-reduction-v1` intake, archives them
-with a fixed build runner and immutable environment, and requires worker capabilities for
-`sm_121`, NVIDIA, and device 0. The GB10 worker compiled the fixture with CUDA 13 and executed its
-nine-case release corpus twice, producing the exact deterministic checksum and trusted device
-binding in both authoritative receipts. The `sm_121` CMake adaptation is explicit input to the
-content-addressed job rather than an ambient host inference.
-
-Compiler jobs exposed one necessary sandbox distinction: linked products in `/cairn/work` must be
-executable. That dedicated bounded tmpfs is now explicitly `exec`; the general `/tmp` mount remains
-explicitly `noexec`. Both stay non-root, `nosuid`, `nodev`, and independently visible in the fixed
-Docker argument construction.
-
-The Ascend host therefore has two deliberately separate worker identities. The device identity
-stays `transport-only`, unavailable, draining, and zero-slot while every shared accelerator is
-occupied. The build identity is ready in pool `npu-build`, has the closed `accelerator: none`
-policy, and advertises exact build-role, CANN 9.1.0-beta.1, and dav-3510 toolchain capabilities.
-It never inherits device availability from the co-located device worker.
-
-Two consecutive live build jobs archived the same fixed Alloyport `ascend-add-v1` source, tiling
-header, CMake project, runner, and immutable build image. The worker selected CMake's ASC language,
-compiled with `bisheng`, linked `libadd_custom.a`, and returned trusted
-`docker:accelerator:none` evidence. This establishes the no-device target compiler substrate only;
-it does not stand in for a generated reduction candidate, ABI adapter, or Ascend device receipt.
-
-**Implemented cross-link release slice (2026-08-25).** The repository pins Rust 1.85.0,
-cargo-zigbuild 0.21.8, Zig 0.14.1, `Cargo.lock`, and a GLIBC 2.28 ceiling. One release entry point
-builds `cairn-server` and `cairn-worker` for both `x86_64-unknown-linux-gnu` and
-`aarch64-unknown-linux-gnu`, then rejects the result unless its ELF machine, interpreter, maximum
-GLIBC symbol, and shared-library set match the frozen target contract. Sorted archives use a fixed
-source epoch and contain checksums plus commit/toolchain metadata. The deployment gate rebuilds each
-archive independently and executes the workers on both real host architectures; target machines
-contain no Rust or C build toolchain.
-
-Workers dial the controller. A connection establishes:
-
-- stable worker identity and unique process incarnation;
-- binary/protocol version;
-- built-in-observed OS/architecture/target environment and available execution backends;
-- controller-authorized worker pool, separately from any business or agent role;
-- device capabilities and current policy state;
-- supported evidence/attestation features.
-
-Assignment lifecycle:
-
-```text
-Queued → Leased → Starting → Running → Uploading → Completed
-                    ↘ Failed
-                    ↘ Ambiguous
-Expired lease → Reconciliation → Retry or operator decision
-```
-
-The controller owns lease reaping. A worker heartbeat is evidence of liveness, not proof that an
-individual external effect did or did not occur.
-
-### 10.3 Evidence boundary
-
-An attempt has two output domains:
-
-1. **job workspace** — operator-submitted files and useful diagnostics; its results are not verdicts;
-2. **worker evidence channel** — argv, resolved image/binary, mounts, stream bytes, exit status,
-   timing, declared output ingestion, and device observations, inaccessible to candidate writes.
-
-The worker reads expected outputs through bounded, duplicated paths where practical. Streaming UI
-output is never the only durable capture path.
-
-### 10.4 Execution backends
-
-Implemented backend:
-
-- `docker-v1` for operator-submitted CPU build and validation jobs.
-
-Device-aware Docker execution may be added when the migration workflow reaches source-accelerator
-or target-device validation. It is not a separate orchestration platform.
-
-An out-of-process backend can be added behind the job/attempt protocol. It must not require a fork of
-product or agent logic.
-
-## 11. Verification architecture
-
-`cairn-verification` operates on claims, observations, policies, and immutable artifacts. It does not
-call a model. It may request jobs through an execution port and then adjudicate their receipts.
-
-**Implemented verification foundation (2026-08-25).** `cairn-verification` now owns strict V1,
-domain-neutral `AdmissionPolicy` and `NumericalAllowance` contracts. Variant minima, required
-construction/fault classes, structural-independence rules, saturation rounds, accepted strengths,
-required execution scopes, and incomplete-budget outcome are explicit immutable policy fields; the
-verifier supplies no hidden global profile defaults. Allowance magnitude uses exact canonical
-decimal bytes rather than binary floating point. Provenance and assurance remain independent,
-held-out validation requires non-empty identity-disjoint derivation/validation corpora, and the
-trusted classification boundary prevents asserted or external-prior-only values from being
-upgraded by assurance metadata. Only proven-bound or exhaustive-finite assurance can reach the
-unqualified-domain-wide class; held-out evidence reaches empirical at most.
-
-This foundation alone does not claim executed admission. Later implemented slices below now cover
-host variant execution, mutation proof, the hardware-free historical reduction control, its first
-complete admitted-domain/receipt/oracle graph, and a candidate verdict over that frozen oracle.
-General candidate-search and broader receipt lifecycle integration remain target work for M2.
-
-**Implemented proposal artifact graph (2026-08-25).** Strict V1 manifests now preserve the caller
-domain and its explicit unknowns separately from evidence-citing refinements; corpus cases retain
-source, source provenance, license provenance, and coverage obligations without becoming trusted by
-origin. Authorship records caller/human/model/repository/external origin without trust promotion;
-model authorship requires an exact episode and model-configuration artifact. Correct variants must
-cite a construction claim whose closed justification vocabulary has no “passes the oracle under
-test” alternative. Wrong variants instead cite a distinct fault class and fault-injection evidence.
-Domain-refinement, corpus-provenance, construction, and fault-injection evidence use separate content
-identity domains.
-
-`OracleProposal` cites the task inputs, caller domain, separate refinements, corpus proposal,
-reference/property proposals, source-admission plan, valid-family plan, observation plan, requested
-strength, and authorship. Its strict schema has no admission policy, allowance, trusted mutant,
-comparison policy, or decision field. This graph establishes immutable proposal inputs only: the
-full mandatory corpus, execution, admission receipt, and adjudication remain unfinished.
-
-**Implemented strongly typed migration-domain slice (2026-08-25).** `cairn-migration` now defines a
-strict V1 caller-domain body for operator entry point, ABI-ordered buffers and scalar parameters,
-buffer roles, dtypes, fixed/symbolic shapes, logical shape-symbol sources and ranges, tile/alignment
-moduli, input-value families, invalid-input behavior, requested semantics, claim kind, and explicit
-exclusions. Buffer name, scalar-parameter name, shape-symbol name, argument index, dimension axis,
-rank, extent, ordinary integer, modulus, and status code are distinct Rust types; compile-fail
-controls prevent cross-unit assignment. Domain validation rejects duplicate ABI positions/names,
-dtype/range mismatch, unknown shape symbols, disagreement between logical and ABI ranges, and
-ambiguous shape-parameter bindings.
-
-Trusted `BoundaryV1` derivation emits complete one-variable-at-a-time assignments for valid minima,
-maxima, zero/empty, one/singleton, lower/upper interiors, representable invalid neighbors, and the
-first/last below-at-above tile boundaries. A shape backed by a scalar ABI parameter updates both
-typed assignments together. Cases retain typed obligations and the caller-declared invalid behavior
-rather than inventing an expected status. Dtype and memory-surface patterns are derived by separate
-typed policies described below. Canonical complete-corpus planning is implemented as described
-below, as is exact collection once authoritative receipts exist; device execution and adjudication
-remain target work.
-
-Trusted `DtypePatternsV1` derivation emits typed construction obligations for floating, signed
-integer, unsigned integer, and boolean inputs without encoding recipes as strings or generic numeric
-values. It covers exact dtype extrema, positive/negative zero, normal/subnormal boundaries,
-infinities, quiet/signaling NaN, unit cancellation, and a deterministic mixed-scale cancellation
-sequence. The caller must classify negative zero, subnormal, infinity, and NaN families separately
-as supported, invalid with explicit behavior, explicitly excluded with a content identity, or
-unknown. Exclusion identities must also occur in the domain's canonical exclusion set. These are
-construction obligations; the supported and explicitly-invalid subset can now cross the raw-byte
-materialization boundary described next, but they are not yet executed observations.
-
-**Implemented deterministic input-byte materialization slice (2026-08-25).** A typed input-value
-obligation plus an explicit element count and positive per-buffer byte limit now produces exact
-little-endian raw bytes for every current floating, signed-integer, unsigned-integer, and boolean
-recipe. Floating special values use canonical dtype bit patterns, including signed zero,
-subnormals, infinity, quiet/signaling NaN, unit cancellation, and the exact
-`[2^(p+1), 1, -2^(p+1), 1]` mixed-scale sequence. Element count, byte length, and byte limit remain
-distinct Rust types; multiplication, host-size conversion, and allocation fail closed. The strict
-V1 manifest binds the canonical source-case identity, copied typed target/disposition, exact byte
-length/order, and raw-byte content identity, and validators recompute both source and byte
-bindings. Unknown and explicitly-excluded obligations cannot be materialized. This slice does not
-by itself choose a complete assignment or execute a case.
-
-**Implemented quantitative boundary-case bundle assembly slice (2026-08-25).** Given an exact
-caller domain, one trusted quantitative boundary case, supported baseline bytes for every
-input-capable buffer, and a positive per-buffer byte limit, migration assembly rederives the full
-mandatory case set and rejects a case that is not a member. It resolves every fixed/symbolic buffer
-shape, checks element/byte products, encodes integer and boolean scalar arguments in exact
-little-endian ABI widths, and interleaves buffers and scalars by the shared typed argument index.
-Write-only outputs carry exact allocation shapes and lengths without fabricated input files. The
-strict V1 invocation manifest binds domain, boundary-case, materialized-buffer, raw-buffer, and
-scalar-byte identities; the canonical `InputBundleV1` contains that manifest and only the required
-input/scalar files, and validation rejects missing, extra, executable, reordered, length-changed, or
-content-changed material. Explicitly excluded boundaries and explicitly-invalid dtype recipes are
-not admitted into this baseline assembly, preventing two independent invalid conditions from being
-silently assigned the boundary case's outcome.
-
-**Implemented dtype-case composition slice (2026-08-25).** A dtype obligation classified
-`Supported` or `Invalid` can now be assembled only over a quantitative case that trusted derivation
-proves is both a member of the exact caller domain and expected to succeed. The targeted
-materialized buffer must validate against the exact dtype-obligation and materialization identities,
-target, and disposition; every other input-capable buffer must remain `Supported`. The strict V1
-dtype-case manifest uses a content-identity domain distinct from quantitative boundary manifests,
-binds the domain, successful baseline, dtype obligation, target materialization, copied typed
-target/outcome, and complete ABI argument set, and cross-validates the canonical bundle files.
-Supported recipes expect success; invalid recipes retain their caller-declared behavior. Unknown,
-excluded, underived, wrong-target, and multi-invalid compositions fail closed. Vendor adapter
-implementation, real execution, and complete-plan adjudication remain target work.
-
-**Implemented memory-surface layout assembly slice (2026-08-25).** An executable null-pointer,
-misalignment, capacity-shortfall, exact-alias, or partial-overlap obligation can now be composed only
-over a trusted successful quantitative case with supported deterministic bytes for every
-input-capable buffer. A distinct strict V1 manifest binds the domain, quantitative baseline,
-memory-surface obligation, copied disposition/outcome, complete ABI argument set, and exactly one
-adapter-neutral layout. The layout records target ABI positions and required byte lengths; relevant
-variants additionally record required alignment and offset, accessible short capacity, or both
-regions and their checked shared allocation extent. Aliased storage has a deterministic preparation
-rule: zero initialize, then overlay input-capable bytes in canonical buffer-pair order. Persisted
-layout fields are recomputed from the typed obligation and ABI arguments, and the canonical bundle
-is cross-validated exactly as for other assembled cases. Unknown, excluded, underived, zero-length,
-and baseline-inapplicable conditions fail closed. This stage deliberately does not construct or
-dereference unsafe addresses; actual pointer/capacity realization remains the isolated call
-adapter's responsibility.
-
-**Implemented isolated call-adapter process-input slice (2026-08-25).** Quantitative, dtype, and
-memory-surface case bundles can now be bound to exact operator-specific adapter executable bytes
-without loading a vendor ABI into the Rust control process. Executable bytes are non-empty,
-caller-bounded, executable-mode material with their own content identity. A strict V1 request binds
-the unmodified source bundle identity, the appropriately typed case-manifest identity, executable
-identity, invocation path, and result path. The composed bundle retains all source files and adds
-only the request plus executable under explicit parents. Its `CommandContract` uses no shell and
-freezes the one-process/one-invocation CLI over Cairn's `/cairn/input`, `/cairn/work`, and
-`/cairn/output` sandbox roots. CUDA, Ascend C, or another adapter may implement that executable; the
-worker remains vendor-neutral. This slice grants no semantic authority to process exit or
-candidate-writable bytes.
-
-**Implemented call-adapter result and capture-validation slice (2026-08-25).** Successful requests
-now freeze every output/output-input ABI argument, canonical output path, and exact byte length.
-The strict V1 result binds the request identity and typed invocation identity, distinguishes
-rejection before candidate invocation from an actual void or typed-status return, and commits each
-reported output's ABI metadata and raw-byte content identity. Validation requires the generic
-executor capture to contain exactly the result plus all successful-case ABI outputs, recomputes
-lengths and identities, and rejects missing, duplicate, extra, or changed material.
-`RejectBeforeExecution` requires the non-invocation completion; `ReturnStatus` requires the exact
-declared status. Invalid cases deliberately declare no ABI output capture because those buffers are
-unspecified and cannot support evidence. A structurally valid adapter report remains an observation,
-not automatic semantic authority; adapter admission and oracle comparison remain pending.
-
-**Implemented generic call-adapter job-composition slice (2026-08-25).** A prepared adapter process,
-exact execution-environment identity, product execution need, stable `JobId`, and independent
-stdout/stderr/result/diagnostic/evidence limits now produce the existing domain-neutral
-`JobContract`. Composition translates placement and resource intent, reuses the fixed no-shell
-command, disables network access, declares exactly the result and applicable successful ABI output
-captures, and derives canonical contract bytes plus typed identity before archival. The migration
-validation tier remains only in a transient product wrapper: changing V1 source-accelerator to V3
-target-device while every generic constraint stays equal does not change worker-facing contract
-bytes or identity. The normal execution coordinator can therefore verify/archive the input bundle,
-environment, and contract without learning migration stages or vendor runtimes. Real adapter
-execution and oracle comparison remain pending.
-
-**Implemented execution-receipt to adapter-observation slice (2026-08-25).** Migration can now
-consume a canonical receipt obtained from authoritative generic execution completion or recovery,
-along with its typed receipt identity. Validation recomputes that identity, binds the receipt to the
-exact prepared `JobId` and `JobContract` identity, rechecks that the contract carries the prepared
-adapter input, command, and complete output declarations, and admits only `Succeeded` with the
-generic success exit code. Receipt output names must exactly equal the contract's canonical declared
-set. Each `DeclaredOutputArtifact` is then read through the typed content store, so missing or
-identity-changed bytes fail before the existing strict adapter-result and ABI-output validator runs.
-The returned typed value retains both receipt and validated adapter observation. The receipt must
-already be an authoritative execution fact; merely placing receipt-shaped bytes in content storage
-does not prove execution, and stdout/stderr or process exit are never reinterpreted as an operator
-status.
-
-**Implemented executable host-fixture transport gate (2026-08-26).** A deterministic Rust fixture
-adapter now implements the same fixed process CLI used by future CUDA and Ascend C adapters. It
-strictly decodes the request and the invocation-manifest variant selected by its typed identity,
-recomputes the matching manifest and request identities, writes exact declared ABI output lengths,
-and emits the normal strict result. The integration gate embeds those exact executable bytes in the
-canonical input bundle, materializes the bundle into host test roots that represent the three
-sandbox mounts, launches the executable without a shell or inherited environment, and returns its
-capture through the generic executor boundary. The coordinator archives and commits the attempt;
-the test then recovers the durable completed job and validates its receipt back into an exact
-operator observation. A changed invocation file fails before any result is written. This is a
-transport/conformance fixture only: zero-filled fixture outputs have no oracle authority, the host
-harness is not a production unsandboxed executor, and real vendor/device execution remains pending.
-
-**Implemented model-authored executable-Oracle material slice (2026-08-27).** The first closed
-proposal-to-execution bridge accepts only the `matmul-zero-k` `f32` case. Its V1 proposal names the
-three ABI positions, fixed matrix shapes, raw IEEE-754 bit vectors, and exact-bit comparator; it
-does not contain invented artifact identities. Trusted deterministic code validates the zero shared
-extent, matrix shape relation, vector lengths, canonical ABI order, six numerical-zero results, and
-caller-authorized comparison strength before deriving the adapter-visible invocation and content
-IDs. Input buffers and the
-invocation enter the canonical source bundle, while expected output bytes are held separately so a
-candidate cannot read its answer. The normal call-adapter request/capture protocol now carries a
-typed executable-Oracle invocation variant. Its bit-exact comparator uses raw identities; its
-`f32-numeric-exact` comparator retains raw identities but normalizes signed zero into separate
-comparison identities before recomputing equality. The current caller contract leaves zero sign
-unspecified, so trusted validation rejects bit exactness independently of model debate. The
-integration gate starts the real fixture process over this model-shaped JSON and validates its
-output through the same capture port. This proves single-case downstream material usability, not
-correctness of an unadmitted proposal, corpus sufficiency against unconditional zero-fill, or
-availability of a CUDA/Ascend C candidate adapter.
-
-**Implemented complete-corpus execution-plan slice (2026-08-26).** A strict V1 plan now binds the
-shared caller domain, exact identities of the quantitative, dtype-pattern, and memory-surface
-mandatory sets, a closed typed execution subject, adapter executable identity, migration validation
-tier, and the canonical list of independent generic jobs. The subject distinguishes source,
-reference, property, admission-variant, and candidate runs while citing the corresponding exact
-upstream artifact identity; changing only that role or identity changes the plan identity. The
-executable subset is derived rather than caller-selected: successful
-and explicitly specified invalid obligations become jobs, while unknown and explicitly excluded
-obligations remain committed by their set roots but cannot enter the list. Each item retains a typed
-boundary, input-value, or memory-surface obligation and invocation identity, expected outcome,
-request and input-bundle identities, caller-assigned `JobId`, and generic contract identity. Input
-order cannot affect plan identity; missing, duplicate, extra, reordered, cross-domain, or changed
-expectation material fails closed. Prepared values retain the category-specific assembled case,
-adapter input, and job so later receipt validation need not erase types. This plan proves complete
-and deterministic preparation only. Dispatching every job and turning observations into oracle
-judgments remain separate unfinished stages.
-
-**Implemented complete-corpus receipt-collection slice (2026-08-26).** Given receipts returned by
-authoritative generic execution completion or recovery, collection now requires exactly one receipt
-for every `JobId` in the cited complete plan. Caller order is irrelevant, but duplicate, missing, or
-unplanned jobs fail before a set can exist. Each receipt then passes the existing category-specific
-boundary, input-value, or memory-surface validator, which recomputes receipt identity and exact
-job/contract/input/command bindings, reads every declared result through typed content storage, and
-validates adapter completion plus output bytes. A strict V1 observation set binds the exact plan
-identity and, in canonical obligation order, each typed obligation, job, authoritative receipt, and
-validated adapter-result identity. Loading the set requires explicit validation against the cited
-plan; the set alone does not manufacture execution authority. Prepared results retain their typed
-category and full validated execution. This is an execution-completeness record only: its schema
-cannot carry a pass/fail verdict, numerical comparison, oracle admission, or candidate judgment.
-
-**Implemented exact corpus-comparison slice (2026-08-26).** For a caller domain explicitly marked
-`Exact`, trusted product comparison now accepts a `Reference` execution plan and either a `Candidate`
-or `AdmissionVariant` subject plan. Both plans must cite the exact caller-domain identity and
-identical quantitative, dtype, and memory obligation roots; every obligation and expected outcome
-must align even though executable, tier, job, contract, receipt, and result identities may differ.
-Both observation sets are rechecked against their own plans and canonical identities before
-comparison. Each strict V1 case fact records the typed obligation, both adapter-result identities,
-both completion values, and for every ABI output its shared typed metadata plus reference and subject
-byte identities. Equality is always recomputed from those facts at output, case, and corpus level;
-there is no stored `passed` summary. The artifact rejects verdict fields. It is useful comparison
-evidence, but a proposed reference has not thereby passed oracle admission and an all-match result
-is not yet trusted adjudication.
-
-**Implemented exact admission-variant host composition slice (2026-08-26).** A strict variant-build
-plan now binds one correct or deliberately wrong admission variant, its exact implementation bytes,
-a bounded build-driver executable, canonical input bundle, fixed no-shell command, environment,
-resources, capture limits, migration tier, and generic job contract. An authoritative successful
-generic receipt is checked against those identities, and the declared product bytes are loaded from
-typed content storage to derive the exact call-adapter executable identity. A complete corpus plan
-then uses the `AdmissionVariant` role and that executable. The resulting exact trial binds the
-proposal expectation, build receipt, reference and subject plans and observations, and recomputed
-comparison; `MustAccept` means the complete comparison matches and `MustReject` means it does not.
-No persisted `passed` field or admission verdict exists. The host gate executes its identity build
-fixture and representative built adapters as real processes, but uses bounded deterministic generic
-captures for the complete corpus. It proves composition and identity flow, not compilation or
-device semantics; CUDA/Ascend C compiler adapters, full device execution, and general
-numerical/property comparison remain pending.
-
-**Implemented mutation-grid contract slice (2026-08-26).** `AdmissionPolicyV1` now cites one exact
-content-addressed trusted generic-mutant set. A strict V1 mutation grid binds that policy, the tested
-implementation, frozen admission corpus, canonical mutant and case axes, and the complete Cartesian
-set of trial cells.
-Applied cells retain separate injection, authoritative execution, and trusted comparison identities,
-the exact execution scopes traversed, a policy-sized/scale-free/case-dependent sizing class, and the
-observed detected/missed fact. A non-injectable cell instead requires an exact reviewed reason.
-Missing, duplicate, reordered, or cross-axis cells fail closed; one underlying batch execution or
-comparison artifact may support multiple cells. Trusted proof
-recomputation derives empty-applicable-grid failure, required fault-class coverage, implementation-
-path failures, fatal policy-sized/scale-free misses, mandatory case-dependent blind spots, and every
-non-injectable cell. The strict proof rejects a stored `passed` field and validates only by full
-recomputation against the cited policy, mutant set, and grid. The domain-neutral contracts do not
-themselves know how to inject an operator mutant. The historical-reduction product adapter now
-implements the first concrete composition: a closed mutation kind selects a matching `MustReject`
-variant and fault-evidence edge, then validates its exact implementation, build receipt,
-admission-variant plan, real run, environment, and corpus. Each frozen reduction case is translated
-to a mutation-case identity; strict product comparison evidence retains the exact reference and
-mutant bits, measured allowance, and recomputed ULP distance. Only that recomputation supplies the
-generic detected/missed fact and injection/execution/comparison identities. Historical control and
-admission accept only this privately constructed product preparation, not an arbitrary generic
-grid. Real compiler/vendor/device mutation adapters remain later M2 work.
-
-Trusted `PointerAndAliasingV1` derivation covers null addresses, violated non-trivial alignments,
-one-byte capacity shortfalls, exact buffer aliasing, and applicable one-byte partial overlaps at
-valid non-empty shapes. Required alignment, misalignment offset, capacity shortfall, overlap offset,
-and canonical buffer pair remain distinct Rust types. The domain must classify every memory
-condition as supported, invalid with explicit behavior, explicitly excluded with a content identity,
-or unknown, and it must declare every distinct ABI buffer pair exactly once. The derivation omits
-non-empty pointer cases for zero-only buffers and does not claim partial overlap for two one-byte
-regions. Executable obligations now have deterministic baseline bytes and adapter-neutral layouts,
-but still require isolated pointer realization and execution before they become observations.
-
-**Implemented historical-regression contract slice (2026-08-25).** Historical records now preserve
-a validated failure class, migration-domain family, target-mechanism or oracle-mechanism scope,
-observed validation stage, non-empty canonical source evidence, original observation, independent
-reproduction fixture, and license provenance. A regression obligation derives the exact typed
-record identity and permits only a detector at the recorded stage: oracle verdict divergence,
-compile/link diagnostic class, invocation failure/status, or output-observation class. Loading an
-obligation against record bytes recomputes identity and copied metadata; an exact-domain coverage
-set rejects empty, duplicate, out-of-order, or cross-family obligations. This establishes the
-artifact and graph-validation boundary. The known reduction fixture is now populated and executed by
-the control below; `GM_ADDR`, `DataCopyExtParams`, alignment, initialization, and related
-target-specific fixtures have not yet been populated or executed.
-
-**Implemented hardware-free historical reduction control (2026-08-26).** The first implementation
-control loads its caller domain, reference, corpus, and historical oracle-divergence obligation
-through the ordinary proposal graph. Six separately compiled Rust fixtures provide a binary64
-accumulate/one-round reference, sequential and balanced-tree correct implementations, and zero,
-drop-last, and unit-offset wrong implementations. Each admission variant is bound to distinct
-implementation bytes, passes through the generic variant-build job and authoritative receipt, then
-runs as a real isolated host process through another generic job and receipt. Declared output is a
-strict finite-f32-bit artifact; trusted validation independently recomputes every output and ULP
-distance without persisting raw JSON floats.
-
-The archived single sample gives the sequential implementation zero ULP distance and therefore
-reproduces the old false rejection when the balanced tree differs by one ULP. The control allowance
-must have measured-family provenance, admissible assurance, the exact derivation corpus, the
-finite-f32-reduction region, and a magnitude equal to the maximum observed correct-family distance.
-Both correct variants must then fall within it and every wrong variant must exceed it. Policy minima,
-required construction/fault classes, distinct construction claims, and implementation plus
-observation-pipeline scopes are rechecked. The mutation adapter applies the closed drop-last,
-unit-offset, and zero-output definitions by binding them to the three exact wrong implementations
-and their already authoritative real runs. It constructs the full three-mutant by two-case grid and
-compares each output with the same reference under the measured one-ULP allowance. Unit-offset and
-zero-output are detected as scale-free defects; drop-last is detected on the historical case but
-honestly missed on the trailing-zero held-out case, which supplies the mandatory case-dependent
-blind spot. The proof must cover the same admission corpus, mutate an implementation from this
-correct family, and have no fatal failure. Asserted allowance, empty applicable grids,
-mutant/algorithm relabeling, changed ULP or receipt/content identities, stored `passed`, and non-V1
-artifacts fail closed. The resulting control is the recomputed evidence base for the first nine
-requirements of `ORACLE_ADMISSION.md` section 18.
-
-**Implemented historical reduction admission receipt (2026-08-26).** Promotion re-runs the entire
-product control rather than trusting its identity alone, then freezes the caller declaration,
-proposal refinements, and explicit exclusions in an admitted-domain manifest. A domain-neutral
-receipt binds the exact task/proposal, policy, empirical reference strength, admission corpus,
-measured allowance, host environment, source/reference observation, correct and wrong variant
-trials, mutant set/grid/proof, configured consecutive saturation evidence, historical coverage,
-blind and non-injectable cells, and an explicit no-disagreement disposition. Assumptions and the
-unverified source-accelerator, target-build, target-device, target-specific-coverage, and runner
-attestation claims are closed typed values carried into the immutable oracle rather than omitted.
-The oracle also freezes an explicit no-time-expiry/revalidation-trigger policy. Receipt and oracle
-identities are content-derived, critical edges are mirrored and revalidated, and there is no stored
-`passed` bit. Missing saturation, a changed frozen corpus, unknown fields, or a non-V1 schema fails
-closed. This completes all ten first-implementation controls in `ORACLE_ADMISSION.md` section 18.
-
-**Implemented historical reduction candidate verdict (2026-08-26).** A candidate run has its own
-closed execution role and cannot reuse an admission-variant label. Its plan binds the exact
-implementation, authoritative build receipt, executable, admitted host environment, and frozen
-reduction corpus before the generic coordinator executes it. Judgment first recomposes the full
-admitted oracle, revalidates reference and candidate observations, and recomputes each pair of
-finite-f32 results and its ULP distance. The product comparison stores no verdict; failed-case
-identities are derived exactly where distance exceeds the frozen allowance. A domain-neutral
-candidate receipt then cites the admitted oracle and admission receipt, candidate source/build/run,
-environment, corpus, allowance, comparison, and every failed case. `Pass` is derived only when that
-set is empty; `Fail` requires it to be non-empty. Oracle blind spots, assumptions, and unverified
-target/device claims are copied exactly into either result. The integration control executes a
-balanced-tree candidate to `Pass`, a zero-output candidate to `Fail`, and rejects role relabeling,
-changed ULP facts, stored `passed`, forged outcome metadata, and non-V1 data. This completes the
-hardware-free admission-to-verdict path; target-device coverage remains explicitly unverified.
-
-Its core modules are expected to include:
-
-- domain and coverage obligations;
-- observation vocabulary for scalar, tensor/array, status, determinism, and invocation evidence;
-- reference/property/implicit oracle plans;
-- tolerance provenance, assurance, and per-case numerical allowance;
-- versioned admission profiles for variant counts, class coverage, independence, saturation, and
-  budget-exhaustion outcomes;
-- generic mutants and mutation-grid classification;
-- admission checks and calibration receipts;
-- candidate comparison and verdict receipts;
-- evidence-graph validation.
-
-The verifier consumes an immutable `AdmissionPolicy`; it does not embed one global variant count.
-The policy identity participates in the admission identity and its configured stopping reason is
-recorded. Numerical allowance is modeled as value plus independent provenance and assurance fields.
-Held-out derivation/validation overlap is rejected by identity before adjudication, and empirical
-passes remain visibly distinct from proven or exhaustive claims.
-
-Operator-specific reference source, properties, corpus material, and call adapters travel in a
-versioned bundle. The trusted runner provides generic ABI/execution machinery. Adding an operator
-does not redeploy operator mathematics in worker binaries.
-
-The full proof model is in [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md).
-
-## 12. Record and identity architecture
-
-### 12.1 Event store
-
-Every event has:
-
-- event identity;
-- aggregate kind and identity;
-- aggregate sequence/revision;
-- schema name and version;
-- causal command identity and optional parent event;
-- timestamp as an observation, not ordering authority;
-- canonical payload bytes;
-- optional actor/session provenance.
-
-Append uses expected revision. Global ordering is not required for truth; cross-stream process
-managers use explicit causality and idempotency keys.
-
-V1 persists event payloads and structured artifacts as canonical UTF-8 JSON through `cairn-codec`.
-The event/aggregate model is format-neutral; envelopes carry encoding and schema identifiers so a
-future codec is an explicit versioned transformation. JSON object ordering, numbers, duplicate keys,
-escaping, and unknown fields are defined by conformance fixtures rather than delegated to a
-particular serializer's defaults.
-
-The first store adapter is SQLite. `cairn-store-sqlite` implements append-only streams, command
-idempotency, transactional outbox, projections, leases, attempts, checkpoints, and artifact-reference
-metadata behind `EventStore`, `ProjectionStore`, `CoordinationStore`, and `ContentStore` ports.
-Product crates do not import SQLite APIs or SQL schemas. Immutable content bytes may initially live
-in filesystem blobs with SQLite metadata; that layout is an adapter detail.
-
-### 12.2 Content store
-
-The CAS stores exact bytes and verifies content identity on write and read. Canonical structured
-artifacts define their encoding version. Large trees use a canonical manifest whose entries cite
-content objects.
-
-Secrets are references, not artifacts. Derived identities use explicit domain separators and types.
-
-### 12.3 Identity graph
+不得用 `bool admitted` 或 `String status` 模拟这些差异。状态转换消费前一状态并产生新类型或新
+artifact；加载 persisted V1 bytes 必须重新校验所有 invariants。
+
+### 6.3 Identity
+
+- 内容 artifact 使用 domain-separated typed SHA-256 semantic identity；
+- aggregate/run/attempt 使用独立生命周期 identity；
+- derived identity 不能被当作 CAS bytes identity；
+- 相似底层表示不构成 generic ID 抽象理由；
+- 容易混淆的 ID、单位、role 和 lifecycle 必须有 compile-fail/equivalent static tests。
+
+Pre-release 期间内部 schema、event、snapshot、artifact 和 protocol 保持单一 V1。设计变化直接修改
+V1 并同步更新代码、测试、fixture 和文档；不增加兼容 reader、migration 或 V2。
+
+## 7. 端到端工作流
+
+### 7.1 Intake
+
+1. 接收严格 V1 `CudaToAscendMigrationTask`；
+2. 归档 CUDA kernel、host launch、caller slice、测试、文档、模型上下文和政策；
+3. 区分可归档内容、外部秘密引用和不允许出域的数据；
+4. 验证 source entry point、target SoC/toolchain、requested claims 和预算；
+5. 生成 mandatory ABI/domain facts 与显式 unknown；
+6. 完成 evidence backwards audit 后才能进入探索。
+
+### 7.2 高阶意图恢复与准入
+
+SIR 从静态事实、CUDA 行为、caller/model 上下文和反馈产生多组带证据假设，明确算法意图、数值
+意图、部署契约、CUDA 实现伪影和疑似缺陷。详细设计见
+[SEMANTIC_INTENT_RECOVERY_DESIGN.md](oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md)。
+
+Intent Admission 逐 claim 校验证据、冲突、隐藏区分 case 和用户政策。结果是不可变
+`MigrationIntentContract`，或局部 `Conflict`、`Unknown`、`NeedsUserDecision`。SIR 本身没有
+promotion edge。
+
+### 7.3 Oracle 探索与准入
+
+Oracle Explorer 按已准入意图生成 claim portfolio、domain partition、reference/property、case、
+comparator、execution/safety、adequacy 和 performance proposal。Synthesis 与 adversarial
+exploration 是可替换 strategy；使用模型策略时以独立 durable episode 通过冻结 artifact 交互，
+也可由 mutation/property/counterexample 等非 Agent 策略承担对抗探索。详细设计见
+[ORACLE_EXPLORATION_SYSTEM_DESIGN.md](oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md)。
+
+Oracle Admission 从权威 receipt 重算，运行正确实现正控制、错误实现/定向 mutation 负控制、
+conflict/domain/bypass/hidden controls，并冻结局部 `AdmittedOraclePortfolio`。现有具体校准机制见
+[ORACLE_ADMISSION.md](oracle/ORACLE_ADMISSION.md)；其中明确把当前 reduction/matmul 路径归类为
+实现证据，不能用它们替代新的 intent/performance 架构。
+
+### 7.4 Candidate search
+
+1. 以 admitted intent + admitted Oracle + target environment 打开隔离 episode；
+2. 模型/搜索器生成 immutable Ascend C candidate 和转换说明；
+3. 先做静态/source completeness、ABI 和 target build gate；
+4. 再按 Oracle plan 请求 target execution、correctness、safety 和 profiling；
+5. trusted judge 返回最小 typed diagnostic，candidate 不能更改 gate；
+6. 新修订产生新 candidate identity，历史尝试全部保留；
+7. 搜索预算、停止原因和 Pareto frontier 均为 durable facts。
+
+Candidate Search 可以读取公开 Oracle claim 和失败反例，不能读取 hidden admission corpus、trusted
+mutant 私有定义、expected-output artifact 或 judge continuation。
+
+### 7.5 Independent Candidate Admission
+
+Candidate Admission 冻结候选后运行，至少分别判断：
+
+- semantic/algorithmic correctness；
+- numerical allowance/assurance；
+- real build/launch/device/ABI execution；
+- memory/concurrency/synchronization safety；
+- Oracle adequacy 与 anti-bypass；
+- performance target/baseline/roofline；
+- model/deployment integration feedback。
+
+Admission-kind-specific Planner 可以选择检查顺序并解释证据，但并非每类 Admission 都必须调用
+Agent；required evidence 在 Planner 之前由 trusted policy 机械派生，final gate 只从 trusted records
+和 receipts 派生 outcome。业务准入边界见
+[INDEPENDENT_ADMISSION_DESIGN.md](oracle/INDEPENDENT_ADMISSION_DESIGN.md)，Planner profile、进程和
+软件结构见 [ADMISSION_ARCHITECTURE.md](design/ADMISSION_ARCHITECTURE.md)。
+
+### 7.6 Feedback and learning
+
+Verdict、counterexample、真实模型表现和 operator review 被分类成 typed feedback，进入新的 SIR、
+Oracle 或 performance run。它们不会原地修改已准入 artifact。经复现、归因、复用性审查和 claim
+admission 后，才进入知识库 T1/T2。
+
+## 8. Semantic Intent Recovery
+
+SIR 是可替换、proposal-only 子系统，独立进程/worker 运行，只读不可变输入。主要产物：
+
+- `IntentHypothesisSet`；
+- `IntentEvidenceGraph`；
+- `IntentConflict` / `IntentUnknown`；
+- `SemanticInvariant`；
+- `OptimizationFreedom`；
+- `ImplementationArtifact`；
+- `DisambiguationExperimentProposal`。
+
+它不可读取 hidden admission 或 candidate judge material，不可修改 caller declaration 或
+`MigrationIntentContract`。未来可在不改变下游协议的前提下，用更强 IR、静态分析、多 agent 或
+形式化工具替换。
+
+## 9. Oracle Explorer
+
+Oracle Explorer 是 claim、case、reference、relation、comparator 和实验的生成/组合器，不是
+judge。它保留 authority dependency graph，避免把共享库、共享模型或 CUDA 单次行为重复计为
+独立证据。
+
+Oracle 至少覆盖 semantic、numerical、execution、safety、adequacy、performance 六个平面。每个
+case 保存 `CaseIntent`；每个 comparator 保存适用 domain 和依据；每项 unknown/conflict 保持可见。
+
+当前模型驱动的 Blue/Red profile 是 synthesis/adversarial strategy 的一组实现证据，其 role、缓存、
+外部研究和 artifact-mediated 修订机制继续遵循 [ORACLE_AGENT.md](ORACLE_AGENT.md) 与
+[ORACLE_PROMPTS.md](ORACLE_PROMPTS.md)。它们不是永久固定的 Agent 拓扑；无论采用何种 strategy，
+都必须消费已准入意图并服从本设计更严格的 proposal/admission 边界。
+
+## 10. Hardware Performance Model
+
+Hardware Performance Model 独立管理：
+
+- T0 官方/机器规格事实；
+- T1 受控 microbench 实测事实；
+- benchmark registry/generator；
+- profiler adapter 与字段校准；
+- algorithm/implementation intensity；
+- conditional multi-ceiling roofline；
+- bottleneck hypothesis；
+- workload-weighted performance evaluation。
+
+理论 peak、实测 ceiling、candidate observation 和业务 target 是不同类型。Roof 必须绑定 SoC、
+dtype、shape、engine、memory level、数据流、并发、toolchain 和 device state。详细设计见
+[PERFORMANCE_ORACLE_DESIGN.md](oracle/PERFORMANCE_ORACLE_DESIGN.md)。
+
+## 11. Knowledge 与 Skill Registry
+
+知识以 claim 为单位采用 T0–T3 层级和 Candidate→Reviewed→Admitted→Retracted 生命周期；skill
+采用 Unaudited→Reviewed→Validated→Refuted 生命周期。作者身份永远只是 provenance，内容变化
+使验证失效，撤回触发反向影响审计。
+
+Agent 按 role 进行 progressive disclosure 查询和 skill 加载。Reviewed skill 可以在受限探索中
+使用并带 provenance，但不能支持 admission、改 policy 或扩大工具权限。详细设计见
+[KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md](oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md)。
+
+## 12. Agent runtime
+
+`cairn-agent` 保持业务中立，提供：
+
+- durable episode/turn/step；
+- protocol-native model continuation 与 semantic turn；
+- role-scoped tool/capability catalog；
+- deterministic model-input projection；
+- model template、deployment、protocol、transport、credential 分层；
+- token/turn/tool/wall-time/external-meter budgets；
+- cancellation、ambiguous effect 和 recorded/live replay；
+- knowledge/skill snapshot 注入记录。
+
+Model transport 只完成一次 provider exchange；tool 执行、重试、预算和终止由 runtime 控制。不同
+role 不共享私有 continuation。Retrieved content 永远是 data，不获得 instruction authority。
+
+当前 OpenAI Responses、Chat Completions 和 Anthropic Messages 的 native continuation 设计继续
+有效；provider 选择与 CUDA→Ascend C 业务解耦。详见 [RECORD_REPLAY.md](RECORD_REPLAY.md) 和
+[ORACLE_AGENT.md](ORACLE_AGENT.md)。产品侧 Agent-capable function、strategy、profile、episode、Host、
+process 和 authority 的定义及当前派生 catalog 见
+[AGENT_ARCHITECTURE.md](design/AGENT_ARCHITECTURE.md)。Agent-capable 位置数量不等于模型调用数、并发数
+或进程数，功能存在也不等于必须使用 Agent。
+
+## 13. Execution substrate
+
+Worker 执行 opaque `JobContract`，不知道 Intent、Oracle、candidate 或 migration stage。Job 冻结：
+
+- input bundle、command、environment 和 output declarations；
+- placement/resource/network/sandbox policy；
+- stream/artifact/evidence limits；
+- retry/effect semantics。
+
+Attempt evidence 分为 candidate-writable workspace 和 worker-controlled evidence channel。后者记录
+argv、binary/image、mount、exit、timing、device/launch observation 和 declared output ingestion。
+
+Controller 负责资源匹配、reservation、lease、attempt、reconciliation 和权威 receipt；worker
+heartbeat 只证明 liveness，不证明某项外部 effect 是否发生。CUDA source、Ascend build 和 NPU
+device 是不同 capability，不能因共处一台机器而混合 authority。
+
+现有 worker、调度、资源探测和 Docker 边界分别见
+[WORKER_EXECUTION.md](WORKER_EXECUTION.md)、[SCHEDULER.md](SCHEDULER.md)、
+[RESOURCE_PROBING.md](RESOURCE_PROBING.md) 和 [ENROLLMENT.md](ENROLLMENT.md)。
+
+## 14. Record、证据与 replay
+
+### 14.1 Event 与 CAS
+
+Event store 保存 aggregate identity、revision、causality、schema V1、canonical payload 和 actor
+provenance。CAS 保存精确 bytes 并在读写时重算 typed content identity。Projection 可重建，event 和
+artifact 不可原地修改。
+
+### 14.2 Evidence graph
 
 ```mermaid
 flowchart BT
-    verdict["Candidate verdict"]
-    candidate["Candidate bundle"]
-    candrun["Candidate execution receipts"]
-    oracle["Admitted oracle"]
-    admission["Admission receipt"]
-    variants["Correct + incorrect variants"]
-    mutation["Mutation grid + blind spots"]
-    domain["Domain + coverage obligations"]
-    corpus["Frozen corpus"]
-    reference["Reference/property artifacts"]
-    task["Task specification"]
-    environment["Images, binaries, policies"]
+    verdict["Migration verdict"]
+    cand["Candidate + build/run/profile receipts"]
+    oracle["Admitted Oracle portfolio"]
+    oadmit["Oracle admission receipts"]
+    intent["Admitted migration intent"]
+    iadmit["Intent admission receipts"]
+    hw["Hardware facts/ceilings"]
+    kb["Knowledge/skills snapshots"]
+    source["CUDA/caller/model context"]
 
-    verdict --> candidate
-    verdict --> candrun
+    verdict --> cand
     verdict --> oracle
-    verdict --> domain
-    candrun --> environment
-    oracle --> admission
-    admission --> variants
-    admission --> mutation
-    admission --> corpus
-    admission --> reference
-    corpus --> domain
-    domain --> task
-    candidate --> task
+    verdict --> intent
+    verdict --> hw
+    oracle --> oadmit
+    oracle --> intent
+    oracle --> hw
+    oadmit --> kb
+    intent --> iadmit
+    iadmit --> source
+    cand --> source
 ```
 
-Completion walks this graph and validates every required object, schema, and identity edge.
+完成任务前执行 backwards audit。任何 verdict-relevant identity 必须能解析到内容、权威 event 或
+明确的 secret/external reference。缺边不能产生 `Admitted` 或 `Satisfied`。
 
-Details of reconstruction and replay are in [`RECORD_REPLAY.md`](RECORD_REPLAY.md).
+### 14.3 Replay
 
-## 13. External API and App Server
+- recorded replay 重用历史外部答案和 receipt，可确定性重建决策；
+- live rerun 可能得到不同模型/设备结果，是新 run；
+- counterfactual branch 从历史边界开始，保留父身份但不修改历史；
+- retracted knowledge 或过期 hardware fact 触发 revalidation，不重写旧 verdict。
 
-The App Server is a long-lived process hosting task aggregates, episodes, worker connections, and
-event subscriptions. It exposes a bidirectional, versioned protocol over stdio for local embedding
-and a supported network transport for remote clients.
+## 15. MigrationVerdict
 
-### 13.1 Resource methods
+顶层 task outcome 与 claim outcome 分开。
 
-The initial protocol families are expected to include:
+### 15.1 Task outcome
 
-- `initialize` and capability negotiation;
-- `task/create`, `task/start`, `task/read`, `task/list`, `task/suspend`, `task/resume`, `task/cancel`;
-- `episode/read` and event subscription;
-- `oracle/read`, `candidate/read`, `verdict/read`;
-- `artifact/read` and authorized export;
-- `approval/respond` for server-initiated requests;
-- worker registration, heartbeat, assignment, and attempt methods on a separately authenticated
-  control surface.
+- `Completed`：按 policy 得到完整多维结论；
+- `Incomplete`；
+- `Cancelled`；
+- `BudgetExhausted`；
+- `InfrastructureFailure`；
+- `NeedsUserDecision`。
 
-Exact methods remain subject to protocol design, but resource naming and versioned schema generation
-are requirements.
+### 15.2 Claim outcome
 
-### 13.2 Event translation
+- `Satisfied`；
+- `Violated`；
+- `Unknown`；
+- `Conflict`；
+- `NotApplicable`；
+- `NotExecuted`；
+- `InfrastructureFailure`。
 
-Internal facts are translated into stable client items:
+### 15.3 Evidence strength
 
-- agent message;
-- reasoning summary where policy allows;
-- tool operation;
-- execution attempt;
-- source/build/correctness diagnostic;
-- artifact publication;
-- oracle admission update;
-- candidate verdict update;
-- approval request;
-- warning or infrastructure incident.
+Claim 还携带离散强度，例如 proven、exhaustive、specification-derived、independent-differential、
+property-supported、empirical、unsupported。数值 provenance 与 assurance 分开。
 
-Each item has `started`, optional `updated`, and terminal `completed`/`failed` behavior. Durable item
-completion can be reconstructed after reconnect; transient deltas may be lost without changing
-truth.
+发布 policy 可派生：
 
-### 13.3 Backpressure
+- `AdmissibleForDeployment`；
+- `CorrectButPerformanceRejected`；
+- `BlockedByCorrectness`；
+- `BlockedByUnknownOrConflict`；
+- `EvidenceIncomplete`。
 
-Ingress and egress queues are bounded. Saturated clients may lose explicitly ephemeral deltas, but
-durable facts remain queryable. Commands rejected for overload return a retryable typed error and do
-not acquire execution authority.
+这些是强类型 policy outcome，不是存储在底层 comparison 中的布尔字段。每个结果列出 scope、
+failed claims、blind spots、assumptions、unverified claims 和支持 receipt。
 
-## 14. Deployment topology
+## 16. 性能与成本调度
+
+### 16.1 验证资源梯度
+
+| 层级 | 资源 | 主要目的 |
+| --- | --- | --- |
+| V0 | CPU/静态工具 | schema、意图/Oracle 提案、reference、case、property、host control |
+| V1 | CUDA source device | 源行为、sanitizer、数值/执行观测 |
+| V2 | Ascend build | compile/link/ABI/静态 artifact |
+| V3 | Ascend NPU | 真实 correctness/safety/performance/device evidence |
+| V4 | 模型/部署环境 | e2e integration、first divergence、业务加权效果 |
+
+这是一条成本/证据梯度，不是 schema 版本。一个 proposal 在最便宜的 decisive failure 处停止。
+Provider turn、人工审批和外部服务是独立搜索预算，不排在硬件层级末端。
+
+### 16.2 Performance search
+
+性能搜索维护 Pareto frontier，结合业务目标、production baseline、hardware ceiling、remaining
+headroom、下一检查成本和可验证性决定是否继续。只有在 correctness 前置 gate 和 measurement
+admission 满足时，才输出发布级性能结论。
+
+## 17. 安全和信赖边界
+
+Trusted computing base 包括：
+
+- canonical schema/identity/strong-type invariants；
+- authorization、role/capability scoping；
+- record/CAS integrity；
+- job assembly、worker evidence capture 和 receipt；
+- trusted derivation/comparison/mutation/adjudication；
+- 明确限制的 deployment/data policy。
+
+“属于 TCB”只表示 authority placement，不表示已经正确。每个 verdict-relevant mechanism 和 policy
+仍需 exact qualification receipt、negative/tamper/fault controls、适用范围和 revalidation trigger；
+最低层 trust root 保持小型并明确残余假设，不能由自身或另一个 agent 自我认证。
+
+它不包括：
+
+- 模型输出、SIR/Oracle/candidate proposal；
+- 外部文档、tests、knowledge 或 skill 的正文；
+- CUDA source 的语义正确性；
+- candidate-writable output；
+- profiler 未校准解释；
+- UI summary 或 applicant 自报状态。
+
+任务在任何 provider、网络或 remote execution 前解析 data-boundary policy。Worker sandbox 是可重放
+与意外损害边界，不声称敌对多租户安全。无法独立观测 device/binary/launch 时，结果必须标为
+unverified。
+
+## 18. Failure 与恢复
+
+| 类型 | 示例 | 处理 |
+| --- | --- | --- |
+| Proposal defect | schema 错、证据缺、错误 identity | 原子拒绝，给可修复 diagnostic |
+| Intent/authority conflict | 文档、CUDA、模型行为不一致 | 保留 conflict，请求实验或用户决策 |
+| Candidate violation | build/结果/safety/perf 不满足 | claim-scoped fail，允许候选修订 |
+| Infrastructure failure | store/worker/device/tool 失败 | 不转为 candidate fail；按 effect policy 恢复 |
+| Ambiguous effect | provider/job 可能执行但未确认 | reconcile，不盲重试 |
+| Policy denial | 数据、网络、设备或预算不允许 | durable denial |
+| Unverifiable | 无足够 intent/Oracle/allowance authority | 输出 unknown/unverifiable，不降级 pass |
+| Knowledge invalidation | claim/skill 被撤回 | impact audit + revalidation |
+
+重启从 event、CAS、projection revision、operation authority 和 attempt journal 恢复。没有 durable
+start authority 不得重新 dispatch 外部 effect。
+
+## 19. 部署拓扑
 
 ```mermaid
 flowchart TB
-    subgraph control["Controller host"]
+    subgraph controller["Controller"]
       server["cairn-server / App Server"]
-      db[("Event store + projections")]
-      cas[("CAS")]
+      db[("Public event store + projections")]
+      cas[("Public CAS")]
+      kb[("Knowledge/skill registry")]
       server --- db
       server --- cas
+      server --- kb
     end
 
-    clients["CLI, UI, upstream caller"] <--> server
-    models["Model providers"] <--> server
-
-    subgraph local["Local execution pool"]
-      cpu["CPU executor"]
-      sourcegpu["Source accelerator executor"]
+    subgraph proposal["Proposal processes"]
+      sir["SIR process"]
+      episodes["Synthesis / adversarial / typed Planner / Candidate episodes"]
     end
 
-    subgraph remote["Remote target hosts"]
-      worker["cairn-worker"]
-      sandbox["build/device sandboxes"]
-      worker --> sandbox
+    subgraph authority["Admission authority"]
+      admission["Mechanical gates"]
+      restricted[("Restricted admission store")]
+      admission --- restricted
     end
 
-    cpu --> server
-    sourcegpu --> server
-    worker -->|"authenticated outbound connection"| server
+    client["CLI/UI/upstream"] <--> server
+    server <--> sir
+    server <--> episodes
+    server <--> admission
+    model["Model providers"] <--> sir
+    model <--> episodes
+    cuda["Managed CUDA worker"] --> server
+    build["Managed Ascend build worker"] --> server
+    npu["Managed Ascend NPU worker"] --> server
+    integration["Controlled model/deployment evaluator"] --> server
 ```
 
-The initial deployment may co-locate server, event store, CAS, CPU, and source accelerator. The
-interfaces remain process-safe so a later deployment can move them without changing product logic.
-
-Workers are replaceable execution capacity. Durable task truth remains on the controller side.
-
-## 15. Cost model and scheduling
-
-The earlier single ladder placed provider turns after target devices even though provider turns
-generate the proposals that enter every validation tier. Cairn models two dimensions instead.
-
-### 15.1 Validation ladder
-
-| Tier | Resource | Typical proof |
-|---|---|---|
-| V0 | CPU | schema, reference, corpus, properties, valid/invalid variants, comparator, self-consistency |
-| V1 | source accelerator | observed source domain, fp behavior/error surface, source admission |
-| V2 | target build environment | compilation, linkage, declared ABI |
-| V3 | target device | target behavior and candidate verdict evidence |
-
-A proposal stops at its first decisive failure. Passing V0 does not imply V1; passing V1 does not
-imply coverage of target-specific failures.
-
-### 15.2 Search budget
-
-Model turns, human approvals, and externally priced services are search costs. They are charged to
-episodes and tasks independently of V0–V3. Before buying a correction turn, the workflow should
-collect all safe, already-authorized cheap diagnostics for the current proposal so the turn receives
-one coherent failure report.
-
-Logical tool-operation budget is reserved before a proposed tool call becomes an executable
-binding. The durable admission records ordered operation identities and trusted registration
-metadata; an over-limit proposal terminates at that boundary without producing tool authority.
-Invocation retries retain the logical operation identity and consume a separate attempt or metered
-budget. The implemented external-meter ledger uses independent named unit ceilings and a distinct
-`MeteredActionId`. It durably reserves the worst-case charge before granting one-shot start
-authority, then records a bounded provider receipt. Reserved capacity is intentionally not refunded:
-this keeps crash recovery conservative when the provider outcome is unknown. A durable start
-recovers as in-doubt and permits receipt reconciliation, never blind re-execution. Live provider and
-service adapters are still target work at this seam.
-
-Provider input/output-token usage is accepted only as a receipt returned with the model response
-and is committed with that response fact. An episode may configure an observed token threshold;
-the cumulative receipts are checked before granting another model step. The response that reaches
-or crosses the threshold remains valid because its usage was not knowable before dispatch. Missing
-usage fails closed before a continuable next step for a budgeted episode and remains explicitly
-unmetered for an episode with no token threshold. A step that already yielded requires no additional
-budget stop because it grants no further model authority.
-
-When present, provider cache-read, cache-write, and cache-miss token details travel with this same
-receipt. They are cost/latency observations, not replay or correctness authority. Missing detail is
-unknown. Role projections keep stable instructions, canonically ordered tools, caller/source
-context, and policy blocks before append-only evidence; they do not merge blue and red histories to
-inflate a cache-hit metric.
-
-Scheduling decisions and skipped checks are durable facts.
-
-## 16. Trust and security boundaries
-
-### 16.1 Trusted computing base
-
-The initial trusted base includes:
-
-- canonical identity and schema code;
-- event/CAS integrity code;
-- authorization and role scoping;
-- job assembly and worker evidence capture;
-- generic verification method and adjudication;
-- deployment policies whose limitations are declared.
-
-It excludes:
-
-- model outputs;
-- candidate and oracle-proposed code;
-- candidate-writable workspace;
-- external corpora by origin;
-- UI summaries;
-- stored `passed` fields when underlying trials can be recomputed.
-
-### 16.2 Worker execution boundary
-
-Workers run in operator-controlled private infrastructure. Submitted code and container images are
-the operator's responsibility; Cairn does not scan them or claim hostile multi-tenant containment.
-The Docker adapter uses a read-only root and input, temporary work storage, no network, non-root
-execution, dropped capabilities, and `no-new-privileges` as reproducibility and accidental-damage
-defaults. Worker credentials, journal files, CAS, and the Docker socket are not mounted into jobs.
-Deployment-specific CPU, memory, PID, and writable-work limits are independently configurable or
-disableable.
-
-### 16.3 Data policy
-
-Each task resolves a data-boundary policy before model or remote dispatch. The policy determines:
-
-- which source bytes may reach which provider;
-- which artifacts may leave the controller;
-- redaction/export behavior;
-- retention and deletion policy;
-- allowed external corpora and license obligations.
-
-Policy identity participates in task and episode identity.
-
-### 16.4 Attestation honesty
-
-If Cairn cannot independently observe that a candidate executed on the declared device, or cannot
-verify the runner binary, the verdict records those facts as unverified. Deployment metadata never
-silently upgrades a claim to attested execution.
-
-## 17. Failure and recovery model
-
-### 17.1 Failure classes
-
-| Class | Example | Default handling |
-|---|---|---|
-| Subject rejection | build error, wrong result, missing bundle path | durable diagnostic; model may correct |
-| Invalid citation/input | model cites unknown artifact | reject operation with available correct identity; no external dispatch |
-| Infrastructure failure | corrupt store, worker crash before effect | preserve task; retry only under policy |
-| Ambiguous effect | provider/job may have executed before acknowledgement | reconcile or request authority; never blind retry |
-| Policy denial | unauthorized network/device/data action | durable denial; do not reinterpret as candidate failure |
-| Unverifiable claim | no admitted reference/property strength | terminal claim result or caller-authorized weaker claim |
-
-Error classification is decided by typed authority boundaries, not by parsing human-readable error
-strings.
-
-### 17.2 Restart
-
-On restart the server:
-
-1. verifies stores and loads projections at known revisions;
-2. replays later events;
-3. resumes process managers idempotently;
-4. expires or reconciles leases;
-5. restores subscriptions from client cursors;
-6. does not dispatch a model or job unless a committed operation grants authority.
-
-### 17.3 Retention and deletion
-
-Evidence retention is policy-controlled. Deletion uses reference-aware garbage collection and
-produces an audit event. A retained verdict cannot continue to claim a deleted required artifact is
-auditable; exports should be self-contained manifests or declare external dependencies.
-
-## 18. Extensibility model
-
-### 18.1 In-tree extensions
-
-Stable Rust traits and typed registries support model adapters, tool implementations, context
-policies, execution backends, stores, and domain adapters. Composition is explicit in the server
-binary and configuration.
-
-### 18.2 Out-of-tree extensions
-
-Out-of-tree extensions run as processes or protocol services. Their manifest declares:
-
-- protocol/version range;
-- capabilities and methods;
-- permissions/data access;
-- durable events and artifact types;
-- effect and retry semantics;
-- source/license/provenance.
-
-Cairn does not load arbitrary Rust dynamic libraries into the trusted server.
-
-### 18.3 Configuration
-
-Configuration selects providers and policies. It cannot replace immutable historical meaning. The
-fully resolved configuration bytes or a reconstructable, secret-free form are archived for each
-task/episode.
-
-Every episode budget dimension is independently optional in configuration. In the serialized
-`EpisodeBudget`, a typed value enables its check and `null` or omission disables it. This applies to
-model-step count, logical tool-operation count, observed provider-token usage, absolute deadline,
-and named external meters. External meters use an optional list of `{meter, units}` limits: an empty
-enabled list rejects every meter, and an unlisted meter fails closed. The resolved budget is copied
-into `EpisodeOpened`, so a configuration reload changes only episodes opened afterward.
-
-## 19. Verification strategy for Cairn itself
-
-### 19.1 Test lanes
-
-- pure unit tests for canonicalization, reducers, comparison, and policy;
-- contract suites shared by store, provider, executor, and backend implementations;
-- property tests for state transitions and identity sensitivity;
-- mutation controls for gates, oracle admission, summaries, and boundary checks;
-- fixture replay from historical old Cairn/Alloyport records;
-- fault injection at every external-effect/commit boundary;
-- process integration tests for server, worker, reconnect, duplicate identity, and lease expiry;
-- hardware-free emulation in public CI;
-- declared hardware lanes for source accelerator and target device;
-- end-to-end first and second operator controls.
-
-### 19.2 Controls before claims
-
-Every new measurement or gate includes:
-
-1. an honest-path control;
-2. a verified perturbation that makes it red;
-3. a check that the perturbation affected the intended subject;
-4. a false-reject control where applicable;
-5. an explicit statement of what the test does not cover.
-
-### 19.3 Historical evidence corpus
-
-Historical failures are retained as immutable regression fixtures, especially:
-
-- the false correctness verdict caused by a single sampled evaluation order;
-- comparator-only mutation and per-case blind spots;
-- missing model-input bytes;
-- same reconstructed request with different live continuation;
-- wrong digest transcription and recoverable citation semantics;
-- lost followed output;
-- stale assignment/lease and duplicate worker identity;
-- target-specific `GM_ADDR`, `DataCopyExtParams`, alignment, and initialization failures.
-
-These are regression obligations, not anecdotes.
-
-## 20. Rewrite sequence
-
-The implementation grows from evidence inward:
-
-1. **Protocol and record kernel** — canonical identities, append-only events, CAS, projections,
-   complete-input audit.
-2. **Agent control** — recorded/scripted providers, one neutral loop, role scopes, operation effects,
-   byte/semantic/workflow replay.
-3. **Executed oracle admission** — structured domain, variants, implementation-scope calibration,
-   false-accept/false-reject controls.
-4. **Execution control plane** — opaque jobs, local executor, worker leases/recovery, trusted evidence.
-5. **Unified reduction control** — reproduce known historical verdicts and first complete run without
-   copying old aggregates.
-6. **Second operator** — force the real domain/verification seams before broad renaming or plugins.
-7. **Stable App Server** — freeze public resources after internal lifecycle is measured.
-8. **Open-source release** — public CI, docs, licenses, security, extension example, reproducible
-   binaries.
-
-The old projects remain readable throughout. Code is ported only when its behavior has a named new
-home and a control proving the behavior still holds.
-
-## 21. Rejected architectural alternatives
-
-| Alternative | Rejection reason |
-|---|---|
-| Keep Cairn and Alloyport as sibling repositories | Creates moving path dependencies, double commits/deployments, and makes one product's evidence boundary an operational convention. |
-| Make everything a dynamically unloadable plugin | Maximizes composition at the cost of Rust static boundaries, auditability, and a stable trusted base before a real extension ecosystem exists. |
-| Put all state in one task aggregate | Couples unrelated lifecycles, makes external-effect recovery brittle, and produces the same oversized state machine the rewrite is intended to escape. |
-| Use mutable database rows as historical truth | Makes replay and audit depend on reconstructing overwritten decisions. Projections may be mutable; facts may not. |
-| Treat the source implementation as the sole oracle | It samples one implementation's behavior and may itself be wrong; it cannot define all legitimate target behavior. |
-| Let the model generate its own tests and accept them | Plausible tests are not grounded truth, and candidate-controlled coverage is self-grading. |
-| Admit an oracle using receipt mutation only | Proves the final comparator, not the build/execute/observe path that a real defect traverses. |
-| Put provider turns at the end of a single cost ladder | Search turns generate proposals before validation; provider spend and validation resources are different axes. |
-| Expose internal event enums directly as public API | Couples clients to implementation churn and prevents stable UI-ready lifecycle semantics. |
-| Claim deterministic live replay | Same bytes can produce a different provider response. Only recorded external answers can be replayed deterministically. |
-
-## 22. Requirements traceability
-
-| Design area | Primary requirements |
-|---|---|
-| Task and product workflow | FR-TASK-*, FR-CAND-*, FR-COST-* |
-| Oracle and verification | FR-ORACLE-*, QR-AUD-* |
-| Agent runtime | FR-AGENT-* |
-| Execution and deployment | FR-EXEC-*, QR-REL-*, QR-SEC-* |
-| Record and identity | FR-REC-*, QR-AUD-*, QR-REL-* |
-| App Server and extensions | FR-API-*, FR-EXT-* |
-| Workspace and release | QR-MNT-*, QR-OSS-* |
-
-Unresolved choices that would materially change this design are listed in
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), not hidden in implementation notes.
+Workers 通过认证 outbound connection 连接 Controller，公共 durable task truth 留在 Controller。
+Controller 保持模块化单体；SIR 从新架构 V1 起是独立进程。Oracle synthesis/adversarial、typed
+Planner 和 Candidate 以隔离 durable episode 运行；capability/data boundary 相同的 episode 可共用
+Proposal/Planning Host，不同边界按 policy 拆 process instance。Admission gate 与 restricted material
+位于独立 authority process。首期可以共用一台受控主机和相同存储技术，但 public/restricted 使用
+不同数据库/CAS root、进程身份和 capability port。
+
+同一 Host 内的 episode 仍只能通过冻结 artifact、typed request/diagnostic 和 durable event 交互；不能
+共享 private continuation、mutable scratch context、pending tool result 或未提交推理。多 Agent 共识、
+投票和重复反思不形成新的 evidence strength。详细交互和调用策略见
+[AGENT_ARCHITECTURE.md](design/AGENT_ARCHITECTURE.md)。
+
+Hardware Performance Model 首期是 Controller 内的独立确定性领域服务，不因概念数量提前微服务化。
+Hidden admission job 的资源调度经过 Controller，但 payload/evidence 使用 Admission 与已分配 Worker
+之间的一次性 restricted capability，不能落入 public CAS。详细进程、存储、网络和恢复设计见
+[RUNTIME_ARCHITECTURE.md](design/RUNTIME_ARCHITECTURE.md)。
+
+## 20. 外部接口
+
+App Server 暴露稳定 product resources，而不是内部 event enum：
+
+- `Task`、`IntentRecoveryRun`、`MigrationIntent`；
+- `OracleExplorationRun`、`Oracle`；
+- `CandidateSearchEpisode`、`Candidate`；
+- `ExecutionAttempt`、`Artifact`、`Receipt`；
+- `HardwareFact`、`PerformanceClaim`；
+- `Feedback`、`MigrationVerdict`；
+- approval、subscription 和 authorized export。
+
+Client lifecycle item 可有 started/updated/completed/failed；瞬时 delta 可在 backpressure 下丢失，
+durable facts 必须可查询。Public protocol 与 internal schema 在 pre-release 都保持当前 V1，修改时
+直接更新当前定义，不保留兼容层。
+
+## 21. Rust workspace 责任
+
+现有 crate 边界继续作为基础；新的业务能力优先在稳定接口后落位，不因文档先行立即拆 crate。
+目标代码结构和以下责任表的具体化见
+[CODE_ORGANIZATION.md](design/CODE_ORGANIZATION.md)：
+
+| Crate/area | 责任 | 禁止承担 |
+| --- | --- | --- |
+| `cairn-protocol` | 强类型 identity、单位、envelope、V1 schema/error vocabulary | 业务 workflow |
+| `cairn-codec` | canonical V1 encoding/strict decode | domain decisions |
+| `cairn-record` / SQLite adapter | events、CAS ports、projection、audit/replay | verdict policy |
+| `cairn-agent` | domain-neutral agent/model/tool/context/budget runtime | CUDA/Ascend/Oracle 业务 |
+| `cairn-execution` | jobs、attempts、workers、leases、receipt | 算子语义与 judge |
+| `cairn-verification` | generic claim/admission/comparator/mutation/verdict mechanics | 提案模型或 vendor source |
+| `cairn-cuda-ascend`（目标；直接替换当前 `cairn-migration`） | CUDA→Ascend C task、intent/Oracle/candidate workflow 与 domain artifacts | provider/worker implementations |
+| `cairn-server` | composition、API、provider/worker/storage adapters | 可复用 domain logic |
+| `cairn-sir` / `cairn-proposal-host`（目标） | 隔离 SIR 与不同 role 的 proposal episode | admitted constructor、restricted store |
+| `cairn-admission`（目标） | restricted store、typed mechanical gates、公开 decision surface | model transport、applicant 修改 |
+| `cairn-worker` | opaque authorized execution | product adjudication |
+| `cairn-testkit`（目标） | fake/recorded providers、fault injection、fixtures | production shortcuts |
+
+`cairn-migration` 的替换发生时直接更新当前 V1、全部调用者和测试并删除旧 crate 名，不保留 alias、
+re-export facade 或双路径。Hardware、knowledge、feedback、intent、Oracle 和 candidate 首期作为产品
+crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实现或独立部署需求证明，不由概念数量决定。
+
+## 22. Cairn 自身的验证
+
+每个 authority boundary 至少需要：
+
+- unit/property tests：canonicalization、state、units、domain 和 comparison；
+- compile-fail/static boundary tests：容易混淆的 ID、state、role、unit 和 evidence；
+- contract suites：store、model adapter、executor、worker、profiler、knowledge loader；
+- positive/negative/conflict/unknown/bypass controls；
+- mutation：admission、summary、policy、identity edge；
+- fault injection：external effect 前后、commit、crash/restart、lease/reconcile；
+- hardware-free recorded lanes 与声明的 CUDA/Ascend hardware lanes；
+- historical regressions 和真实模型 feedback replay；
+- 第二个语义形态不同的 CUDA kernel，验证边界而非泛化产品。
+
+任何新 gate 都必须证明 honest path 可通过、目标 perturbation 确实发生且会变红、false reject 被
+控制，并声明没有覆盖什么。
+
+## 23. 当前实现状态与设计差距
+
+截至 2026-08-27，以下基础已经存在或已有已记录控制：
+
+- 强类型 V1 protocol/codec、event/CAS、record/replay；
+- agent provider/continuation/tool/budget 基础；
+- worker enrollment、资源探测、调度、lease、Docker 执行和跨架构发布；
+- generic job/call-adapter/input/output/receipt 边界；
+- structured migration domain、boundary/dtype/memory obligations；
+- historical reduction 的 host admission→candidate verdict 控制；
+- 固定 `matmul-zero-k` f32 的模型提案→物化→真实 host adapter→比较管线；
+- Blue/Red role、external-test research 和 artifact-mediated dogfood。
+
+以下是目标设计，尚不能由上述控制宣称完成：
+
+- 独立 SIR 与 Intent Admission；
+- claim-scoped authority graph 和多假设 intent contract；
+- 完整 Oracle portfolio 与多平面 verdict；
+- 真实 CUDA 和 Ascend C candidate adapter/device attestation；
+- target sanitizer、并发/同步和 anti-bypass 证据；
+- hardware facts、microbench、profiler calibration 和 multi-roofline；
+- performance admission 与真实模型闭环；
+- 知识/skill registry、claim lifecycle、retraction propagation；
+- hidden-corpus exposure/burn/replenishment 与 feedback contamination control；
+- verifier mechanism/policy qualification 和反向影响审计；
+- 完整 Agent profile catalog、invocation policy、artifact-mediated interaction 和同 Host episode isolation；
+- 第二个真实 CUDA→Ascend C kernel 端到端控制。
+
+设计完成不等于这些能力已实现。未来开发顺序与 gate 由
+[开发计划设计](dev/README.md) 管理，已发生事实与证据由
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) 管理。
+
+## 24. 被拒绝的架构方案
+
+| 方案 | 拒绝理由 |
+| --- | --- |
+| 把 Cairn 定义为通用异构迁移系统 | 稀释已明确的 CUDA→Ascend C 目标，容易使抽象和评估漂移 |
+| 从 CUDA 单次输出直接生成最终 Oracle | 固化 source bug、未定义行为、偶然数值和实现伪影 |
+| 同一 agent 同时生成 candidate 和自我判分 | 共同错误、泄漏和 reward hacking，缺乏 authority separation |
+| SIR 直接输出正式意图契约 | 无法独立优化/替换，错误抽象会直接污染所有下游 authority |
+| 全局 `atol/rtol` 或一个总置信分 | 混淆 domain、数值语义、证据强度和冲突 |
+| 性能达标补偿 correctness 失败 | 产生不可接受的错误迁移 |
+| 用单一宣传峰值判断 roofline | 忽略 dtype/shape/engine/dataflow/measurement 条件 |
+| 把官方文档、知识或内置 skill 自动设为可信 | 作者/来源不等于 exact claim 已被证据支持 |
+| 让 Admission Agent 自报通过 | 第二个模型不是机械独立 judge，必须从 receipt 重算 |
+| 只保存最终 artifact/summary | 无法重放、撤回、定位共同依赖或审计反馈演化 |
+| 预先建立 schema V2/兼容 reader | Cairn 尚未建立公共兼容基线，违反 pre-release V1 规则 |
+
+## 25. 需求追踪
+
+| 设计区域 | 主要需求 |
+| --- | --- |
+| CUDA→Ascend C 产品和 task | FR-TASK-*、FR-CAND-* |
+| Intent Recovery/Admission | FR-INTENT-*、FR-TASK-005/006/007 |
+| Oracle Explorer/Admission | FR-ORACLE-*、QR-AUD-* |
+| Performance/hardware | FR-PERF-*、FR-CAND-*、FR-COST-* |
+| Knowledge/skills/feedback | FR-KNOW-*、FR-FEEDBACK-*、FR-REC-*、FR-AGENT-* |
+| Agent runtime 与产品 Agent topology | FR-AGENT-* |
+| Execution/deployment | FR-EXEC-*、QR-REL-*、QR-SEC-* |
+| Record/replay/identity | FR-REC-*、QR-AUD-*、QR-MNT-* |
+| API/open source | FR-API-*、FR-EXT-*、QR-OSS-* |
+
+本次架构刷新已经把 intent、performance、knowledge/skill 和 feedback 义务补入
+`SYSTEM_REQUIREMENTS.md`。这些边界是规范性目标，不应被旧的较窄 Oracle 实施计划覆盖。

@@ -472,7 +472,7 @@ For every model attempt, the auditor starts from `ModelRequestPrepared` and walk
 - data-boundary policy.
 
 For every verdict, it walks the evidence graph defined in `SYSTEM_DESIGN.md` and
-`ORACLE_ADMISSION.md`.
+`oracle/ORACLE_ADMISSION.md`.
 
 ### 9.2 Gap taxonomy
 

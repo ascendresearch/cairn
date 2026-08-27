@@ -1,25 +1,26 @@
 # Cairn system requirements
 
 - Status: normative target baseline
-- Date: 2026-08-24
-- Product scope: unified Cairn
-- Initial product slice: CUDA operator to Ascend C migration
+- Date: 2026-08-27
+- Product scope: CUDA operator to Ascend C migration
 
 ## 1. Purpose
 
-Cairn is an evidence-first agentic engineering system. Given a bounded heterogeneous-software
-migration task, it searches for a candidate implementation, searches for and admits an oracle able to
-judge that candidate, executes the relevant artifacts on controlled infrastructure, and returns a
-verdict with an auditable evidence chain.
+Cairn is an evidence-first CUDA-to-Ascend-C migration system. Given a bounded CUDA kernel and the
+necessary caller/model context, it recovers and admits the user's intended semantics, searches for
+and admits an oracle portfolio able to judge those semantics, searches for an Ascend C candidate,
+executes the relevant artifacts on controlled CUDA and Ascend infrastructure, and returns a
+multi-dimensional verdict with an auditable evidence chain.
 
 The generated implementation alone is not the product. A completed result consists of:
 
 1. the implementation and its immutable identity;
 2. the supported domain and target environment against which it was evaluated;
-3. the oracle and the evidence that admitted that oracle;
-4. source, build, execution, correctness, and optional performance receipts;
-5. an explicit verdict strength, blind spots, assumptions, and unverified claims;
-6. a durable execution record sufficient for audit, replay, and controlled counterfactual work.
+3. the admitted user-intent contract and its evidence;
+4. the oracle portfolio and the evidence that admitted each applicable claim;
+5. source, build, execution, correctness, numerical, safety, performance, and integration receipts;
+6. explicit per-claim outcomes and strengths, blind spots, assumptions, conflicts, and unknowns;
+7. a durable execution record sufficient for audit, replay, and controlled counterfactual work.
 
 The earlier Cairn harness and Alloyport product are one system here. Their separation survives only
 as internal architecture and trust boundaries.
@@ -31,8 +32,13 @@ as internal architecture and trust boundaries.
 Cairn owns:
 
 - task intake and immutable task identity;
+- higher-order semantic-intent recovery, hypothesis preservation, and separate intent admission;
 - oracle proposal, attack, admission, versioning, and freezing;
 - candidate search and correction loops;
+- CUDA/Ascend hardware facts, microbench/profiling evidence, conditional rooflines, and performance
+  admission for the migrated kernel;
+- claim-scoped knowledge and skill trust, retrieval, lifecycle, and retraction impact analysis;
+- structured use of previous-iteration and real-model feedback;
 - model, tool, context, and execution orchestration;
 - local and remote execution on CPU, source accelerators, build environments, and target devices;
 - evidence capture, content addressing, provenance, and verdict production;
@@ -54,24 +60,30 @@ Cairn does not own:
 An upstream caller MAY provide measurements, constraints, priorities, and termination decisions. It
 MUST NOT silently replace Cairn's search method or verification policy through an untyped instruction.
 
-### 2.3 Initial and future scope
+### 2.3 Product scope
 
-The initial end-to-end scope is a CUDA operator migrated to Ascend C. The architecture MUST admit a
-second operator shape without modifying the agent runtime, execution substrate, worker protocol, or
-generic verification kernel. Broader heterogeneous migrations MAY be added only after this property
-is demonstrated, not inferred from generic names.
+The product scope is CUDA operator migration to Ascend C. The architecture MUST admit a second
+materially different CUDA operator without modifying the agent runtime, execution substrate, worker
+protocol, or generic verification mechanics. Domain-neutral infrastructure is an internal dependency
+property and MUST NOT be represented as a broader heterogeneous-migration product claim. Supporting
+another source or target requires an explicit future product decision and is outside this baseline.
 
 ## 3. Actors and trust posture
 
 | Actor or artifact | Role | Default trust |
 |---|---|---|
 | Upstream caller | supplies task, declared domain, constraints, and budget | authoritative only for its declared intent |
-| Oracle author (blue) | proposes domain details, reference semantics, properties, and valid variants | untrusted proposal |
+| Semantic-intent recovery | proposes high-order algorithm, numerical, deployment, and contract hypotheses | untrusted proposal |
+| Intent admission | promotes supported claim-scoped intent and preserves conflicts/unknowns | trusted only for its exact policy and evidence |
+| Oracle author (blue) | operationalizes admitted intent into claim domains, references, properties, cases, and valid variants | untrusted proposal |
 | Oracle breaker (red) | produces correct-by-construction and deliberately wrong variants | conditionally trusted per claim |
 | Candidate author | searches for the target implementation | untrusted |
 | Model provider | produces model responses | untrusted and nondeterministic external service |
 | Source implementation | executable artifact being migrated | behavioral evidence, not infallible semantics |
 | External corpus | upstream tests, OpInfo-like data, crawled material | proposal with provenance, never truth by origin |
+| Knowledge or skill | supplies retrieved claims or exploration procedures | trust is claim/content scoped; authorship grants none |
+| Hardware model | supplies scoped specification and measured ceiling claims | trusted only after fact/measurement admission |
+| Prior/model feedback | supplies counterexamples, integration observations, and workload evidence | evidence after attribution, never an untyped reward |
 | Verification kernel | derives tolerances, injects generic mutants, compares, adjudicates | trusted repository code |
 | Execution worker | executes opaque authorized jobs and captures evidence | trusted only within its declared attestation boundary |
 | Job container | runs operator-submitted build and validation code | trusted for infrastructure safety; outputs remain claims to verify |
@@ -84,29 +96,32 @@ hand-written oracle and a model-authored oracle MUST face the same applicable ad
 
 ### 4.1 Result taxonomy
 
-Cairn MUST distinguish the following terminal outcomes:
+Cairn MUST distinguish task completion from claim outcomes. A correctness or performance claim MUST
+use at least `Satisfied`, `Violated`, `Unknown`, `Conflict`, `NotApplicable`, `NotExecuted`, and
+`InfrastructureFailure`; these values MUST remain scoped to the exact claim and domain. The task
+itself MUST distinguish:
 
-- `Pass`: the candidate satisfied an admitted oracle over the stated domain and evidence strength;
-- `Fail`: the candidate contradicted an admitted check, with reproducible failure evidence;
-- `Unverifiable`: the system could not establish a sufficiently strong oracle for the requested
-  claim;
+- `Completed`: the configured policy derived a complete multi-dimensional result;
+- `NeedsUserDecision`: an intent or policy conflict requires explicit authority;
 - `Incomplete`: authorized search ended without a candidate verdict;
 - `Cancelled`: an authorized actor stopped the work;
 - `BudgetExhausted`: the declared budget ended the work;
 - `InfrastructureFailure`: the requested observation could not be obtained because Cairn or its
   environment failed.
 
-`InfrastructureFailure` MUST NOT be converted into `Fail`, and `Unverifiable` MUST NOT be converted
-into a weaker `Pass` without changing the requested claim and reporting the weaker strength.
+`InfrastructureFailure`, `Unknown`, and `Conflict` MUST NOT be converted into `Violated` or
+`Satisfied`. Performance success MUST NOT compensate for a required correctness, numerical,
+execution, or safety claim that is not satisfied.
 
 ### 4.2 Verdict contents
 
-Every `Pass`, `Fail`, or `Unverifiable` result MUST name:
+Every completed or claim-level result MUST name:
 
-- task, candidate, oracle, domain, corpus, policy, and target identities;
+- task, admitted intent, candidate, oracle portfolio, domain, corpus, policy, and target identities;
 - the oracle strength used: reference, property/metamorphic, implicit, or none;
 - calibration/admission identity and scope;
 - every failed case and applicable diagnostic;
+- separate semantic, numerical, execution, safety, adequacy, performance, and integration outcomes;
 - known blind spots and coverage exclusions;
 - unverified assumptions such as device execution or runner attestation;
 - the exact receipts and recorded events supporting the result.
@@ -123,13 +138,33 @@ Every `Pass`, `Fail`, or `Unverifiable` result MUST name:
 | FR-TASK-004 | Derived identities MUST be distinguishable from content identities and MUST NOT be queried as though bytes necessarily exist for them. | Fake-store contract proves no derived identity is dereferenced. |
 | FR-TASK-005 | The caller MUST supply a minimum machine-readable domain contract covering known buffer/parameter roles, dtypes/shapes, valid ranges, required error behavior, requested semantics, exclusions, and explicit unknowns. It MUST be sufficient to derive mandatory base boundary cases for the requested claim. | Domain-to-corpus tests with independently derived expected cases and an incomplete/unknown control. |
 | FR-TASK-006 | Cairn MUST preserve the caller's original declaration and any later measured disagreement between declared and observed domain. | Evidence record showing both values without overwriting either. |
-| FR-TASK-007 | Agent-proposed domain refinements MUST cite their evidence and remain distinct from caller declarations, source observations, and external expectations until admission adjudicates them. | Conflicting-domain fixture retains all sources and blocks an unattributed merged value. |
+| FR-TASK-007 | Agent-proposed domain or intent refinements MUST cite their evidence and remain distinct from caller declarations, source observations, and external expectations until Intent Admission adjudicates them. | Conflicting-domain fixture retains all sources and blocks an unattributed merged value. |
 
-### 5.2 Oracle search and admission
+### 5.2 Semantic-intent recovery and admission
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
-| FR-ORACLE-001 | Cairn MUST model an oracle as a versioned artifact that is proposed, admitted or rejected, and frozen before it judges a candidate. | State-machine tests and an end-to-end freeze control. |
+| FR-INTENT-001 | Cairn MUST treat higher-order user-intent recovery as an isolated proposal subsystem whose outputs cannot be used where an admitted migration-intent contract is required. | Compile-fail/static boundary test plus capability test. |
+| FR-INTENT-002 | Intent recovery MUST consider algorithmic, numerical, model/deployment, externally observable contract, CUDA implementation-artifact, and suspected-source-defect layers without forcing them into one answer. | Corpus fixtures for each layer and one mixed-layer case. |
+| FR-INTENT-003 | The subsystem MUST preserve competing hypotheses, supporting/refuting evidence, common dependencies, conflicts, and explicit unknowns; an aggregate confidence score MUST NOT replace these fields. | Multi-hypothesis and conflict round-trip controls. |
+| FR-INTENT-004 | Intent recovery MAY read a bounded caller slice, tests, documentation, model/deployment context, traces, and prior feedback while the candidate execution unit remains one kernel plus explicit host launch. | Scope/capability fixture proving bounded context and unchanged execution unit. |
+| FR-INTENT-005 | Every hypothesis MUST distinguish required semantics, required observable contract, conditional deployment behavior, CUDA implementation artifacts, suspected defects, and unclassified material where applicable. | Hardware-specialization, checkpoint-dependent behavior, and source-bug fixtures. |
+| FR-INTENT-006 | Intent Admission MUST promote claims individually into an immutable `MigrationIntentContract` and MUST return `Conflict`, `Unknown`, or `NeedsUserDecision` when authority is insufficient or contradictory. | Admission fixtures for all outcomes. |
+| FR-INTENT-007 | Intent recovery MUST NOT read hidden admission cases, mutate caller declarations or admitted contracts, write Oracle/candidate verdict policy, or gain execution authority through a prompt or skill. | Process/data/capability isolation tests. |
+| FR-INTENT-008 | Replacing the intent extractor, model, prompt, analyzer, skill, or knowledge snapshot MUST create a new recovery-run and hypothesis-set identity without rewriting prior results. | Identity mutation and immutable-history tests. |
+| FR-INTENT-009 | Intent feedback MUST use distinct typed forms for semantic counterexamples, Oracle conflicts, production observations, user decisions, coverage gaps, implementation feedback, and performance feedback. Feedback MUST trigger a new proposal/admission flow rather than silently mutate a contract. | Type-boundary and feedback-revision controls. |
+| FR-INTENT-010 | Intent recovery quality MUST be evaluated for precision, semantic recall, implementation-artifact separation, conflict discovery, calibrated unknowns, provenance completeness, and downstream correction cost. | Frozen intent-admission corpus with hidden controls and measured report. |
+| FR-INTENT-011 | Every CUDA behavior that is anomalous, undefined, specialized, or inconsistent with higher-order intent MUST receive a claim/domain-scoped disposition: preserve observed behavior, follow admitted semantic intent, exclude undefined region, split domain, or block for user decision. No global preserve-or-fix boolean may replace this decision. | Fixtures for all dispositions and a contract-revalidation identity test. |
+| FR-INTENT-012 | Authority MUST be claim-scoped: user policy may decide desired semantics but not execution facts; device receipts may decide observations but not desired semantics; models, knowledge, skills, and retrieved documents remain proposals. | Cross-authority type/policy tests and conflicting-claim fixtures. |
+
+Detailed design is normative in
+[`oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md).
+
+### 5.3 Oracle search and admission
+
+| ID | Requirement | Acceptance evidence |
+|---|---|---|
+| FR-ORACLE-001 | Cairn MUST model an oracle as an immutable artifact revision that is proposed, admitted or rejected, and frozen before it judges a candidate. Artifact revision is a lifecycle/content identity and MUST NOT imply an internal schema version increment. | State-machine tests and an end-to-end freeze control. |
 | FR-ORACLE-002 | The candidate author MUST NOT be able to modify the oracle, corpus, tolerance policy, mutants, comparison, or adjudication for its own experiment. | Capability/visibility test plus sandbox write-isolation test. |
 | FR-ORACLE-003 | Oracle proposal and kernel search MUST be separate episodes with separate visibility policies and linked immutable identities. | Record audit demonstrating the two episodes and link. |
 | FR-ORACLE-004 | Cairn MUST support correct-by-construction variants that an oracle is required to accept. Their correctness argument MUST not depend on passing the oracle under test. | At least two structurally independent variants for two operator families. |
@@ -144,33 +179,44 @@ Every `Pass`, `Fail`, or `Unverifiable` result MUST name:
 | FR-ORACLE-013 | Source implementation, high-precision reference, external cases, and properties MUST remain separate evidence sources so disagreements can be adjudicated rather than overwritten. | Three-way disagreement fixtures. |
 | FR-ORACLE-014 | Cairn MUST support reference, property/metamorphic, implicit, and unavailable oracle strengths without representing them as equally strong. | Verdict serialization and UI/API conformance tests. |
 | FR-ORACLE-015 | Updating an oracle, corpus, domain, comparison policy, or calibration evidence MUST create a new experiment identity; it MUST NOT mutate the meaning of an old verdict. | Immutable-history and versioning tests. |
-| FR-ORACLE-016 | Oracle admission MUST produce an immutable admitted-domain artifact from the separately recorded caller contract, refinements, source observations, external proposals, and coverage obligations. An unresolved conflict affecting the requested claim MUST reject or weaken admission. | Agreement, resolved-conflict, and unresolved-conflict controls. |
-| FR-ORACLE-017 | Variant counts, required construction/fault classes, independence, saturation, and exhaustion behavior MUST be versioned `AdmissionPolicy` configuration rather than hard-coded verifier constants. Failure to satisfy the selected policy MUST NOT produce `Pass`. | Multiple policy-profile tests, budget-exhaustion control, and recorded stopping reasons. |
+| FR-ORACLE-016 | Oracle admission MUST consume an immutable `MigrationIntentContract` and may admit only a claim domain consistent with it. Oracle-discovered evidence that would alter user intent MUST return typed feedback to Intent Admission; an unresolved conflict affecting the requested claim MUST reject, limit, or make Oracle admission unverifiable. | Agreement, resolved-conflict, intent-return, and unresolved-conflict controls. |
+| FR-ORACLE-017 | Variant counts, required construction/fault classes, independence, saturation, and exhaustion behavior MUST be versioned `AdmissionPolicy` configuration rather than hard-coded verifier constants. Failure to satisfy the selected policy MUST NOT produce an `Admitted` claim. | Multiple policy-profile tests, budget-exhaustion control, and recorded stopping reasons. |
 | FR-ORACLE-018 | A numerical allowance MUST record provenance independently from assurance. Assurance MUST distinguish at least proven bounds, exhaustive finite coverage, held-out validation, exploratory measurement, external-prior-only, and unsupported evidence. | Serialization and adjudication fixtures for every class. |
-| FR-ORACLE-019 | `HeldOutValidated` MAY support only an explicitly empirical `Pass`; an unqualified domain-wide numerical claim MUST require a justified proven bound or exhaustive finite coverage. Derivation and validation corpora MUST be identity-disjoint. | Corpus-overlap rejection, empirical-verdict labeling, and proven/exhaustive controls. |
-| FR-ORACLE-020 | Oracle search MUST run blue and red as distinct durable role-scoped episodes. They MAY share immutable task artifacts but MUST NOT share private model continuation or unsubmitted reasoning. | Episode/visibility audit with distinct identities and an attempted private-history cross-link rejection. |
-| FR-ORACLE-021 | Blue MUST have a bounded read-only external-test research tool. Search/fetch requests, immutable upstream revision when available, exact fetched bytes or bounded excerpt, provenance, and truncation MUST remain reconstructable. Repository-license lookup is outside this research loop. | Recorded PyTorch-like search/fetch control plus query/source/bytes identity mutations. |
-| FR-ORACLE-022 | External or upstream tests MUST remain research context and MUST NOT become trusted cases by origin. Search snippets and fetched bytes MUST NOT have a typed promotion path to executable corpus cases; Blue MUST independently author the structured Cairn test proposal while retaining the informing research-result identity. | Research-to-proposal isolation and trust-promotion negative controls. |
-| FR-ORACLE-023 | Oracle proposal revisions MUST be immutable and feedback MUST identify the responsible role, frozen proposal, admission attempt, evidence, and recoverable deficiencies without exposing another role's private continuation. | Blue/red correction loop with proposal lineage and visibility audit. |
-| FR-ORACLE-024 | Blue/Red disagreement MUST run as a bounded artifact-mediated loop: Red reviews one frozen Blue revision, blocking findings return to Blue's existing episode, Blue submits a changed complete revision, and Red re-reviews that revision. Exhaustion MUST terminate explicitly and MUST NOT be converted into admission. | Multi-round revise/pass/exhaustion controls with distinct role continuations and immutable revision/review identities. |
+| FR-ORACLE-019 | `HeldOutValidated` MAY support only an explicitly empirical `Satisfied` claim outcome; an unqualified domain-wide numerical claim MUST require a justified proven bound or exhaustive finite coverage. Derivation and validation corpora MUST be identity-disjoint. | Corpus-overlap rejection, empirical-verdict labeling, and proven/exhaustive controls. |
+| FR-ORACLE-020 | Oracle synthesis and adversarial exploration MUST have distinct durable strategy/episode identities when both are used. They MAY run in one capability-equivalent Proposal Host but MUST NOT share private model continuation, unsubmitted reasoning, writable artifact namespace, or unrecorded mutable context. Policy MAY use non-agent mutation/property/counterexample strategies instead of a model-backed adversarial episode. | Episode/visibility audit, same-host isolation control, attempted private-history cross-link rejection, and a non-agent adversarial strategy fixture. |
+| FR-ORACLE-021 | A model-based Oracle synthesis strategy that uses external tests MUST have only a bounded read-only research tool. Search/fetch requests, immutable upstream revision when available, exact fetched bytes or bounded excerpt, provenance, and truncation MUST remain reconstructable. Repository-license lookup is outside this research loop. | Recorded PyTorch-like search/fetch control plus query/source/bytes identity mutations. |
+| FR-ORACLE-022 | External or upstream tests MUST remain research context and MUST NOT become trusted cases by origin. Search snippets and fetched bytes MUST NOT have a typed promotion path to executable corpus cases; the synthesis strategy MUST independently author the structured Cairn test proposal while retaining the informing research-result identity. | Research-to-proposal isolation and trust-promotion negative controls. |
+| FR-ORACLE-023 | Oracle proposal revisions MUST be immutable and feedback MUST identify the responsible strategy/episode, frozen proposal, admission attempt, evidence, and recoverable deficiencies without exposing another episode's private continuation. | Synthesis/adversarial correction loop with proposal lineage and visibility audit. |
+| FR-ORACLE-024 | When policy selects a model-backed synthesis/adversarial revision loop, it MUST be bounded and artifact-mediated: the adversarial episode reviews one frozen synthesis revision, blocking findings return to the responsible synthesis episode, a changed complete revision receives a new identity, and the adversarial strategy re-reviews that revision. Exhaustion MUST terminate explicitly and MUST NOT be converted into admission. | Multi-round revise/pass/exhaustion controls with distinct continuations and immutable revision/review identities. |
 | FR-ORACLE-025 | A malformed or semantically invalid model submission MUST be rejected atomically with exact trusted diagnostics and a bounded repair opportunity in the same role episode. No invalid partial body is accepted; an unchanged rejected revision is invalid. | JSON/schema/cross-field/unchanged-revision repair controls asserting exact feedback and continuation reuse. |
 | FR-ORACLE-026 | Oracle instructions MUST be repository-owned, content-addressed, role-separated, and arranged as a stable cacheable prefix before append-only evidence and the current diagnostic/request suffix. Retrieved content is untrusted data and MUST NOT acquire instruction authority. | Prompt snapshot, role-isolation, stable-prefix reconstruction, and injected-research negative controls. |
+| FR-ORACLE-027 | Trusted policy MUST derive an immutable required-claim set and acyclic dependency graph from admitted intent, requested claims, target environment, and release policy. Explorer/applicant roles MUST NOT remove required claims, and a partially admitted portfolio MUST NOT satisfy an API requiring portfolio closure. | Required/optional/not-applicable controls, cycle rejection, and compile-fail partial/full boundary test. |
+| FR-ORACLE-028 | Hidden cases MUST have sealed, consumed-without-disclosure, burned-to-public-regression, or retired lifecycle states plus an exposure ledger and diagnostic budget. A case whose distinguishing information is disclosed MUST lose hidden strength and be replenished where its partition remains required. | Adaptive-query/leak, burn/replenish, and hidden-capability tests. |
+| FR-ORACLE-029 | Random, stateful, atomic, or schedule-dependent claims MUST define applicable determinism, randomness, allowed-outcome-set, state-transition, repetition, reset, and statistical-error contracts. A single source output or absence of statistical significance MUST NOT establish equivalence. | Seed/state/order, legal-set, non-independent repetition, and inconclusive-statistics fixtures. |
+| FR-ORACLE-030 | Every verdict-relevant verifier mechanism and admission policy—including derivation, comparator, adapter, runner/parser, evidence capture, mutant injection, sanitizer/profiler adapter, aggregation, and diagnostic redaction—MUST have exact identity, scoped qualification evidence, lifecycle, limitations, and requalification triggers. A gate or second agent MUST NOT self-certify this trust root. | Honest/negative/tamper/fault/mutation controls plus mechanism-refutation impact audit. |
+| FR-ORACLE-031 | A human/operator risk-acceptance decision MUST remain a separate scoped policy artifact and MUST NOT rewrite `Violated`, `Unknown`, `Conflict`, `NotExecuted`, `Rejected`, or `Unverifiable` into `Satisfied` or `Admitted`, nor serve as correctness evidence for a later Oracle. | Risk-acceptance serialization, release-policy, and outcome-immutability controls. |
 
-Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md).
+Oracle exploration and proof obligations are normative in
+[`oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md`](oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md) and
+[`oracle/ORACLE_ADMISSION.md`](oracle/ORACLE_ADMISSION.md). Shared planner/gate, hidden-control, receipt, and
+revalidation requirements are normative in
+[`oracle/INDEPENDENT_ADMISSION_DESIGN.md`](oracle/INDEPENDENT_ADMISSION_DESIGN.md). Typed Planner profiles,
+required-evidence derivation, plan validation, process boundaries, and Gate software composition are normative in
+[`design/ADMISSION_ARCHITECTURE.md`](design/ADMISSION_ARCHITECTURE.md).
 
-### 5.3 Candidate search and gates
+### 5.4 Candidate search and gates
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
 | FR-CAND-001 | Cairn MUST run bounded candidate-search episodes against a pinned model configuration, tool catalog, context policy, task, and admitted oracle. | Complete episode identity audit. |
-| FR-CAND-002 | Candidate evaluation MUST separate at least source completeness, target build, target execution/correctness, and optional performance claims. | A fixture that fails independently at each stage. |
+| FR-CAND-002 | Candidate evaluation MUST separately report source completeness, target build, semantic correctness, numerical acceptance, real target execution, safety/concurrency, adequacy, performance, and model/deployment integration as applicable. | A fixture that fails independently at each stage. |
 | FR-CAND-003 | A defect the model can inspect and correct MUST be represented as recoverable diagnostic feedback, not a fatal infrastructure error. | Wrong-citation, source, build, and correctness rejection recovery tests. |
 | FR-CAND-004 | Ambiguous external effects and actual infrastructure defects MUST retain durable recovery semantics and MUST NOT be retried as though known not to have occurred. | Crash/restart fault-injection tests. |
 | FR-CAND-005 | Gate inputs MUST be derived from trusted records or verified receipts where possible; the model MUST NOT retype values already carried by a cited artifact. | Tool schemas plus regression for wrong digest transcription. |
 | FR-CAND-006 | A candidate rejection MUST include the minimal evidence needed to correct it without exposing secrets or allowing the candidate to change the gate. | Diagnostic contract tests and redaction tests. |
 | FR-CAND-007 | The system MUST preserve every attempted candidate and its relationship to parent attempts rather than retaining only the final candidate. | Candidate lineage audit. |
 
-### 5.4 Agent runtime
+### 5.5 Agent runtime
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
@@ -179,7 +225,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-AGENT-003 | Every decision affecting model-visible instructions, tools, history, injected context, model configuration, or pending tool results MUST be recorded before provider dispatch. | Runtime invariant and fault-injection test. |
 | FR-AGENT-004 | The model request MUST be projected from durable facts and content, not from unrecorded mutable session state. | Restart-before-dispatch produces byte-identical request. |
 | FR-AGENT-005 | Provider nondeterminism MUST be represented explicitly. Cairn MUST NOT claim that a live provider continuation is deterministic merely because its request was reconstructed. | Same-request live control records possible divergence. |
-| FR-AGENT-006 | Agent roles MUST be isolated by scoped capabilities and visibility, not merely by prompt instruction. | Red/blue/candidate capability matrix test. |
+| FR-AGENT-006 | Agent roles and strategy episodes MUST be isolated by scoped capabilities and visibility, not merely by prompt instruction. Capability-equivalent episodes MAY share a Host process, but continuation, context snapshot, writable artifact namespace, tool results, and budget MUST remain separate; a different capability/data boundary MUST use a different process instance. | Synthesis/adversarial/planner/candidate capability matrix, same-host isolation, and forced-process-split tests. |
 | FR-AGENT-007 | The runtime MUST enforce explicit, independently configurable budgets for turns, tokens where observable, tool operations, wall time, and externally metered actions. Every dimension MUST support a typed configured value and an explicit disabled state. | Configuration round-trip plus enabled, disabled, boundary, and exhaustion tests. |
 | FR-AGENT-008 | Cancellation and suspension MUST reach durable safe points and preserve whether each external operation is pending, completed, rejected, or ambiguous. | Cancellation at every operation phase. |
 | FR-AGENT-009 | Repository model template, runtime-model alias, deployment, protocol, generation policy, transport limits, and credential reference MUST be separate validated fields. The template MUST own provider-visible model identity and model/protocol capabilities; user configuration MUST NOT redeclare them. Resolving an alias MUST produce an immutable, reconstructable, secret-free episode snapshot citing the exact template identity. | Template/catalog validation, absence-of-capabilities user fixture, resolution identity, private-endpoint, reload, and secret-scan tests. |
@@ -194,8 +240,14 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-AGENT-018 | A protocol-native response MUST be parsed once into a lossless continuation and a provider-neutral semantic projection. The native-continuation fact, semantic-turn fact, and all tool-call proposal facts MUST commit as one event batch; the neutral adapter path MUST reject native responses. | Three-protocol golden/negative suites, failed-batch fault injection, and event adjacency test. |
 | FR-AGENT-019 | Model-input projection MUST preserve deterministic stable-prefix ordering within an episode. Changing evidence MUST append or cite a new immutable block rather than rewriting caller declarations or earlier history merely for presentation. | Byte-prefix comparison across two role turns and restart reconstruction. |
 | FR-AGENT-020 | When a provider reports prompt-cache read, write, or miss token counts, Cairn MUST retain them with the exact model-attempt usage receipt. Missing cache detail MUST remain unknown, and cache reuse MUST NOT establish replay equivalence, determinism, trust, or verdict authority. | Per-protocol usage fixtures, missing-detail control, and record/replay equality test. |
+| FR-AGENT-021 | Model-backed Admission planning MUST use an admission-kind-specific typed planner profile and a distinct durable episode. Profiles for Intent, Oracle, Hardware, Performance, Candidate, Knowledge, and Skill MUST NOT share applicant, obligation, experiment-request, diagnostic, policy, or outcome types merely because the runtime and model are shared. Planning MUST remain optional where a qualified deterministic recipe suffices. | Cross-profile compile-fail tests, same-model isolated episodes, deterministic-without-agent path, and wrong-kind plan rejection. |
+| FR-AGENT-022 | Cairn MUST distinguish Agent-capable function, strategy, planner/agent profile, durable episode, Host process, and authority in product types and records. The current profile catalog and its derived count MUST NOT be encoded as a fixed process, concurrency, protocol, or release constant; a required product function MAY use an admitted deterministic strategy when policy permits. | Catalog derivation test, typed identity compile-fail tests, deterministic strategy substitution, and no hard-coded profile-count architecture check. |
+| FR-AGENT-023 | Cross-episode Agent interaction MUST occur only through immutable, provenance-bearing artifacts, typed requests/diagnostics, and durable events selected by trusted policy. Episodes MUST NOT read another episode's private continuation, mutable scratch context, unpublished reasoning, pending tool results, or unsubmitted drafts; Agent agreement, voting, or repeated reflection MUST NOT increase evidence strength or replace authoritative receipts. | Same-host and cross-host isolation tests, artifact-edge reconstruction, private-context denial controls, and agreement-without-receipt negative test. |
 
-### 5.5 Execution substrate
+The product Agent catalog, invocation policy, episode interaction, Host sharing, and capability-driven process split
+are normative in [`design/AGENT_ARCHITECTURE.md`](design/AGENT_ARCHITECTURE.md).
+
+### 5.6 Execution substrate
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
@@ -233,7 +285,49 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-EXEC-032 | Replicated input and Docker-environment artifacts MUST use strict canonical V1 formats. `docker-v1` MUST accept a full immutable local image ID, argv without a shell, and a deterministic container name derived from `AttemptId`. The worker MUST persist start before Docker invocation, reconcile absent/created/running/exited state after restart, capture only bounded streams and declared regular outputs, durably publish the terminal observation before cleanup, and never rerun an already exited attempt. Join MUST leave execution disabled; activation MUST coherently select exactly `docker-v1` with one ready slot. | Canonical material tests; strict activation tests; SQLite close-reopen recovery test; real Docker Hello World plus byte-identical exited-attempt replay. |
 | FR-EXEC-033 | Docker CPU, memory, PID, writable-work, material-transfer, execution-time, stream, evidence, and declared-output limits MUST be configuration or contract values. Every optional operator limit MUST accept `null` to disable it. Fixed safety policy MUST NOT masquerade as a deployment-specific budget. | Strict configuration round trip with enabled and disabled limits; execution/capture bound tests. |
 
-### 5.6 Cost and scheduling
+### 5.7 Performance Oracle and hardware model
+
+| ID | Requirement | Acceptance evidence |
+|---|---|---|
+| FR-PERF-001 | Performance MUST always be represented as an independently reported validation plane and MUST NOT compensate for semantic, numerical, execution, or safety failure. When no business target is supplied, the plane MUST remain informational, unknown, or not executed rather than disappear. | Policy derivation tests including no-target and fast-but-wrong candidates. |
+| FR-PERF-002 | Cairn MUST distinguish theoretical specification peaks, measured sustainable ceilings, algorithmic rooflines, implementation rooflines, candidate observations, and business targets as separate strong types and claims. | Compile-fail/unit-boundary and serialization controls. |
+| FR-PERF-003 | Every roof or ceiling MUST declare its applicable SoC, dtype, shape/size region, engine, memory level/path, dataflow, concurrency, toolchain, and device-state assumptions; a single device-wide roof value is insufficient. | Applicability and wrong-roof rejection fixtures. |
+| FR-PERF-004 | Measured hardware facts MUST cite the exact microbench source/binary, environment, parameters, raw samples, timing/synchronization policy, device state, statistics, and authoritative receipts. | Reproducible microbench artifact and identity mutation suite. |
+| FR-PERF-005 | Profiler adapters MUST retain vendor-field definitions, tool/environment identity, calibration evidence, missing/overflow/multiplexing facts, and measurement perturbation. Uncalibrated interpretation MUST remain a proposal. | Calibrated and conflicting-profiler controls. |
+| FR-PERF-006 | A performance workload corpus MUST preserve real model/deployment shapes, weights or frequencies, cold/steady/concurrent modes, provenance, and hidden admission coverage. Proxy workloads MUST be identified as such. | Weighted-corpus identity and proxy-label tests. |
+| FR-PERF-007 | CUDA source, Ascend production, simple correct Ascend, measured hardware ceiling, and algorithmic bound baselines MUST remain distinct because they answer different questions. | Baseline-type boundary tests and report conformance. |
+| FR-PERF-008 | Final performance admission MUST bind the exact admitted intent, candidate binary, workload, device, launch, environment, correctness prerequisites, measurement policy, baseline, and applicable ceilings. | End-to-end receipt graph and cross-identity negative tests. |
+| FR-PERF-009 | Performance outcomes MUST distinguish at least target satisfaction, baseline improvement, proximity to an applicable roof, supported bottleneck, regression, inconclusive result, and invalid measurement rather than use one `faster` boolean. | Outcome schema and independently failing fixtures. |
+| FR-PERF-010 | Device contention, synchronization error, unstable frequency/temperature, incomparable baseline, or insufficient samples MUST yield an invalid or inconclusive measurement rather than an admitted regression or improvement. | Controlled noise/contention and missing-sync tests. |
+| FR-PERF-011 | Performance search MUST retain a Pareto frontier and a recorded stopping rationale using remaining headroom, next-check cost, and verifiability; optimization MUST reclassify the bottleneck when evidence indicates it moved. | Multi-candidate frontier and bottleneck-movement scenario. |
+| FR-PERF-012 | Workload drift MUST create a typed observation and, when an admitted trigger is crossed, require a new corpus/weight admission and performance experiment. Aggregate improvement MUST NOT hide a required region, quantile, tail, or SLO regression. | Drift/reweight identity test and weighted-average masking control. |
+
+Detailed design is normative in
+[`oracle/PERFORMANCE_ORACLE_DESIGN.md`](oracle/PERFORMANCE_ORACLE_DESIGN.md).
+
+### 5.8 Knowledge, skills, and feedback
+
+| ID | Requirement | Acceptance evidence |
+|---|---|---|
+| FR-KNOW-001 | Knowledge MUST be represented as claim-scoped content with provenance, subject, domain/environment, evidence dependencies, reference tier, evidence strength, lifecycle, freshness, conflicts, and allowed uses. It MUST NOT use authorship or one `trusted` boolean as authority. | Claim round-trip, missing-scope, and author-trust negative tests. |
+| FR-KNOW-002 | Cairn MUST distinguish T0 specification/machine facts, T1 measured facts, T2 validated mechanisms/recipes, and T3 task cases/feedback without allowing one tier to masquerade as another. | Typed tier and use-policy controls. |
+| FR-KNOW-003 | Knowledge claims MUST support candidate, reviewed, admitted, superseded, and retracted lifecycles. Retraction or applicability loss MUST trigger reverse impact analysis for dependent intent, Oracle, performance, and verdict artifacts. | Retraction-propagation graph fixture. |
+| FR-KNOW-004 | Skills MUST have a lifecycle independent from knowledge claims and MUST distinguish unaudited, reviewed, validated, and refuted content. Author identity, repository location, or built-in status MUST NOT grant validation. | Skill-state boundary and origin controls. |
+| FR-KNOW-005 | Changing skill content MUST invalidate its validation for new runs. Historical runs MUST retain the exact old content identity; no compatibility reader or schema increment is required during pre-release V1 development. | Content mutation and historical reconstruction tests. |
+| FR-KNOW-006 | An unvalidated skill MAY be used only in a policy-bounded exploration sandbox with explicit provenance. It MUST NOT support admission-critical claims, modify policy/hidden corpora/comparators, or expand the caller role's execution, network, device, or secret permissions. | Capability-intersection and prompt-injection tests. |
+| FR-KNOW-007 | Knowledge/skill retrieval MUST use progressive disclosure and return identity, match reason, trust/lifecycle, scope, evidence tier, conflicts/retractions, and allowed use with the content. Retrieval rank or semantic similarity MUST NOT alter authority. | Structured/full-text retrieval and ranking-invariance controls. |
+| FR-KNOW-008 | Search query, index/knowledge snapshot, selected result, loaded skill content, and their influence on a proposal MUST remain reconstructable. Retrieved text is data and MUST NOT acquire instruction authority. | Restart replay and injected-document negative test. |
+| FR-KNOW-009 | Sealed hidden-admission material, including existence-revealing metadata and embeddings, MUST NOT enter ordinary knowledge/full-text/vector indexes or skill assets. Burned material MAY enter only through its explicit public-regression transition. | Index-exclusion, existence-leak, and burned-transition controls. |
+| FR-FEEDBACK-001 | Previous-iteration input MUST be classified into typed counterexample, false-accept/false-reject, production/model observation, coverage gap, user decision, implementation feedback, or performance feedback before use. | Classification and cross-type rejection tests. |
+| FR-FEEDBACK-002 | Feedback MUST create a new proposal/revalidation flow and MUST NOT silently mutate an admitted intent, Oracle, hardware fact, corpus weight, threshold, or historical verdict. | Immutable-history feedback scenario. |
+| FR-FEEDBACK-003 | A positive model-level observation MUST NOT by itself establish local kernel correctness; a negative observation MAY create a regression obligation but MUST retain attribution uncertainty until first-divergence or equivalent evidence resolves it. | Positive/negative integration controls. |
+| FR-FEEDBACK-004 | Reusable knowledge writeback MUST pass recurrence, scope/generalization, retrieval-value, evidence, and admission review. Rejected crystallization candidates and negative knowledge MUST remain recorded. | Curator workflow with admitted, dismissed, and retracted candidates. |
+| FR-FEEDBACK-005 | Every feedback item MUST receive an allowed-use disposition and contamination edges. Applicant-visible or derivation-equivalent feedback MUST NOT serve as held-out evidence for the same claim merely under a new identity. | Derivation/held-out overlap, equivalent-case, visibility, and strength-downgrade controls. |
+
+Detailed design is normative in
+[`oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md`](oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md).
+
+### 5.9 Cost and scheduling
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
@@ -244,7 +338,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 | FR-COST-005 | Cost policy decisions MUST be recorded and replayable as decisions, including skipped tiers and their justification. | Record projection test. |
 | FR-COST-006 | Agent cost reports SHOULD distinguish total input, cache-read, cache-write, cache-miss when reported, and output tokens by task, episode role, model, deployment, and protocol. Optimization MUST consider total uncached work and result quality rather than cache-hit percentage alone. | Two-episode cache report fixture with known and unknown cache details. |
 
-### 5.7 Records, audit, replay, and counterfactuals
+### 5.10 Records, audit, replay, and counterfactuals
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
@@ -266,7 +360,7 @@ Detailed proof obligations are normative in [`ORACLE_ADMISSION.md`](ORACLE_ADMIS
 
 Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md).
 
-### 5.8 External interfaces and extensibility
+### 5.11 External interfaces and extensibility
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
@@ -284,10 +378,11 @@ Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md
 
 | ID | Requirement | Acceptance evidence |
 |---|---|---|
-| QR-AUD-001 | No `Pass` may depend solely on an applicant's self-reported conclusion. | Adversarial receipt fixtures. |
+| QR-AUD-001 | No `Admitted` or `Satisfied` outcome may depend solely on an applicant's self-reported conclusion. | Adversarial receipt fixtures. |
 | QR-AUD-002 | Every new gate or invariant MUST be demonstrated red under a verified perturbation before being accepted green. | Mutation log in test output/evidence. |
 | QR-AUD-003 | Every batch check MUST report both what it caught and what it did not exercise. | Coverage/blind-spot receipt fields. |
 | QR-AUD-004 | A reader that can succeed while returning no required data MUST be treated as failure or explicitly empty by contract. | Empty-read negative tests. |
+| QR-AUD-005 | Trusted policy MUST mechanically derive the admission-kind-specific required-evidence set before any optional Planner runs. A Planner MAY order checks or propose allowed supplemental experiments, but MUST NOT delete, downgrade, satisfy, or replace a required obligation. Every proposed experiment MUST pass deterministic typed validation before an external effect. | Required-set tamper controls, omission/replace attempts, invalid-plan rejection, and Planner-failure-without-false-pass tests. |
 
 ### 6.2 Reliability and recovery
 
@@ -307,6 +402,11 @@ Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md
 | QR-SEC-003 | Shared-device scheduling MUST prevent accidental use of unauthorized or quarantined devices. | Device policy integration tests. |
 | QR-SEC-004 | Logs and exported evidence MUST redact credentials and policy-defined sensitive source content. | Redaction fixtures and secret scanner. |
 | QR-SEC-005 | Vendored corpora, skills, images, and fixtures MUST carry source and license provenance before release. | Release compliance gate. |
+| QR-SEC-006 | Semantic Intent Recovery MUST run as an OS process separate from the Controller and Admission authority. Model-backed proposal/planning episodes MUST run outside the Admission authority under exact typed profiles and capability grants, without a restricted-store handle or admitted-artifact construction capability. Capability-equivalent episodes MAY share a Host; a different data/tool/OS capability boundary MUST use a different process instance. The mechanical Admission gate MUST run in a separate authority process without model transport. | Process/dependency inspection, same-host episode isolation, forced process split, OS-permission tests, and attempted restricted-read/admitted-construction controls. |
+| QR-SEC-007 | Public evidence, restricted admission material, and secret references MUST use distinct validated identity/capability ports and distinct process credentials; the ordinary Controller principal MUST NOT read the restricted store. Hidden execution payloads and full receipts MUST NOT transit public CAS or proposal-visible diagnostics; inability to provide the restricted path MUST yield not-executed/unverifiable rather than a public-store fallback. | Cross-namespace compile/runtime rejection, filesystem credential test, hidden-job trace, public export scan, and unavailable-path control. |
+
+Detailed process, store, network, and recovery boundaries are normative in
+[`design/RUNTIME_ARCHITECTURE.md`](design/RUNTIME_ARCHITECTURE.md).
 
 ### 6.4 Maintainability and schema discipline
 
@@ -318,6 +418,7 @@ Detailed record semantics are normative in [`RECORD_REPLAY.md`](RECORD_REPLAY.md
 | QR-MNT-004 | A second real operator MUST not require changes to generic runtime, worker, or verification core types. | Second-operator end-to-end control. |
 | QR-MNT-005 | Architecture documents MUST state whether a described capability is target, implemented, or measured. | Documentation gate/review checklist. |
 | QR-MNT-006 | Semantically distinct identities, revisions, schema versions, evidence strengths, and lifecycle states MUST use distinct validated Rust types. Production APIs MUST NOT erase them into interchangeable strings, integers, digests, or generic identifiers except at explicit wire/storage boundaries. | Compile-fail boundary tests plus schema round-trip and invalid-value tests. |
+| QR-MNT-007 | Every Oracle-program implementation slice MUST cite a `DesignConformanceRecord` covering applicable requirements/decisions, authority and capability boundaries, required claims, feedback/hidden use, mechanism qualification, controls, receipt closure, strong types, and explicit unknown scope. A conflict among normative documents MUST block the affected slice until the documents are reconciled. | Plan/review fixture and a deliberate normative-conflict control. |
 
 ### 6.5 Observability and cost accountability
 
@@ -363,6 +464,9 @@ These milestones order evidence; they are not a promise of dates.
 
 ### M2 — Executed oracle admission
 
+- isolated semantic-intent recovery produces competing, evidence-citing hypotheses;
+- independent intent admission freezes one claim-scoped migration-intent contract and preserves an
+  explicit unknown or conflict;
 - structured domain and corpus derivation;
 - hand-written reduction oracle represented as an ordinary proposal;
 - correct and incorrect variants compile and execute;
@@ -373,15 +477,21 @@ These milestones order evidence; they are not a promise of dates.
 ### M3 — First unified migration
 
 - one CUDA-to-Ascend task runs through oracle admission and kernel search;
+- both the CUDA source path and Ascend C candidate path execute on their declared real devices;
 - a gate rejection is corrected without terminating the task;
 - worker loss and controller restart are survived;
-- final verdict graph is complete and exportable.
+- final multi-plane verdict graph is complete and exportable;
+- correctness, numerical, execution, safety, adequacy, and performance outcomes remain distinct.
 
-### M4 — Generalization control
+### M4 — Product-boundary and feedback control
 
 - a second operator with a materially different output or call shape runs end to end;
 - no generic runtime, worker, or verification-core type changes are needed;
 - required domain-specific behavior enters as content-addressed artifacts or product adapters.
+- a real-model integration observation enters as typed feedback, produces a new proposal/revalidation
+  lineage, and does not rewrite the first verdict;
+- at least one measured hardware ceiling and one profiler interpretation are independently admitted
+  for the target environment.
 
 ### M5 — Public platform surface
 
@@ -395,9 +505,11 @@ These milestones order evidence; they are not a promise of dates.
 - a dynamic in-process plugin marketplace;
 - a general durable-workflow engine unrelated to agent and migration semantics;
 - multi-agent teams before red/blue/candidate role isolation and record branching are proven;
+- migration from source platforms other than CUDA or to targets other than Ascend C;
 - automatic trust of LLM-generated tests, crawled corpora, or upstream labels;
 - silent context compaction before compacted inputs can be recorded and audited;
-- model-level performance acceptance or global operator selection;
+- ownership of model-level business acceptance thresholds or global operator selection; model-level
+  observations remain required feedback when supplied by the caller;
 - claiming target-device execution or attestation that the deployment cannot independently observe.
 
 ## 9. Requirement-change rule

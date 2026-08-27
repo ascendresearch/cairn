@@ -1,9 +1,11 @@
 # Oracle Agent design
 
 - Status: normative focused design and active implementation contract
-- Date: 2026-08-26
+- Date: 2026-08-27
 - Parent design: [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md)
-- Verification design: [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md)
+- Verification design: [`oracle/ORACLE_ADMISSION.md`](oracle/ORACLE_ADMISSION.md)
+- Agent architecture: [`design/AGENT_ARCHITECTURE.md`](design/AGENT_ARCHITECTURE.md)
+- Admission architecture: [`design/ADMISSION_ARCHITECTURE.md`](design/ADMISSION_ARCHITECTURE.md)
 - Decisions: `D-003`, `D-004`, `D-008`, `D-020`, `D-021`, `D-022`
 - Requirements: `FR-TASK-005..007`, `FR-ORACLE-*`, `FR-AGENT-*`, `FR-COST-*`
 
@@ -13,6 +15,11 @@ The Oracle Agent turns a caller's minimum structured operator contract and immut
 into an oracle proposal that trusted admission code can accept, reject, or classify as
 unverifiable. It is the first search stage of a Cairn migration. It runs before candidate search and
 does not require a target device merely to author or revise a proposal.
+
+`Blue` and `Red` in this document name the currently implemented model-backed synthesis and
+adversarial strategy profiles. They are not permanent mandatory Agent types or a requirement for two
+OS processes. Oracle Exploration policy may later compose other model or non-model strategies; when
+these profiles are selected, every isolation and replay rule below remains mandatory.
 
 The Oracle Agent is not the adjudicator. Models may propose domain refinements, references,
 properties, corpus cases, correct-by-construction variants, deliberately wrong variants, and
@@ -37,7 +44,7 @@ Created
        -> BlueEpisode
        -> RedEpisode
        -> ExecutedAdmission
-       -> proposal revision, Rejected, Unverifiable, or AdmittedOracle
+       -> proposal revision, Rejected, Unverifiable, or AdmittedOraclePortfolio
   -> OracleAdmitted
   -> CandidateSearch
   -> VerdictReady
@@ -49,9 +56,16 @@ occupied NPU may block later V3 evidence, but it does not block structured intak
 proposal work, external research, CPU/source admission, or creation of an oracle whose target
 assumptions and revalidation triggers remain explicit.
 
+After the 2026-08-27 architecture refresh, this Blue/Red loop is the proposal-and-attack mechanism
+inside [`oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md`](oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md).
+It begins only from an independently admitted `MigrationIntentContract`. Higher-order intent
+recovery is a separate proposal-only subsystem and neither Blue nor Red may silently perform its
+promotion. The loop proposes a claim portfolio across semantic, numerical, execution, safety,
+adequacy, and performance planes; trusted admission remains claim-scoped.
+
 ## 3. Input authority
 
-### 3.1 Caller minimum contract
+### 3.1 Admitted intent and caller minimum contract
 
 The caller supplies a canonical `MigrationDomainContractV1` sufficient to identify:
 
@@ -66,10 +80,17 @@ The caller supplies a canonical `MigrationDomainContractV1` sufficient to identi
 The caller is not required to enumerate the full admitted domain or complete test corpus. Missing
 knowledge must be an explicit unknown rather than an unrestricted claim.
 
+The caller contract remains original evidence. Before Blue starts, Semantic Intent Recovery may
+produce competing high-order hypotheses and separate Intent Admission may freeze supported claims
+as a `MigrationIntentContract`. Blue receives both identities and may not merge, overwrite, or
+reinterpret a remaining conflict as resolved. If a missing intent claim would change expected
+semantics, the Oracle loop returns it to Intent Admission rather than filling it with model judgment.
+
 ### 3.2 Blue responsibility
 
 Blue receives the exact caller contract, source artifacts, admitted documentation inputs, mandatory
-base obligations derived by trusted code, and a scoped tool catalog. Blue may propose:
+base obligations derived by trusted code, the exact admitted intent contract, and a scoped tool
+catalog. Blue may propose:
 
 - evidence-citing domain refinements;
 - semantic or higher-precision references;
@@ -83,6 +104,10 @@ base obligations derived by trusted code, and a scoped tool catalog. Blue may pr
 Blue never overwrites the caller contract. Each refinement is an immutable delta citing its exact
 evidence. Blue cannot choose the admission policy, derive a trusted tolerance, inject generic
 mutants, compare its own evidence authoritatively, or emit an admitted oracle.
+
+A refinement that only partitions or operationalizes an admitted claim may remain in Oracle
+exploration. A finding that changes algorithm, numerical, deployment, or observable-contract intent
+must become typed feedback to Semantic Intent Recovery/Intent Admission; Blue cannot promote it.
 
 ### 3.3 Red responsibility
 
@@ -103,7 +128,8 @@ content-addressed proposal edge.
 
 Trusted code independently derives mandatory cases, selects the configured mutant set, schedules
 authorized execution, verifies authoritative receipts, derives allowance provenance and assurance,
-compares complete observations, and emits `Rejected`, `Unverifiable`, or `AdmittedOracle`.
+compares complete observations, and emits claim-scoped `Rejected`, `Unverifiable`, or
+`AdmittedOraclePortfolio` outcomes.
 Origin—caller, PyTorch, another framework, model, or repository—does not grant truth.
 
 ## 4. Episode and information model

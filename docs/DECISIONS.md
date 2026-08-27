@@ -1,7 +1,7 @@
 # Resolved design decisions
 
 - Status: normative decision register
-- Date: 2026-08-24
+- Date: 2026-08-27
 
 This register records decisions that close entries in [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 Detailed requirements remain in `SYSTEM_REQUIREMENTS.md`; detailed implementation boundaries remain
@@ -62,7 +62,7 @@ SQLite-specific features such as WAL, busy timeout, transaction shape, and backu
 details. A future PostgreSQL or remote content-store adapter must pass the same contract and fault-
 injection suites before it can replace SQLite.
 
-## D-003 — Hybrid authority for the structured domain
+## D-003 — Hybrid evidence for the structured domain
 
 - Resolves: OQ-003
 - Decision: accepted
@@ -84,9 +84,10 @@ The contract may be incomplete, but it may not disguise an unknown as an unrestr
 
 ### Cairn responsibility
 
-A role-scoped domain-analysis/blue episode may propose refinements from source, documentation,
-framework definitions, and upstream tests. Each refinement cites its evidence and remains distinct
-from the caller declaration.
+The isolated Semantic Intent Recovery subsystem may propose refinements from source, documentation,
+framework definitions, caller/model context, prior feedback, and upstream tests. Each refinement
+cites its evidence and remains distinct from the caller declaration. Under D-025, this subsystem is
+proposal-only; Blue receives the subsequently admitted intent and cannot perform this promotion.
 
 Cairn independently challenges both through:
 
@@ -97,13 +98,14 @@ Cairn independently challenges both through:
 
 ### Conflict rule
 
-Caller declaration, agent interpretation, source observations, and external expectations are never
-overwritten into one unattributed value. Admission records agreements and disagreements. An
-unresolved disagreement affecting the requested claim rejects the oracle or reduces it to an
-explicit weaker/`Unverifiable` result.
+Caller declaration, SIR hypotheses, source observations, external expectations, and production
+feedback are never overwritten into one unattributed value. Intent Admission records agreements and
+disagreements. An unresolved disagreement affecting the requested intent produces `Conflict`,
+`Unknown`, or `NeedsUserDecision`; it cannot be repaired by Oracle Blue.
 
-The admitted structured domain is an immutable artifact produced by admission. Changing it creates a
-new oracle and experiment identity.
+The admitted structured domain is part of the immutable `MigrationIntentContract`. Oracle Admission
+may admit only claim domains consistent with it. Changing the contract creates new intent, Oracle,
+and experiment identities.
 
 ## D-004 — Policy-configured variant sufficiency
 
@@ -135,7 +137,7 @@ family only if its accepted strength and limitations explicitly permit that redu
 label missing evidence as having passed.
 
 Budget exhaustion before the selected policy is satisfied yields rejection, a permitted weaker
-strength, or `Unverifiable`. Cost limits never turn incomplete admission into `Pass`. The exact
+strength, or `Unverifiable`. Cost limits never turn incomplete admission into `Admitted`. The exact
 policy identity and observed stopping reason are retained in the admission receipt.
 
 ## D-005 — Separate numerical provenance from assurance
@@ -155,7 +157,8 @@ variant count and independence, input-generation/search strategy, observed spans
 regions, and known unexplored regions. A safety factor is policy, not proof, and does not promote an
 empirical maximum to `ProvenBound`.
 
-`HeldOutValidated` may support an empirical `Pass` when allowed by the selected admission policy.
+`HeldOutValidated` may support an empirical `Satisfied` claim outcome when allowed by the selected
+admission policy.
 The verdict must label it as empirical and state its admitted domain, corpus relationship,
 allowance, and limitations. Only a justified `ProvenBound` or `ExhaustiveFinite` assurance may use
 an unqualified domain-wide numerical claim. `ExploratoryMeasured`, `PriorOnly`, and `Unsupported`
@@ -457,7 +460,13 @@ OCI runtime framework or presented as malicious-code containment.
 
 - Decision: accepted
 
-One oracle-search attempt opens distinct blue and red Cairn episodes. They have separate
+Blue and Red name Cairn's current model-backed synthesis and adversarial strategy profiles; they are
+not permanent required Agent types or deployment processes. A policy may substitute deterministic
+mutation, property, counterexample, or other admitted exploration strategies. Whenever both
+model-backed profiles are used, the following isolation remains mandatory.
+
+When these profiles are selected, one oracle-search attempt opens distinct blue and red Cairn
+episodes. They have separate
 `EpisodeId` values, durable histories, model snapshots, budgets, capability sets, and visibility
 policies. Blue and red exchange only submitted content-addressed artifacts and trusted diagnostic
 bundles; a provider-native continuation or unsubmitted reasoning never crosses the role boundary.
@@ -476,7 +485,8 @@ uses total input, uncached input, output, latency, and task quality rather than 
 
 - Decision: accepted
 
-The blue role receives a read-only `oracle_search_external_tests` product tool. The model supplies a
+The current model-backed synthesis (Blue) profile receives a read-only
+`oracle_search_external_tests` product tool. The model supplies a
 bounded query and operator-approved repository scopes; trusted adapters own endpoints, credentials,
 redirect policy, response bounds, and repository allowlists. Results retain exact query, source,
 immutable upstream revision/blob identity where available, exact fetched bytes, retrieval
@@ -497,7 +507,8 @@ providers.
 
 - Decision: accepted
 
-Blue and Red retain separate durable episodes across an OracleSearch attempt. Red reviews exactly
+When policy selects the current model-backed synthesis/adversarial revision strategy, Blue and Red
+retain separate durable episodes across an OracleSearch attempt. Red reviews exactly
 one frozen Blue revision. A Red `revise` with blocking findings is returned as trusted structured
 feedback to Blue's existing episode; Blue must submit a complete changed replacement, which creates
 a new immutable identity before Red can review it. Neither private continuation crosses the role
@@ -505,10 +516,11 @@ boundary, and malformed submissions are rejected atomically with exact diagnosti
 that produced them.
 
 The loop has separately configured limits for Blue submission repair, Red submission repair,
-Blue/Red adversarial rounds, and pass stability rechecks. A pass requires an empty blocker set and
-the configured rechecks over the same frozen revision. A later concrete blocker reopens revision;
-repeated votes never manufacture admission. Limit exhaustion produces an explicit non-converged
-terminal result for trusted admission or an operator to consume.
+Blue/Red adversarial rounds, and blocker-free stability rechecks. A blocker-free review status
+requires an empty blocker set and the configured rechecks over the same frozen revision; it does not
+constitute Admission. A later concrete blocker reopens revision; repeated votes never manufacture
+admission. Limit exhaustion produces an explicit non-converged terminal result for trusted admission
+or an operator to consume.
 
 This is not an instruction to maximize conversation length. Additional turns are purchased only
 to repair a rejected structure, resolve a concrete blocker, or test a named instability surface.
@@ -545,3 +557,233 @@ clock value, classify a lifecycle outcome a second time, mutate state, await, or
 error. Business operations commit outside logging constructs. Cairn V1 does not use tracing spans
 or `instrument` in business crates, so deleting an observability scope cannot delete the work it
 described. A future distributed-tracing decision must preserve this ownership rule explicitly.
+
+## D-024 — Cairn product scope is CUDA → Ascend C
+
+- Decision: accepted
+
+Cairn is specifically a CUDA-to-Ascend-C operator migration system. Its product language,
+requirements, evaluation corpus, domain adapters, Oracle risks, performance model, and public claims
+remain inside that boundary. Domain-neutral agent, record, execution, and verification mechanics are
+internal dependency properties; they are not evidence for a general heterogeneous-migration product.
+
+A second materially different CUDA operator is required to validate the internal seams. Supporting
+another source or target requires a future explicit product decision. Generic names or hypothetical
+reuse do not authorize abstractions for that future.
+
+## D-025 — Higher-order intent recovery is isolated and proposal-only
+
+- Decision: accepted
+
+Cairn's primary semantic objective is to recover the user's higher-order algorithm, numerical,
+model/deployment, and observable-contract intent rather than mechanically preserve CUDA implementation
+choices. `Semantic Intent Recovery` is an independently replaceable subsystem that may read a wider,
+bounded context than the single-kernel execution unit and may emit competing evidence-backed
+hypotheses, conflicts, unknowns, invariants, and optimization freedoms.
+
+Its output has proposal types and cannot be passed where an admitted migration-intent contract is
+required. Separate Intent Admission promotes exact claims. The extractor cannot read hidden
+admission material, modify caller or admitted contracts, or decide an Oracle/candidate verdict.
+
+## D-026 — Oracle and verdicts are multi-plane, claim-scoped portfolios
+
+- Decision: accepted
+
+Algorithmic correctness, numerical acceptance, execution/integration authenticity, memory and
+concurrency safety, Oracle adequacy, and performance are distinct planes. User-facing summaries may
+group execution and safety under correctness, but the underlying claims, evidence, outcomes, and
+blind spots remain separate. The performance plane is always present in the portfolio. When the
+caller supplies no business target it may remain informational, unknown, or not executed, but it is
+not silently omitted. It can never compensate for a required correctness-plane failure.
+
+Oracle and candidate outcomes are claim- and domain-scoped, with explicit satisfied, violated,
+unknown, conflict, not-applicable, not-executed, and infrastructure-failure states plus a discrete
+evidence strength. A policy may derive a release decision, but no global confidence scalar or stored
+`passed` bit replaces those facts.
+
+## D-027 — Performance uses admitted conditional ceilings
+
+- Decision: accepted
+
+Hardware performance is modeled as a family of conditionally applicable ceilings rather than a
+single device roof. Cairn distinguishes official/theoretical facts, controlled microbench
+measurements, algorithmic rooflines, implementation rooflines, candidate observations, and business
+targets. Claims bind SoC, dtype, shape, engine, memory path, dataflow, concurrency, toolchain, device
+state, workload, and measurement policy.
+
+An optional `PerformanceExperimentPlannerProfile` may use an agent, but profiler interpretation,
+unit conversion, measurement validity, comparison, and final performance outcome are recomputed
+from authoritative receipts.
+
+## D-028 — Previous-iteration and real-model feedback is typed evidence
+
+- Decision: accepted
+
+Candidate counterexamples, Oracle false accepts/rejects, profiling, integration results, production
+observations, user decisions, and coverage gaps enter subsequent exploration as different typed
+evidence. They are not an untyped reward and do not mutate an admitted intent, Oracle, threshold,
+corpus weight, or historical verdict in place.
+
+Positive model-level behavior is weak support for its exact deployment slice and does not prove local
+kernel correctness. Negative behavior creates a valuable regression obligation but retains
+attribution uncertainty until first-divergence or equivalent evidence resolves it.
+
+## D-029 — Knowledge and skills have claim/content-scoped trust lifecycles
+
+- Decision: accepted
+
+Cairn adopts T0 specification/machine facts, T1 measured facts, T2 validated mechanisms/recipes, and
+T3 task cases/feedback as distinct knowledge classes. Each exact knowledge claim records provenance,
+scope, dependencies, evidence strength, lifecycle, conflicts, freshness, and allowed uses. Author,
+vendor, official, built-in, and retrieval rank are never trust by themselves.
+
+Skills have an independent unaudited/reviewed/validated/refuted lifecycle. Reviewed but unvalidated
+skills may help inside bounded exploration to avoid a validation-use deadlock, but they cannot
+support admission-critical claims, modify judge policy, or expand role capabilities. Content change
+invalidates validation for new runs. Retraction remains auditable and propagates through reverse
+references to affected intent, Oracle, performance, and verdict artifacts.
+
+## D-030 — Authority and source-behavior disposition are claim-scoped
+
+- Decision: accepted
+
+Cairn has no global authority ranking across intent, mathematical truth, source behavior, device
+observation, and model proposal. The user decides desired semantics and policy within an explicit
+scope; execution receipts decide what ran and was observed; an admitted specification/reference
+supports only its exact claim; models, knowledge, skills, and retrieval remain proposals.
+
+Every anomalous, undefined, specialized, or intent-divergent CUDA region receives an admitted typed
+disposition: preserve observed behavior, follow admitted semantic intent, exclude the undefined
+region, split the domain, or block pending user decision. There is no product-wide preserve-or-fix
+boolean.
+
+## D-031 — Hidden evidence burns on disclosure and feedback cannot self-create held-out strength
+
+- Decision: accepted
+
+Hidden cases carry sealed, consumed-without-disclosure, burned-to-public-regression, or retired
+state plus an exposure ledger. If a diagnostic reveals enough distinguishing information to the
+applicant lineage, the case loses hidden strength, becomes a public regression, and is replenished
+when its coverage partition remains required. Repeated pass/fail querying is treated as possible
+disclosure rather than a harmless API.
+
+Feedback has an explicit allowed-use disposition and contamination graph. Applicant-visible,
+derivation-equivalent, or knowledge-injected feedback cannot be relabeled as held-out evidence for
+the same claim under a new content identity.
+
+## D-032 — Admission mechanisms and policies require qualification
+
+- Decision: accepted
+
+Repository ownership defines the trusted-computing boundary but does not prove a comparator, runner,
+adapter, parser, sanitizer/profiler adapter, corpus builder, gate, diagnostic redactor, aggregation
+rule, or admission policy correct. Each verdict-relevant mechanism has exact identity, scoped
+qualification evidence, lifecycle, limitations, and requalification triggers.
+
+The lowest trust root is kept small and supported by independent tests, review, mutation/fault
+injection, real-tool calibration, and replayable receipts. A gate cannot certify itself and a second
+agent's agreement is not mechanism qualification. Refutation triggers reverse impact analysis.
+
+## D-033 — Normative document conflicts block implementation
+
+- Decision: accepted
+
+Requirements define observable obligations, decisions record accepted choices, the system design
+defines overall authority, and focused designs add detail without weakening them. Implementation
+plans, current code, historical fixtures, research reports, and open questions do not override this
+normative set.
+
+A real conflict among normative documents blocks the affected implementation slice until all
+impacted documents are reconciled. Cairn does not add fallback behavior or dual interpretations to
+paper over a design conflict during pre-release V1 development.
+
+## D-034 — The control plane is modular, while proposal and admission authorities cross processes
+
+- Decision: accepted
+
+Cairn keeps workflow, public record/CAS, scheduling, API, feedback routing, knowledge/skill registry,
+and the initial deterministic Hardware Performance Model in a modular Controller. It does not turn
+every domain concept into a microservice.
+
+Semantic Intent Recovery runs as a separate OS process from the first new-architecture V1 slice.
+Oracle synthesis/adversarial strategies, typed Admission Planners, and Candidate Search run as
+isolated durable episodes outside Admission authority. Capability-equivalent episodes may share a
+Proposal/Planning Host, while a different data/tool/OS capability boundary requires a different
+process instance. The mechanical Admission gate and restricted material run in a separate authority
+process. A process boundary is required by replaceability, hidden-data visibility, execution risk,
+or promotion authority—not by Agent count or module name.
+
+## D-035 — Public, restricted-admission, and secret storage are separate capabilities
+
+- Decision: accepted
+
+Cairn exposes no universal content-store handle where possession of a content identity implies read
+authority. Public evidence, restricted admission material, and secret references use distinct typed
+ports, identities, process credentials, and lifecycle policies. A minimal deployment may use the
+same storage technology and host, but public and restricted data use separate database files/CAS
+roots and cannot be opened by the same ordinary application capability.
+
+Hidden device jobs use Controller scheduling metadata plus a one-time, attempt-scoped restricted
+bundle/evidence capability between Admission and the assigned Worker. Hidden input, full output,
+expected values, and private control receipts do not transit through public CAS or proposal-visible
+diagnostics. If that path is unavailable, hidden hardware evidence remains not executed rather than
+being downgraded into the public path.
+
+## D-036 — The product crate is explicitly CUDA-to-Ascend-C and concepts do not imply crates
+
+- Decision: accepted
+
+When the new architecture is implemented, `cairn-migration` is directly replaced by
+`cairn-cuda-ascend`, including its callers, tests, fixtures, examples, and documentation. Because
+Cairn is still pre-release, the old crate name, compatibility re-exports, dual product paths, and
+format conversion code are removed rather than retained.
+
+Intent, Oracle, Candidate, Hardware, Feedback, and Knowledge/Skill begin as isolated modules inside
+that product crate. A new crate requires evidence such as a process/security boundary, a materially
+different dependency set, a second implementation, or two real consumers. Conceptual importance or
+hypothetical support for other migration targets is not sufficient.
+
+## D-037 — Admission planning is optional and uses kind-specific typed profiles
+
+- Decision: accepted
+
+There is no universal Admission Planner Agent. Trusted policy mechanically derives the exact
+admission-kind-specific required-evidence set before planning. An optional Planner may order checks,
+choose among policy-allowed experiments, propose supplemental controls, and explain public receipts;
+it cannot delete, downgrade, satisfy, or replace required obligations. Every plan proposal passes a
+deterministic typed validator before any external effect.
+
+Intent, Oracle, Hardware Fact, Performance, Candidate, Knowledge, and Skill planning use distinct
+profile, applicant, obligation, experiment-request, diagnostic, receipt, and outcome types. They may
+share the domain-neutral agent runtime, model provider, and a capability-equivalent Planning Host,
+but not private continuation, mutable context, writable artifact namespace, or authority. Intent and
+Oracle commonly benefit from reasoning-based planning; Hardware and Performance prefer deterministic
+measurement recipes with optional adaptive planning; Candidate Admission initially uses a
+deterministic dependency/cost scheduler.
+
+Planner output remains proposal evidence. Mechanical gates run without model transport in the
+separate Admission authority process and derive outcomes only from frozen inputs, trusted policy,
+authoritative receipts, and qualified mechanisms.
+
+## D-038 — Agent catalog is capability-derived and interaction is artifact-mediated
+
+- Decision: accepted
+
+Cairn distinguishes an Agent-capable product function, a replaceable strategy, a typed planner or
+agent profile, a durable episode, a Host process, and an authority. The current design derives eleven
+Agent-capable logical positions from four exploration/generation functions and seven Admission Planner
+profiles. Eleven is an inventory result, not a protocol constant, process count, concurrency target,
+or requirement to invoke a model. Required functions may use deterministic strategies when their
+typed contract and policy permit. Blue and Red remain current model-backed Oracle synthesis and
+adversarial profiles rather than permanent Agent kinds.
+
+Multiple capability-equivalent episodes may share a Host, but each retains its own identity, context
+snapshot, continuation, budget, tool results, writable namespace, and capability grant. Cross-episode
+interaction occurs only through immutable provenance-bearing artifacts, typed requests/diagnostics,
+and durable events selected by trusted policy. Private continuation, mutable scratch state, unpublished
+reasoning, pending tool results, and unsubmitted drafts do not cross episode boundaries. Agent
+agreement, voting, or repeated reflection creates neither receipt authority nor stronger evidence.
+
+Processes split when data visibility, external tools, OS sandbox, credentials, or authority differ,
+not merely because role names differ. The mechanical Admission Gate remains model-free and outside
+every Agent Host.

@@ -1,8 +1,8 @@
 # Cairn design baseline
 
-- Status: initial target design
-- Date: 2026-08-24
-- Scope: the new, unified Cairn repository
+- Status: normative target design
+- Date: 2026-08-27
+- Scope: CUDA → Ascend C migration system
 
 This directory is the authoritative design baseline for the rewrite. It replaces neither the old
 repositories' evidence nor their histories. It separates current decisions from historical
@@ -15,7 +15,21 @@ document is complete.
 |---|---|---|
 | [`SYSTEM_REQUIREMENTS.md`](SYSTEM_REQUIREMENTS.md) | What must the system do, refuse, expose, and prove? | Normative requirements |
 | [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) | What architecture is intended to satisfy those requirements? | Normative target design |
-| [`ORACLE_ADMISSION.md`](ORACLE_ADMISSION.md) | Why may an oracle judge a candidate? | Normative verification design |
+| [`design/README.md`](design/README.md) | How are the target code, logical, and runtime architectures organized? | Normative software architecture index |
+| [`design/CODE_ORGANIZATION.md`](design/CODE_ORGANIZATION.md) | Which crates/modules own each rule and which dependency directions are forbidden? | Normative code organization |
+| [`design/LOGICAL_ARCHITECTURE.md`](design/LOGICAL_ARCHITECTURE.md) | How do aggregates, commands/events, ports, capabilities, and workflows compose? | Normative logical architecture |
+| [`design/RUNTIME_ARCHITECTURE.md`](design/RUNTIME_ARCHITECTURE.md) | Which processes, stores, trust zones, data paths, and recovery rules exist at runtime? | Normative runtime architecture |
+| [`design/ADMISSION_ARCHITECTURE.md`](design/ADMISSION_ARCHITECTURE.md) | How do kind-specific Planner profiles, required evidence, execution, and mechanical Gates compose? | Normative Admission software architecture |
+| [`design/AGENT_ARCHITECTURE.md`](design/AGENT_ARCHITECTURE.md) | Which Agent-capable functions and profiles exist, and how do episodes, Hosts, processes, and artifact-mediated interaction compose? | Normative Agent software architecture |
+| [`dev/README.md`](dev/README.md) | How is development staged, sliced, gated, parallelized, and reconciled with the current implementation baseline? | Normative development-planning index; no implementation authorization |
+| [`oracle/README.md`](oracle/README.md) | In what order should the Oracle research and subsystem designs be read? | Oracle document index |
+| [`oracle/DESIGN_INVARIANTS.md`](oracle/DESIGN_INVARIANTS.md) | Which cross-document invariants and pre-implementation checks must every later session preserve? | Normative cross-cutting guardrail |
+| [`oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | How are high-order user-intent hypotheses recovered without giving the extractor contract authority? | Normative subsystem design |
+| [`oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md`](oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md) | How are multi-plane Oracle claims explored, attacked, and prepared for independent admission? | Normative subsystem design |
+| [`oracle/INDEPENDENT_ADMISSION_DESIGN.md`](oracle/INDEPENDENT_ADMISSION_DESIGN.md) | How do planner agents, hidden controls, authoritative receipts, and mechanical gates divide responsibility across all admission kinds? | Normative cross-cutting design |
+| [`oracle/PERFORMANCE_ORACLE_DESIGN.md`](oracle/PERFORMANCE_ORACLE_DESIGN.md) | How are hardware facts, microbenchmarks, profiling, conditional rooflines, and performance claims admitted? | Normative subsystem design |
+| [`oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md`](oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md) | How may agents retrieve knowledge and load skills without turning origin or retrieval into trust? | Normative subsystem design |
+| [`oracle/ORACLE_ADMISSION.md`](oracle/ORACLE_ADMISSION.md) | Why may an Oracle claim judge a candidate, and how do previous-round feedback and all validation planes enter admission? | Normative verification design |
 | [`ORACLE_AGENT.md`](ORACLE_AGENT.md) | How do isolated blue/red episodes research, propose, attack, and revise an oracle while preserving cache efficiency? | Normative agent/product design |
 | [`ORACLE_PROMPTS.md`](ORACLE_PROMPTS.md) | Which instruction layers, correction protocol, failure defenses, and budget assumptions govern Blue and Red? | Normative prompt design and audit |
 | [`ORACLE_DOGFOOD.md`](ORACLE_DOGFOOD.md) | How is the recorded/live Oracle loop configured, exercised, and accepted? | Active validation ledger |
@@ -28,15 +42,20 @@ document is complete.
 | [`SCHEDULER.md`](SCHEDULER.md) | How are generic candidates selected, reserved, assigned, retried, and safely released? | Implemented scheduling trust boundary |
 | [`RESOURCE_PROBING.md`](RESOURCE_PROBING.md) | Which resource facts are observed, configured, matched, and still deferred? | Implemented D1 probe/operator contract |
 | [`WORKER_EXECUTION.md`](WORKER_EXECUTION.md) | How is Docker activated, recovered, and measured? | Implemented F2 operator boundary |
-| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | In what dependency order do worker authority, scheduling, probing, registry lifecycle, and onboarding close? | Active delivery plan and acceptance gates |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | What is implemented, what old Phase G ordering is suspended, and what conformance evidence is required before a replacement slice starts? | Active implementation ledger and delivery gate |
+| [`oracle/ORACLE_RESEARCH_REPORT.md`](oracle/ORACLE_RESEARCH_REPORT.md) | What does the Oracle-generation literature and industry practice establish? | Research basis, non-normative |
+| [`oracle/BORROWABLE_DIRECTIONS.md`](oracle/BORROWABLE_DIRECTIONS.md) | Which external ideas are worth adapting, and which should not be copied? | Research synthesis, non-normative |
 
 ## Reading order
 
 1. Read the requirements to understand the product boundary and acceptance properties.
 2. Read the system design for the architecture and end-to-end workflows.
-3. Read the two focused designs for the system's defining guarantees: oracle admission and durable
-   execution evidence.
-4. Read resolved decisions and open questions before changing an unsettled boundary.
+3. Read [`design/README.md`](design/README.md) for code, logical, and runtime architecture.
+4. Read [`dev/README.md`](dev/README.md) before planning or starting an implementation slice.
+5. Follow [`oracle/README.md`](oracle/README.md) through semantic-intent recovery, Oracle exploration,
+   independent admission, Oracle admission, performance/hardware, and knowledge/skill trust.
+6. Read durable execution evidence for the concrete replay guarantees.
+7. Read resolved decisions and open questions before changing an unsettled boundary.
 
 ## Normative language
 
@@ -57,6 +76,16 @@ is expected to be met, but passing prose is not acceptance evidence.
    document and recording the evidence or argument used.
 6. Old Cairn and Alloyport behavior may become regression evidence, but old names, aggregates, and
    deployment accidents are not automatically requirements.
+
+### Conflict and precedence rule
+
+Requirements define observable obligations; accepted decisions record chosen policy; the system
+design defines overall authority/dependency; focused designs add subsystem detail without weakening
+those obligations. The implementation plan, current code, historical fixtures, research reports, and
+open questions cannot override normative design. A real conflict between normative documents blocks
+the affected work until all impacted documents are reconciled; it is not permission to implement a
+fallback or choose the most convenient interpretation. Oracle-specific conformance is summarized in
+[`oracle/DESIGN_INVARIANTS.md`](oracle/DESIGN_INVARIANTS.md).
 
 ## Source material
 

@@ -1,7 +1,7 @@
 # Open questions and decision backlog
 
 - Status: non-normative backlog
-- Date: 2026-08-24
+- Date: 2026-08-27
 
 This file holds decisions that would materially affect the normative requirements or design. An open
 question is not permission for an implementation to choose silently. Resolve a question by updating
@@ -36,6 +36,9 @@ it.
   [`D-007`](DECISIONS.md#d-007--typed-sha-256-identities-with-a-pre-release-v1-reset-policy). V1
   uses typed, domain-separated SHA-256 identities and UUIDv7 lifecycle IDs; pre-release changes
   rebuild development state and add no runtime alias or migration framework.
+- **OQ-018** — product generalization: resolved by
+  [`D-024`](DECISIONS.md#d-024--cairn-product-scope-is-cuda--ascend-c). Cairn's product scope is
+  CUDA → Ascend C; domain-neutral infrastructure does not broaden that scope.
 
 ## OQ-004 — Independence of semantic reference
 
@@ -102,18 +105,20 @@ until an independent mechanism exists. Do not make public release depend on hard
 - Priority: P2
 - Affects: product result beyond correctness
 
-The old product contained performance concepts, while the newest positioning centered the verdict on
-correctness and oracle admission. Cairn should eventually produce performance evidence, but it must
-not decide model-level “fast enough.”
+Performance is now a first-class, non-compensating validation plane. Cairn owns operator-level
+performance evidence, conditional roofline analysis, and performance admission, while the upstream
+caller retains model-level business acceptance authority.
 
 Questions:
 
-- what operator-level performance claim is in scope;
-- what stable denominator/baseline is used;
-- how warmup, noise, interference, and shared-device occupancy are recorded;
-- whether performance admission is a parallel oracle lifecycle.
+- which operator-level claims and release thresholds the first caller requests;
+- which production/simple/algorithmic baseline is primary for each claim;
+- the first workload corpus and model-derived weighting policy;
+- the minimum empirical evidence for `NearApplicableRoof` and `BottleneckSupported`.
 
-Trigger: one admitted-correct operator whose caller requests a measurable performance claim.
+The lifecycle and measurement principles are resolved in
+[`oracle/PERFORMANCE_ORACLE_DESIGN.md`](oracle/PERFORMANCE_ORACLE_DESIGN.md); the concrete first
+profile is OQ-020.
 
 ## OQ-011 — Public App Server transport
 
@@ -181,14 +186,78 @@ vs CLA, governance/maintainer model, trademark/project-name policy, and the depe
 before the first release. These controls must also address compatible provenance for imported code,
 fixtures, corpora, model outputs, and vendor integrations.
 
-## OQ-018 — Product generalization beyond operator migration
+## OQ-019 — First Intent Admission policy and corpus
 
-- Priority: P3
-- Affects: public positioning and domain schemas
+- Priority: P0 before implementation resumes
+- Affects: first `MigrationIntentContract`, SIR evaluation, downstream Oracle authority
 
-The architectural phrase “evidence-first agentic engineering” is intentionally broader than CUDA to
-Ascend, but broad support is not yet demonstrated. Do not add generic workflow abstractions until a
-second heterogeneous engineering domain requires them.
+Which exact claim set is the minimum admitted intent for the first kernel: mathematical operation,
+ABI/shape relation, numerical mode, deployment specialization, side effects, and optimization
+freedom? Which frozen cases distinguish implementation artifacts, source bugs, model-dependent quirks,
+competing plausible meanings, and genuine unknowns?
 
-Trigger: a real task outside operator migration that can reuse oracle admission, execution evidence,
-and replay without weakening their semantics.
+The architecture fixes that SIR is proposal-only and admission is claim-scoped. It does not yet fix
+the first operator, minimum hidden corpus, or which conflicts require a user decision. Those choices
+must be made before defining V1 production intent artifacts.
+
+## OQ-020 — First Ascend hardware-performance profile
+
+- Priority: P1 before performance implementation
+- Affects: hardware-fact schema, microbench registry, profiler adapter, performance admission
+
+Select the first Ascend SoC, exact CANN/compiler/firmware environment, required computation and
+memory ceilings, profiler fields, device-state controls, and production baseline. The architecture
+requires conditional ceilings and calibrated measurements but intentionally does not invent numbers
+or tool fields before the real environment is selected and probed.
+
+## OQ-021 — Initial knowledge and skill admission profiles
+
+- Priority: P1 before SIR/Oracle knowledge retrieval is enabled
+- Affects: role capabilities, retrieval results, claim promotion, skill execution
+
+Which claim kinds may be admitted from official documentation alone, which require execution
+receipts, and which can only guide exploration? Which reviewed-but-unvalidated skills are allowed for
+SIR and Blue, what sandbox capabilities may they request, and what exact evidence promotes each skill
+claim to validated?
+
+The T0–T3 and skill lifecycle are fixed; the per-claim/per-role minimum profiles remain policy work.
+
+## OQ-022 — Real-model feedback acquisition and attribution
+
+- Priority: P1 before model-integration feedback is enabled
+- Affects: privacy, workload weighting, first-divergence, revalidation
+
+Define the minimum model/deployment context Cairn may receive, whether activations/weights remain
+external references, how representative workload weights are derived, and which first-divergence or
+ablation evidence is required before a model-level regression is attributed to the migrated kernel.
+Positive feedback cannot prove local correctness and negative feedback cannot silently rewrite the
+Oracle; the unresolved question is the first concrete acquisition and attribution policy.
+
+## OQ-023 — First verifier-mechanism qualification profile
+
+- Priority: P0 before new Oracle Admission implementation
+- Affects: comparator, adapter, runner, gate, policy evaluator, diagnostic redaction
+
+Select the exact mechanisms in the first `VerificationMechanismSet`, their independent golden or
+property oracles, required mutation/fault controls, real-tool calibration, reviewers, and
+qualification/requalification policy. The architecture requires qualification but cannot use the
+future gate to manufacture its own trust root.
+
+## OQ-024 — Hidden corpus exposure and replenishment policy
+
+- Priority: P1 before adaptive Blue/Candidate admission
+- Affects: diagnostic utility, hidden strength, corpus cost, anti-overfitting
+
+Define what diagnostic detail burns a case, whether exposure is tracked per proposal, model episode,
+model family, task lineage, or globally, how many adaptive queries are allowed, and how a depleted
+coverage partition is replenished and independently reviewed. Until decided, a revealed
+counterexample is conservatively public for its applicant lineage.
+
+## OQ-025 — First statistical/stateful Oracle policy
+
+- Priority: P2; blocks only a random, stateful, or schedule-set first operator
+- Affects: repetitions, reset, statistical power, legal outcome sets, replay
+
+Choose supported RNG/state models, distributional claims, type-I/type-II error bounds, multiple-test
+policy, minimum effect, repetition/reset isolation, and inconclusive outcome. Deterministic operator
+slices may proceed without solving this, but they must not create a generic statistical default.

@@ -2,7 +2,8 @@
 
 - Status: active
 - Date: 2026-08-27
-- Scope: integrated worker/runtime foundation and model-authored Oracle Agent delivery
+- Scope: implemented worker/runtime foundation and redesign of the CUDA → Ascend C Oracle program
+- Replacement development-plan design: [`dev/README.md`](dev/README.md)
 
 This plan combines the unfinished parts of resource-driven workers and managed enrollment into one
 dependency-ordered program. It is an implementation plan, not a replacement for the normative
@@ -30,21 +31,41 @@ after that commit. The current implemented frontier is one model-authored, execu
   stability rechecks. It used seven model requests, 128,419 input tokens, 34,024 output tokens, and
   106,240 cache-read tokens. The detailed four-run learning ledger is in `ORACLE_DOGFOOD.md`.
 
-The next session should start with the corpus-level companion control, not device deployment and
-not further prompt tuning. Add a nonzero-K `f32` matmul case with nonzero expected values through
-the same typed materialization, adapter, capture, and comparison ports. Then introduce a typed
-corpus-sufficiency rule that requires the zero-K case and this nonzero control together, so an
-unconditional zero-fill implementation cannot receive a candidate verdict. Keep single-case
-`ascend_c_test_readiness.ready=true` scoped to execution-material readiness; it is deliberately
-`sufficient_for_candidate_verdict=false`.
+**Architecture reset (2026-08-27):** implementation is intentionally paused at this frontier. The
+fixed `matmul-zero-k` path is now classified as a transport/materialization control, not the template
+for the final Oracle-generation product. Adding a nonzero-K companion would improve this control but
+would not resolve semantic authority, comparator justification, coverage, real device evidence, or
+performance. It is therefore no longer the automatic next implementation task.
 
-After that companion gate passes, move the proven typed body and correction path out of the live
-example into the production `OracleProposalV1`/Blue submission gateway and admission graph. Full
-G13 remains incomplete until production proposal/revision/attack/admission artifacts consume the
-material, generic durable `AgentEpisode` owns the loop budgets, and a candidate-specific CUDA or
-Ascend C adapter executes the resulting corpus. Do not schedule scarce GPU/NPU work merely to
-validate Oracle authoring or corpus construction; those remain hardware-free until the candidate
-execution stage.
+Before implementation resumes, Phase G must be re-sliced against the refreshed
+[`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) and the focused designs for
+[code organization](design/CODE_ORGANIZATION.md),
+[logical architecture](design/LOGICAL_ARCHITECTURE.md),
+[runtime architecture](design/RUNTIME_ARCHITECTURE.md),
+[Admission architecture](design/ADMISSION_ARCHITECTURE.md),
+[Agent architecture](design/AGENT_ARCHITECTURE.md),
+[semantic-intent recovery](oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md),
+[Oracle exploration](oracle/ORACLE_EXPLORATION_SYSTEM_DESIGN.md),
+[independent admission](oracle/INDEPENDENT_ADMISSION_DESIGN.md),
+[performance/hardware](oracle/PERFORMANCE_ORACLE_DESIGN.md), and
+[knowledge/skill trust](oracle/KNOWLEDGE_AND_SKILL_TRUST_DESIGN.md). The replacement development stages,
+dependencies, slices, entry/exit gates, and workstreams are now defined under
+[`dev/README.md`](dev/README.md); they remain plan design and do not authorize code work. The first new
+slice must establish
+the proposal-only `Semantic Intent Recovery` boundary and separate Intent Admission for one kernel;
+it must not let the extractor directly produce an admitted migration contract. Implementation may
+resume only after the relevant `docs/dev/` entry gate is reviewed and the named P0 blockers close.
+
+Full G13 remains incomplete until production intent/proposal/revision/attack/admission artifacts
+consume the material, generic durable `AgentEpisode` owns the loop budgets, candidate-specific CUDA
+and Ascend C adapters execute the resulting portfolio on the declared paths, and performance is
+admitted against scoped hardware facts and workloads. Scarce GPU/NPU work remains deferred until an
+applicable proposal passes cheaper gates.
+
+Every replacement Phase G slice must first produce the `DesignConformanceRecord` required by
+[`oracle/DESIGN_INVARIANTS.md`](oracle/DESIGN_INVARIANTS.md), including authority/capability boundaries,
+required claims, feedback/hidden-corpus use, mechanism qualification, controls, receipt closure,
+strong-type obligations, and explicit unknown/not-executed scope.
 
 Carry these constraints into the next session:
 
@@ -52,8 +73,18 @@ Carry these constraints into the next session:
   internal version increments during pre-release development;
 - preserve necessary strong types at trust and identity boundaries without generalizing the first
   slice into a speculative universal operator schema;
-- Blue and Red keep distinct durable episodes/continuations, and model agreement never substitutes
-  for trusted claim-strength or admission policy;
+- keep Cairn's product scope strictly CUDA → Ascend C even where the agent, record, and worker
+  infrastructure remains domain-neutral;
+- keep Semantic Intent Recovery isolated and proposal-only so its implementation can be replaced or
+  optimized without changing admitted contracts or judge authority;
+- when the current model-backed Blue/Red synthesis/adversarial profiles are selected, they keep
+  distinct durable episodes/continuations; other policy-selected strategies remain possible, and
+  model agreement never substitutes for trusted claim-strength or admission policy;
+- treat previous-iteration and real-model feedback as typed evidence, never as an untyped reward or
+  an in-place mutation of an admitted artifact;
+- keep performance as an independent gate using conditional, measured hardware ceilings; it cannot
+  compensate for correctness failure;
+- preserve knowledge/skill trust state, exact content identity, allowed use, and retraction impact;
 - logging remains observational: no fallible, async, stateful, or business-semantic work belongs in
   tracing event fields or span lifetimes;
 - retrieved upstream tests are untrusted research context, not corpus or semantic authority.
@@ -246,7 +277,14 @@ All worker-control, journal, content, and configuration formats remain schema V1
 development, incompatible changes replace V1 directly and development state is rebuilt; there are
 no conversion or compatibility branches.
 
-## Phase G — executed oracle admission (active)
+## Phase G — executed oracle admission (implementation ledger; redesign pending)
+
+> **Planning status (2026-08-27):** the entries below remain the factual ledger for work already
+> implemented and for the old narrow plan. Their unfinished ordering is suspended and is not the
+> approved next-step sequence. A replacement Phase G plan must be derived from the refreshed intent,
+> Oracle, performance, feedback, and knowledge/skill designs before code work resumes. That replacement
+> sequencing is now maintained in [`dev/ROADMAP.md`](dev/ROADMAP.md) and
+> [`dev/SLICE_CATALOG.md`](dev/SLICE_CATALOG.md); this section remains a historical implementation ledger.
 
 The next product milestone is M2, not a wider worker runtime. Its first implemented foundation is a
 new domain-neutral `cairn-verification` crate with strict V1 admission-policy and numerical-allowance
@@ -256,7 +294,7 @@ and assurance are separate; held-out derivation and validation corpora must be i
 asserted and external-prior-only values cannot support a pass; held-out evidence is empirical at
 most; and only proven/exhaustive evidence may support an unqualified domain-wide numerical claim.
 
-The remaining G slices, in dependency order, are:
+The historical G slices and their recorded state are:
 
 1. **Implemented 2026-08-25:** immutable caller-domain, refinement, corpus-proposal, authorship,
    construction-claim, correct/wrong-variant, and oracle-proposal manifests. Proposal schema cannot
