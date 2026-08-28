@@ -42,7 +42,7 @@ DEV-004 generic DeepSeek SIR proposal path
 ```text
 immutable migration task artifacts
 → task-generic context projection
-→ configured DeepSeek profile + scoped read/search tools
+→ configured DeepSeek profile + scoped source-inspection tools
 → durable agent episode
 → typed facts / competing hypotheses / unknowns / citations
 ```

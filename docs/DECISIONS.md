@@ -931,7 +931,8 @@ Before implementing Intent Admission, a mechanism qualification registry, or a d
 process tree, Cairn must run one minimal model-backed vertical proof through the existing durable
 agent runtime:
 
-1. project task-generic immutable source/context and scoped read/search tools;
+1. project task-generic immutable source/context and only the scoped source-inspection tools the
+   current task size requires;
 2. invoke the configured DeepSeek runtime profile;
 3. persist a typed proposal containing cited facts, competing hypotheses, and explicit unknowns;
 4. replay the same profile shape with a materially different migration task and no production-code

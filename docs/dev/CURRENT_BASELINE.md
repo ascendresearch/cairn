@@ -62,7 +62,7 @@ downstream value。没有这项事实，SIR 不应继续位于 critical path。
 
 ```text
 generic durable agent runtime + recorded provider
-+ task artifacts and scoped read/search tools
++ task artifacts and scoped source-inspection tools
 + DEV-001 evaluation fixture (answer visible only after episode)
 + DEV-003 sanitation/provenance controls
 ```

@@ -789,7 +789,8 @@ architecture 已实现。
 ## 23. 首期实施边界
 
 第一个architecture proof只实现一个实际model-backed SIR profile/episode：复用当前domain-neutral
-`cairn-agent` runtime，把task-generic immutable context和scoped read/search tools投影给DeepSeek，持久化带
+`cairn-agent` runtime，把task-generic immutable context和按当前task规模所需的scoped source-inspection tools
+投影给DeepSeek，持久化带
 引用、竞争假设和unknown的typed proposal，并提供recorded replay与opt-in live lane。
 
 该slice不建立Admission、Planner、mechanism qualification registry、Oracle profile、Candidate Search或

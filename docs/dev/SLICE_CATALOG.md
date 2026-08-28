@@ -40,7 +40,7 @@ typed output、recorded/live commands、预算和删除路径；它不需要另�
 
 - 在当前product crate中增加最小SIR profile/context/proposal adapter；
 - 复用`cairn-agent`的durable episode、DeepSeek protocol、tool loop和recorded/live transport；
-- scoped repository read/search tools；
+- scoped task-artifact inspection tools；
 - task-generic typed proposal与strict decode；
 - test harness在episode结束后读取DEV-001 expected results做evaluation。
 
