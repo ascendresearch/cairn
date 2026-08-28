@@ -12,12 +12,12 @@ use cairn_agent::{
     EpisodeDeadlineUnixMillis, EpisodeProviderTokenLimit, EpisodeStepLimit,
     EpisodeToolOperationLimit, HttpModelTransport, ModelName, ModelOutputTokenLimit,
     ModelProtocolKind, ModelSelection, ModelTemplate, ModelTemplateRegistry, NativeProtocolCodec,
-    ProviderName, ResolvedRuntimeModelArtifact, RuntimeModelAlias, RuntimeModelCatalog,
-    recover_agent_episode,
+    ProviderName, RuntimeModelAlias, RuntimeModelCatalog, recover_agent_episode,
 };
 use cairn_migration::{
     IntentRecoveryRequestV1, SirEpisodeRunInput, SirReadByteLimit, SirReadLineLimit,
-    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits, SirTaskWorkspace, run_sir_episode,
+    SirResolvedRuntimeModelArtifact, SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits,
+    SirTaskWorkspace, run_sir_episode,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use cairn_record::ContentStore;
@@ -211,12 +211,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn archive_model_configuration(
     content: &mut SqliteContentStore,
     model: &cairn_agent::ResolvedRuntimeModel,
-) -> Result<ContentId<ResolvedRuntimeModelArtifact>, Box<dyn std::error::Error>> {
-    let expected = model.content_id()?;
+) -> Result<ContentId<SirResolvedRuntimeModelArtifact>, Box<dyn std::error::Error>> {
+    let expected = model.content_id()?.to_wire();
     let archived = content
-        .put::<ResolvedRuntimeModelArtifact>(&mut Cursor::new(model.canonical_bytes()?))?
+        .put::<SirResolvedRuntimeModelArtifact>(&mut Cursor::new(model.canonical_bytes()?))?
         .content_id;
-    if archived != expected {
+    if archived.to_wire() != expected {
         return Err("resolved runtime-model identity changed while archiving".into());
     }
     Ok(archived)

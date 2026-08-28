@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cairn-admission",
     "crates/cairn-agent",
     "crates/cairn-codec",
     "crates/cairn-control-transport",
@@ -24,10 +25,11 @@ license = "MIT"
 
 [workspace.dependencies]
 base64 = "0.22.1"
+cairn-admission = { path = "crates/cairn-admission" }
 cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }
-cairn-migration = { path = "crates/cairn-migration" }
+cairn-migration = { path = "crates/cairn-migration", default-features = false }
 cairn-observability = { path = "crates/cairn-observability" }
 cairn-control-transport = { path = "crates/cairn-control-transport" }
 cairn-protocol = { path = "crates/cairn-protocol" }

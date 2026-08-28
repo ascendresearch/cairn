@@ -1,0 +1,22 @@
+[package]
+name = "cairn-admission"
+description = "Model-free Cairn Admission process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-codec.workspace = true
+cairn-migration.workspace = true
+cairn-protocol.workspace = true
+cairn-record.workspace = true
+cairn-store-sqlite.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

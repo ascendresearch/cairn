@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 
-use cairn_agent::ResolvedRuntimeModelArtifact;
 use cairn_execution::TargetEnvironmentName;
 use cairn_protocol::{ContentId, ContentType, EpisodeId, TaskId};
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -11,9 +10,12 @@ use crate::{
     ArgumentIndex, DataType, EntryPointName,
     sir::{
         SirError, SirIntentHypothesisSetProposalArtifact, SirSourceCitationV1,
-        SirTaskBundleArtifact, SirTaskLimits, SirTaskWorkspace,
+        SirTaskBundleArtifact, SirTaskLimits,
     },
 };
+
+#[cfg(feature = "agent-runtime")]
+use crate::sir::SirTaskWorkspace;
 
 const SCHEMA_V1: u16 = 1;
 const MAX_ARGUMENTS: usize = 64;
@@ -204,6 +206,16 @@ pub enum IntentRecoveryInputArtifact {}
 
 impl ContentType for IntentRecoveryInputArtifact {
     const DOMAIN: &'static str = "migration.intent-recovery-input.v1";
+}
+
+/// Exact agent-owned resolved runtime-model artifact cited by a SIR proposal.
+///
+/// The semantic content domain remains the agent domain; this local marker lets model-free
+/// consumers validate the typed reference without linking the agent runtime.
+pub enum SirResolvedRuntimeModelArtifact {}
+
+impl ContentType for SirResolvedRuntimeModelArtifact {
+    const DOMAIN: &'static str = "agent.resolved-runtime-model.v1";
 }
 
 /// Caller-declared ABI role. Runtime handles are not scalar values.
@@ -531,6 +543,28 @@ impl SirCallerDeclarationV1 {
     #[must_use]
     pub fn claims(&self) -> &[SirCallerClaimV1] {
         &self.claims
+    }
+
+    #[must_use]
+    pub fn unknowns(&self) -> &[SirDeclaredUnknownV1] {
+        &self.unknowns
+    }
+}
+
+impl SirDeclaredUnknownV1 {
+    #[must_use]
+    pub const fn id(&self) -> &SirDeclaredUnknownId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> SirDeclaredUnknownKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn question(&self) -> &SirDeclaredUnknownQuestion {
+        &self.question
     }
 }
 
@@ -889,6 +923,28 @@ pub struct SirIntentHypothesisV1 {
     counter_evidence: Vec<SirIntentEvidenceRefV1>,
 }
 
+impl SirIntentHypothesisV1 {
+    #[must_use]
+    pub const fn id(&self) -> &SirHypothesisId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn layer(&self) -> SirIntentLayer {
+        self.layer
+    }
+
+    #[must_use]
+    pub const fn claim(&self) -> &SirHypothesisClaim {
+        &self.claim
+    }
+
+    #[must_use]
+    pub const fn domain(&self) -> &SirIntentDomain {
+        &self.domain
+    }
+}
+
 /// Claim edge used by a conflict without erasing caller/hypothesis identity.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
@@ -905,6 +961,18 @@ pub struct SirIntentConflictV1 {
     statement: SirConflictStatement,
     claims: Vec<SirIntentClaimRefV1>,
     evidence: Vec<SirIntentEvidenceRefV1>,
+}
+
+impl SirIntentConflictV1 {
+    #[must_use]
+    pub const fn id(&self) -> &SirConflictId {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn claims(&self) -> &[SirIntentClaimRefV1] {
+        &self.claims
+    }
 }
 
 /// Classification of an unresolved question.
@@ -926,6 +994,23 @@ pub struct SirUnknownV1 {
     kind: SirUnknownKind,
     question: SirUnknownQuestion,
     evidence: Vec<SirIntentEvidenceRefV1>,
+}
+
+impl SirUnknownV1 {
+    #[must_use]
+    pub const fn id(&self) -> &SirUnknownId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> SirUnknownKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn question(&self) -> &SirUnknownQuestion {
+        &self.question
+    }
 }
 
 /// Proposed invariant that a later Admission may promote.
@@ -987,6 +1072,13 @@ pub struct SirDisambiguationExperimentV1 {
     targets: Vec<SirDisambiguationTargetV1>,
     plan: SirExperimentPlan,
     predictions: Vec<SirExperimentPrediction>,
+}
+
+impl SirDisambiguationExperimentV1 {
+    #[must_use]
+    pub fn targets(&self) -> &[SirDisambiguationTargetV1] {
+        &self.targets
+    }
 }
 
 /// Complete model-authored proposal body.
@@ -1139,6 +1231,11 @@ impl SirProposalSubmissionV1 {
         &self.invariants
     }
 
+    #[must_use]
+    pub fn disambiguation_experiments(&self) -> &[SirDisambiguationExperimentV1] {
+        &self.disambiguation_experiments
+    }
+
     fn validate_internal(&self) -> Result<(), SirError> {
         let observations = self
             .observed_facts
@@ -1241,6 +1338,7 @@ impl SirProposalSubmissionV1 {
         Ok(())
     }
 
+    #[cfg(feature = "agent-runtime")]
     pub(crate) fn validate_against(
         &self,
         workspace: &SirTaskWorkspace,
@@ -1252,6 +1350,13 @@ impl SirProposalSubmissionV1 {
                 workspace.validate_citation(citation)?;
             }
         }
+        self.validate_against_recovery_input(input)
+    }
+
+    pub(crate) fn validate_against_recovery_input(
+        &self,
+        input: &IntentRecoveryInputV1,
+    ) -> Result<(), SirError> {
         let caller_claims = input
             .request
             .caller
@@ -1295,7 +1400,7 @@ pub struct IntentHypothesisSetProposalV1 {
     schema_version: u16,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
     submission: SirProposalSubmissionV1,
 }
 
@@ -1305,15 +1410,16 @@ struct IntentHypothesisSetProposalWire {
     schema_version: u16,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
     submission: SirProposalSubmissionV1,
 }
 
 impl IntentHypothesisSetProposalV1 {
+    #[cfg(feature = "agent-runtime")]
     pub(crate) fn new(
         recovery_input: ContentId<IntentRecoveryInputArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
         submission: SirProposalSubmissionV1,
     ) -> Self {
         Self {

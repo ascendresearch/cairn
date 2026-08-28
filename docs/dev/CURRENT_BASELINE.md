@@ -13,7 +13,9 @@ CP0已经证明DeepSeek可作为runtime actor面对不同task产生task-generic 
 task上改变一个具体Oracle选择。CP0结论为`Go`：SIR当前以proposal-only capability进入架构，并继续沿第一个
 真实consumer扩展。DEV-006已用真实DeepSeek闭合caller/source分离的完整输入与typed proposal contract；首版
 submission被strict gateway拒绝后在同一continuation修复成功。其后的纵向链是接入最小claim-scoped Intent Admission和
-`NeedsUserDecision`，再让一个真实Oracle决策消费首个`MigrationIntentContract`；这不授权一次性铺满完整
+`NeedsUserDecision`，再让一个真实Oracle决策消费首个`MigrationIntentContract`。DEV-007已由model-free
+process从exact live proposal生成首个output-order request，实际任务authority选择了unordered-set语义；该
+选择尚未被误报为typed decision或admitted contract。这不授权一次性铺满完整
 SIR → Admission → Oracle → Candidate权威链或恢复预建架构。
 
 ## 2. 可复用基础
@@ -89,5 +91,6 @@ production path处理atomic compaction task，并证明proposal可阻止把atomi
 | DEV-004 | Accepted | generic proposal path经recorded replay、full CI和真实DeepSeek episode闭合；只证明runtime workflow接通 |
 | DEV-005 | Accepted | reduction与atomic compaction共享production path；SIR改变order-sensitive Oracle选择，CP0 Go |
 | DEV-006 | Accepted | 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1`通过strict、recorded、absence、full CI与真实DeepSeek repair/restart |
+| DEV-007 | Accepted | model-free process从exact live proposal机械生成scoped output-order request；实际任务authority选择unordered-set hypothesis，尚未promotion |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

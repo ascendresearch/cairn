@@ -84,11 +84,23 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<(), SchemaError>
     Ok(())
 }
 
+pub(crate) fn validate_read_only(connection: &Connection) -> Result<(), SchemaError> {
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let version = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+    if version != CURRENT_VERSION {
+        return Err(SchemaError::Unsupported {
+            found: version,
+            supported: CURRENT_VERSION,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;
 
-    use super::{CURRENT_VERSION, SchemaError, initialize};
+    use super::{CURRENT_VERSION, SchemaError, initialize, validate_read_only};
 
     #[test]
     fn initialization_is_idempotent_and_versioned() {
@@ -133,5 +145,16 @@ mod tests {
             initialize(&mut connection),
             Err(SchemaError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn read_only_validation_requires_an_existing_v1_schema() {
+        let mut connection = Connection::open_in_memory().expect("connection");
+        assert!(matches!(
+            validate_read_only(&connection),
+            Err(SchemaError::Unsupported { found: 0, .. })
+        ));
+        initialize(&mut connection).expect("initialize fixture");
+        validate_read_only(&connection).expect("validate initialized fixture");
     }
 }

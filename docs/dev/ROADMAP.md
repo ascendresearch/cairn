@@ -18,10 +18,11 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-005 cross-task and downstream-utility gate
 → CP0 Go
 → DEV-006 complete typed recovery input/proposal contract
-→ implement the smallest authority/migration consumer
+→ DEV-007 model-free scoped user-decision request
+→ typed user decision + smallest promotion boundary
 ```
 
-DEV-004/005/006现已accepted，CP0结论为Go：SIR当前落在proposal-only seam，并保留随真实consumer扩展的口子。
+DEV-004/005/006/007现已accepted，CP0结论为Go：SIR当前落在proposal-only seam，并保留随真实consumer扩展的口子。
 当前已确定最小consumer-driven方向：完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1` → claim-scoped
 Intent Admission/`NeedsUserDecision` → 一个消费`MigrationIntentContract`的真实Oracle决策。该方向继续建设
 SIR并建立首个正式consumer，尚未授权完整CP1能力集、Candidate链或通用governance。

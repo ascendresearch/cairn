@@ -6,15 +6,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["agent-runtime"]
+agent-runtime = ["dep:cairn-agent", "dep:reqwest"]
+
 [dependencies]
 base64.workspace = true
-cairn-agent.workspace = true
+cairn-agent = { workspace = true, optional = true }
 cairn-codec.workspace = true
 cairn-execution.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 cairn-verification.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

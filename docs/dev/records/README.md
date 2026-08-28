@@ -13,6 +13,8 @@
 | DEV-003 | Accepted | [`DEV-003.md`](DEV-003.md) | current fixture provenance/sanitation foundation |
 | DEV-004 | Accepted | [`implementation note`](DEV-004-IMPLEMENTATION.md) | recorded/full CI与用户授权的live DeepSeek均闭合；只证明generic proposal workflow接通 |
 | DEV-005 | Accepted | [`cross-task/value evaluation`](DEV-005-EVALUATION.md) | atomic compaction复用同一路径；proposal改变Oracle order决策；CP0 Go |
+| DEV-006 | Accepted | [`typed recovery contract`](DEV-006-IMPLEMENTATION.md) | caller/source分离的current-V1 input/proposal contract；recorded、full CI和live strict repair闭合 |
+| DEV-007 | Accepted | [`typed decision request`](DEV-007-IMPLEMENTATION.md) | model-free process生成scoped request；用户选择只作为下一slice输入，尚未promotion |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

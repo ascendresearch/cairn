@@ -7,7 +7,7 @@ use std::{
 
 use cairn_protocol::{BlobDigest, ContentId, ContentType};
 use cairn_record::{ContentDescriptor, ContentRangeStore, ContentStore, ContentStoreError};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::schema;
 
@@ -36,6 +36,37 @@ impl SqliteContentStore {
         let blob_root = blob_root.as_ref().to_path_buf();
         fs::create_dir_all(blob_root.join("objects/sha256")).map_err(io_error)?;
         fs::create_dir_all(blob_root.join("tmp")).map_err(io_error)?;
+        Ok(Self {
+            connection,
+            blob_root,
+        })
+    }
+
+    /// Opens an existing content store without schema, metadata, or filesystem mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database/CAS does not exist, is not current V1, or cannot be
+    /// opened read-only.
+    pub fn open_read_only(
+        database_path: impl AsRef<Path>,
+        blob_root: impl AsRef<Path>,
+    ) -> Result<Self, ContentStoreError> {
+        let connection =
+            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(metadata_error)?;
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(metadata_error)?;
+        schema::validate_read_only(&connection).map_err(|error| ContentStoreError::Metadata {
+            message: error.to_string(),
+        })?;
+        let blob_root = blob_root.as_ref().to_path_buf();
+        if !blob_root.join("objects/sha256").is_dir() {
+            return Err(ContentStoreError::Io {
+                message: "read-only CAS object root does not exist".to_owned(),
+            });
+        }
         Ok(Self {
             connection,
             blob_root,
@@ -397,6 +428,30 @@ mod tests {
             .expect("verified read");
         assert_eq!(output, b"persistent bytes");
         assert_eq!(read.blob_digest, descriptor.blob_digest);
+    }
+
+    #[test]
+    fn read_only_store_reads_existing_content_and_cannot_publish() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let database = directory.path().join("content.db");
+        let cas = directory.path().join("cas");
+        let descriptor = {
+            let mut store = SqliteContentStore::open(&database, &cas).expect("store");
+            store
+                .put::<SourceFile>(&mut Cursor::new(b"public immutable bytes"))
+                .expect("put")
+        };
+        let mut store = SqliteContentStore::open_read_only(&database, &cas).expect("read-only");
+        let mut output = Vec::new();
+        store
+            .write_to(&descriptor.content_id, &mut output)
+            .expect("read existing");
+        assert_eq!(output, b"public immutable bytes");
+        assert!(
+            store
+                .put::<SourceFile>(&mut Cursor::new(b"forbidden write"))
+                .is_err()
+        );
     }
 
     #[test]

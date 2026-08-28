@@ -23,7 +23,7 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..005 的当前状态和边界 |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..007 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -47,6 +47,8 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 - DEV-005：Accepted，第二个atomic compaction task复用同一路径，并产生可观察Oracle utility。
 - DEV-006：Accepted，完整typed recovery input/proposal contract通过recorded、full CI与真实DeepSeek
   strict-repair/restart。
+- DEV-007：Accepted，model-free process从exact live proposal生成scoped output-order request；实际任务
+  authority选择unordered-set hypothesis，尚未形成typed decision或admitted contract。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
 `IntentHypothesisSetProposalV1`已经闭合；下一条纵向链以第一个正式consumer约束建设范围，接入最小claim-scoped Intent Admission与

@@ -7,14 +7,20 @@ mod corpus_observation;
 mod domain;
 mod exact_comparison;
 mod executable_oracle;
+#[cfg(feature = "agent-runtime")]
 mod external_research;
 mod historical;
 mod input_values;
+mod intent_admission;
 mod materialize;
 mod memory_surface;
+#[cfg(feature = "agent-runtime")]
 mod oracle_prompt;
+#[cfg(feature = "agent-runtime")]
 mod oracle_search;
+#[cfg(feature = "agent-runtime")]
 mod oracle_tools;
+#[cfg(feature = "agent-runtime")]
 mod oracle_workflow;
 mod reduction_admission;
 mod reduction_candidate;
@@ -85,6 +91,7 @@ pub use executable_oracle::{
     PreparedExecutableOracleOutputComparison, ZeroKMatmulF32OracleCaseV1,
     assemble_zero_k_matmul_f32_oracle, compare_executable_oracle_output,
 };
+#[cfg(feature = "agent-runtime")]
 pub use external_research::{
     ArchivedExternalTestEvidence, ExternalResearchPolicy, ExternalResearchProvider,
     ExternalResearchProviderError, ExternalTestCaseV1, ExternalTestResearchContextV1,
@@ -112,6 +119,12 @@ pub use input_values::{
     SignedIntegerDataType, SignedIntegerInputPattern, UnsignedIntegerDataType,
     UnsignedIntegerInputPattern, derive_mandatory_input_value_cases,
 };
+pub use intent_admission::{
+    IntentAdmissionError, IntentDecisionRequestBatchArtifact, IntentDecisionRequestBatchV1,
+    UserIntentCallerUnknownContextV1, UserIntentDecisionOptionV1,
+    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserIntentDecisionResponseKind,
+    derive_user_intent_decision_requests,
+};
 pub use materialize::{
     CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount,
     CorpusMaterializationError, MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
@@ -127,23 +140,27 @@ pub use memory_surface::{
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
 };
+#[cfg(feature = "agent-runtime")]
 pub use oracle_prompt::{
     MaterializedOraclePrompt, OracleInstructionSetV1, OraclePromptError, OracleRolePromptArtifact,
     OracleRolePromptInput, OracleRolePromptV1, archive_oracle_role_prompt,
     archive_standard_oracle_instructions, materialize_oracle_prompt,
     oracle_common_instruction_text, oracle_role_instruction_text, prepare_oracle_role_prompt,
 };
+#[cfg(feature = "agent-runtime")]
 pub use oracle_search::{
     OracleAgentRole, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleRoleTool,
     OracleSearchPlanArtifact, OracleSearchPlanError, OracleSearchPlanInput, OracleSearchPlanV1,
     archive_oracle_role_tool_catalog, oracle_role_tool_catalog_bytes, oracle_role_tool_catalog_id,
     prepare_oracle_role_episode,
 };
+#[cfg(feature = "agent-runtime")]
 pub use oracle_tools::{
     BlueDomainRefinementGateway, BlueProposalGateway, BlueProposalSubmissionV1, OracleToolError,
     RedSubmissionGateway, blue_domain_refinement_registration, blue_proposal_registration,
     oracle_role_native_tools, red_submission_registrations,
 };
+#[cfg(feature = "agent-runtime")]
 pub use oracle_workflow::{
     OracleAdmissionAttemptArtifact, OracleAdmissionFeedbackArtifact, OracleAdmissionFeedbackV1,
     OracleAttackArtifact, OracleAttackInput, OracleAttackV1, OracleDiagnosticEvidenceArtifact,
@@ -187,12 +204,15 @@ pub use reduction_mutation::{
     HistoricalReductionMutationVariantEvidence, PreparedHistoricalReductionMutationGrid,
     compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
 };
+#[cfg(feature = "agent-runtime")]
 pub use sir::{
-    SirEpisodeRunError, SirEpisodeRunInput, SirEpisodeRunOutcome, SirError,
-    SirIntentHypothesisSetProposalArtifact, SirReadByteLimit, SirReadLineLimit,
+    SirEpisodeRunError, SirEpisodeRunInput, SirEpisodeRunOutcome, SirTaskWorkspace, run_sir_episode,
+};
+pub use sir::{
+    SirError, SirIntentHypothesisSetProposalArtifact, SirReadByteLimit, SirReadLineLimit,
     SirSourceCitationV1, SirSourceLineCount, SirSourceLineNumber, SirTaskArtifactBytes,
     SirTaskArtifactPath, SirTaskArtifactV1, SirTaskBundleArtifact, SirTaskBundleV1,
-    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits, SirTaskWorkspace, run_sir_episode,
+    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits,
 };
 pub use sir_contract::{
     IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
@@ -208,11 +228,12 @@ pub use sir_contract::{
     SirIntentHypothesisV1, SirIntentLayer, SirInvariantId, SirInvariantStatement, SirObservationId,
     SirObservationStatement, SirObservedFactV1, SirOptimizationFreedomId,
     SirOptimizationFreedomStatement, SirOptimizationFreedomV1, SirPriorFeedbackArtifact,
-    SirPriorFeedbackV1, SirProposalSubmissionV1, SirSemanticInvariantV1, SirShapeExpression,
-    SirSourceBehaviorDispositionKind, SirSourceBehaviorDispositionV1, SirSourceDispositionId,
-    SirTargetContextV1, SirTargetEnvironmentSelectionV1, SirTargetSoc, SirTargetSocSelectionV1,
-    SirTargetToolchain, SirTargetToolchainSelectionV1, SirUnknownId, SirUnknownKind,
-    SirUnknownQuestion, SirUnknownV1, SirValueDomainDeclaration,
+    SirPriorFeedbackV1, SirProposalSubmissionV1, SirResolvedRuntimeModelArtifact,
+    SirSemanticInvariantV1, SirShapeExpression, SirSourceBehaviorDispositionKind,
+    SirSourceBehaviorDispositionV1, SirSourceDispositionId, SirTargetContextV1,
+    SirTargetEnvironmentSelectionV1, SirTargetSoc, SirTargetSocSelectionV1, SirTargetToolchain,
+    SirTargetToolchainSelectionV1, SirUnknownId, SirUnknownKind, SirUnknownQuestion, SirUnknownV1,
+    SirValueDomainDeclaration,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,
