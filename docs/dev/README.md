@@ -83,5 +83,7 @@ qualification profile，D-041 冻结历史 fixture curation policy。它们关�
 entry由`9b2502d`闭合后DEV-002已进入`InProgress`。它只定义future mechanism的考试与复核边界，不预填qualification结果。见
 [`records/README.md`](records/README.md)。
 
-DEV-002正在实施其contract/control bundle；在DEV-002和DEV-004接受前，ST1代码slice仍是`Blocked`。
+DEV-002 review-pending contract/control bundle已由commit `a713d00`物化；现在按
+[`independent private review`](records/DEV-002-PRIVATE-REVIEW.md)审查exact public subject和private controls，
+尚未生成control-review receipt。在DEV-002和DEV-004接受前，ST1代码slice仍是`Blocked`。
 决策、fixture或qualification contract已接受不能被误报为mechanism已经qualified。
