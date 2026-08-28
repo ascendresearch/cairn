@@ -152,7 +152,8 @@ DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
 `InProgress`。其active change set已物化clean-room CUDA/host source、public controls和六分区private batch，
 并直接扩展/消费DEV-003已接受的`cairn-testkit` contract；private batch仍为`review-pending`，因此尚未生成
 redacted review receipt或冻结为accepted input。当前未运行CUDA/Ascend lane，也未另建并行V1 fixture
-manifest。
+manifest。case-set facts与review authority已分离，strict receipt contract和公开independent-review protocol
+已就绪；下一条件是非case作者审查exact private bytes。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 

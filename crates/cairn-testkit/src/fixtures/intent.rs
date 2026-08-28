@@ -985,6 +985,180 @@ pub enum RestrictedPartitionStatus {
     FrozenReviewed,
 }
 
+/// Identity of a private-store reviewer, distinct from fixture authors and artifact identities.
+///
+/// ```compile_fail
+/// use cairn_testkit::fixtures::{FixtureAuthorId, PrivateCorpusReviewerId};
+/// fn require_reviewer(_: PrivateCorpusReviewerId) {}
+/// let author: FixtureAuthorId = todo!();
+/// require_reviewer(author);
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct PrivateCorpusReviewerId(String);
+
+impl PrivateCorpusReviewerId {
+    /// Creates a canonical reviewer identity under the private-reviewer namespace.
+    ///
+    /// # Errors
+    ///
+    /// Rejects identities outside `private-reviewer-*` or with noncanonical label bytes.
+    pub fn new(value: impl Into<String>) -> Result<Self, IntentFixtureError> {
+        let value = value.into();
+        validate_case_id(&value)?;
+        if !value.starts_with("private-reviewer-") {
+            return Err(IntentFixtureError::InvalidValue {
+                kind: "private corpus reviewer",
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the canonical reviewer identity.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for PrivateCorpusReviewerId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+/// Independently reviewed facts required before a private case set can be frozen.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrivateReviewCheck {
+    CleanRoomSourceProvenance,
+    D039DomainAndAbi,
+    PartitionSemanticCoverage,
+    PublicDerivationIndependence,
+    BindingTamperValidity,
+    ExposureAndDiagnosticSafety,
+}
+
+impl PrivateReviewCheck {
+    fn all() -> [Self; 6] {
+        [
+            Self::CleanRoomSourceProvenance,
+            Self::D039DomainAndAbi,
+            Self::PartitionSemanticCoverage,
+            Self::PublicDerivationIndependence,
+            Self::BindingTamperValidity,
+            Self::ExposureAndDiagnosticSafety,
+        ]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum PrivateReviewOutcome {
+    Accepted,
+}
+
+/// Private independent-review receipt. It binds authority to exact public and private inputs.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IntentPrivateReviewReceiptV1 {
+    schema_version: SchemaV1,
+    decision: IntentSpecificationDecision,
+    public_bundle_identity: IntentBundleIdentity,
+    case_set_manifest_identity: RestrictedIntentManifestId,
+    case_author: FixtureAuthorId,
+    reviewer: PrivateCorpusReviewerId,
+    checks: Vec<PrivateReviewCheck>,
+    partitions: Vec<RestrictedPartitionKind>,
+    outcome: PrivateReviewOutcome,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntentPrivateReviewReceiptWire {
+    schema_version: SchemaV1,
+    decision: IntentSpecificationDecision,
+    public_bundle_identity: IntentBundleIdentity,
+    case_set_manifest_identity: RestrictedIntentManifestId,
+    case_author: FixtureAuthorId,
+    reviewer: PrivateCorpusReviewerId,
+    checks: Vec<PrivateReviewCheck>,
+    partitions: Vec<RestrictedPartitionKind>,
+    outcome: PrivateReviewOutcome,
+}
+
+impl IntentPrivateReviewReceiptV1 {
+    fn validate(&self) -> Result<(), IntentFixtureError> {
+        if self.case_author.as_str() != "cairn-project-ws-domain"
+            || self.checks != PrivateReviewCheck::all()
+            || self.partitions != RestrictedPartitionKind::all()
+        {
+            return Err(IntentFixtureError::InconsistentFixture);
+        }
+        Ok(())
+    }
+
+    /// Derives the redacted public reference from exact canonical receipt bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the receipt identity frame is invalid.
+    pub fn identity(bytes: &[u8]) -> Result<RestrictedReviewReceiptId, IntentFixtureError> {
+        RestrictedReviewReceiptId::derive(bytes)
+    }
+
+    /// Returns the exact reviewed private case-set manifest identity.
+    #[must_use]
+    pub const fn case_set_manifest_identity(&self) -> RestrictedIntentManifestId {
+        self.case_set_manifest_identity
+    }
+
+    /// Returns the exact reviewed public bundle identity.
+    #[must_use]
+    pub const fn public_bundle_identity(&self) -> IntentBundleIdentity {
+        self.public_bundle_identity
+    }
+
+    /// Returns the independent reviewer identity.
+    #[must_use]
+    pub const fn reviewer(&self) -> &PrivateCorpusReviewerId {
+        &self.reviewer
+    }
+}
+
+impl TryFrom<IntentPrivateReviewReceiptWire> for IntentPrivateReviewReceiptV1 {
+    type Error = IntentFixtureError;
+
+    fn try_from(wire: IntentPrivateReviewReceiptWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            decision: wire.decision,
+            public_bundle_identity: wire.public_bundle_identity,
+            case_set_manifest_identity: wire.case_set_manifest_identity,
+            case_author: wire.case_author,
+            reviewer: wire.reviewer,
+            checks: wire.checks,
+            partitions: wire.partitions,
+            outcome: wire.outcome,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for IntentPrivateReviewReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        IntentPrivateReviewReceiptWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RestrictedPartitionSummaryV1 {
@@ -1139,6 +1313,17 @@ pub fn decode_intent_restricted_summary_v1(
     bytes: &[u8],
 ) -> Result<IntentRestrictedSummaryV1, IntentFixtureError> {
     decode_and_validate(bytes, IntentRestrictedSummaryV1::validate)
+}
+
+/// Strictly decodes an accepted private independent-review receipt.
+///
+/// # Errors
+///
+/// Rejects noncanonical, non-V1, incomplete, wrong-domain, or self-inconsistent input.
+pub fn decode_intent_private_review_receipt_v1(
+    bytes: &[u8],
+) -> Result<IntentPrivateReviewReceiptV1, IntentFixtureError> {
+    decode_and_validate(bytes, IntentPrivateReviewReceiptV1::validate)
 }
 
 fn decode_and_validate<T>(

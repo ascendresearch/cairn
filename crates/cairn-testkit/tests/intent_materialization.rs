@@ -1,9 +1,11 @@
 use std::{fs, path::PathBuf, process::Command};
 
 use cairn_testkit::fixtures::{
-    F32Datum, IntentArtifactPath, IntentBundleIdentity, ReductionElementCount,
-    decode_intent_claims_v1, decode_intent_manifest_v1, decode_intent_public_corpus_v1,
-    decode_intent_restricted_summary_v1, decode_intent_user_decisions_v1, scan_public_tree,
+    F32Datum, IntentArtifactIdentity, IntentArtifactPath, IntentBundleIdentity,
+    ReductionElementCount, RestrictedIntentManifestId, decode_intent_claims_v1,
+    decode_intent_manifest_v1, decode_intent_private_review_receipt_v1,
+    decode_intent_public_corpus_v1, decode_intent_restricted_summary_v1,
+    decode_intent_user_decisions_v1, scan_public_tree,
 };
 
 fn repository_root() -> PathBuf {
@@ -155,4 +157,31 @@ fn public_intent_tree_passes_shared_sanitation_and_private_tree_is_untracked() {
         assert!(output.status.success());
         assert!(output.stdout.is_empty());
     }
+}
+
+#[test]
+fn private_review_receipt_binds_distinct_exact_inputs_and_independent_reviewer() {
+    let public_bundle = IntentBundleIdentity::derive(b"synthetic public bundle").expect("bundle");
+    let case_set =
+        RestrictedIntentManifestId::derive(b"synthetic private case set").expect("case set");
+    let receipt = format!(
+        "{{\"case_author\":\"cairn-project-ws-domain\",\"case_set_manifest_identity\":\"{case_set}\",\"checks\":[\"clean-room-source-provenance\",\"d039-domain-and-abi\",\"partition-semantic-coverage\",\"public-derivation-independence\",\"binding-tamper-validity\",\"exposure-and-diagnostic-safety\"],\"decision\":\"D-039\",\"outcome\":\"accepted\",\"partitions\":[\"implementation-artifact\",\"source-defect\",\"deployment-quirk\",\"competing-plausible-meaning\",\"genuine-unknown\",\"tamper-wrong-binding\"],\"public_bundle_identity\":\"{public_bundle}\",\"reviewer\":\"private-reviewer-user\",\"schema_version\":1}}"
+    );
+    let decoded = decode_intent_private_review_receipt_v1(receipt.as_bytes())
+        .expect("strict independent review receipt");
+    assert_eq!(decoded.public_bundle_identity(), public_bundle);
+    assert_eq!(decoded.case_set_manifest_identity(), case_set);
+    assert_eq!(decoded.reviewer().as_str(), "private-reviewer-user");
+
+    let self_review = receipt.replace("private-reviewer-user", "cairn-project-ws-domain");
+    assert!(decode_intent_private_review_receipt_v1(self_review.as_bytes()).is_err());
+
+    let incomplete = receipt.replace(",\"exposure-and-diagnostic-safety\"", "");
+    assert!(decode_intent_private_review_receipt_v1(incomplete.as_bytes()).is_err());
+
+    let wrong_domain = IntentArtifactIdentity::derive(b"synthetic public bundle")
+        .expect("wrong semantic identity")
+        .to_string();
+    let wrong_binding = receipt.replace(&public_bundle.to_string(), &wrong_domain);
+    assert!(decode_intent_private_review_receipt_v1(wrong_binding.as_bytes()).is_err());
 }
