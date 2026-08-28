@@ -150,10 +150,10 @@ DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
 材料 disposition 和删除时机。用户于2026-08-27审查并接受review package commit `fe88f4e`。DEV-003已
 通过G1–G6 repository evidence并以`79a1174`接受；DEV-001的设计评审和依赖回填均已完成，现处于
 `InProgress`。其active change set已物化clean-room CUDA/host source、public controls和六分区private batch，
-并直接扩展/消费DEV-003已接受的`cairn-testkit` contract；private batch仍为`review-pending`，因此尚未生成
-redacted review receipt或冻结为accepted input。当前未运行CUDA/Ascend lane，也未另建并行V1 fixture
-manifest。case-set facts与review authority已分离，strict receipt contract和公开independent-review protocol
-已就绪；下一条件是非case作者审查exact private bytes。
+并直接扩展/消费DEV-003已接受的`cairn-testkit` contract。`private-reviewer-user`已完成exact private review，
+redacted receipt identity与六个`frozen-reviewed` partition已写入public summary；case-set facts与review
+authority保持分离，freeze-transition audit证明final bundle只改变authority projection。当前未运行
+CUDA/Ascend lane，也未另建并行V1 fixture manifest；下一条件是G1–G6 acceptance checks和ledger closure。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 

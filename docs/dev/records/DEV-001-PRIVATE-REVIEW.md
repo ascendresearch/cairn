@@ -1,9 +1,12 @@
 # DEV-001 independent private review
 
-- 状态：`ReviewReady`
+- 状态：`Accepted`
 - Parent record：[`DEV-001.md`](DEV-001.md)
 - Decision：[`D-039`](../../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
 - Public implementation commit：`98c4681f783ffcc1f759ef1fd697725ef9c3990c`
+- Review-contract commit：`9997a3e`
+- Reviewer：`private-reviewer-user`
+- Outcome：六项检查全部接受（用户于2026-08-27明确attest）
 
 ## 1. Review purpose and authority
 
@@ -63,7 +66,7 @@ ledger只记录未通过的check category，不公开case-specific diagnosis。c
 若全部通过，Reviewer给出一个canonical `private-reviewer-*` identity，并明确声明其审查了exact local public
 bundle和private manifest。随后由strict tooling生成private `IntentPrivateReviewReceiptV1`，receipt必须绑定：
 
-- exact public `IntentBundleIdentity`；
+- exact pre-receipt `IntentReviewSubjectIdentity`，由reviewer实际检查的public manifest bytes派生；
 - exact private `RestrictedIntentManifestId`；
 - case author与独立reviewer的不同强类型identity；
 - D-039；
@@ -78,3 +81,17 @@ public summary只写入由receipt exact bytes派生的`RestrictedReviewReceiptId
 Receipt生成后仍需重跑strict decode、identity binding、public sanitation、`.cairn`零tracked-file、workspace CI
 和backwards audit。只有这些证据全部通过，DEV-001才能从`InProgress`变为`Accepted`；随后DEV-002才消费
 frozen public bundle identity和redacted review receipt identity。
+
+## 6. Completed receipt and freeze transition
+
+- independently reviewed pre-receipt public bundle：
+  `cairn:v1:sha256:testkit.intent-public-bundle.v1:8eea4e384b52224b8ba1716bee38b23bd9fb102ed6578953bc1d4b89b473d1d8`；
+- redacted receipt identity：
+  `cairn:v1:sha256:testkit.restricted-review-receipt.v1:746b5bb5a718d3508311ec7b596299f4c30df2fe04a57a1d77bccb9e6553028e`；
+- frozen accepted public bundle：
+  `cairn:v1:sha256:testkit.intent-public-bundle.v1:fa2eb4064e772775e886e4feb2f39ca330d8988b7b5227fa6af2f497b7b488fc`。
+
+`IntentReviewSubjectIdentity`与`IntentBundleIdentity`是不同强类型：receipt绑定reviewer实际检查的pre-receipt
+manifest bytes；final bundle因public summary写入receipt identity而获得新identity。private audit通过
+`validate_intent_freeze_transition`证明两者的source、claims、corpus、ABI、provenance和其余artifact edges
+完全相同，唯一允许变化是restricted-summary authority projection，避免receipt与final bundle循环引用。

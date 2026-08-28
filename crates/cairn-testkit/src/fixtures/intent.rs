@@ -284,6 +284,11 @@ impl ContentType for IntentPublicBundle {
     const DOMAIN: &'static str = "testkit.intent-public-bundle.v1";
 }
 
+pub enum IntentReviewSubject {}
+impl ContentType for IntentReviewSubject {
+    const DOMAIN: &'static str = "testkit.intent-review-subject.v1";
+}
+
 pub enum RestrictedReviewReceipt {}
 impl ContentType for RestrictedReviewReceipt {
     const DOMAIN: &'static str = "testkit.restricted-review-receipt.v1";
@@ -382,6 +387,12 @@ typed_identity!(
     IntentBundleIdentity,
     IntentPublicBundle,
     "Intent bundle identity"
+);
+typed_identity!(
+    /// Exact pre-receipt public manifest bytes independently reviewed for freezing.
+    IntentReviewSubjectIdentity,
+    IntentReviewSubject,
+    "Intent review subject identity"
 );
 typed_identity!(
     /// Redacted identity of a private-store review receipt, never a case identity.
@@ -1066,7 +1077,7 @@ enum PrivateReviewOutcome {
 pub struct IntentPrivateReviewReceiptV1 {
     schema_version: SchemaV1,
     decision: IntentSpecificationDecision,
-    public_bundle_identity: IntentBundleIdentity,
+    review_subject_identity: IntentReviewSubjectIdentity,
     case_set_manifest_identity: RestrictedIntentManifestId,
     case_author: FixtureAuthorId,
     reviewer: PrivateCorpusReviewerId,
@@ -1080,7 +1091,7 @@ pub struct IntentPrivateReviewReceiptV1 {
 struct IntentPrivateReviewReceiptWire {
     schema_version: SchemaV1,
     decision: IntentSpecificationDecision,
-    public_bundle_identity: IntentBundleIdentity,
+    review_subject_identity: IntentReviewSubjectIdentity,
     case_set_manifest_identity: RestrictedIntentManifestId,
     case_author: FixtureAuthorId,
     reviewer: PrivateCorpusReviewerId,
@@ -1115,10 +1126,10 @@ impl IntentPrivateReviewReceiptV1 {
         self.case_set_manifest_identity
     }
 
-    /// Returns the exact reviewed public bundle identity.
+    /// Returns the exact pre-receipt public review-subject identity.
     #[must_use]
-    pub const fn public_bundle_identity(&self) -> IntentBundleIdentity {
-        self.public_bundle_identity
+    pub const fn review_subject_identity(&self) -> IntentReviewSubjectIdentity {
+        self.review_subject_identity
     }
 
     /// Returns the independent reviewer identity.
@@ -1135,7 +1146,7 @@ impl TryFrom<IntentPrivateReviewReceiptWire> for IntentPrivateReviewReceiptV1 {
         let value = Self {
             schema_version: wire.schema_version,
             decision: wire.decision,
-            public_bundle_identity: wire.public_bundle_identity,
+            review_subject_identity: wire.review_subject_identity,
             case_set_manifest_identity: wire.case_set_manifest_identity,
             case_author: wire.case_author,
             reviewer: wire.reviewer,
@@ -1260,6 +1271,16 @@ impl IntentRestrictedSummaryV1 {
             .iter()
             .all(|partition| partition.status == RestrictedPartitionStatus::ReviewPending)
     }
+
+    /// Reports whether every partition is frozen by the bound independent-review receipt.
+    #[must_use]
+    pub fn is_frozen_reviewed(&self) -> bool {
+        self.review_receipt_identity.is_some()
+            && self
+                .partitions
+                .iter()
+                .all(|partition| partition.status == RestrictedPartitionStatus::FrozenReviewed)
+    }
 }
 
 /// Strictly decodes the canonical current-V1 public Intent manifest.
@@ -1324,6 +1345,49 @@ pub fn decode_intent_private_review_receipt_v1(
     bytes: &[u8],
 ) -> Result<IntentPrivateReviewReceiptV1, IntentFixtureError> {
     decode_and_validate(bytes, IntentPrivateReviewReceiptV1::validate)
+}
+
+/// Verifies that receipt publication changed only the restricted-summary authority projection.
+///
+/// # Errors
+///
+/// Fails when the receipt does not bind the exact review subject, the accepted summary does not
+/// bind the receipt, a partition remains pending, or any other manifest edge changed.
+pub fn validate_intent_freeze_transition(
+    review_subject_manifest_bytes: &[u8],
+    accepted_manifest: &IntentPublicManifestV1,
+    accepted_summary: &IntentRestrictedSummaryV1,
+    receipt_bytes: &[u8],
+) -> Result<(), IntentFixtureError> {
+    let review_manifest = decode_intent_manifest_v1(review_subject_manifest_bytes)?;
+    let receipt = decode_intent_private_review_receipt_v1(receipt_bytes)?;
+    if IntentReviewSubjectIdentity::derive(review_subject_manifest_bytes)?
+        != receipt.review_subject_identity
+        || accepted_summary.review_receipt_identity
+            != Some(IntentPrivateReviewReceiptV1::identity(receipt_bytes)?)
+        || !accepted_summary.is_frozen_reviewed()
+        || review_manifest.schema_version != accepted_manifest.schema_version
+        || review_manifest.owner_slice != accepted_manifest.owner_slice
+        || review_manifest.author != accepted_manifest.author
+        || review_manifest.license != accepted_manifest.license
+        || review_manifest.data_classification != accepted_manifest.data_classification
+        || review_manifest.specification != accepted_manifest.specification
+        || review_manifest.assets.len() != accepted_manifest.assets.len()
+    {
+        return Err(IntentFixtureError::InconsistentFixture);
+    }
+    for (review_asset, accepted_asset) in
+        review_manifest.assets.iter().zip(&accepted_manifest.assets)
+    {
+        if review_asset.path != accepted_asset.path
+            || review_asset.role != accepted_asset.role
+            || (review_asset.role != IntentArtifactRole::RestrictedPartitionSummary
+                && review_asset.identity != accepted_asset.identity)
+        {
+            return Err(IntentFixtureError::InconsistentFixture);
+        }
+    }
+    Ok(())
 }
 
 fn decode_and_validate<T>(
