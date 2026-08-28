@@ -32,6 +32,7 @@ mechanism authority。不得通过compatibility path复活。
 | `DEV-005` | Accepted | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | [`DEV-005 evaluation`](records/DEV-005-EVALUATION.md)；atomic compaction live成功；SIR改变order-sensitive Oracle选择；CP0 Go |
 | `DEV-006` | Accepted | 用完整caller/source分离的`IntentRecoveryInputV1`驱动同一runtime episode，并提交可供后续claim admission消费的完整typed hypothesis set | DEV-005 Go；[`DEV-006 DCR`](records/DEV-006-IMPLEMENTATION.md) | strict V1、recorded、absence与full CI green；live episode `episode:01a048a1-7279-7b22-807b-8756963ace78`严格修复后提交完整proposal并通过terminal restart |
 | `DEV-007` | Accepted | 由model-free process消费exact public SIR proposal，机械生成首个claim-scoped `UserIntentDecisionRequestV1` | DEV-006；[`DEV-007 DCR`](records/DEV-007-IMPLEMENTATION.md) | strict process/current-V1/negative controls green；exact live proposal生成output-order request，实际任务authority选择`h-compact-set-order-unspecified` |
+| `DEV-008` | Accepted | 将exact typed user decision机械promotion为首个`MigrationIntentContractV1`，并仅用它驱动collection-output Oracle policy | DEV-007；[`DEV-008 DCR`](records/DEV-008-IMPLEMENTATION.md) | separate SIR/Admission child process、different-UID authority smoke、restricted commit、exact live replay与contract-only Oracle comparator green |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要
@@ -77,6 +78,6 @@ current-source observation限定为count + multiset。容量与non-overlap仍来
 
 ## 6. Future backlog（未切片）
 
-DEV-005已经Go。后续仍只按第一个真实consumer拆分：Intent authority、Oracle、Candidate、CUDA/Ascend execution、
+DEV-005已经Go，DEV-008已闭合第一条窄的Intent authority→Oracle policy consumer。后续仍只按下一个真实consumer拆分：Oracle materialization、Candidate、CUDA/Ascend execution、
 restricted evidence、mechanism qualification、performance、knowledge/skill、feedback和platform/release。
 目标设计中的概念清单不是开发待办，也不自动获得ID或entry gate。

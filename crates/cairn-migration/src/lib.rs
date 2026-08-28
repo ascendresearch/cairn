@@ -28,6 +28,7 @@ mod reduction_control;
 mod reduction_mutation;
 mod sir;
 mod sir_contract;
+mod sir_process;
 mod variant_execution;
 
 pub use assemble::{
@@ -234,6 +235,11 @@ pub use sir_contract::{
     SirTargetEnvironmentSelectionV1, SirTargetSoc, SirTargetSocSelectionV1, SirTargetToolchain,
     SirTargetToolchainSelectionV1, SirUnknownId, SirUnknownKind, SirUnknownQuestion, SirUnknownV1,
     SirValueDomainDeclaration,
+};
+pub use sir_process::{
+    SirProcessError, SirProcessImplementationArtifact, SirProcessRequestArtifact,
+    SirProcessRequestV1, SirProcessTerminalArtifact, SirProcessTerminalV1,
+    process_recorded_sir_request, sir_recorded_ingress_implementation_id,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,

@@ -285,10 +285,11 @@ gate 本身必须 model-free，只读取已验证 identity、policy、decision �
 最终 authority 架构中，SIR 应通过独立 worker/service port 运行。其实现可以更换为规则、静态分析、不同模型、多 agent、
 形式化工具或它们的组合，而不改变 Oracle Explorer、Candidate Search 和 Admission 的接口。
 
-当前 `cairn-migration::sir` 复用 `cairn-agent` 的 in-process proposal harness，是 D-042 明确允许的
-proposal-only 纵向价值证明，不是最终部署拓扑。只要 proposal 尚不能进入 admitted consumer，该 harness
-可以保留；第一条 Intent Admission authority integration 必须同时落实独立进程/OS principal、typed
-process protocol 和 capability reachability，不能把现有 harness 直接升级权限。
+`cairn-migration::sir`中的DeepSeek proposal harness继续复用domain-neutral `cairn-agent`完成runtime
+reasoning；它仍没有Admission权限。DEV-008在首个admitted consumer出现时增加了独立one-shot
+`cairn-sir` recorded-ingress process、typed `SirRunId`/`OperationId` protocol和独立OS principal smoke，
+并由另一个`cairn-admission` principal完成promotion。当前process adapter只物化并复验已有proposal，不应被
+误报为新的模型host或完整SIR service pool；后续真实supervisor接入时沿同一typed/capability boundary演进。
 
 依赖方向只能是：
 
@@ -429,10 +430,10 @@ downstream utility 下降，含义是暂停不成比例的 SIR 投资并保留�
 ## 13. 当前建设路线
 
 当前已经完成的 foundation 是：task-generic source projection、bounded read tools、DeepSeek recorded/live
-episode、带引用的 competing hypothesis proposal、durable provenance，以及第二任务的下游 utility control。
-它仍是 `IntentHypothesisSetProposalV1` 的最小子集。
+episode、完整current-V1 competing hypothesis proposal、durable provenance，以及第二任务的下游 utility
+control。首个窄authority consumer也已闭合。
 
-下一条纵向链必须继续建设 SIR，同时让它面对第一个正式 consumer：
+第一条纵向链的设计与当前完成情况为：
 
 1. 冻结完整 `IntentRecoveryInputV1`：调用者最小声明、目标环境、允许证据、显式 unknown、capability；
 2. 将当前 proposal 直接完善为当前 V1 的 `IntentHypothesisSetProposalV1`：严格分开 observed facts、hypotheses、
@@ -448,9 +449,10 @@ episode、带引用的 competing hypothesis proposal、durable provenance，以�
 obligations。第一条 authority integration 同时落实目标 `cairn-sir` 进程隔离；没有 consumer 的空 crate、
 全量 planner catalog 或资格体系不作为前置工作。
 
-DEV-006已经用现有production runtime闭合第1、2项，并以真实DeepSeek strict-repair/restart验证current V1。
-第3项及其后的authority工作必须围绕首个Intent Admission/Oracle consumer单独切片，不能因本次proposal
-contract通过而预建完整process tree。
+DEV-006用现有production runtime闭合第1、2项，并以真实DeepSeek strict-repair/restart验证current V1；
+DEV-007/008闭合第4、5、6项，并用最小independent SIR ingress与Admission process落实第一条authority
+boundary。第3项的通用coordinator/service lifecycle仍未实现，也不是补齐架构清单的待办。下一步只围绕
+实际Oracle materialization consumer切片，不能因首个contract通过而预建完整process tree。
 
 设计允许分块演进，但每一步都保持相同隔离边界：
 

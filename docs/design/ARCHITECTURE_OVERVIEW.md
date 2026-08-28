@@ -293,26 +293,31 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 任何方案若要求 Controller 读取 hidden bytes、Proposal 获得 promotion edge、Worker 理解 Oracle 业务，
 或引入非 V1 fallback，就不再是“实现细节”，必须回到规范层重新讨论。
 
-第一个architecture proof限定为一个实际DeepSeek-backed、proposal-only的SIR episode：task-generic
+第一个architecture proof曾限定为一个实际DeepSeek-backed、proposal-only的SIR episode：task-generic
 context/tool projection → typed `IntentHypothesisSet` proposal → recorded replay/opt-in live evidence。它在
 Intent Admission之前停止。Reduction evaluation fixture由
 [`D-039`](../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
 冻结，但expected answer不进入runtime context。D-040的prebuilt qualification profile已由D-042 supersede，
 DEV-002 code/fixtures被删除。通过同一production path运行一个语义形态不同的task并证明downstream utility
-后，才规划Admission和Oracle authority。
+后，才规划Admission和Oracle authority。该value gate已通过；DEV-008现已增加最小独立SIR recorded
+ingress、独立Admission promotion、restricted commit和contract-only collection comparator policy。
 
 ## 13. 当前实现与目标差距
 
-当前已有 `cairn-server`、`cairn-worker`、agent/record/execution/verification 基础和
-`cairn-migration` 中的固定 Oracle/历史 reduction 路径。以下仍是目标而非实现：
+当前已有 `cairn-server`、`cairn-worker`、agent/record/execution/verification 基础、
+`cairn-migration`中的SIR contract/process protocol，以及DEV-008的窄SIR/Admission child binaries和首个
+contract-only comparator policy。以下仍是目标而非实现：
 
 - `cairn-migration` 尚未重命名并重组为明确的 CUDA → Ascend C 产品 crate；
-- SIR、proposal host 和 Admission 尚无独立进程协议与部署；
+- 尚无通用SIR service pool、proposal host、Controller supervisor和Admission service lifecycle；当前只有
+  exact one-shot child protocol与不同UID capability proof；
 - 产品侧 Agent profile catalog、invocation policy 和 interaction validator 尚未实现；
-- public/restricted/secret storage capability 尚未按本设计闭合；
+- public read-only/restricted write-only路径已在DEV-008窄slice闭合；secret storage、public event/outbox和
+  通用restricted data plane尚未实现；
 - Controller 还没有完整 product process manager；
 - Hardware Performance Model、knowledge/skill registry 和 feedback routing 尚未形成目标模块；
-- 新架构的第一条 intent → Oracle claim 纵向路径尚未开始。
+- 第一条intent → comparator-policy路径已完成；CUDA reference/Ascend materialization、Candidate与device
+  observation路径尚未开始。
 
 实施必须从 [`../dev/SLICE_CATALOG.md`](../dev/SLICE_CATALOG.md) 选择 Ready slice，且每一片先形成
 `DesignConformanceRecord`。本文不授权直接实施。

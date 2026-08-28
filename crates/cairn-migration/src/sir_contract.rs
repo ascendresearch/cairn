@@ -811,6 +811,11 @@ impl IntentRecoveryInputV1 {
     }
 
     #[must_use]
+    pub const fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+
+    #[must_use]
     pub const fn request(&self) -> &IntentRecoveryRequestV1 {
         &self.request
     }
@@ -876,6 +881,11 @@ impl SirObservedFactV1 {
             return Err(SirError::InvalidStructure("observed fact citation count"));
         }
         Ok(())
+    }
+
+    #[must_use]
+    pub fn citations(&self) -> &[SirSourceCitationV1] {
+        &self.citations
     }
 }
 

@@ -611,6 +611,16 @@ lifecycle_id!(/// Task aggregate lifecycle identity.
 TaskId, "task");
 lifecycle_id!(/// Agent episode lifecycle identity.
 EpisodeId, "episode");
+lifecycle_id!(/// One isolated semantic-intent-recovery process run.
+///
+/// A model episode and its containing SIR process run are distinct lifecycles:
+///
+/// ```compile_fail
+/// use cairn_protocol::{EpisodeId, SirRunId};
+/// fn require_sir_run(_: SirRunId) {}
+/// require_sir_run(EpisodeId::new());
+/// ```
+SirRunId, "sir-run");
 lifecycle_id!(/// External operation lifecycle identity.
 OperationId, "operation");
 lifecycle_id!(/// Logical execution job identity.

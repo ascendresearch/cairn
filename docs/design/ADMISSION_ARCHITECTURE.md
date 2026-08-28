@@ -1,7 +1,7 @@
 # Cairn Admission 软件架构设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-28
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 父设计：[`ARCHITECTURE_OVERVIEW.md`](ARCHITECTURE_OVERVIEW.md)
 - Agent 设计：[`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)
@@ -863,21 +863,24 @@ identity/receipt。后续Oracle、Candidate、Hardware/Performance、Knowledge/S
 
 ## 21. 当前实现状态
 
-截至 2026-08-27，当前仓库已有 generic admission/candidate-verdict mechanics、historical reduction
-controls、固定 matmul Oracle materialization、agent runtime、execution worker 和 record/CAS 基础。
+截至 2026-08-28，DEV-008已经实现第一条窄的Intent Admission architecture proof：独立
+`cairn-admission` one-shot process以真正read-only方式读取Controller public CAS，机械重算exact
+proposal/input/request/grant/decision closure，把`MigrationIntentContractV1`与restricted decision先提交到
+Admission-owned store，再发布contract-bound public outcome。该binary正常依赖图不含agent、provider或
+network transport；不同UID smoke证明proposal principal不能读取restricted store。
 
-尚未实现：
+这不是通用Admission平台。当前尚未实现：
 
-- 独立 `cairn-admission` process；
+- 通用service lifecycle、Controller event/outbox与crash publication recovery；
+- 外部用户身份认证/UI；当前grant由Controller归档路径提供；
 - typed required-evidence derivation family；
-- 上述 planner profiles 与 Planning Host bridge；
-- public/restricted store physical/capability separation；
-- restricted device job data plane；
-- 七类 gate 的完整 receipt closure；
-- profile qualification 与 evaluation；
-- 第一条 Intent Admission architecture proof slice。
+- planner profiles与Planning Host bridge；
+- hidden corpus、restricted device job data plane与七类gate的完整receipt closure；
+- profile/mechanism qualification与evaluation registry；
+- Oracle materialization、Candidate及Hardware/Performance authority链。
 
-设计完成不表示 Admission 已经存在。
+因此“Admission已经存在”只对DEV-008的exact user-decision promotion gate成立，不能外推到上面尚未实现的
+kind或runtime mechanics。
 
 ## 22. 被拒绝的方案
 

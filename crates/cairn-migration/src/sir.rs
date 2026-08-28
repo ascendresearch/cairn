@@ -542,6 +542,26 @@ impl<'de> Deserialize<'de> for SirSourceCitationV1 {
     }
 }
 
+impl SirSourceCitationV1 {
+    /// Returns the cited task-local path.
+    #[must_use]
+    pub const fn path(&self) -> &SirTaskArtifactPath {
+        &self.path
+    }
+
+    /// Returns the inclusive first cited line.
+    #[must_use]
+    pub const fn start_line(&self) -> SirSourceLineNumber {
+        self.start_line
+    }
+
+    /// Returns the inclusive final cited line.
+    #[must_use]
+    pub const fn end_line(&self) -> SirSourceLineNumber {
+        self.end_line
+    }
+}
+
 #[cfg(feature = "agent-runtime")]
 mod runtime {
     use std::io::Cursor;

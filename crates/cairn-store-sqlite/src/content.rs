@@ -42,19 +42,25 @@ impl SqliteContentStore {
         })
     }
 
-    /// Opens an existing content store without schema, metadata, or filesystem mutation.
+    /// Opens a frozen content-store snapshot without schema, metadata, or filesystem mutation.
+    ///
+    /// The caller must guarantee that the database will not change for this handle's lifetime.
+    /// `SQLite` immutable mode intentionally does not coordinate with a concurrent WAL writer.
     ///
     /// # Errors
     ///
     /// Returns an error when the database/CAS does not exist, is not current V1, or cannot be
     /// opened read-only.
-    pub fn open_read_only(
+    pub fn open_immutable_read_only(
         database_path: impl AsRef<Path>,
         blob_root: impl AsRef<Path>,
     ) -> Result<Self, ContentStoreError> {
-        let connection =
-            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(metadata_error)?;
+        let database_uri = immutable_database_uri(database_path.as_ref())?;
+        let connection = Connection::open_with_flags(
+            database_uri,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(metadata_error)?;
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(metadata_error)?;
@@ -172,6 +178,24 @@ impl SqliteContentStore {
         }
         transaction.commit().map_err(metadata_error)
     }
+}
+
+fn immutable_database_uri(path: &Path) -> Result<String, ContentStoreError> {
+    let path = fs::canonicalize(path).map_err(io_error)?;
+    let path = path.to_str().ok_or_else(|| ContentStoreError::Io {
+        message: "read-only SQLite path must be UTF-8".to_owned(),
+    })?;
+    let mut uri = String::from("file:");
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+            uri.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut uri, "%{byte:02X}").expect("writing to String cannot fail");
+        }
+    }
+    uri.push_str("?mode=ro&immutable=1");
+    Ok(uri)
 }
 
 impl ContentStore for SqliteContentStore {
@@ -441,7 +465,17 @@ mod tests {
                 .put::<SourceFile>(&mut Cursor::new(b"public immutable bytes"))
                 .expect("put")
         };
-        let mut store = SqliteContentStore::open_read_only(&database, &cas).expect("read-only");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o444))
+                .expect("read-only database mode");
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555))
+                .expect("read-only parent mode");
+        }
+        let mut store =
+            SqliteContentStore::open_immutable_read_only(&database, &cas).expect("read-only");
         let mut output = Vec::new();
         store
             .write_to(&descriptor.content_id, &mut output)
@@ -452,6 +486,13 @@ mod tests {
                 .put::<SourceFile>(&mut Cursor::new(b"forbidden write"))
                 .is_err()
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755))
+                .expect("restore temporary directory mode");
+        }
     }
 
     #[test]

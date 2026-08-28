@@ -130,6 +130,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -274,6 +275,20 @@ dependencies = [
  "tokio",
  "tracing",
  "x509-parser",
+]
+
+[[package]]
+name = "cairn-sir"
+version = "0.1.0"
+dependencies = [
+ "cairn-admission",
+ "cairn-codec",
+ "cairn-migration",
+ "cairn-protocol",
+ "cairn-record",
+ "cairn-store-sqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

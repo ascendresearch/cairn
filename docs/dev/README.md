@@ -12,8 +12,10 @@
 Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构建通用运行时、边界和评测；DeepSeek
 等 configured runtime model 才是面对每个未知迁移任务、阅读代码并提出高阶意图假设的 actor。
 
-当前先回答一个产品问题：SIR 相比 source-preserving 或用户直接声明 intent，是否真的改善后续迁移决策。
-在这个问题有证据之前，不建设完整 Admission、Oracle、Candidate、qualification 或多 Agent 拓扑。
+CP0已经回答第一个产品问题：SIR相对source-preserving路径确实改变了atomic compaction的下游
+output-order决策；DEV-008又证明该结果可经用户authority和独立Admission进入contract-only comparator
+policy。当前要继续验证的是这条contract能否驱动实际Oracle materialization和迁移结果，而不是因此建设
+完整Admission、Oracle、Candidate、qualification或多Agent拓扑。
 
 ## 2. 文档地图
 
@@ -23,7 +25,7 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..007 的当前状态和边界 |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..008 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -48,9 +50,12 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 - DEV-006：Accepted，完整typed recovery input/proposal contract通过recorded、full CI与真实DeepSeek
   strict-repair/restart。
 - DEV-007：Accepted，model-free process从exact live proposal生成scoped output-order request；实际任务
-  authority选择unordered-set hypothesis，尚未形成typed decision或admitted contract。
+  authority选择unordered-set hypothesis。
+- DEV-008：Accepted，exact typed decision经独立Admission process机械promotion、restricted commit，并只由
+  `MigrationIntentContractV1`驱动首个collection-output Oracle comparator policy。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
-`IntentHypothesisSetProposalV1`已经闭合；下一条纵向链以第一个正式consumer约束建设范围，接入最小claim-scoped Intent Admission与
-`NeedsUserDecision`，再让一个真实Oracle决策消费`MigrationIntentContract`。这不授权一次性建设完整
-CP1，也不恢复DEV-002式第三人fixture review、通用Admission/qualification框架或固定多Agent拓扑。
+`IntentHypothesisSetProposalV1`已经闭合；第一个正式consumer也已把scoped user decision机械提升为
+`MigrationIntentContractV1`并选择真实comparator语义。下一步应沿这个contract接入实际Oracle
+materialization/call-adapter consumer，而不是横向铺开通用Admission。DEV-008仍不等于完整CP1，也不恢复
+DEV-002式第三人fixture review、通用Admission/qualification框架或固定多Agent拓扑。

@@ -10,6 +10,7 @@ members = [
     "crates/cairn-protocol",
     "crates/cairn-record",
     "crates/cairn-server",
+    "crates/cairn-sir",
     "crates/cairn-store-sqlite",
     "crates/cairn-testkit",
     "crates/cairn-verification",
@@ -34,6 +35,7 @@ cairn-observability = { path = "crates/cairn-observability" }
 cairn-control-transport = { path = "crates/cairn-control-transport" }
 cairn-protocol = { path = "crates/cairn-protocol" }
 cairn-record = { path = "crates/cairn-record" }
+cairn-sir = { path = "crates/cairn-sir" }
 cairn-store-sqlite = { path = "crates/cairn-store-sqlite" }
 cairn-testkit = { path = "crates/cairn-testkit" }
 cairn-verification = { path = "crates/cairn-verification" }

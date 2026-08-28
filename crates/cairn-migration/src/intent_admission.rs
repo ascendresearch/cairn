@@ -168,6 +168,16 @@ impl UserIntentDecisionRequestV1 {
     }
 
     #[must_use]
+    pub const fn proposal(&self) -> ContentId<SirIntentHypothesisSetProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
+        self.recovery_input
+    }
+
+    #[must_use]
     pub fn options(&self) -> &[UserIntentDecisionOptionV1] {
         &self.options
     }
