@@ -11,7 +11,7 @@
 | Slice | Record | Review status | Catalog status | 下一条件 |
 | --- | --- | --- | --- | --- |
 | `DEV-001` | [`DEV-001.md`](DEV-001.md)；[`private review`](DEV-001-PRIVATE-REVIEW.md) | `Accepted` | `Accepted` | DEV-002消费commit `9dc8243`冻结的public bundle与redacted review receipt identities |
-| `DEV-002` | [`DEV-002.md`](DEV-002.md) | `ReviewPending` | `Proposed` | 跨workstream与用户审查十项slot、controls、private review protocol和future receipt prohibition |
+| `DEV-002` | [`DEV-002.md`](DEV-002.md) | `ReviewedForEntry` | `Ready` | 从accepted review package `955a09d`启动单一contract/control change set |
 | `DEV-003` | [`DEV-003.md`](DEV-003.md) | `Accepted` | `Accepted` | DEV-306消费fixtures后按disposition删除superseded旧路径 |
 
 此前G0评审已经接受两项计划修正：
@@ -21,6 +21,6 @@
 2. DEV-002在ST0冻结D-040 qualification contract和独立controls，不为尚未实现的mechanism预填receipt；
    exact qualification identities/receipts由DEV-100/102/103/104在实现存在后、首次用于Gate前生成。
 
-当前DEV-002评审需要确认：十项slot没有合并或缺失；golden expectations与mechanism under test分离；
-public/private qualification controls和review authority分离；real-host calibration归future owning slice；
-任何尚不存在的implementation identity或qualification receipt均不能由DEV-002预填。
+DEV-002评审已经确认：十项slot没有合并或缺失；golden expectations与mechanism under test分离；
+public/private qualification controls和review authority分离；real-host calibration归future owning slice；任何
+尚不存在的implementation identity或qualification receipt均不能由DEV-002预填。

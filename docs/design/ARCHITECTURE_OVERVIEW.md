@@ -299,10 +299,10 @@ Candidate Search 之前停止。Operator、claim scope 和 non-adaptive corpus �
 [`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
 冻结；首个 verifier qualification profile 由
 [`D-040`](../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
-冻结。Source artifact和sanitized fixtures已分别由DEV-001/003接受；qualification contracts/independent
-controls尚未生成，DEV-002 conformance record处于`ReviewPending`，因此仍不构成DEV-002或ST1代码实施授权。
-Exact qualification receipt必须等对应verdict-relevant implementation存在后、首次用于Gate前生成，不能在
-ST0预填。
+冻结。Source artifact和sanitized fixtures已分别由DEV-001/003接受；DEV-002 conformance record已审查，
+授权物化qualification contracts/independent controls，但这些artifact尚未生成且不授权ST1代码实施。Exact
+qualification receipt必须等对应verdict-relevant implementation存在后、首次用于Gate前生成，不能在ST0
+预填。
 
 ## 13. 当前实现与目标差距
 
