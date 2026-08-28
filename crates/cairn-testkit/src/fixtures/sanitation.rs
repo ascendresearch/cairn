@@ -7,6 +7,7 @@ use super::FixtureError;
 
 const REGRESSION_ROOT: &str = "fixtures/regressions/v1/";
 const INTENT_ROOT: &str = "fixtures/cuda-ascend/intent/reduce-sum-f32/v1/";
+const QUALIFICATION_ROOT: &str = "fixtures/cuda-ascend/qualification/intent/reduce-sum-f32/v1/";
 
 /// Repository-relative path scanned under one approved public fixture root.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -22,7 +23,9 @@ impl PublicSanitationPath {
     pub fn new(value: impl Into<String>) -> Result<Self, FixtureError> {
         let value = value.into();
         let path = Path::new(&value);
-        let approved_root = value.starts_with(REGRESSION_ROOT) || value.starts_with(INTENT_ROOT);
+        let approved_root = value.starts_with(REGRESSION_ROOT)
+            || value.starts_with(INTENT_ROOT)
+            || value.starts_with(QUALIFICATION_ROOT);
         if !approved_root
             || value.contains('\\')
             || path.is_absolute()
@@ -296,6 +299,7 @@ pub fn scan_public_tree(
     let approved_roots = [
         repository_root.join("fixtures/regressions/v1"),
         repository_root.join("fixtures/cuda-ascend/intent/reduce-sum-f32/v1"),
+        repository_root.join("fixtures/cuda-ascend/qualification/intent/reduce-sum-f32/v1"),
     ];
     if !approved_roots.iter().any(|root| fixture_root == root) || !fixture_root.is_dir() {
         return Err(FixtureError::InvalidPath {
