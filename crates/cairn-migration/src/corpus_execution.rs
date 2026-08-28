@@ -800,6 +800,7 @@ fn memory_surface_outcome(disposition: &MemoryConditionDisposition) -> Option<Ca
 fn invocation_key(invocation: CorpusInvocationIdentityV1) -> (u8, String) {
     match invocation {
         CorpusInvocationIdentityV1::ExecutableOracle { manifest } => (3, manifest.to_wire()),
+        CorpusInvocationIdentityV1::CollectionOutput { manifest } => (4, manifest.to_wire()),
         CorpusInvocationIdentityV1::Boundary { manifest } => (0, manifest.to_wire()),
         CorpusInvocationIdentityV1::InputValue { manifest } => (1, manifest.to_wire()),
         CorpusInvocationIdentityV1::MemorySurface { manifest } => (2, manifest.to_wire()),

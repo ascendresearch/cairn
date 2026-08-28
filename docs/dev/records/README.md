@@ -16,6 +16,7 @@
 | DEV-006 | Accepted | [`typed recovery contract`](DEV-006-IMPLEMENTATION.md) | caller/source分离的current-V1 input/proposal contract；recorded、full CI和live strict repair闭合 |
 | DEV-007 | Accepted | [`typed decision request`](DEV-007-IMPLEMENTATION.md) | model-free process生成scoped request；用户选择由DEV-008继续promotion |
 | DEV-008 | Accepted | [`first admitted intent`](DEV-008-IMPLEMENTATION.md) | exact用户决策经独立Admission机械promotion；restricted commit后由contract-only collection Oracle policy消费 |
+| DEV-009 | Accepted | [`contract-bound collection observation`](DEV-009-IMPLEMENTATION.md) | 首个contract policy已约束真实双ABI output、authoritative receipt与comparison evidence |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

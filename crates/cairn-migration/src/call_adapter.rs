@@ -15,12 +15,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::{
-    ArgumentIndex, AssembledBoundaryCaseInput, AssembledExecutableOracleCaseInput,
-    AssembledInputValueCaseInput, AssembledMemorySurfaceCaseInput, BufferName, CaseExpectedOutcome,
-    CorpusBufferByteLength, ExecutableOracleInvocationArtifact, InvalidInputBehavior,
-    MaterializedAbiArgumentV1, MaterializedBoundaryCaseArtifact,
-    MaterializedInputValueCaseArtifact, MaterializedMemorySurfaceCaseArtifact,
-    MigrationExecutionNeed, MigrationValidationTier, StatusCode,
+    ArgumentIndex, AssembledBoundaryCaseInput, AssembledCollectionF32OracleCaseInput,
+    AssembledExecutableOracleCaseInput, AssembledInputValueCaseInput,
+    AssembledMemorySurfaceCaseInput, BufferName, CaseExpectedOutcome,
+    CollectionF32InvocationArtifact, CollectionF32OutputBufferV1, CorpusBufferByteLength,
+    ExecutableOracleInvocationArtifact, InvalidInputBehavior, MaterializedAbiArgumentV1,
+    MaterializedBoundaryCaseArtifact, MaterializedInputValueCaseArtifact,
+    MaterializedMemorySurfaceCaseArtifact, MigrationExecutionNeed, MigrationValidationTier,
+    StatusCode,
 };
 
 const ADAPTER_DIRECTORY: &str = "cairn/bin";
@@ -109,6 +111,10 @@ impl ContentType for CallAdapterExecutableArtifact {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CorpusInvocationIdentityV1 {
+    /// Contract-bound collection-output invocation.
+    CollectionOutput {
+        manifest: ContentId<CollectionF32InvocationArtifact>,
+    },
     /// Model-authored proposal materialized into an adapter-visible typed invocation.
     ExecutableOracle {
         manifest: ContentId<ExecutableOracleInvocationArtifact>,
@@ -770,6 +776,35 @@ pub fn prepare_executable_oracle_call_adapter_input(
     )
 }
 
+/// Binds one contract-bound collection case to an exact isolated adapter executable.
+///
+/// The trusted expected collection remains outside the adapter input bundle.
+///
+/// # Errors
+///
+/// Rejects empty/oversized executable bytes, contradictory source material, or protocol failure.
+pub fn prepare_collection_output_call_adapter_input(
+    case: &AssembledCollectionF32OracleCaseInput,
+    executable: &[u8],
+    limit: CallAdapterExecutableByteLimit,
+) -> Result<PreparedCallAdapterInput, CallAdapterProtocolError> {
+    let invocation = case.invocation();
+    prepare_with_outputs(
+        case.input_bundle(),
+        case.input_bundle_bytes(),
+        case.input_bundle_id(),
+        CorpusInvocationIdentityV1::CollectionOutput {
+            manifest: case.invocation_id(),
+        },
+        vec![
+            expected_output(invocation.values_output())?,
+            expected_output(invocation.count_output())?,
+        ],
+        executable,
+        limit,
+    )
+}
+
 /// Validates a boundary-case adapter capture against its exact request and expected outcome.
 ///
 /// # Errors
@@ -846,6 +881,26 @@ pub fn validate_executable_oracle_call_adapter_capture(
     validate_capture(
         prepared,
         CorpusInvocationIdentityV1::ExecutableOracle {
+            manifest: case.invocation_id(),
+        },
+        &CaseExpectedOutcome::Success,
+        captured,
+    )
+}
+
+/// Validates a collection-output adapter capture against its exact typed request.
+///
+/// # Errors
+///
+/// Rejects request/case mismatch, missing/extra/tampered files, or non-invocation completion.
+pub fn validate_collection_output_call_adapter_capture(
+    case: &AssembledCollectionF32OracleCaseInput,
+    prepared: &PreparedCallAdapterInput,
+    captured: &[CapturedOutput],
+) -> Result<ValidatedCallAdapterObservation, CallAdapterProtocolError> {
+    validate_capture(
+        prepared,
+        CorpusInvocationIdentityV1::CollectionOutput {
             manifest: case.invocation_id(),
         },
         &CaseExpectedOutcome::Success,
@@ -960,6 +1015,32 @@ pub fn validate_executable_oracle_call_adapter_receipt<C: ContentStore>(
         receipt,
         content,
         CorpusInvocationIdentityV1::ExecutableOracle {
+            manifest: case.invocation_id(),
+        },
+        &CaseExpectedOutcome::Success,
+    )
+}
+
+/// Validates an authoritative successful execution receipt for a collection-output case.
+///
+/// # Errors
+///
+/// Rejects mismatched execution authority, unreadable content, or invalid adapter capture.
+pub fn validate_collection_output_call_adapter_receipt<C: ContentStore>(
+    case: &AssembledCollectionF32OracleCaseInput,
+    input: &PreparedCallAdapterInput,
+    job: &PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    content: &C,
+) -> Result<ValidatedCallAdapterExecution, CallAdapterProtocolError> {
+    validate_receipt(
+        input,
+        job,
+        receipt_id,
+        receipt,
+        content,
+        CorpusInvocationIdentityV1::CollectionOutput {
             manifest: case.invocation_id(),
         },
         &CaseExpectedOutcome::Success,
@@ -1271,6 +1352,17 @@ fn expected_outputs(
             })
         })
         .collect()
+}
+
+fn expected_output(
+    output: &CollectionF32OutputBufferV1,
+) -> Result<CallAdapterExpectedOutputV1, CallAdapterProtocolError> {
+    Ok(CallAdapterExpectedOutputV1 {
+        argument_index: output.argument_index(),
+        buffer: output.buffer().clone(),
+        byte_length: output.byte_length(),
+        path: output_path(output.argument_index())?,
+    })
 }
 
 fn output_path(index: ArgumentIndex) -> Result<SandboxPath, CallAdapterProtocolError> {

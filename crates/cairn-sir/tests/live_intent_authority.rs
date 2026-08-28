@@ -7,18 +7,19 @@ use std::{
 };
 
 use cairn_admission::{
-    AuthoritativeIntentClaimV1, CollectionOracleElementArtifact, CollectionOutputComparisonV1,
-    CollectionOutputIntentV1, CollectionOutputOrderContractV1, CollectionReportedCount,
-    ExpectedCollectionOracleOutputV1, ObservedCollectionOracleOutputV1, TaskIntentAuthoritySubject,
-    UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1, UserIntentAuthorityScopeV1,
-    UserIntentDecisionArtifact, UserIntentDecisionResponseV1, UserIntentDecisionV1,
-    derive_collection_output_oracle_decision, promote_user_intent,
+    AuthoritativeIntentClaimV1, CollectionOutputIntentV1, CollectionOutputOrderContractV1,
+    TaskIntentAuthoritySubject, UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1,
+    UserIntentAuthorityScopeV1, UserIntentDecisionArtifact, UserIntentDecisionResponseV1,
+    UserIntentDecisionV1, derive_collection_output_oracle_decision, promote_user_intent,
 };
 use cairn_migration::{
-    IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
+    CollectionF32Bits, CollectionOracleElementArtifact, CollectionOutputComparisonV1,
+    CollectionReportedCount, ExpectedCollectionOracleOutputV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputArtifact, IntentRecoveryInputV1, ObservedCollectionOracleOutputV1,
     SirCallerClaimId, SirHypothesisId, SirIntentHypothesisSetProposalArtifact, SirProcessRequestV1,
     SirProcessTerminalV1, SirTaskBundleArtifact, SirTaskBundleV1,
-    UserIntentDecisionRequestArtifact, derive_user_intent_decision_requests,
+    UserIntentDecisionRequestArtifact, assemble_collection_f32_oracle_case,
+    derive_user_intent_decision_requests,
 };
 use cairn_protocol::{ContentId, ContentType, OperationId, SirRunId};
 use cairn_record::ContentStore;
@@ -153,6 +154,32 @@ fn exact_live_proposal_crosses_process_and_drives_first_admitted_oracle_policy()
             .expect("reordered");
     assert_eq!(
         oracle.compare(&expected, &reordered),
+        CollectionOutputComparisonV1::Equivalent
+    );
+
+    let f32_input = [1.0_f32, 4.0, 3.0, 2.0]
+        .into_iter()
+        .map(|value| CollectionF32Bits::new(value.to_bits()).expect("normal f32"))
+        .collect::<Vec<_>>();
+    let f32_case = assemble_collection_f32_oracle_case(
+        &oracle,
+        &f32_input,
+        CollectionF32Bits::new(2.0_f32.to_bits()).expect("threshold"),
+    )
+    .expect("exact contract-bound materializer");
+    let reversed_actual = ObservedCollectionOracleOutputV1::new(
+        [3.0_f32, 4.0]
+            .into_iter()
+            .map(|value| {
+                ContentId::<CollectionOracleElementArtifact>::derive(&value.to_bits().to_le_bytes())
+                    .expect("observed f32 element")
+            })
+            .collect(),
+        CollectionReportedCount::new(2),
+    )
+    .expect("reversed actual output");
+    assert_eq!(
+        oracle.compare(f32_case.expected(), &reversed_actual),
         CollectionOutputComparisonV1::Equivalent
     );
 }

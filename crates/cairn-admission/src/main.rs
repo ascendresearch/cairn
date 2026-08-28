@@ -7,13 +7,13 @@ use std::{
 };
 
 use cairn_admission::{
-    MigrationIntentContractArtifact, RestrictedIntentAdmissionDecisionArtifact,
-    UserIntentAuthorityGrantV1, UserIntentDecisionArtifact, UserIntentDecisionV1,
-    promote_user_intent,
+    RestrictedIntentAdmissionDecisionArtifact, UserIntentAuthorityGrantV1,
+    UserIntentDecisionArtifact, UserIntentDecisionV1, promote_user_intent,
 };
 use cairn_migration::{
-    IntentHypothesisSetProposalV1, IntentRecoveryInputV1, SirIntentHypothesisSetProposalArtifact,
-    UserIntentDecisionRequestV1, derive_user_intent_decision_requests,
+    IntentHypothesisSetProposalV1, IntentRecoveryInputV1, MigrationIntentContractArtifact,
+    SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestV1,
+    derive_user_intent_decision_requests,
 };
 use cairn_protocol::{ContentId, ContentType};
 use cairn_record::ContentStore;

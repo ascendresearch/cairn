@@ -2,6 +2,7 @@
 
 mod assemble;
 mod call_adapter;
+mod collection_oracle;
 mod corpus_execution;
 mod corpus_observation;
 mod domain;
@@ -46,13 +47,29 @@ pub use call_adapter::{
     CallAdapterRequestV1, CallAdapterResultArtifact, CallAdapterResultV1,
     CorpusInvocationIdentityV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
     ValidatedCallAdapterExecution, ValidatedCallAdapterObservation, compose_call_adapter_job,
-    prepare_boundary_call_adapter_input, prepare_executable_oracle_call_adapter_input,
-    prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
-    validate_boundary_call_adapter_capture, validate_boundary_call_adapter_receipt,
+    prepare_boundary_call_adapter_input, prepare_collection_output_call_adapter_input,
+    prepare_executable_oracle_call_adapter_input, prepare_input_value_call_adapter_input,
+    prepare_memory_surface_call_adapter_input, validate_boundary_call_adapter_capture,
+    validate_boundary_call_adapter_receipt, validate_collection_output_call_adapter_capture,
+    validate_collection_output_call_adapter_receipt,
     validate_executable_oracle_call_adapter_capture,
     validate_executable_oracle_call_adapter_receipt, validate_input_value_call_adapter_capture,
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
     validate_memory_surface_call_adapter_receipt,
+};
+pub use collection_oracle::{
+    AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,
+    CollectionF32InputBytesArtifact, CollectionF32InvocationArtifact, CollectionF32InvocationV1,
+    CollectionF32OutputBufferV1, CollectionF32ThresholdBytesArtifact, CollectionF32ThresholdV1,
+    CollectionOracleElementArtifact, CollectionOracleMechanismArtifact,
+    CollectionOutputComparisonEvidenceArtifact, CollectionOutputComparisonEvidenceV1,
+    CollectionOutputComparisonV1, CollectionOutputOracleDecisionArtifact,
+    CollectionOutputOracleDecisionV1, CollectionOutputOracleError, CollectionOutputOraclePolicyV1,
+    CollectionReportedCount, ExpectedCollectionOracleOutputArtifact,
+    ExpectedCollectionOracleOutputV1, MigrationIntentContractArtifact,
+    ObservedCollectionOracleOutputArtifact, ObservedCollectionOracleOutputV1,
+    PreparedCollectionOutputComparisonEvidence, assemble_collection_f32_oracle_case,
+    collection_oracle_mechanism_id, materialize_collection_output_comparison,
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,

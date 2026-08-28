@@ -33,6 +33,7 @@ mechanism authority。不得通过compatibility path复活。
 | `DEV-006` | Accepted | 用完整caller/source分离的`IntentRecoveryInputV1`驱动同一runtime episode，并提交可供后续claim admission消费的完整typed hypothesis set | DEV-005 Go；[`DEV-006 DCR`](records/DEV-006-IMPLEMENTATION.md) | strict V1、recorded、absence与full CI green；live episode `episode:01a048a1-7279-7b22-807b-8756963ace78`严格修复后提交完整proposal并通过terminal restart |
 | `DEV-007` | Accepted | 由model-free process消费exact public SIR proposal，机械生成首个claim-scoped `UserIntentDecisionRequestV1` | DEV-006；[`DEV-007 DCR`](records/DEV-007-IMPLEMENTATION.md) | strict process/current-V1/negative controls green；exact live proposal生成output-order request，实际任务authority选择`h-compact-set-order-unspecified` |
 | `DEV-008` | Accepted | 将exact typed user decision机械promotion为首个`MigrationIntentContractV1`，并仅用它驱动collection-output Oracle policy | DEV-007；[`DEV-008 DCR`](records/DEV-008-IMPLEMENTATION.md) | separate SIR/Admission child process、different-UID authority smoke、restricted commit、exact live replay与contract-only Oracle comparator green |
+| `DEV-009` | Accepted | 让DEV-008 admitted collection contract约束现有call-adapter的真实ABI observation与comparison evidence | DEV-008；[`DEV-009 record`](records/DEV-009-IMPLEMENTATION.md) | expected隔离、双ABI output、authoritative receipt、unordered controls、exact replay与full CI已闭合；不扩展portfolio/planner/hidden/device |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要

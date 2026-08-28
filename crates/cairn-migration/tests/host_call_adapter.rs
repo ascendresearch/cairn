@@ -16,7 +16,8 @@ use cairn_migration::{
     BufferAccessV1, BufferContractInput, BufferContractV1, BufferMemoryContractInput,
     BufferMemoryContractV1, BufferName, CallAdapterCaptureLimits, CallAdapterCompletionV1,
     CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1, CallAdapterOutputBytesArtifact,
-    CallAdapterResultV1, CaseExpectedOutcome, CaseTarget, CorpusBufferByteLimit,
+    CallAdapterResultV1, CaseExpectedOutcome, CaseTarget, CollectionF32Bits,
+    CollectionOutputOracleDecisionV1, CollectionOutputOraclePolicyV1, CorpusBufferByteLimit,
     CorpusElementCount, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
     CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusExecutionSubjectV1,
     CorpusObservationSetArtifact, CorpusObservationSetError, CorpusObservationSetV1, DataType,
@@ -25,25 +26,28 @@ use cairn_migration::{
     InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition,
     InputValueDomainV1, IntegerValue, InvalidInputBehavior, MandatoryInputValueCasesV1,
     MandatoryMemorySurfaceCasesV1, MemoryConditionDisposition, MigrationDomainContractInput,
-    MigrationDomainContractV1, MigrationExecutionNeed, MigrationMandatoryCasesV1,
-    MigrationValidationTier, PointerAlignmentContractV1, PreparedCallAdapterInput,
-    PreparedCallAdapterJob, PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan,
-    RequestedSemanticsArtifact, ScalarParameterContractInput, ScalarParameterContractV1,
-    ScalarParameterName, ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput,
-    ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource, ValidatedCorpusExecutionCase,
-    ValidatedCorpusObservationSet, ValidatedVariantBuild, VariantBuildCaptureLimits,
-    VariantBuildDriverByteLimit, VariantBuildPlanArtifact, VariantBuildPlanV1,
-    VariantBuildReceiptArtifact, VariantBuildReceiptV1, VariantExecutionError,
-    VariantImplementationByteLimit, ZeroKMatmulF32OracleCaseV1, assemble_boundary_case_input,
+    MigrationDomainContractV1, MigrationExecutionNeed, MigrationIntentContractArtifact,
+    MigrationMandatoryCasesV1, MigrationValidationTier, PointerAlignmentContractV1,
+    PreparedCallAdapterInput, PreparedCallAdapterJob, PreparedCorpusExecutionCase,
+    PreparedCorpusExecutionPlan, RequestedSemanticsArtifact, ScalarParameterContractInput,
+    ScalarParameterContractV1, ScalarParameterName, ScalarParameterRole, SemanticClaimKind,
+    ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
+    SirCallerClaimId, ValidatedCorpusExecutionCase, ValidatedCorpusObservationSet,
+    ValidatedVariantBuild, VariantBuildCaptureLimits, VariantBuildDriverByteLimit,
+    VariantBuildPlanArtifact, VariantBuildPlanV1, VariantBuildReceiptArtifact,
+    VariantBuildReceiptV1, VariantExecutionError, VariantImplementationByteLimit,
+    ZeroKMatmulF32OracleCaseV1, assemble_boundary_case_input, assemble_collection_f32_oracle_case,
     assemble_input_value_case_input, assemble_memory_surface_case_input,
     assemble_zero_k_matmul_f32_oracle, compare_exact_corpus_observations,
     compare_executable_oracle_output, compose_call_adapter_job, compose_exact_variant_trial,
     derive_mandatory_base_cases, derive_mandatory_input_value_cases,
-    derive_mandatory_memory_surface_cases, materialize_input_value_case,
-    prepare_boundary_call_adapter_input, prepare_corpus_execution_plan,
+    derive_mandatory_memory_surface_cases, materialize_collection_output_comparison,
+    materialize_input_value_case, prepare_boundary_call_adapter_input,
+    prepare_collection_output_call_adapter_input, prepare_corpus_execution_plan,
     prepare_executable_oracle_call_adapter_input, prepare_variant_build_job,
-    validate_boundary_call_adapter_receipt, validate_corpus_execution_receipts,
-    validate_executable_oracle_call_adapter_capture, validate_variant_build_receipt,
+    validate_boundary_call_adapter_receipt, validate_collection_output_call_adapter_receipt,
+    validate_corpus_execution_receipts, validate_executable_oracle_call_adapter_capture,
+    validate_variant_build_receipt,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
@@ -136,6 +140,64 @@ fn model_authored_zero_k_oracle_runs_through_the_real_adapter_protocol() {
     );
 }
 
+#[test]
+fn admitted_policy_drives_receipt_bound_collection_materialization() {
+    let decision = CollectionOutputOracleDecisionV1::new(
+        ContentId::<MigrationIntentContractArtifact>::derive(b"generic admitted contract")
+            .expect("contract identity"),
+        SirCallerClaimId::new("copies-strictly-above").expect("selection claim"),
+        CollectionOutputOraclePolicyV1::ExactMultisetAndCount,
+    );
+    let values = [1.0_f32, 4.0, 3.0, 2.0]
+        .into_iter()
+        .map(|value| CollectionF32Bits::new(value.to_bits()).expect("normal f32"))
+        .collect::<Vec<_>>();
+    let threshold = CollectionF32Bits::new(2.0_f32.to_bits()).expect("threshold");
+    let assembled =
+        assemble_collection_f32_oracle_case(&decision, &values, threshold).expect("case assembly");
+    let executable = fs::read(env!(
+        "CARGO_BIN_EXE_cairn-collection-output-adapter-fixture"
+    ))
+    .expect("collection fixture executable");
+    let adapter = prepare_collection_output_call_adapter_input(
+        &assembled,
+        &executable,
+        CallAdapterExecutableByteLimit::new(
+            u64::try_from(executable.len()).expect("executable length"),
+        )
+        .expect("executable limit"),
+    )
+    .expect("adapter input");
+    let completed = complete_adapter_input(adapter);
+    let execution = validate_collection_output_call_adapter_receipt(
+        &assembled,
+        &completed.adapter,
+        &completed.job,
+        completed.receipt_id,
+        &completed.receipt,
+        &completed.content,
+    )
+    .expect("receipt-bound observation");
+    let comparison = materialize_collection_output_comparison(
+        &assembled,
+        &decision,
+        &execution,
+        &completed.content,
+    )
+    .expect("receipt-bound comparison");
+
+    assert!(
+        comparison.matches(),
+        "reordered actual child output is equivalent"
+    );
+    assert_eq!(
+        comparison.id(),
+        ContentId::derive(comparison.bytes()).expect("comparison evidence identity")
+    );
+    let invocation_json = serde_json::to_string(assembled.invocation()).expect("invocation JSON");
+    assert!(!invocation_json.contains("expected"));
+}
+
 struct PreparedHostCase {
     assembled: AssembledBoundaryCaseInput,
     adapter: PreparedCallAdapterInput,
@@ -145,6 +207,15 @@ struct CompletedHostCase {
     _directory: tempfile::TempDir,
     content: SqliteContentStore,
     assembled: AssembledBoundaryCaseInput,
+    adapter: PreparedCallAdapterInput,
+    job: PreparedCallAdapterJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: ExecutionReceipt,
+}
+
+struct CompletedAdapterInput {
+    directory: tempfile::TempDir,
+    content: SqliteContentStore,
     adapter: PreparedCallAdapterInput,
     job: PreparedCallAdapterJob,
     receipt_id: ContentId<ExecutionReceiptArtifact>,
@@ -1120,6 +1191,19 @@ fn prepared_host_case_with_executable(executable: &[u8]) -> PreparedHostCase {
 }
 
 fn complete_host_case(prepared_case: PreparedHostCase) -> CompletedHostCase {
+    let completed = complete_adapter_input(prepared_case.adapter);
+    CompletedHostCase {
+        _directory: completed.directory,
+        content: completed.content,
+        assembled: prepared_case.assembled,
+        adapter: completed.adapter,
+        job: completed.job,
+        receipt_id: completed.receipt_id,
+        receipt: completed.receipt,
+    }
+}
+
+fn complete_adapter_input(adapter: PreparedCallAdapterInput) -> CompletedAdapterInput {
     let directory = tempfile::tempdir().expect("temporary execution state");
     let mut content = SqliteContentStore::open(
         directory.path().join("content.db"),
@@ -1128,9 +1212,8 @@ fn complete_host_case(prepared_case: PreparedHostCase) -> CompletedHostCase {
     .expect("content store");
     let mut events =
         SqliteEventStore::open(directory.path().join("events.db")).expect("event store");
-    let archived_input =
-        put::<InputBundleArtifact>(&mut content, prepared_case.adapter.input_bundle_bytes());
-    assert_eq!(archived_input, prepared_case.adapter.input_bundle_id());
+    let archived_input = put::<InputBundleArtifact>(&mut content, adapter.input_bundle_bytes());
+    assert_eq!(archived_input, adapter.input_bundle_id());
     let environment =
         put::<ExecutionEnvironmentArtifact>(&mut content, b"host fixture environment");
     let need = MigrationExecutionNeed::new(
@@ -1146,7 +1229,7 @@ fn complete_host_case(prepared_case: PreparedHostCase) -> CompletedHostCase {
     .expect("execution need");
     let job = compose_call_adapter_job(
         JobId::new(),
-        &prepared_case.adapter,
+        &adapter,
         environment,
         &need,
         CallAdapterCaptureLimits {
@@ -1177,7 +1260,7 @@ fn complete_host_case(prepared_case: PreparedHostCase) -> CompletedHostCase {
     .expect("started execution");
 
     let execution_root = directory.path().join("host-execution");
-    let bundle = prepared_case.adapter.input_bundle().clone();
+    let bundle = adapter.input_bundle().clone();
     let mut executor = ScriptedExecutor::new(|input: &ExecutionInput<'_>| {
         run_host_fixture(input, &bundle, &execution_root, environment)
     });
@@ -1211,11 +1294,10 @@ fn complete_host_case(prepared_case: PreparedHostCase) -> CompletedHostCase {
     else {
         panic!("expected completed execution");
     };
-    CompletedHostCase {
-        _directory: directory,
+    CompletedAdapterInput {
+        directory,
         content,
-        assembled: prepared_case.assembled,
-        adapter: prepared_case.adapter,
+        adapter,
         job,
         receipt_id,
         receipt,

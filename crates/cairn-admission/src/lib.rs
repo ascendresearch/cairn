@@ -3,17 +3,17 @@
 use std::{fmt, str::FromStr};
 
 use cairn_migration::{
+    CollectionOutputOracleDecisionV1, CollectionOutputOraclePolicyV1,
     IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-    SirCallerClaimId, SirHypothesisId, SirIntentHypothesisSetProposalArtifact,
-    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
-    derive_user_intent_decision_requests,
+    MigrationIntentContractArtifact, SirCallerClaimId, SirHypothesisId,
+    SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
+    UserIntentDecisionRequestV1, derive_user_intent_decision_requests,
 };
 use cairn_protocol::{ContentId, ContentType, SchemaVersion, TaskId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 const MAX_AUTHORITY_SUBJECT_BYTES: usize = 128;
-const MAX_COLLECTION_ELEMENTS: usize = 1_048_576;
 const INTENT_USER_DECISION_GATE_V1: &[u8] = include_bytes!("lib.rs");
 
 /// Controller-published grant proving who may decide one exact intent scope.
@@ -41,13 +41,6 @@ impl ContentType for UserIntentDecisionArtifact {
     const DOMAIN: &'static str = "migration.user-intent-decision.v1";
 }
 
-/// First immutable admitted migration-intent contract.
-pub enum MigrationIntentContractArtifact {}
-
-impl ContentType for MigrationIntentContractArtifact {
-    const DOMAIN: &'static str = "migration.intent-contract.v1";
-}
-
 /// Exact deterministic gate implementation used for this decision.
 pub enum IntentUserDecisionGateArtifact {}
 
@@ -60,13 +53,6 @@ pub enum RestrictedIntentAdmissionDecisionArtifact {}
 
 impl ContentType for RestrictedIntentAdmissionDecisionArtifact {
     const DOMAIN: &'static str = "admission.intent-decision-restricted.v1";
-}
-
-/// Exact semantic identity of one collection element used by the first Oracle comparator.
-pub enum CollectionOracleElementArtifact {}
-
-impl ContentType for CollectionOracleElementArtifact {
-    const DOMAIN: &'static str = "migration.oracle-collection-element.v1";
 }
 
 /// Authenticated application subject selected by a Controller authority grant.
@@ -713,206 +699,6 @@ pub fn intent_user_decision_gate_id()
         .map_err(|error| IntentPromotionError::Codec(error.to_string()))
 }
 
-/// Count reported by a collection-producing implementation.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct CollectionReportedCount(u32);
-
-impl CollectionReportedCount {
-    #[must_use]
-    pub const fn new(value: u32) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
-
-/// Trusted expected collection produced by the selected Oracle reference.
-///
-/// A candidate observation cannot substitute for trusted expected values.
-///
-/// ```compile_fail
-/// use cairn_admission::{
-///     CollectionReportedCount, ExpectedCollectionOracleOutputV1,
-///     ObservedCollectionOracleOutputV1,
-/// };
-/// fn require_expected(_: ExpectedCollectionOracleOutputV1) {}
-/// let observed = ObservedCollectionOracleOutputV1::new(
-///     Vec::new(),
-///     CollectionReportedCount::new(0),
-/// ).unwrap();
-/// require_expected(observed);
-/// ```
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ExpectedCollectionOracleOutputV1 {
-    elements: Vec<ContentId<CollectionOracleElementArtifact>>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExpectedCollectionOracleOutputWire {
-    elements: Vec<ContentId<CollectionOracleElementArtifact>>,
-}
-
-impl ExpectedCollectionOracleOutputV1 {
-    /// Creates a bounded trusted expected collection.
-    ///
-    /// # Errors
-    ///
-    /// Rejects expected collections exceeding the current-V1 element bound.
-    pub fn new(
-        elements: Vec<ContentId<CollectionOracleElementArtifact>>,
-    ) -> Result<Self, IntentPromotionError> {
-        validate_collection_bound(&elements)?;
-        Ok(Self { elements })
-    }
-}
-
-impl TryFrom<ExpectedCollectionOracleOutputWire> for ExpectedCollectionOracleOutputV1 {
-    type Error = IntentPromotionError;
-
-    fn try_from(wire: ExpectedCollectionOracleOutputWire) -> Result<Self, Self::Error> {
-        Self::new(wire.elements)
-    }
-}
-
-impl<'de> Deserialize<'de> for ExpectedCollectionOracleOutputV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        ExpectedCollectionOracleOutputWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-/// Candidate observation whose independently reported count may be wrong.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ObservedCollectionOracleOutputV1 {
-    elements: Vec<ContentId<CollectionOracleElementArtifact>>,
-    reported_count: CollectionReportedCount,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ObservedCollectionOracleOutputWire {
-    elements: Vec<ContentId<CollectionOracleElementArtifact>>,
-    reported_count: CollectionReportedCount,
-}
-
-impl ObservedCollectionOracleOutputV1 {
-    /// Creates a bounded candidate observation without trusting its reported count.
-    ///
-    /// # Errors
-    ///
-    /// Rejects observations exceeding the current-V1 element bound.
-    pub fn new(
-        elements: Vec<ContentId<CollectionOracleElementArtifact>>,
-        reported_count: CollectionReportedCount,
-    ) -> Result<Self, IntentPromotionError> {
-        validate_collection_bound(&elements)?;
-        Ok(Self {
-            elements,
-            reported_count,
-        })
-    }
-}
-
-impl TryFrom<ObservedCollectionOracleOutputWire> for ObservedCollectionOracleOutputV1 {
-    type Error = IntentPromotionError;
-
-    fn try_from(wire: ObservedCollectionOracleOutputWire) -> Result<Self, Self::Error> {
-        Self::new(wire.elements, wire.reported_count)
-    }
-}
-
-impl<'de> Deserialize<'de> for ObservedCollectionOracleOutputV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        ObservedCollectionOracleOutputWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-/// Concrete comparator decision selected from an admitted contract.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CollectionOutputOraclePolicyV1 {
-    ExactMultisetAndCount,
-    ExactSequenceAndCount,
-}
-
-/// Explicit comparison result; no stored pass boolean erases the failure class.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CollectionOutputComparisonV1 {
-    Equivalent,
-    ReportedCountMismatch,
-    ElementMultisetMismatch,
-    ElementSequenceMismatch,
-}
-
-/// Contract-bound Oracle decision.
-pub struct CollectionOutputOracleDecisionV1 {
-    contract: ContentId<MigrationIntentContractArtifact>,
-    selection_claim: SirCallerClaimId,
-    policy: CollectionOutputOraclePolicyV1,
-}
-
-impl CollectionOutputOracleDecisionV1 {
-    #[must_use]
-    pub const fn policy(&self) -> CollectionOutputOraclePolicyV1 {
-        self.policy
-    }
-
-    #[must_use]
-    pub const fn contract(&self) -> ContentId<MigrationIntentContractArtifact> {
-        self.contract
-    }
-
-    #[must_use]
-    pub const fn selection_claim(&self) -> &SirCallerClaimId {
-        &self.selection_claim
-    }
-
-    #[must_use]
-    pub fn compare(
-        &self,
-        expected: &ExpectedCollectionOracleOutputV1,
-        actual: &ObservedCollectionOracleOutputV1,
-    ) -> CollectionOutputComparisonV1 {
-        if u32::try_from(expected.elements.len()).unwrap_or(u32::MAX) != actual.reported_count.get()
-        {
-            return CollectionOutputComparisonV1::ReportedCountMismatch;
-        }
-        match self.policy {
-            CollectionOutputOraclePolicyV1::ExactSequenceAndCount => {
-                if expected.elements == actual.elements {
-                    CollectionOutputComparisonV1::Equivalent
-                } else {
-                    CollectionOutputComparisonV1::ElementSequenceMismatch
-                }
-            }
-            CollectionOutputOraclePolicyV1::ExactMultisetAndCount => {
-                let mut expected_elements = expected.elements.clone();
-                let mut actual_elements = actual.elements.clone();
-                expected_elements.sort_by_key(ContentId::to_wire);
-                actual_elements.sort_by_key(ContentId::to_wire);
-                if expected_elements == actual_elements {
-                    CollectionOutputComparisonV1::Equivalent
-                } else {
-                    CollectionOutputComparisonV1::ElementMultisetMismatch
-                }
-            }
-        }
-    }
-}
-
 /// Derives the first real Oracle comparator decision only from a public admitted outcome.
 ///
 /// A proposal cannot be substituted for the admitted outcome.
@@ -945,11 +731,11 @@ pub fn derive_collection_output_oracle_decision(
             CollectionOutputOraclePolicyV1::ExactSequenceAndCount
         }
     };
-    Ok(CollectionOutputOracleDecisionV1 {
-        contract: outcome.contract.identity()?,
-        selection_claim: contract.selection_claim.clone(),
+    Ok(CollectionOutputOracleDecisionV1::new(
+        outcome.contract.identity()?,
+        contract.selection_claim.clone(),
         policy,
-    })
+    ))
 }
 
 /// Fail-closed errors from typed user decision promotion.
@@ -1001,13 +787,4 @@ fn require_identity<T: ContentType>(
 
 fn migration_error(error: impl fmt::Display) -> IntentPromotionError {
     IntentPromotionError::Migration(error.to_string())
-}
-
-fn validate_collection_bound<T>(values: &[T]) -> Result<(), IntentPromotionError> {
-    if values.len() > MAX_COLLECTION_ELEMENTS {
-        return Err(IntentPromotionError::InvalidStructure(
-            "collection Oracle element count",
-        ));
-    }
-    Ok(())
 }
