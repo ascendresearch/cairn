@@ -140,7 +140,7 @@ schema。分类：`HistoricalControl`；按 D-041 生成新的净化 fixture，�
 D-039、D-040、D-041 已于 2026-08-27 接受，关闭了三个 P0 设计选择。D-041 sanitized fixtures、manifest、
 scan profile和current-V1 `cairn-testkit` contract已由DEV-003 commit
 `79a1174ad9767ab528c808a39511ada91e8129f9`接受。D-039 source/corpus bytes和D-040 qualification
-contract/independent controls尚未生成；DEV-001因此进入`Ready`，DEV-002仍为`Proposed`，下游代码slice保持
+contract/independent controls尚未生成；DEV-001已进入`InProgress`，DEV-002仍为`Proposed`，下游代码slice保持
 `Blocked`。Qualification receipt不能在verdict-relevant implementation、dependency和calibration
 environment存在前预填；十项exact receipts按catalog mapping由DEV-100/102/103/104在首次使用前生成，
 DEV-104负责set closure。
@@ -148,9 +148,9 @@ DEV-104负责set closure。
 DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
 [`records/`](records/README.md)，精确列出了计划路径、authority/data boundary、controls、外部 lane、历史
 材料 disposition 和删除时机。用户于2026-08-27审查并接受review package commit `fe88f4e`。DEV-003已
-通过G1–G6 repository evidence并以`79a1174`接受；DEV-001的设计评审和依赖回填均已完成，状态为`Ready`。
-当前尚未生成CUDA source或public/restricted Intent corpus。为避免重复fixture schema，DEV-001必须直接消费
-DEV-003已接受的`cairn-testkit` contract，不另建并行V1 fixture manifest。
+通过G1–G6 repository evidence并以`79a1174`接受；DEV-001的设计评审和依赖回填均已完成，现处于
+`InProgress`。当前尚未冻结CUDA source或public/restricted Intent corpus。为避免重复fixture schema，
+DEV-001必须直接消费DEV-003已接受的`cairn-testkit` contract，不另建并行V1 fixture manifest。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 
