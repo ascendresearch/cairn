@@ -80,8 +80,8 @@ qualification profile，D-041 冻结历史 fixture curation policy。它们关�
 - 完成 DEV-004 的 `DesignConformanceRecord` 与 exact change inventory。
 
 用户于2026-08-28接受DEV-002 [`DesignConformanceRecord`](records/DEV-002.md) review package `955a09d`；
-DEV-002现为`Ready`。它只定义future mechanism的考试与复核边界，不预填qualification结果。见
+entry由`9b2502d`闭合后DEV-002已进入`InProgress`。它只定义future mechanism的考试与复核边界，不预填qualification结果。见
 [`records/README.md`](records/README.md)。
 
-DEV-002可以实施其contract/control bundle；在DEV-002和DEV-004接受前，ST1代码slice仍是`Blocked`。
+DEV-002正在实施其contract/control bundle；在DEV-002和DEV-004接受前，ST1代码slice仍是`Blocked`。
 决策、fixture或qualification contract已接受不能被误报为mechanism已经qualified。

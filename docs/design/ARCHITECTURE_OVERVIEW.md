@@ -300,7 +300,7 @@ Candidate Search 之前停止。Operator、claim scope 和 non-adaptive corpus �
 冻结；首个 verifier qualification profile 由
 [`D-040`](../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
 冻结。Source artifact和sanitized fixtures已分别由DEV-001/003接受；DEV-002 conformance record已审查，
-授权物化qualification contracts/independent controls，但这些artifact尚未生成且不授权ST1代码实施。Exact
+qualification contracts/independent controls正在物化但尚未接受，且不授权ST1代码实施。Exact
 qualification receipt必须等对应verdict-relevant implementation存在后、首次用于Gate前生成，不能在ST0
 预填。
 
