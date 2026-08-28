@@ -34,9 +34,10 @@ downstream value。没有这项事实，SIR 不应继续位于 critical path。
 - DEV-002 的 review 在历史上确实发生，但 D-042 已 supersede 其预建 D-040 qualification 方向；对应 code、
   tests、public/private bundle 和 private review record 从 current V1 tree 删除，Git history 足以追溯。
 
-## 4. 当前没有实现
+## 4. 当前仍未完成
 
-- task-generic model-backed SIR proposal product path；
+- DEV-004 的 task-generic SIR proposal module、recorded episode 和 opt-in live 入口已实现，但尚无本次
+  live DeepSeek evidence，不能计为 accepted model-backed path；
 - 第二个语义形态不同任务的同路径验证；
 - SIR 对 downstream migration/Oracle choice 的可观察收益；
 - 正式 Intent Admission、Oracle/Candidate authority chain；
@@ -86,7 +87,7 @@ production path处理第二个实质不同 task，并据 downstream utility 决�
 | DEV-001 | Accepted | reduction evaluator fixture；不供 runtime answer projection |
 | DEV-002 | Superseded | 过早 qualification framework 已从 current tree 删除 |
 | DEV-003 | Accepted | 最小 fixture provenance/sanitation foundation |
-| DEV-004 | Proposed | 尚未授权实施；等待精简 implementation note |
+| DEV-004 | EvidencePending | current V1 implementation、recorded evidence和full CI已闭合；等待明确授权向外部DeepSeek发送task source后运行live lane |
 | DEV-005 | Blocked | 等待 DEV-004；承担 cross-task 与 SIR go/no-go |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

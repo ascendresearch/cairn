@@ -28,11 +28,11 @@ mechanism authority。不得通过compatibility path复活。
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-004` | Proposed | 复用现有`cairn-agent`建立task-generic DeepSeek SIR proposal episode | current agent runtime；DEV-001作为evaluation-only input；D-042 | typed proposal含citations/competing hypotheses/unknown；recorded replay；opt-in live DeepSeek；model-visible context无fixture answer；无Admission/hidden/production special case |
+| `DEV-004` | EvidencePending | 复用现有`cairn-agent`建立task-generic DeepSeek SIR proposal episode | current agent runtime；DEV-001作为evaluation-only input；D-042；implementation note `be2985a` | typed proposal含citations/competing hypotheses/unknown；recorded replay；opt-in live DeepSeek；model-visible context无fixture answer；无Admission/hidden/production special case |
 | `DEV-005` | Blocked | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | 无production branch/prompt结构变化；与source-preserving/user-declared baseline比较；至少一个downstream utility或明确停止SIR |
 
-DEV-004尚未进入`Ready`。开始前只需一个精简implementation note明确exact files、model-visible projection、
-typed output、recorded/live commands、预算和删除路径；它不需要另一轮private fixture review。
+DEV-004 implementation、recorded lane和full CI已闭合，现为`EvidencePending`。Live lane尚未执行：向外部
+DeepSeek发送task source与使用private credential需要用户明确授权；它不需要另一轮private fixture review。
 
 ## 4. DEV-004边界
 

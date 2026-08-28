@@ -20,6 +20,7 @@ mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
 mod reduction_mutation;
+mod sir;
 mod variant_execution;
 
 pub use assemble::{
@@ -184,6 +185,15 @@ pub use reduction_mutation::{
     HistoricalReductionMutationInputs, HistoricalReductionMutationKind,
     HistoricalReductionMutationVariantEvidence, PreparedHistoricalReductionMutationGrid,
     compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
+};
+pub use sir::{
+    IntentHypothesisSetProposalV1, SirCitedFactV1, SirEpisodeRunError, SirEpisodeRunInput,
+    SirEpisodeRunOutcome, SirError, SirFactStatement, SirHypothesisSummary,
+    SirIntentHypothesisSetProposalArtifact, SirIntentHypothesisV1, SirProposalSubmissionV1,
+    SirReadByteLimit, SirReadLineLimit, SirSourceCitationV1, SirSourceLineCount,
+    SirSourceLineNumber, SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskArtifactV1,
+    SirTaskBundleArtifact, SirTaskBundleV1, SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits,
+    SirTaskWorkspace, SirUnknownQuestion, SirUnknownV1, run_sir_episode,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,

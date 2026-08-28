@@ -1,6 +1,6 @@
 # DEV-004 implementation note — generic DeepSeek SIR proposal
 
-- 状态：`ReviewPending`；不是 DCR，不授权 Admission 或其他 authority 实现
+- 状态：`EvidencePending`；不是 DCR，不授权 Admission 或其他 authority 实现
 - 日期：2026-08-28
 - Slice：[`DEV-004`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 决策：[`D-042`](../../DECISIONS.md#d-042--runtime-models-reason-per-task-fixtures-evaluate-but-do-not-define-the-product)
@@ -69,7 +69,7 @@ hypothesis并保留unknown。不得出现operator名、D-039、reduction domain�
 | --- | --- |
 | `crates/cairn-migration/src/sir.rs` | task bundle、minimal proposal types、generic prompt/projection、两个tool gateways和episode runner |
 | `crates/cairn-migration/src/lib.rs` | 只导出当前consumer需要的SIR API |
-| `crates/cairn-migration/examples/sir_deepseek.rs` | recorded/live共用的`AgentEpisode` driver；SQLite/CAS restart；JSON summary不打印hidden reasoning |
+| `crates/cairn-migration/examples/sir_deepseek.rs` | live入口调用recorded/live共用的product runner；SQLite/CAS终态重开；JSON summary不打印hidden reasoning |
 | `config/sir-deepseek.example.json` | current-V1 model alias、output/episode/tool/time/byte limits；无task/fixture答案 |
 | `crates/cairn-migration/tests/sir_episode.rs` | strict types、tool scope、context absence、malformed submission、recorded replay/restart |
 
@@ -84,20 +84,20 @@ Recorded required command：
 cargo test -p cairn-migration --test sir_episode
 ```
 
-测试先经同一 native codec/episode/tool path 捕获 exact request/response exchanges，再用
-`RecordedModelTransport` 重放；重启后下一request必须byte-identical。Scripted response只证明protocol，不能
-计作DeepSeek quality。
+测试先经同一 native codec/episode/tool path 捕获 exact request/response exchanges，再在新durable state中用
+`RecordedModelTransport` 对exact request identity逐步重放；原episode关闭SQLite/CAS后必须恢复同一terminal
+projection。Scripted response只证明protocol，不能计作DeepSeek quality。
 
 Opt-in live command：
 
 ```text
 cargo run -p cairn-migration --example sir_deepseek -- \
-  config/sir-deepseek.example.json \
-  fixtures/cuda-ascend/intent/reduce-sum-f32/v1/source
+  fixtures/cuda-ascend/intent/reduce-sum-f32/v1/source \
+  config/sir-deepseek.example.json
 ```
 
-默认限额：最多6个model steps、12个tool operations、24,000 observed provider tokens、单turn 4,096 output
-tokens、300秒、32个task files、256 KiB task bytes。Live lane记录model/deployment、episode、task bundle、
+默认限额：最多8个model steps、24个tool operations、65,536 observed provider tokens、单turn 16,384 output
+tokens、900秒、32个task files、256 KiB task bytes。Live lane记录model/deployment、episode、task bundle、
 proposal、request/response、usage、completion和restart facts，但不打印provider raw response或chain-of-thought。
 
 ## 7. Acceptance 与停止
@@ -114,3 +114,11 @@ DEV-004 接受必须同时满足：
 如果真实run无法形成有效proposal，DEV-004保持`EvidencePending`并记录first divergence，不增加Admission、
 qualification或多Agent review。若实现本身失败，删除上述5个新增/修改入口；若DEV-005 No-go，删除
 `sir.rs`、example/config/tests和exports，保留未修改的domain-neutral `cairn-agent`。
+
+## 8. Current evidence
+
+- `cargo test -p cairn-migration --test sir_episode`：通过，3 tests；
+- `cargo clippy -p cairn-migration --all-targets -- -D warnings`：通过；
+- `scripts/ci.sh`：沙箱内mTLS local-socket test被OS拒绝；在允许local socket的环境重跑full CI通过；
+- live DeepSeek：`NotExecuted`。外部调用在process启动前被安全审查拒绝，没有provider request发生；需要用户
+  明确授权把所选task source发送给配置的外部DeepSeek endpoint并使用private API credential。
