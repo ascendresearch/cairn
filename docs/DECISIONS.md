@@ -787,3 +787,112 @@ agreement, voting, or repeated reflection creates neither receipt authority nor 
 Processes split when data visibility, external tools, OS sandbox, credentials, or authority differ,
 not merely because role names differ. The mechanical Admission Gate remains model-free and outside
 every Agent Host.
+
+## D-039 — The first Intent Admission operator is a clean-room finite-f32 reduction
+
+- Decision: accepted
+
+The first Intent Authority Proof uses a Cairn-authored, MIT-compatible, clean-room CUDA `f32`
+one-dimensional reduction with an explicit host launch. Historical Alloyport `cuda-reduction-v1`
+behavior and receipts may inform control design, but its source bytes are not imported unless their
+provenance and license are independently cleared. Fixed `matmul-zero-k` remains a
+transport/materialization control and is not the first Intent Admission operator.
+
+The minimum admitted intent is claim-scoped:
+
+- the mathematical operation is reduction by addition over one contiguous input vector;
+- the first domain is binary32 normal values or signed zero with `1 <= N <= 256` and
+  `abs(x_i) <= 65536`; subnormals, NaN, infinity, empty input, aliasing, and wider shapes are
+  explicitly outside this first admitted domain rather than silently assigned behavior;
+- the ABI has one read-only input buffer, one single-element output buffer, and one length value;
+  input/output aliasing is forbidden, the input is unchanged, and the output is overwritten without
+  writes outside its declared surface;
+- the numerical intent is the real-number sum, with the family of arbitrary permutation/
+  parenthesization trees using round-to-nearest-ties-to-even binary32 addition as calibration
+  evidence rather than source-tree bit identity; signed-zero results are numerically equivalent.
+  The later Oracle must independently establish the applicable allowance and strength, and another
+  accumulation precision/order is allowed only when its observation satisfies that admitted
+  numerical contract;
+- launch geometry, block decomposition, and reduction tree are implementation artifacts that may
+  change within the admitted numerical and observable contract;
+- common deployment shapes are workload evidence, not a hidden narrowing of the admitted domain;
+- a fixed source, launch, input, and environment is deterministic, so this slice does not create a
+  statistical-admission default.
+
+Empty-input inclusion, exact source-order requirements, a defined source anomaly, a caller/source
+semantic conflict, or a requested domain expansion requires an explicit user/policy decision and a
+new intent admission flow.
+
+The first corpus uses a non-adaptive sealed batch. Public material covers honest,
+tail/non-power-of-two, order-sensitive cancellation, wrong exact-bit, wrong deployment-specialization,
+and explicit unknown controls. Restricted material has at least one independently reviewed sealed
+control in each of six partitions: implementation artifact, source defect, deployment quirk, competing plausible
+meaning, genuine unknown, and tamper/wrong binding. Only minimal claim/outcome diagnostics are
+published; disclosure of distinguishing information burns the case to a public regression under
+D-031. If disclosure leaves a required partition without a sealed control, the first non-adaptive
+attempt blocks until an independently reviewed replacement is frozen; it does not query adaptively.
+General adaptive-query and replenishment policy remains OQ-024.
+
+## D-040 — The first verifier qualification set is deterministic and Intent-scoped
+
+- Decision: accepted
+
+The first architecture proof uses a deterministic Intent-evidence recipe rather than a model-backed
+Admission Planner. Its initial `VerificationMechanismSet` contains separately identified and
+qualified mechanisms for:
+
+1. strict V1 decoding, canonical identity, and constructor-invariant validation;
+2. CUDA/host-launch ABI static-fact extraction;
+3. mechanical `RequiredIntentEvidenceSet` derivation;
+4. the deterministic recipe and typed plan validation;
+5. recorded/host observation adaptation and execution;
+6. raw observation comparison;
+7. applicant/policy/job/attempt/environment receipt binding and closure;
+8. claim-scoped conflict, unknown, and source-disposition policy evaluation;
+9. the Intent Mechanical Gate and admitted-constructor boundary;
+10. diagnostic redaction.
+
+Each mechanism has an exact identity, scope, limitations, qualification receipt, and requalification
+triggers. Qualification uses independently authored golden expectations, property or targeted
+mutation controls where applicable, honest/false-accept/false-reject/conflict/unknown cases,
+wrong-binding and missing/duplicate/tampered receipt controls, runner no-launch/stale-output/capture/
+crash faults, and hidden/secret redaction canaries. A real host execution calibrates the first runner;
+recorded execution remains a distinct lane and does not claim CUDA or Ascend device evidence.
+
+Qualification review includes the mechanism owner plus reviewers acting for Admission and Quality;
+the owner cannot be the sole reviewer. Verdict-relevant source, policy, dependency, toolchain,
+calibration environment, or limitation changes require a new qualification identity. Refutation
+blocks use of the mechanism and triggers reverse-impact analysis. The future Gate cannot generate
+the golden expectations or qualification receipt used to establish its own trust root.
+
+## D-041 — Historical behavior is retained through newly authored sanitized fixtures
+
+- Decision: accepted
+
+Historical records remain immutable evidence in Git history or their original private stores. New
+architecture tests do not edit those bytes, reuse their digest for changed content, or import an old
+product schema as the current V1 contract. They retain useful behavior through newly authored,
+explicit, MIT-compatible fixtures with a provenance manifest naming the historical behavior,
+current author, license/data classification, synthetic status, covered obligation, and replacement
+scope.
+
+The first public fixture families cover:
+
+- the historical false correctness verdict (the known false rejection), measured-family correction,
+  and per-case blind spot;
+- complete model-input audit and category-specific missing inputs;
+- recorded replay and same-input live counterfactual divergence;
+- recoverable wrong citation;
+- output-capture failure;
+- stale lease and duplicate live worker controls;
+- one complete ST1 end-to-end identity graph.
+
+Private deployment state, credentials, PKI, enrollment bundles, SQLite/CAS contents, logs, raw live
+provider requests/responses or private continuation data, absolute host paths, complete third-party
+fetched bytes, and provenance-uncleared Alloyport source never become checked-in fixtures. The
+`.cairn/secrets/` tree is categorically private. Sealed Intent Admission controls belong to the
+restricted store, not the public test tree.
+
+Superseded product-specific fixtures and code are deleted only after their new V1 consumers and
+controls are accepted. No compatibility reader, alias, converter, dual fixture path, or historical
+admitted shape is retained.

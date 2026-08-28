@@ -36,9 +36,21 @@ it.
   [`D-007`](DECISIONS.md#d-007--typed-sha-256-identities-with-a-pre-release-v1-reset-policy). V1
   uses typed, domain-separated SHA-256 identities and UUIDv7 lifecycle IDs; pre-release changes
   rebuild development state and add no runtime alias or migration framework.
+- **OQ-016** — historical fixture curation: resolved by
+  [`D-041`](DECISIONS.md#d-041--historical-behavior-is-retained-through-newly-authored-sanitized-fixtures).
+  Historical behavior is retained through new explicit V1 fixtures; private deployment/provider
+  material and uncleared source do not enter Git.
 - **OQ-018** — product generalization: resolved by
   [`D-024`](DECISIONS.md#d-024--cairn-product-scope-is-cuda--ascend-c). Cairn's product scope is
   CUDA → Ascend C; domain-neutral infrastructure does not broaden that scope.
+- **OQ-019** — first Intent Admission policy and corpus: resolved by
+  [`D-039`](DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction).
+  The first operator is a clean-room finite-`f32` reduction with an exact claim scope and a
+  non-adaptive public/restricted corpus profile.
+- **OQ-023** — first verifier-mechanism qualification profile: resolved by
+  [`D-040`](DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped).
+  The first deterministic Intent-scoped mechanism set, controls, review, and requalification policy
+  are fixed.
 
 ## OQ-004 — Independence of semantic reference
 
@@ -153,28 +165,6 @@ Potential approaches include local-only providers, encrypted/private CAS, redact
 verifier access policies. A redacted export must state exactly which claims cannot be independently
 reconstructed.
 
-## OQ-016 — Historical fixture curation
-
-- Priority: P0
-- Affects: rewrite controls
-
-Which old Cairn/Alloyport records and artifacts become checked-in public fixtures, and which contain
-private code, provider data, absolute paths, or deployment secrets?
-
-Required set by behavior:
-
-- false correctness verdict and measured-family fix;
-- per-case mutation blind spots;
-- complete model-input audit and missing-input examples;
-- recorded replay and same-input live divergence;
-- recoverable wrong citation;
-- output-capture failure;
-- stale lease and duplicate worker controls;
-- one complete end-to-end identity graph.
-
-Sanitize by producing new explicit fixtures, not by editing historical evidence and pretending its
-digest is unchanged.
-
 ## OQ-017 — Contribution policy and governance
 
 - Priority: P1 before public release
@@ -185,20 +175,6 @@ The outbound project license is MIT under
 vs CLA, governance/maintainer model, trademark/project-name policy, and the dependency license gate
 before the first release. These controls must also address compatible provenance for imported code,
 fixtures, corpora, model outputs, and vendor integrations.
-
-## OQ-019 — First Intent Admission policy and corpus
-
-- Priority: P0 before implementation resumes
-- Affects: first `MigrationIntentContract`, SIR evaluation, downstream Oracle authority
-
-Which exact claim set is the minimum admitted intent for the first kernel: mathematical operation,
-ABI/shape relation, numerical mode, deployment specialization, side effects, and optimization
-freedom? Which frozen cases distinguish implementation artifacts, source bugs, model-dependent quirks,
-competing plausible meanings, and genuine unknowns?
-
-The architecture fixes that SIR is proposal-only and admission is claim-scoped. It does not yet fix
-the first operator, minimum hidden corpus, or which conflicts require a user decision. Those choices
-must be made before defining V1 production intent artifacts.
 
 ## OQ-020 — First Ascend hardware-performance profile
 
@@ -232,16 +208,6 @@ external references, how representative workload weights are derived, and which 
 ablation evidence is required before a model-level regression is attributed to the migrated kernel.
 Positive feedback cannot prove local correctness and negative feedback cannot silently rewrite the
 Oracle; the unresolved question is the first concrete acquisition and attribution policy.
-
-## OQ-023 — First verifier-mechanism qualification profile
-
-- Priority: P0 before new Oracle Admission implementation
-- Affects: comparator, adapter, runner, gate, policy evaluator, diagnostic redaction
-
-Select the exact mechanisms in the first `VerificationMechanismSet`, their independent golden or
-property oracles, required mutation/fault controls, real-tool calibration, reviewers, and
-qualification/requalification policy. The architecture requires qualification but cannot use the
-future gate to manufacture its own trust root.
 
 ## OQ-024 — Hidden corpus exposure and replenishment policy
 

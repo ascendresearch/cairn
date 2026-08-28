@@ -65,11 +65,15 @@
 
 ## 6. 当前启动条件
 
-首个新架构 product increment 仍被以下 P0 决策阻塞：
+三个 P0 选择已经关闭：D-039 冻结首个 Intent operator/claim/corpus，D-040 冻结首个 verifier
+qualification profile，D-041 冻结历史 fixture curation policy。它们关闭的是设计选择，不是 ST0 evidence。
 
-- `OQ-019`：首个 Intent Admission operator、claim set 与 corpus；
-- `OQ-023`：首个 verifier mechanism qualification profile；
-- `OQ-016`：被首批新架构测试复用的历史 fixture 如何净化和归档。
+首个新架构 product increment 仍需完成：
 
-不依赖这些答案的只读审计和计划工作可以继续；会冻结生产 V1 intent/admission 类型或 corpus 的代码
-不能自行选择默认值。
+- materialize D-039 的 clean-room CUDA/host source、public corpus 和 restricted sealed corpus；
+- 为 D-040 的 exact mechanisms 生成并审查 qualification receipts；
+- 按 D-041 生成 sanitized V1 fixtures、provenance manifests 和 public/private scan；
+- 完成 DEV-004 的 `DesignConformanceRecord` 与 exact change inventory。
+
+在这些 entry evidence 完成前，代码 slice 仍是 `Blocked`；决策已接受不能被误报为 fixture、qualification
+或实现已经完成。

@@ -344,7 +344,27 @@ SIR 不应：
 - 将高层 IR 设计成不可替换的全项目中心模型；
 - 把未来可能的通用迁移抽象引入当前 CUDA → Ascend C 产品边界。
 
-## 12. 分步建设原则
+## 12. 首个 Intent Admission profile
+
+首个 architecture proof 使用 [`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
+冻结的 clean-room CUDA `f32` 一维求和及显式 host launch。首个 admitted domain 只包括 contiguous、
+normal-or-signed-zero binary32、`1 <= N <= 256`、`abs(x_i) <= 65536`；input/output alias、空输入、
+subnormal、非有限值和更宽 shape 不被临时猜测，而是保持 domain-outside 或 user-decision obligation。
+
+SIR 必须至少产生并保留下列可竞争解释：数学求和、source reduction-tree bit identity、部署 shape
+特化，以及证据不足的 unknown。Intent Admission 的目标选择 real-number sum；任意 permutation/
+parenthesization、每个节点 round-to-nearest-ties-to-even binary32 addition 的 family 只作为后续 allowance
+calibration evidence，signed zero 数值等价。Launch geometry、block decomposition 和 tree order 是实现
+伪影。具体 allowance 和 evidence strength 仍由后续 Oracle Admission 独立建立，Intent contract 不预先
+制造该结论。
+
+首个 corpus 是 non-adaptive sealed batch。Public controls 覆盖 honest、tail/non-power-of-two、
+order-sensitive cancellation、wrong exact-bit、wrong deployment-specialization 和 unknown；restricted
+controls 分别覆盖 implementation artifact、source defect、deployment quirk、competing meaning、genuine
+unknown 和 tamper/wrong binding。任一 hidden diagnostic 泄漏区分信息后按 D-031 burn 为公开 regression。
+一般 adaptive-query/replenishment policy 仍由 OQ-024 决定。
+
+## 13. 分步建设原则
 
 设计允许分块演进，但每一步都保持相同隔离边界：
 

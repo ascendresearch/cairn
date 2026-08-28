@@ -295,8 +295,12 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 
 第一个 architecture proof slice 仍限定为一个 kernel 的
 `IntentHypothesisSet → Intent Admission → MigrationIntentContract → 一个 Oracle claim proposal`，在
-Candidate Search 之前停止。具体 operator、claim 和 hidden corpus 仍受
-[`OQ-019`](../OPEN_QUESTIONS.md) 阻塞；这句话不构成本轮实施授权。
+Candidate Search 之前停止。Operator、claim scope 和 non-adaptive corpus 已由
+[`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
+冻结；首个 verifier qualification profile 由
+[`D-040`](../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
+冻结。Source artifact、sanitized fixtures、qualification receipts 和 slice conformance record 尚未生成，
+因此这句话不构成本轮代码实施授权。
 
 ## 13. 当前实现与目标差距
 

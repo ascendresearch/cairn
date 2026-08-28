@@ -134,13 +134,15 @@
 
 ## 5. 进入实现前仍需关闭的选择
 
-以下 open questions 对相应 slice 是真正 blocker：
+首个 Intent operator/corpus、首个 verifier qualification profile 和历史 fixture curation policy 已分别由
+D-039、D-040、D-041 关闭。它们的 source/corpus bytes、qualification receipts 和 sanitized fixture
+manifests 仍是 ST0 entry evidence，不因 decision accepted 而视为已经生成。
 
-- OQ-019：首个 Intent Admission 的 operator、claim set 和 hidden corpus；
+以下 open questions 对相应后续 slice 仍是真正 blocker：
+
 - OQ-020：首个 Ascend SoC、CANN/compiler、microbench、profiler 和 baseline；
 - OQ-021：首批 knowledge claim 与 skill 的 per-role admission profile；
 - OQ-022：真实模型反馈的数据边界、workload 获取和 first-divergence/归因政策；
-- OQ-023：首个 comparator/adapter/runner/gate/policy mechanism qualification profile；
 - OQ-024：adaptive admission 的 hidden exposure、diagnostic budget 和 replenishment policy；
 - OQ-025：仅在随机/有状态/多调度结果 operator 上需要的统计准入 policy。
 

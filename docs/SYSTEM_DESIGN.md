@@ -292,6 +292,13 @@ Intent Admission 逐 claim 校验证据、冲突、隐藏区分 case 和用户�
 `MigrationIntentContract`，或局部 `Conflict`、`Unknown`、`NeedsUserDecision`。SIR 本身没有
 promotion edge。
 
+首个 Intent Authority Proof 按 D-039 使用 Cairn clean-room `f32` 一维求和：normal-or-signed-zero、
+`1 <= N <= 256`、`abs(x_i) <= 65536`、non-aliasing single-output ABI，并把 launch/reduction tree 视为
+implementation artifact。它采用 non-adaptive public/restricted corpus；首片按 D-040 使用 deterministic
+recipe 和 Intent-scoped qualified mechanisms。D-041 只允许 newly authored sanitized V1 fixtures 进入
+新架构测试。这些选择冻结首片 contract，但不表示 source、corpus、qualification receipt 或 fixture
+已经实现。
+
 ### 7.3 Oracle 探索与准入
 
 Oracle Explorer 按已准入意图生成 claim portfolio、domain partition、reference/property、case、
@@ -766,4 +773,5 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 | API/open source | FR-API-*、FR-EXT-*、QR-OSS-* |
 
 本次架构刷新已经把 intent、performance、knowledge/skill 和 feedback 义务补入
-`SYSTEM_REQUIREMENTS.md`。这些边界是规范性目标，不应被旧的较窄 Oracle 实施计划覆盖。
+`SYSTEM_REQUIREMENTS.md`。D-039、D-040、D-041 进一步冻结首个 Intent profile、mechanism qualification
+profile 和 historical fixture policy。这些边界是规范性目标，不应被旧的较窄 Oracle 实施计划覆盖。

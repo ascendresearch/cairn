@@ -68,7 +68,7 @@ capability data path。
 - historical reduction correct/wrong variants 与 blind-spot control；
 - hardware-free admitted-oracle/candidate-verdict 控制。
 
-复用条件：先完成 `OQ-023` mechanism qualification；产品专属 policy 移回
+复用条件：先按 D-040 完成 exact mechanism qualification；产品专属 policy 移回
 `cairn-cuda-ascend`，generic crate 只保留真正共享的 mechanics。
 
 ## 4. 产品证据与历史控制
@@ -105,7 +105,7 @@ performance。分类：`HistoricalControl + ProductEvidence`。保留为 transpo
 
 它证明 measured-family allowance、correct/wrong controls、mutation blind spot、receipt recomputation 和
 candidate comparison 的若干机制。其旧 domain/admitted shapes 不是新 Intent/Oracle portfolio 的默认
-schema。分类：`HistoricalControl`；按 `OQ-016` 生成新的净化 fixture，不修改旧证据后冒充 digest 未变。
+schema。分类：`HistoricalControl`；按 D-041 生成新的净化 fixture，不修改旧证据后冒充 digest 未变。
 
 ## 5. 目标设计尚未实现
 
@@ -136,12 +136,16 @@ schema。分类：`HistoricalControl`；按 `OQ-016` 生成新的净化 fixture�
 
 ## 7. 开发起点
 
+D-039、D-040、D-041 已于 2026-08-27 接受，关闭了三个 P0 设计选择。当前尚未生成 D-039 source/corpus
+bytes、D-040 qualification receipts 或 D-041 sanitized fixture manifests，因此 DEV-001/002/003 仍是
+`Proposed`，依赖它们的代码 slice 仍是 `Blocked`。
+
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 
 ```text
-approved OQ-019 policy/corpus
-+ approved OQ-023 mechanism qualification
-+ sanitized OQ-016 fixtures
+materialized D-039 source + public/restricted corpus
++ qualified D-040 mechanism receipts
++ sanitized D-041 fixtures + provenance manifests
 + current reusable runtime/record/execution foundations
 + current normative architecture
 ```

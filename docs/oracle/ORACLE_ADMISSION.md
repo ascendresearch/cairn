@@ -796,5 +796,6 @@ Admission 必须显式报告：
 12. comparator、adapter、runner 和 policy evaluator 具有独立 qualification controls；
 13. 所有未实现设备、工具、coverage 和 authority 均显式 `Unknown`/`NotExecuted`/blind spot。
 
-具体首个 operator、hidden corpus、hardware profile 和 feedback acquisition policy 仍由
-[`../OPEN_QUESTIONS.md`](../OPEN_QUESTIONS.md) 中 OQ-019 至 OQ-022 决定。本文件不在本轮授权实现。
+首个 operator 与 non-adaptive hidden corpus 已由 D-039 决定；hardware profile、knowledge/skill、feedback
+acquisition 和一般 adaptive hidden policy 仍分别由 OQ-020、OQ-021、OQ-022、OQ-024 决定。本文件不在
+本轮授权实现。

@@ -798,9 +798,9 @@ architecture 已实现。
 6. separate Admission gate；
 7. recorded replay 和 capability/continuation isolation controls。
 
-是否在该 slice 启用 model-backed adversarial strategy 由风险和 OQ-019 的 operator/claim/corpus 决定，
-不是为了凑齐 Agent 数量。Candidate Search、Hardware/Performance Agent planners 和 Knowledge/Skill
-planners 不属于第一 slice。
+首个 slice 的 operator/claim/corpus 已由 D-039 冻结，Admission planning 按 D-040 使用 deterministic
+recipe；不为该 slice 启用 model-backed adversarial strategy，也不为凑齐 Agent 数量增加 episode。
+Candidate Search、Hardware/Performance Agent planners 和 Knowledge/Skill planners 不属于第一 slice。
 
 ## 24. Catalog 维护规则
 

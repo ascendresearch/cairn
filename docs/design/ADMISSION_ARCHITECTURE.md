@@ -862,8 +862,11 @@ compile-fail/static boundary tests。
 7. 下游生成一个 Oracle claim proposal后停止。
 
 它不要求同时实现七类 planner，不要求真实 NPU/performance，不要求多 Agent，也不授权建立万能
-`AdmissionPlannerV1` schema。具体 operator、claim 和 hidden corpus 仍受
-[`OQ-019`](../OPEN_QUESTIONS.md) 阻塞。
+`AdmissionPlannerV1` schema。首个 operator、claim 和 non-adaptive hidden corpus 已由
+[`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
+确定；首片使用 D-040 的 deterministic recipe 和十项 Intent-scoped mechanism set，不启动 model-backed
+Admission Planner。Mechanism inventory、source bytes、corpus bytes 和 qualification receipts 仍须在 ST0
+物化并审查后，代码 slice 才能进入 `Ready`。
 
 后续建议按真实依赖扩展：Oracle Control → Hardware deterministic recipes → Candidate deterministic
 scheduler → Performance adaptive planning → Knowledge/Skill governance。顺序仍需进入 Implementation Plan

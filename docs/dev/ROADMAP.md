@@ -19,7 +19,7 @@
 
 | Stage | 目标 | 对应里程碑 | 主要 blocker |
 | --- | --- | --- | --- |
-| `ST0 Planning Readiness` | 关闭首片决策、净化 fixture、冻结开发 contract | M0 补强 | OQ-016、OQ-019、OQ-023 |
+| `ST0 Planning Readiness` | 物化首片决策、净化 fixture、冻结开发 contract | M0 补强 | D-039/040/041 evidence、DEV-004 |
 | `ST1 Intent Authority Proof` | 一个 kernel 从 SIR proposal 到 admitted intent，再交出一个 Oracle claim | M2 前半 | ST0 |
 | `ST2 Oracle Generation Core` | 自动生成 claim portfolio，并以确定性+可选 Agent 策略攻击 | M2 探索部分 | ST1 |
 | `ST3 Independent Oracle Admission` | 从 qualified mechanisms 和 receipts 形成 admitted Oracle portfolio | M2 完成 | ST2、OQ-024 的适用部分 |
@@ -58,14 +58,16 @@ Knowledge Registry 的无权限基础和设备 Worker 准备可以并行，但�
 
 ### 目标
 
-把“第一个实现什么”从隐含假设变为已接受的开发输入。
+把已经接受的“第一个实现什么”物化为 exact source、corpus、qualified mechanism、sanitized fixture 和
+可审查开发 contract。
 
 ### 必须完成
 
-- 关闭 `OQ-019`：选择第一个 deterministic CUDA kernel、intent claim set、公开/hidden corpus 和用户
-  决策点；
-- 关闭 `OQ-023`：定义首批 comparator/adapter/runner/gate/policy evaluator qualification；
-- 处理 `OQ-016`：生成首批净化历史 fixtures 和 provenance manifest；
+- 物化 D-039：生成 clean-room deterministic CUDA/host source、intent claim fixtures、公开/restricted
+  corpus 和 user-decision controls；
+- 执行 D-040：冻结 exact mechanism identities，并生成 comparator/adapter/runner/gate/policy evaluator/
+  redactor qualification receipts；
+- 执行 D-041：生成首批净化历史 fixtures、provenance manifests、public/private disposition 和扫描记录；
 - 为 ST1 形成一份已审查的 `DesignConformanceRecord`；
 - 明确真实 CUDA/Ascend build/NPU lane 的可用性，但不要求此时占用设备；
 - 对目标产品 crate 直接替换策略形成 change inventory，不建立 alias/dual path。

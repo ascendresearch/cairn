@@ -19,24 +19,25 @@ slice 为 `Blocked`。
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-001` | Proposed | 关闭 OQ-019，冻结首个 deterministic kernel、Intent claim set、公开/hidden corpus、冲突与用户决策 policy | 用户/产品选择，历史和新 fixture 研究 | requirements/decision/focused design 同步；正、竞争假设、source artifact、unknown fixtures 列表 |
-| `DEV-002` | Proposed | 关闭 OQ-023，定义首个 `VerificationMechanismSet` qualification | 选定 DEV-001 的所需机制范围 | mechanism identities、golden/property oracle、mutation/fault controls、review/requalification policy |
-| `DEV-003` | Proposed | 关闭 OQ-016 的首批范围并生成 fixture sanitation plan | 历史 evidence inventory | public/private disposition、new fixture provenance、secret/path/provider scan、保留/删除列表 |
+| `DEV-001` | Proposed | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；new fixture authoring | exact source/host artifact、provenance、正/竞争/unknown/user-decision fixtures 和 sealed partition manifest |
+| `DEV-002` | Proposed | 对 D-040 的首个 `VerificationMechanismSet` 完成 qualification | D-039 accepted；DEV-001 exact mechanism inputs | mechanism identities、independent golden/property expectations、mutation/fault controls、review 和 qualification/requalification receipts |
+| `DEV-003` | Proposed | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory | new V1 fixture provenance、secret/path/provider scan、保留/删除列表和完整 ST1 graph fixture plan |
 | `DEV-004` | Blocked | 为 ST1 完成首份 `DesignConformanceRecord` 和 exact change inventory | DEV-001/002/003 | 已审查 record，列出 V1 类型、crate/file、authority、tests、删除路径和 unknown scope |
 
-### DEV-001 选择约束
+### DEV-001 materialization 约束
 
-首个 kernel 应优先满足：
+DEV-001 必须把 D-039 直接物化为：
 
-- deterministic，避免被 OQ-025 统计政策阻塞；
-- 足以产生两个以上合理 intent hypotheses 或至少一个实现伪影/部署特化；
-- 有可运行 CUDA source 和明确 host launch；
-- 可在无 NPU时完成 Intent 区分控制；
-- 后续有现实 Ascend C candidate 路径；
-- 不是只靠固定 expected bytes 就能掩盖意图问题的 trivial case。
+- Cairn-authored、MIT-compatible、clean-room CUDA source 与明确 host launch；
+- `normal-or-signed-zero f32`、`1 <= N <= 256`、`abs(x_i) <= 65536` 的 exact first domain；
+- mathematical sum、source-tree bit identity、deployment specialization 和 unknown 的竞争假设；
+- public honest/tail/order-sensitive/wrong-hypothesis/unknown controls；
+- 六个 required restricted sealed partitions 与 non-adaptive exposure rule；
+- 无 NPU 可运行的 deterministic/recorded Intent 区分证据；
+- 后续现实 Ascend C candidate path 所需但本 slice 不实现的 ABI/launch contract。
 
-不能因为当前 `matmul-zero-k` 已物化就自动选择它。选择需服务 intent authority proof，而非最大化旧代码
-复用率。
+不得改为复制 provenance 未清的 Alloyport bytes，也不得退回当前 `matmul-zero-k` 来最大化旧代码复用。
+Source/corpus content identity 在 materialize 后由当前 V1 bytes 派生，不能预填或沿用历史 digest。
 
 ## 3. ST1 — Intent Authority Proof
 
