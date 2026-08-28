@@ -89,8 +89,15 @@ fn public_bundle_is_canonical_complete_and_bound_to_dev001() {
         decode_intent_restricted_qualification_summary_v1(&read("restricted-controls.public.json"))
             .expect("strict redacted restricted summary");
     assert_eq!(restricted.control_count(), 3);
-    assert!(restricted.is_review_pending());
-    assert!(!restricted.is_frozen_reviewed());
+    assert!(!restricted.is_review_pending());
+    assert!(restricted.is_frozen_reviewed());
+    assert_eq!(
+        restricted
+            .review_receipt_identity()
+            .expect("redacted control-review receipt")
+            .to_string(),
+        "cairn:v1:sha256:testkit.qualification-control-review-receipt.v1:1b8b892807530fb47b5b4df1f65cf4a9df291932fed047164d346e1d565688b1"
+    );
 }
 
 #[test]
@@ -202,7 +209,23 @@ fn control_review_receipt_is_distinct_and_fail_closed() {
 
 #[test]
 fn synthetic_freeze_transition_allows_only_review_authority_projection() {
-    let review_manifest_bytes = read("manifest.json");
+    let current_manifest_bytes = read("manifest.json");
+    let current_summary_bytes = read("restricted-controls.public.json");
+    let current_summary_identity =
+        IntentQualificationArtifactIdentity::derive(&current_summary_bytes)
+            .expect("current summary identity");
+    let pending_summary_identity =
+        IntentQualificationArtifactIdentity::derive(pending_summary_bytes())
+            .expect("pending summary identity");
+    let review_manifest_bytes = String::from_utf8(current_manifest_bytes)
+        .expect("manifest text")
+        .replace(
+            &current_summary_identity.to_string(),
+            &pending_summary_identity.to_string(),
+        )
+        .into_bytes();
+    decode_intent_qualification_manifest_v1(&review_manifest_bytes)
+        .expect("reconstructed review manifest");
     let review_subject = IntentQualificationReviewSubjectIdentity::derive(&review_manifest_bytes)
         .expect("review subject");
     let private_manifest =
@@ -222,9 +245,6 @@ fn synthetic_freeze_transition_allows_only_review_authority_projection() {
     let accepted_summary_identity =
         IntentQualificationArtifactIdentity::derive(accepted_summary_bytes(&receipt_id).as_bytes())
             .expect("accepted summary identity");
-    let pending_summary_identity =
-        IntentQualificationArtifactIdentity::derive(&read("restricted-controls.public.json"))
-            .expect("pending summary identity");
     let accepted_manifest_bytes = String::from_utf8(review_manifest_bytes.clone())
         .expect("manifest text")
         .replace(
@@ -276,4 +296,8 @@ fn accepted_summary_bytes(receipt_id: &QualificationControlReviewReceiptId) -> S
     format!(
         "{{\"controls\":[{{\"kind\":\"wrong-binding\",\"status\":\"frozen-reviewed\"}},{{\"kind\":\"hidden-redaction-canary\",\"status\":\"frozen-reviewed\"}},{{\"kind\":\"secret-redaction-canary\",\"status\":\"frozen-reviewed\"}}],\"review_receipt_identity\":\"{receipt_id}\",\"schema_version\":1}}"
     )
+}
+
+fn pending_summary_bytes() -> &'static [u8] {
+    b"{\"controls\":[{\"kind\":\"wrong-binding\",\"status\":\"review-pending\"},{\"kind\":\"hidden-redaction-canary\",\"status\":\"review-pending\"},{\"kind\":\"secret-redaction-canary\",\"status\":\"review-pending\"}],\"review_receipt_identity\":null,\"schema_version\":1}"
 }

@@ -1,11 +1,11 @@
 # DEV-002 independent qualification-control review
 
-- 状态：`ReviewPending`
+- 状态：`Accepted`
 - Parent record：[`DEV-002.md`](DEV-002.md)
 - Decision：[`D-040`](../../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
 - Public implementation commit：`a713d0059c331fef8da188b02f2c5854a39a9980`
-- Reviewer：待非作者审查后填写
-- Outcome：待填写
+- Reviewer：`qualification-reviewer-user`
+- Outcome：四项检查全部接受（用户于2026-08-28明确attest）
 
 ## 1. Review purpose and authority
 
@@ -83,3 +83,21 @@ Receipt生成后仍需重跑strict decode、exact public/private binding、freez
 `.cairn`零tracked-file、workspace CI、Markdown link/secret/path scan和backwards audit。只有这些证据全部通过，
 DEV-002才能从`InProgress`变为`Accepted`。该接受只冻结“考试和controls”；DEV-100/102/103/104仍必须对各自
 exact mechanism implementation另行qualification，之后才能首次进入Intent Gate。
+
+上述四项检查均已通过。Strict tooling已生成private review receipt，并完成只允许restricted-summary
+authority projection变化的freeze transition；最终DEV-002状态仍需等待G1–G6和acceptance ledger闭合。
+
+## 6. Completed receipt and freeze transition
+
+- independently reviewed public review subject：
+  `cairn:v1:sha256:testkit.intent-qualification-review-subject.v1:1ffdeef88592e8fa50991f6a03c9d870449d148a246c7e0a6fe3aa084e89af11`；
+- redacted control-review receipt identity：
+  `cairn:v1:sha256:testkit.qualification-control-review-receipt.v1:1b8b892807530fb47b5b4df1f65cf4a9df291932fed047164d346e1d565688b1`；
+- frozen public bundle：
+  `cairn:v1:sha256:testkit.intent-qualification-public-bundle.v1:acb24e22e011b2a57573f1e11c6c26e4cd63156605ce2fe0c7e9832e70a61acc`。
+
+Private audit只返回三类control identity-bound和freeze transition通过的categorical result；private manifest/
+control identities与bytes均未进入Git或public ledger。`IntentQualificationReviewSubjectIdentity`、
+`IntentQualificationBundleIdentity`、`QualificationControlReviewReceiptId`和future mechanism qualification
+receipt保持不同强类型。最终bundle只把public summary从`review-pending`切换为`frozen-reviewed`并写入
+redacted receipt identity；其余public artifact edges与reviewer实际检查的subject完全相同。
