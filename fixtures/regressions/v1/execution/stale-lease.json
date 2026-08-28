@@ -1,0 +1,1 @@
+{"cases":[{"case_id":"expired-before-start","expected":"reassignable","kind":"lease","state":"expired-before-execution-start"},{"case_id":"expired-execution-in-doubt","expected":"reconcile-only","kind":"lease","state":"expired-execution-in-doubt"}],"family":"stale-lease","schema_version":1}

@@ -1,0 +1,1 @@
+{"cases":[{"case_id":"recorded-workflow","evidence_status":"recorded","expectation":"exact-reconstruction","kind":"replay","mode":"recorded-workflow"},{"case_id":"same-input-live-counterfactual","evidence_status":"not-executed","expectation":"may-diverge","kind":"replay","mode":"same-input-live-counterfactual"}],"family":"recorded-live-divergence","schema_version":1}

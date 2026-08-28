@@ -1,0 +1,19 @@
+[package]
+name = "cairn-testkit"
+description = "Strongly typed fixture and control support for Cairn tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cairn-codec.workspace = true
+cairn-protocol.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
