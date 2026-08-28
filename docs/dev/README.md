@@ -33,6 +33,7 @@
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 开始、合并、阶段晋级和完成声明需要哪些控制？ | 规范性开发 gate |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 工作流、代码归属、并行协作和集成顺序如何安排？ | 规范性协作设计 |
 | [`DESIGN_CONFORMANCE_RECORD_TEMPLATE.md`](DESIGN_CONFORMANCE_RECORD_TEMPLATE.md) | 每个 slice 开始前如何记录其设计符合性？ | 必填计划模板 |
+| [`records/README.md`](records/README.md) | 哪些 slice 已有持久化 conformance record，评审和 catalog 状态是什么？ | 开发入口评审记录 |
 
 ## 3. 阅读顺序
 
@@ -68,12 +69,18 @@
 三个 P0 选择已经关闭：D-039 冻结首个 Intent operator/claim/corpus，D-040 冻结首个 verifier
 qualification profile，D-041 冻结历史 fixture curation policy。它们关闭的是设计选择，不是 ST0 evidence。
 
-首个新架构 product increment 仍需完成：
+首个新架构 product increment 按依赖顺序仍需完成：
 
-- materialize D-039 的 clean-room CUDA/host source、public corpus 和 restricted sealed corpus；
-- 为 D-040 的 exact mechanisms 生成并审查 qualification receipts；
-- 按 D-041 生成 sanitized V1 fixtures、provenance manifests 和 public/private scan；
+- 先由DEV-003按D-041建立最小`cairn-testkit` provenance/sanitation contract，生成sanitized V1 fixtures、
+  public/private disposition和扫描记录；
+- 再由DEV-001复用该contract，materialize D-039的clean-room CUDA/host source、public corpus和restricted
+  sealed corpus；
+- 为 D-040 冻结十项 qualification contracts、独立 golden/mutation/fault controls和review assignment；
+  exact implementation receipts由DEV-100/102/103/104在对应实现写出后、首次进入Gate前生成；
 - 完成 DEV-004 的 `DesignConformanceRecord` 与 exact change inventory。
+
+DEV-001 与 DEV-003 的首版 conformance records 已形成，但仍是 `ReviewPending`，未授权 source/fixture
+写入。见 [`records/README.md`](records/README.md)。
 
 在这些 entry evidence 完成前，代码 slice 仍是 `Blocked`；决策已接受不能被误报为 fixture、qualification
 或实现已经完成。

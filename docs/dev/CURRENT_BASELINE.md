@@ -68,7 +68,8 @@ capability data path。
 - historical reduction correct/wrong variants 与 blind-spot control；
 - hardware-free admitted-oracle/candidate-verdict 控制。
 
-复用条件：先按 D-040 完成 exact mechanism qualification；产品专属 policy 移回
+复用条件：先由 DEV-002 冻结 independent qualification controls，再由 owning implementation slice 对
+exact source/dependency 完成 qualification，任何 mechanism 在此前不得进入 Gate；产品专属 policy 移回
 `cairn-cuda-ascend`，generic crate 只保留真正共享的 mechanics。
 
 ## 4. 产品证据与历史控制
@@ -137,14 +138,22 @@ schema。分类：`HistoricalControl`；按 D-041 生成新的净化 fixture，�
 ## 7. 开发起点
 
 D-039、D-040、D-041 已于 2026-08-27 接受，关闭了三个 P0 设计选择。当前尚未生成 D-039 source/corpus
-bytes、D-040 qualification receipts 或 D-041 sanitized fixture manifests，因此 DEV-001/002/003 仍是
-`Proposed`，依赖它们的代码 slice 仍是 `Blocked`。
+bytes、D-040 qualification contract/independent controls 或 D-041 sanitized fixture manifests，因此
+DEV-001/002/003 仍是 `Proposed`，依赖它们的代码 slice 仍是 `Blocked`。Qualification receipt 不能在
+verdict-relevant implementation、dependency 和 calibration environment 存在前预填；十项 exact receipts
+按 catalog mapping 由 DEV-100/102/103/104 在首次使用前生成，DEV-104 负责 set closure。
+
+DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
+[`records/`](records/README.md)，精确列出了计划路径、authority/data boundary、controls、外部 lane、历史
+材料 disposition 和删除时机。两份记录仍为 `ReviewPending`；它们的存在不构成 G0 通过，catalog 状态未
+改变，也尚未授权 CUDA source、public/restricted corpus 或 sanitized fixture 写入。为避免重复fixture
+schema，DEV-003先拥有最小 `cairn-testkit` provenance/sanitation contract，DEV-001在其accepted后消费。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 
 ```text
 materialized D-039 source + public/restricted corpus
-+ qualified D-040 mechanism receipts
++ D-040 qualification contracts + independent golden/mutation/fault controls
 + sanitized D-041 fixtures + provenance manifests
 + current reusable runtime/record/execution foundations
 + current normative architecture

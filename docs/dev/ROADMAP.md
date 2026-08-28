@@ -58,23 +58,27 @@ Knowledge Registry 的无权限基础和设备 Worker 准备可以并行，但�
 
 ### 目标
 
-把已经接受的“第一个实现什么”物化为 exact source、corpus、qualified mechanism、sanitized fixture 和
-可审查开发 contract。
+把已经接受的“第一个实现什么”物化为 exact source、corpus、mechanism qualification contract、sanitized
+fixture 和可审查开发 contract。
 
 ### 必须完成
 
-- 物化 D-039：生成 clean-room deterministic CUDA/host source、intent claim fixtures、公开/restricted
-  corpus 和 user-decision controls；
-- 执行 D-040：冻结 exact mechanism identities，并生成 comparator/adapter/runner/gate/policy evaluator/
-  redactor qualification receipts；
 - 执行 D-041：生成首批净化历史 fixtures、provenance manifests、public/private disposition 和扫描记录；
+- 由 DEV-003 先落一个被首批fixtures真实消费的最小 `cairn-testkit` provenance/sanitation contract，
+  DEV-001复用它，不并行定义第二套fixture manifest；
+- 物化 D-039：复用上述contract生成clean-room deterministic CUDA/host source、intent claim fixtures、
+  公开/restricted corpus 和 user-decision controls；
+- 物化 D-040：冻结十项 semantic mechanism slots、independently authored golden/property expectations、
+  mutation/fault controls、review assignment 和 qualification/requalification plans；exact implementation
+  identity 与 receipt 在 owning ST1 slice 写出实现后、首次用于 Gate 前生成；
 - 为 ST1 形成一份已审查的 `DesignConformanceRecord`；
 - 明确真实 CUDA/Ascend build/NPU lane 的可用性，但不要求此时占用设备；
 - 对目标产品 crate 直接替换策略形成 change inventory，不建立 alias/dual path。
 
 ### 退出断言
 
-团队无需在代码中猜测首个 intent 的语义、corpus、mechanism trust root 或旧 fixture 的合法用途。
+团队无需在代码中猜测首个 intent 的语义、corpus、mechanism qualification obligation 或旧 fixture 的
+合法用途；尚未实现的 mechanism 不被误报为已经 qualified。
 
 ## 5. ST1 — Intent Authority Proof
 
@@ -102,6 +106,8 @@ Frozen CUDA task/context
 - 只实现 `IntentEvidencePlannerProfile` 或 approved deterministic recipe，不铺七类 Planner；
 - 只产生一个下游 Oracle claim proposal，在 Candidate Search 前停止；
 - recorded/hardware-free lane 覆盖 positive、conflict、unknown、wrong-hypothesis、tamper 和 restart。
+- 按 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 的 owner mapping，在每项 D-040 mechanism 首次被 Gate 使用前
+  绑定 exact implementation identity、完成独立 review并生成 qualification receipt；DEV-104 闭合全部十项。
 
 ### 非目标
 

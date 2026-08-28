@@ -19,9 +19,9 @@ slice 为 `Blocked`。
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-001` | Proposed | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；new fixture authoring | exact source/host artifact、provenance、正/竞争/unknown/user-decision fixtures 和 sealed partition manifest |
-| `DEV-002` | Proposed | 对 D-040 的首个 `VerificationMechanismSet` 完成 qualification | D-039 accepted；DEV-001 exact mechanism inputs | mechanism identities、independent golden/property expectations、mutation/fault controls、review 和 qualification/requalification receipts |
-| `DEV-003` | Proposed | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory | new V1 fixture provenance、secret/path/provider scan、保留/删除列表和完整 ST1 graph fixture plan |
+| `DEV-001` | Proposed | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；DEV-003 fixture provenance/sanitation contract | exact source/host artifact、provenance、正/竞争/unknown/user-decision fixtures 和 sealed partition manifest |
+| `DEV-002` | Proposed | 物化 D-040 首个 `VerificationMechanismSet` 的 qualification contract 与独立 controls | D-039 accepted；DEV-001 exact artifact/corpus inputs | semantic mechanism slots、independent golden/property expectations、mutation/fault controls、review assignment 和 qualification/requalification plans；不预填 implementation identity/receipt |
+| `DEV-003` | Proposed | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory | `cairn-testkit` 的 current-V1 fixture provenance/sanitation contract及真实fixture消费者、secret/path/provider scan、保留/删除列表和完整 ST1 graph fixture plan |
 | `DEV-004` | Blocked | 为 ST1 完成首份 `DesignConformanceRecord` 和 exact change inventory | DEV-001/002/003 | 已审查 record，列出 V1 类型、crate/file、authority、tests、删除路径和 unknown scope |
 
 ### DEV-001 materialization 约束
@@ -39,15 +39,40 @@ DEV-001 必须把 D-039 直接物化为：
 不得改为复制 provenance 未清的 Alloyport bytes，也不得退回当前 `matmul-zero-k` 来最大化旧代码复用。
 Source/corpus content identity 在 materialize 后由当前 V1 bytes 派生，不能预填或沿用历史 digest。
 
+### DEV-002 qualification 顺序约束
+
+DEV-002 冻结的是 qualification contract、独立 golden/property expectations、fault/mutation controls、review
+roles 和 requalification triggers，不是尚不存在实现的 qualification receipt。D-040 的 exact
+implementation identity 必须绑定 verdict-relevant source、policy、dependency、toolchain、calibration
+environment 和 limitation；因此不能在 DEV-100/102/103/104 写出对应实现前预填。
+
+`QualificationBeforeGate` 的责任分配为：
+
+| D-040 mechanism | Owning implementation slice | Qualification deadline |
+| --- | --- | --- |
+| strict V1 decode、canonical identity、constructor invariants | DEV-100 | DEV-100 acceptance 前 |
+| CUDA/host ABI static-fact extraction | DEV-102 | DEV-102 acceptance 前 |
+| `RequiredIntentEvidenceSet` derivation | DEV-103 | DEV-103 acceptance 前 |
+| deterministic recipe / typed plan validation | DEV-103 | DEV-103 acceptance 前 |
+| recorded/host adapter and runner | DEV-104 | 首次供 Intent Gate 使用前 |
+| raw observation comparator | DEV-104 | 首次供 Intent Gate 使用前 |
+| receipt binding and closure | DEV-104 | 首次供 Intent Gate 使用前 |
+| conflict/unknown/source-disposition evaluator | DEV-104 | 首次供 Intent Gate 使用前 |
+| Intent Mechanical Gate / admitted constructor boundary | DEV-104 | 首次产生 outcome 前 |
+| diagnostic redaction | DEV-104 | 首次发布 diagnostic 前 |
+
+DEV-104 acceptance 必须引用全部十项 exact qualification identities/receipts；任何 unqualified/refuted mechanism
+均 fail closed。DEV-002 control 作者不能成为后续 mechanism owner 的唯一 reviewer。
+
 ## 3. ST1 — Intent Authority Proof
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-100` | Blocked | 直接把 `cairn-migration` 当前 V1 替换为 `cairn-cuda-ascend` 并建立 dependency/vocabulary architecture gates | DEV-004 | workspace/fixtures/docs 全部切换；旧 crate/alias/compat path 不存在；行为控制仍通过 |
+| `DEV-100` | Blocked | 直接把 `cairn-migration` 当前 V1 替换为 `cairn-cuda-ascend` 并建立 dependency/vocabulary architecture gates | DEV-004 | workspace/fixtures/docs 全部切换；旧 crate/alias/compat path 不存在；行为控制仍通过；D-040 strict-decode/canonical/constructor mechanism 对 exact implementation 完成 qualification |
 | `DEV-101` | Blocked | 建立最小 public/restricted/secret typed ports 与独立 `cairn-admission` process boundary | DEV-100、DEV-002 | Controller/proposal 无 restricted access；Admission 无 model dependency；wrong-store compile/runtime denial；restart control |
-| `DEV-102` | Blocked | 建立 `cairn-sir` frozen input/process protocol 和 `IntentHypothesisSet` proposal-only output | DEV-100、DEV-001 | competing/unknown/conflict hypotheses；SIR crash/restart；admitted constructor 静态不可达 |
-| `DEV-103` | Blocked | 机械派生 `RequiredIntentEvidenceSet`，实现 exact deterministic recipe 或 `IntentEvidencePlannerProfile` 和 typed validator | DEV-101/102 | applicant 不能删 obligation；wrong-kind compile/decode fail；planner-absent path 按 DEV-001 policy 工作 |
-| `DEV-104` | Blocked | 执行 Intent controls并由 separate Mechanical Gate 形成 `MigrationIntentContract` 或非成功 outcome | DEV-101/102/103、DEV-002 | positive/conflict/unknown/wrong-hypothesis/tamper/receipt-closure/restart controls |
+| `DEV-102` | Blocked | 建立 `cairn-sir` frozen input/process protocol 和 `IntentHypothesisSet` proposal-only output | DEV-100、DEV-001 | competing/unknown/conflict hypotheses；SIR crash/restart；admitted constructor 静态不可达；D-040 CUDA/host ABI extractor 对 exact implementation 完成 qualification |
+| `DEV-103` | Blocked | 机械派生 `RequiredIntentEvidenceSet`，实现 exact deterministic recipe 或 `IntentEvidencePlannerProfile` 和 typed validator | DEV-101/102 | applicant 不能删 obligation；wrong-kind compile/decode fail；planner-absent path 按 DEV-001 policy 工作；D-040 required-set derivation 与 recipe/plan validator 分别 qualification |
+| `DEV-104` | Blocked | 执行 Intent controls并由 separate Mechanical Gate 形成 `MigrationIntentContract` 或非成功 outcome | DEV-101/102/103、DEV-002 qualification contract | positive/conflict/unknown/wrong-hypothesis/tamper/receipt-closure/restart controls；D-040 runner/adapter、comparator、receipt closure、policy evaluator、Gate/admitted boundary、redactor 分别 qualification，并闭合首个 set |
 | `DEV-105` | Blocked | 让 admitted intent 生成一个 typed `OracleClaimProposal` 并完成 ST1 backwards audit | DEV-104 | 无 admitted intent 时调用失败；artifact/event graph 完整；Candidate Search 未启动 |
 
 ### ST1 Integration Gate
@@ -86,7 +111,7 @@ gap、conflict、novelty 或 expected information gain 支持时启动。Red 不
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-300` | Blocked | 把 DEV-002 qualification profile 落为 exact mechanism registry/lifecycle 与 Gate precondition | DEV-002、ST1 | unqualified/refuted mechanism fail closed；requalification/impact controls |
+| `DEV-300` | Blocked | 把 DEV-002 qualification contract 与 ST1 exact receipts 落为 mechanism registry/lifecycle 和 Gate precondition | DEV-002、ST1 | unqualified/refuted mechanism fail closed；requalification/impact controls |
 | `DEV-301` | Blocked | 实现 `OracleControlPlannerProfile`、required set projection 和 deterministic plan validation | DEV-200/205 | Planner不能删/满足 obligation；wrong-kind experiment/hidden request 拒绝；deterministic fallback |
 | `DEV-302` | Blocked | 建立 public correct-family、negative mutation、conflict、bypass execution/receipt closure | DEV-300/301 | applicant-authored passed/receipt tamper/candidate-writable evidence 全部变红 |
 | `DEV-303` | Blocked | 建立 restricted hidden corpus store、one-time Worker capability、redacted diagnostics 与 exposure ledger | DEV-101、DEV-302；adaptive 时需 OQ-024 | Controller/Proposal 无 hidden bytes；digest knowledge 不授权；burn/replenish 或明确 non-adaptive policy |
@@ -153,7 +178,7 @@ Cross-cutting work不单独形成无边界“大重构”，随首个消费者�
 | Product observability | DEV-102/104 | 每个新增 lifecycle 同步事件与 semantic-parity control |
 | Proposal Host isolation | DEV-202 | 新 profile 复用 contract suite，不复制 Host |
 | Restricted data plane | DEV-101/303 | 新 admission kind 复用 typed capability，不通用化 store handle |
-| Mechanism qualification | DEV-002/300 | 每个新 comparator/adapter/profiler 加 exact qualification |
+| Mechanism qualification | DEV-002 controls；DEV-100/102/103/104 first receipts；DEV-300 lifecycle | 每个新 comparator/adapter/profiler 加 exact qualification |
 | Architecture tests | DEV-100/101 | 每个 slice 增量增加 forbidden dependency/type controls |
 | Fixture sanitation | DEV-003 | 新历史材料先 provenance/disposition 后进入 test tree |
 | Metrics/dashboard | owning product slice | 指标不成为 durable truth 或 gate authority |

@@ -865,8 +865,10 @@ compile-fail/static boundary tests。
 `AdmissionPlannerV1` schema。首个 operator、claim 和 non-adaptive hidden corpus 已由
 [`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
 确定；首片使用 D-040 的 deterministic recipe 和十项 Intent-scoped mechanism set，不启动 model-backed
-Admission Planner。Mechanism inventory、source bytes、corpus bytes 和 qualification receipts 仍须在 ST0
-物化并审查后，代码 slice 才能进入 `Ready`。
+Admission Planner。Mechanism semantic inventory、source bytes、corpus bytes、independent qualification
+controls 和 qualification/requalification plans 仍须在 ST0 物化并审查后，首个 ST1 code slice 才能进入
+`Ready`。Exact implementation identity 和 qualification receipt 必须由 owning implementation slice 在源码、
+依赖与 calibration environment 冻结后、首次用于 Gate 前生成；不得在实现存在前预填。
 
 后续建议按真实依赖扩展：Oracle Control → Hardware deterministic recipes → Candidate deterministic
 scheduler → Performance adaptive planning → Knowledge/Skill governance。顺序仍需进入 Implementation Plan

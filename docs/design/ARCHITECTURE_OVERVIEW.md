@@ -299,8 +299,9 @@ Candidate Search 之前停止。Operator、claim scope 和 non-adaptive corpus �
 [`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
 冻结；首个 verifier qualification profile 由
 [`D-040`](../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
-冻结。Source artifact、sanitized fixtures、qualification receipts 和 slice conformance record 尚未生成，
-因此这句话不构成本轮代码实施授权。
+冻结。Source artifact、sanitized fixtures、qualification contracts/independent controls 和已审查的 slice
+conformance record 尚未生成，因此这句话不构成本轮代码实施授权。Exact qualification receipt 必须等
+对应 verdict-relevant implementation 存在后、首次用于 Gate 前生成，不能在 ST0 预填。
 
 ## 13. 当前实现与目标差距
 
