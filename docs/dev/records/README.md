@@ -10,8 +10,8 @@
 
 | Slice | Record | Review status | Catalog status | 下一条件 |
 | --- | --- | --- | --- | --- |
-| `DEV-001` | [`DEV-001.md`](DEV-001.md) | `ReviewPending` | `Proposed` | 先由DEV-003接受fixture provenance contract，再由WS-DOMAIN、WS-QUALITY、WS-ADMISSION关闭G0 checklist |
-| `DEV-003` | [`DEV-003.md`](DEV-003.md) | `ReviewPending` | `Proposed` | WS-QUALITY、WS-RECORD、WS-ADMISSION 审查 disposition、private boundary 和删除时机 |
+| `DEV-001` | [`DEV-001.md`](DEV-001.md) | `ReviewedDependencyPending` | `Proposed` | 先由DEV-003接受fixture provenance contract并回填exact identity，再完成开工worktree audit |
+| `DEV-003` | [`DEV-003.md`](DEV-003.md) | `ReviewedForEntry` | `Ready` | 从review package `fe88f4e`启动单一DEV-003 change set |
 
 本轮评审还需明确接受两项由 G0 audit 发现的计划修正：
 

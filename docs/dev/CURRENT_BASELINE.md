@@ -145,9 +145,10 @@ verdict-relevant implementation、dependency 和 calibration environment 存在�
 
 DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
 [`records/`](records/README.md)，精确列出了计划路径、authority/data boundary、controls、外部 lane、历史
-材料 disposition 和删除时机。两份记录仍为 `ReviewPending`；它们的存在不构成 G0 通过，catalog 状态未
-改变，也尚未授权 CUDA source、public/restricted corpus 或 sanitized fixture 写入。为避免重复fixture
-schema，DEV-003先拥有最小 `cairn-testkit` provenance/sanitation contract，DEV-001在其accepted后消费。
+材料 disposition 和删除时机。用户于2026-08-27审查并接受review package commit `fe88f4e`。DEV-003已
+进入`Ready`；DEV-001的设计评审已完成，但仍等待DEV-003 accepted provenance/sanitation contract，故保持
+`Proposed`。当前尚未生成CUDA source、public/restricted corpus或sanitized fixture bytes。为避免重复
+fixture schema，DEV-003先拥有最小`cairn-testkit` contract，DEV-001在其accepted后消费。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 

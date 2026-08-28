@@ -12,8 +12,8 @@
 表中只列专属目标和增量验收。状态变化必须同步记录到
 [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 或其引用的状态记录，并引用 commit/evidence，不能只改本表。
 
-当前没有任何新架构代码 slice 被授权为 `InProgress`。决策/计划 slice 为 `Proposed`；依赖它们的代码
-slice 为 `Blocked`。
+当前没有任何新架构代码 slice 处于 `InProgress`。DEV-003 已通过 entry review 并进入 `Ready`；DEV-001
+仍等待其 fixture provenance/sanitation contract，其余依赖 slice 保持 `Proposed` 或 `Blocked`。
 
 ## 2. ST0 — Planning Readiness
 
@@ -21,7 +21,7 @@ slice 为 `Blocked`。
 | --- | --- | --- | --- | --- |
 | `DEV-001` | Proposed | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；DEV-003 fixture provenance/sanitation contract | exact source/host artifact、provenance、正/竞争/unknown/user-decision fixtures 和 sealed partition manifest |
 | `DEV-002` | Proposed | 物化 D-040 首个 `VerificationMechanismSet` 的 qualification contract 与独立 controls | D-039 accepted；DEV-001 exact artifact/corpus inputs | semantic mechanism slots、independent golden/property expectations、mutation/fault controls、review assignment 和 qualification/requalification plans；不预填 implementation identity/receipt |
-| `DEV-003` | Proposed | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory | `cairn-testkit` 的 current-V1 fixture provenance/sanitation contract及真实fixture消费者、secret/path/provider scan、保留/删除列表和完整 ST1 graph fixture plan |
+| `DEV-003` | Ready | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory；review package `fe88f4e` | `cairn-testkit` 的 current-V1 fixture provenance/sanitation contract及真实fixture消费者、secret/path/provider scan、保留/删除列表和完整 ST1 graph fixture plan |
 | `DEV-004` | Blocked | 为 ST1 完成首份 `DesignConformanceRecord` 和 exact change inventory | DEV-001/002/003 | 已审查 record，列出 V1 类型、crate/file、authority、tests、删除路径和 unknown scope |
 
 ### DEV-001 materialization 约束
