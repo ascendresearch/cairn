@@ -19,6 +19,7 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 
 | 文档 | 用途 |
 | --- | --- |
+| [`../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | SIR 的规范性目标、authority 边界与当前建设路线 |
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
@@ -45,6 +46,7 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 - DEV-004：Accepted，task-generic recorded/live DeepSeek SIR proposal episode 已闭合；
 - DEV-005：Accepted，第二个atomic compaction task复用同一路径，并产生可观察Oracle utility。
 
-CP0结论是SIR当前落在proposal-only seam，同时保留未来扩展口。当前下一步应以第一个真实CUDA→Ascend C
-迁移结果为consumer，再规划最小intent/Oracle/candidate边界；不因为保留SIR就恢复DEV-002式第三人fixture
-review、Admission或qualification框架，也不因为主线暂时不依赖SIR就否定或删除这条能力。
+CP0结论是`Go`：SIR继续留在当前建设路径。下一条纵向链以第一个正式consumer约束建设范围，完善
+`IntentRecoveryInputV1`/`IntentHypothesisSetV1`，接入最小claim-scoped Intent Admission与
+`NeedsUserDecision`，再让一个真实Oracle决策消费`MigrationIntentContract`。这不授权一次性建设完整
+CP1，也不恢复DEV-002式第三人fixture review、通用Admission/qualification框架或固定多Agent拓扑。

@@ -1,10 +1,11 @@
 # CUDA 高阶语义意图恢复子系统设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-28
 - 父设计：[系统设计](../SYSTEM_DESIGN.md)
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - Agent 软件架构：[Agent 与 Strategy](../design/AGENT_ARCHITECTURE.md)
+- 当前实施基线：[CURRENT_BASELINE](../dev/CURRENT_BASELINE.md)
 - 调研依据：[Oracle 自动生成调研](ORACLE_RESEARCH_REPORT.md)、
   [可借鉴方向](BORROWABLE_DIRECTIONS.md)
 
@@ -19,20 +20,26 @@ Ascend C 上保留的高阶语义，并据此确定哪些实现细节必须保�
 `Semantic Intent Recovery`（SIR）：SIR 只产生带证据的候选意图，不直接定义正式迁移契约，
 不生成最终 Oracle 权威，也不判断 Ascend C 候选是否通过。
 
+`proposal-only` 是永久 authority 边界，不是能力上限或暂停建设的同义词。SIR 可以逐步组合模型、
+静态分析、IR、规则、符号方法和受控实验，形成越来越完整的意图恢复能力；但这些能力始终只能提交
+proposal，由独立 Intent Admission 决定哪些 exact claim 可以进入正式迁移契约。
+
 ## 2. 核心边界
 
 ```mermaid
 flowchart LR
-    input["不可变输入\nCUDA kernel / caller / model context / docs / tests / traces"]
+    input["IntentRecoveryInputV1\ncaller declaration + bounded evidence + capability manifest"]
     sir["Semantic Intent Recovery\n提取、假设、冲突、实验建议"]
-    proposals[["IntentHypothesisSet\nPROPOSED"]]
+    proposals[["IntentHypothesisSetV1\nPROPOSED"]]
     admit{"Intent Admission\n独立准入"}
     contract[["MigrationIntentContract\nADMITTED"]]
     oracle["Oracle Explorer"]
+    decision["UserIntentDecision\n实际任务 authority"]
 
     input --> sir --> proposals --> admit
     admit -->|充分| contract --> oracle
-    admit -->|冲突或不足| unresolved["Conflict / Unknown / NeedsUserDecision"]
+    admit -->|证据不足| unresolved["Conflict / Unknown / Limited"]
+    admit -->|期望语义必须由人决定| decision --> admit
 ```
 
 最重要的不可跨越规则是：
@@ -41,9 +48,24 @@ flowchart LR
 - 只有独立的 Intent Admission 可以把被支持的 claim 提升为正式迁移意图；
 - 未能恢复的语义必须保留为 `Unknown`，相互矛盾的解释必须保留为 `Conflict`；
 - 不能以一个自然语言摘要替代原始证据、推导路径和竞争假设；
-- 后续 Oracle、候选搜索和性能优化只能消费已准入 claim，或者明确消费仍未决的 claim 并输出
-  弱化结论；
+- 要求正式结论的 Oracle、候选搜索和性能优化只能消费 `MigrationIntentContract` 中的已准入 claim；
+  未决 claim 只能缩小或阻断对应 scope，不能作为弱化版正式意图旁路输入；
 - SIR 无权查看隐藏 admission corpus、候选最终 verdict 或修改 judge policy。
+
+### 2.1 参与者与责任
+
+| 参与者 | 责任 | 不承担 |
+| --- | --- | --- |
+| 任务提交者/Controller | 收集调用者最小声明，冻结输入、权限、预算与运行身份 | 替 SIR 编写答案或把结构有效当成语义成立 |
+| runtime SIR actor | 面对未见任务读取授权材料，运行 0..N 个恢复策略并提交 typed proposal | admission、用户决策、Oracle/candidate verdict |
+| repository coding agent | 构建通用 SIR 应用、协议、工具与测试 | 阅读 evaluator answer 后代写 runtime proposal |
+| Intent Admission | 逐 claim 机械检查 authority、证据闭包与冲突，形成 contract 或 scoped outcome | 用另一模型的“同意”代替证据 |
+| 实际任务 authority | 只处理证据无法决定的期望语义或 policy 分叉 | 审阅每份 SIR 报告、确认源码可机械观察的事实 |
+
+所谓“非 case 作者”不是固定第三人 reviewer。case/fixture 作者只负责 evaluator 材料，不能借此成为
+产品运行时的意图 authority；真正进入 `NeedsUserDecision` 环节的人，应是实际调用者、算子/模型负责人
+或其明确授权代表。该角色只回答 exact、scoped 的决策请求，不读取 restricted expected answer，也不为
+每次 SIR run 举行通用评审。
 
 ## 3. “用户意图”的分层模型
 
@@ -95,7 +117,20 @@ Disposition 必须绑定 exact claim/domain/source observation 和授权依据�
 
 ## 4. 输入模型
 
-SIR 的读取面可以比单个执行单元更大，但执行和候选判断仍以单个 kernel 为边界。输入至少包括：
+Controller 冻结 `IntentRecoveryInputV1`。它至少包含：
+
+1. 调用者最小机器可读声明：source entry point/参数角色、dtype/shape、已知合法域与错误行为、请求的
+   输出语义或 reference、明确 exclusion 与 unknown；
+2. 目标 Ascend SoC/toolchain、迁移 scope、requested claims 和预算；
+3. 被授权的证据引用、结构化 prior feedback 或 `NoPriorFeedback`；
+4. exact capability manifest、数据政策和 task/run identity。
+
+调用者声明是一个有 provenance 的 authority source，不是 SIR prompt 中可以被覆盖的普通文本。caller
+declaration、SIR hypothesis、source observation、external expectation 和 feedback 必须保持来源分离；
+冲突由 Intent Admission 显式记录，不能合并成一个无出处的值。
+
+SIR 的读取面可以比单个执行单元更大，但执行和候选判断仍以单个 kernel 或显式 migration unit 为边界。
+授权证据可以包括：
 
 1. CUDA kernel、头文件、宏、模板实例化信息和编译选项；
 2. host launch 代码、参数构造、shape/stride/layout 计算和 stream 使用；
@@ -106,7 +141,8 @@ SIR 的读取面可以比单个执行单元更大，但执行和候选判断仍�
 7. 上一轮迭代的结构化反馈，包括真实模型接入结果；
 8. 经检索策略允许的知识条目和 skill，但保留其精确信赖状态与内容身份。
 
-所有输入先进入不可变、内容寻址的 `IntentEvidenceSet`。密钥、私有模型数据或不可归档材料只能
+证据进入不可变、内容寻址的 `IntentEvidenceSet`，再由 `IntentRecoveryInputV1` 引用；声明、证据、
+capability 与生命周期 identity 不得擦除为通用字符串或 digest。密钥、私有模型数据或不可归档材料只能
 以受控外部引用存在，并明确限制 replay 能力。SIR 不拥有任何输入的写权限。
 
 ## 5. 主要产物
@@ -129,7 +165,7 @@ SIR 的读取面可以比单个执行单元更大，但执行和候选判断仍�
 
 ### 5.2 Hypothesis set，而不是唯一答案
 
-`IntentHypothesisSet` 必须允许：
+`IntentHypothesisSetV1` 必须允许：
 
 - 多个竞争解释；
 - 每个解释覆盖不同 domain region；
@@ -155,6 +191,16 @@ SIR 需要把以下信息显式分开：
 强度，例如允许改变线程分解但不允许改变 reduction 的合法结果集合。
 
 ## 6. 恢复流程
+
+### 6.0 Strategy coordinator
+
+SIR 是任务级恢复运行时，不等于某一个模型。Controller 按冻结 policy 启动 `IntentRecoveryRun`；SIR
+coordinator 可为该 run 选择静态/IR/规则/符号 strategy，并按需要运行 0..N 个 model-backed episode。
+DeepSeek 是当前首个 runtime strategy，不是永久拓扑。模型不能自行扩大 provider、turn、token、tool、
+skill、网络或设备权限；也不要求为了形式完整而固定组织多 Agent debate 或第三人复核。
+
+各 strategy 输出必须保留自己的 provenance 和共同依赖。聚合可以去重或建立关系，但不能把不同来源
+压平为“多数意见”。任务规模或当前 consumer 不需要的 strategy 不预建空框架。
 
 ### 6.1 静态事实提取
 
@@ -220,21 +266,29 @@ Intent Admission 按 claim 审查：
 
 1. 验证证据身份、适用域和依赖图；
 2. 检查是否存在未解决反证或 source undefined behavior；
-3. 在隐藏/冻结的意图区分语料上进行控制；
-4. 验证从原始证据到 claim 的可重放推导；
-5. 选择 `Admitted`、`AdmittedWithLimits`、`Conflict`、`Unknown` 或
+3. 机械派生该 claim 所需的公开、restricted、执行或用户决策 obligation；
+4. 仅在当前 exact admission mechanism 和风险确实需要时运行相应冻结/隐藏 control；
+5. 验证从原始证据到 claim 的可重放推导；
+6. 选择 `Admitted`、`AdmittedWithLimits`、`Conflict`、`Unknown` 或
    `NeedsUserDecision`；
-6. 生成不可变 `MigrationIntentContract`，不修改原始 hypothesis。
+7. 只有完成 closure 的 claim 才进入不可变 `MigrationIntentContract`，原始 hypothesis 不被修改。
 
-Admission 可以由 agent 编排和解释，但机械 gate 只能读取权威 receipt，不能以另一模型的一句
-“同意”作为独立性。
+可选 `IntentEvidencePlannerProfile` 可以提出如何补证或区分假设，但它仍是 proposal actor。Admission
+gate 本身必须 model-free，只读取已验证 identity、policy、decision 和权威 receipt，不能以另一模型或
+通用 reviewer 的“同意”作为独立性。若缺失的是用户期望语义，gate 产生独立、scoped
+`UserIntentDecisionRequest`；实际任务 authority 的回答作为新输入进入后续 recovery/admission run。
 
 ## 7. 隔离设计
 
 ### 7.1 进程与依赖隔离
 
-SIR 应通过独立 worker/service port 运行。其实现可以更换为规则、静态分析、不同模型、多 agent、
+最终 authority 架构中，SIR 应通过独立 worker/service port 运行。其实现可以更换为规则、静态分析、不同模型、多 agent、
 形式化工具或它们的组合，而不改变 Oracle Explorer、Candidate Search 和 Admission 的接口。
+
+当前 `cairn-migration::sir` 复用 `cairn-agent` 的 in-process proposal harness，是 D-042 明确允许的
+proposal-only 纵向价值证明，不是最终部署拓扑。只要 proposal 尚不能进入 admitted consumer，该 harness
+可以保留；第一条 Intent Admission authority integration 必须同时落实独立进程/OS principal、typed
+process protocol 和 capability reachability，不能把现有 harness 直接升级权限。
 
 依赖方向只能是：
 
@@ -317,8 +371,10 @@ SIR 的评估不能只看模型生成文本是否“合理”。至少需要：
 判断，也没有减少用户工作，或换一个语义形态不同的task就要求修改production代码/prompt结构，则SIR不进入
 critical path。
 
-意图恢复 admission corpus 应包含：硬件特化但语义不变、模型/checkpoint 依赖的非教科书行为、
-文档与源码冲突、CUDA 源 bug、多个合理解释、信息不足、融合和 side effect 等案例。
+case 数量、第三人评审数量和 proposal 文本是否漂亮都不是 SIR 泛化证据。fixture 只服务 evaluator；
+runtime SIR 不读取 expected answer。未来确有 admission mechanism 时，其控制应按 exact claim 和风险覆盖
+硬件特化但语义不变、模型/checkpoint 依赖的非教科书行为、文档与源码冲突、CUDA 源 bug、多个合理解释、
+信息不足、融合和 side effect 等类别，而不是预建一个无 consumer 的通用资格仪式。
 
 ## 10. 强类型边界
 
@@ -349,7 +405,7 @@ SIR 不应：
 - 将高层 IR 设计成不可替换的全项目中心模型；
 - 把未来可能的通用迁移抽象引入当前 CUDA → Ascend C 产品边界。
 
-## 12. 首个 runtime-model evaluation profile
+## 12. 当前 runtime-model 价值证明
 
 首个evaluation fixture使用
 [`D-039`](../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
@@ -361,18 +417,41 @@ authorized tool results。Prompt可以要求引用事实、保留竞争假设和
 具体答案。Proposal是否发现数学归约、source-order行为、deployment specialization或证据不足，由evaluator
 在episode完成后判断；production代码不得为这些标签建fixture-specific branch。
 
-第一项fixture只证明integration path。进入Intent Admission设计前，还必须选择一个在算法骨架、memory/
-side-effect或multi-kernel structure上实质不同的CUDA task，并在不修改production profile/API/code的情况下
-运行。若做不到，或SIR相对user-declared intent没有可观测下游收益，则停止SIR路线。
+DEV-004 已完成上述 reduction 的 recorded/live proposal episode。DEV-005 又用同一 production path 处理
+atomic compaction task，没有修改 `sir.rs`、production prompt 或控制流；SIR 对 atomic output order 的
+unknown 改变了一个具体下游 Oracle 选择。因此 D-042 的 cross-task/downstream-utility gate 结论为 `Go`。
 
-## 13. 分步建设原则
+`Go` 证明当前 task-generic seam 值得继续建设，不证明 SIR 已泛化、proposal 正确或 Intent 已 admitted；
+也不授权一次性铺满完整 process tree、qualification registry 或固定 reviewer topology。若未来某阶段的
+downstream utility 下降，含义是暂停不成比例的 SIR 投资并保留已被真实 consumer 使用的最小 seam，而不是
+永久否定或删除 SIR 方向。
+
+## 13. 当前建设路线
+
+当前已经完成的 foundation 是：task-generic source projection、bounded read tools、DeepSeek recorded/live
+episode、带引用的 competing hypothesis proposal、durable provenance，以及第二任务的下游 utility control。
+它仍是 `IntentHypothesisSetProposalV1` 的最小子集。
+
+下一条纵向链必须继续建设 SIR，同时让它面对第一个正式 consumer：
+
+1. 冻结完整 `IntentRecoveryInputV1`：调用者最小声明、目标环境、允许证据、显式 unknown、capability；
+2. 将当前 proposal 直接完善为当前 V1 的 `IntentHypothesisSetV1`：严格分开 observed facts、hypotheses、
+   conflicts/unknowns、invariants、optimization freedoms、source behavior disposition 和实验提案；
+3. 建立 `IntentRecoveryRun` lifecycle 和 strategy coordinator；只按真实任务需要增加 static/model strategy，
+   不固定多 Agent 或 reviewer 数量；
+4. 为首个下游 claim 实现最小 model-free Intent Admission 与强类型 promotion boundary；
+5. 对不可由证据决定的 desired semantics 生成 `UserIntentDecisionRequest`，由实际任务 authority 回答；
+6. 形成第一个 `MigrationIntentContract`，并让一个真实 Oracle 决策只能通过该 contract 消费 SIR 结果。
+
+这一链路闭合后，再按真实 consumer 逐步增加 bounded caller slice、动态 probe、模型图/部署上下文、
+结构化反馈、更强 IR/关系抽取/主动实验，以及可建模子域的形式化语义和 translation-validation
+obligations。第一条 authority integration 同时落实目标 `cairn-sir` 进程隔离；没有 consumer 的空 crate、
+全量 planner catalog 或资格体系不作为前置工作。
 
 设计允许分块演进，但每一步都保持相同隔离边界：
 
-1. 先支持 kernel + 显式 host launch 的 ABI/shape/算法骨架与多假设输出；
-2. 再加入 bounded caller slice、测试、文档和 CUDA 动态 probe；
-3. 再加入模型图/部署上下文和结构化真实反馈；
-4. 按算子类别加入更强的 IR、关系抽取和主动实验；
-5. 最后在可建模子域加入形式化语义和 translation-validation obligations。
-
-每阶段提升的是可恢复 claim 的范围和强度，不改变“SIR 提案、Intent Admission 授权”的根本边界。
+- 每个 slice 必须连接一个真实下游 decision、减少明确人工工作，或关闭一条 authority/capability 风险；
+- fixture expected answer、case author 和 repository coding agent 不进入 runtime SIR context；
+- 不以固定 case、评审、Agent 或迭代数量代替 task-generic API 与 downstream utility；
+- 不因避免过度建设而删除已证明有用的 SIR seam，也不以保留 seam 为由预建无 consumer 的体系；
+- 每阶段提升可恢复 claim 的范围和强度，不改变“SIR 提案、Intent Admission 授权”的根本边界。

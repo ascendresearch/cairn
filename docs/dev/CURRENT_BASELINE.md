@@ -10,9 +10,10 @@ Cairn 已有可复用的 durable agent runtime、record/replay、tool loop、pro
 局部验证基础，但新的 CUDA → Ascend C 端到端 workflow 尚未完成。
 
 CP0已经证明DeepSeek可作为runtime actor面对不同task产生task-generic SIR proposal，并在atomic compaction
-task上改变一个具体Oracle选择。SIR当前以proposal-only seam进入架构，未来可随真实consumer扩展；这不授权
-现在建设完整SIR → Admission → Oracle权威链。下一步应围绕第一个真实迁移结果规划最小consumer，而不是
-恢复预建架构。
+task上改变一个具体Oracle选择。CP0结论为`Go`：SIR当前以proposal-only authority进入架构，并继续沿第一个
+真实consumer扩展。下一条纵向链是完善SIR输入/输出，接入最小claim-scoped Intent Admission和
+`NeedsUserDecision`，再让一个真实Oracle决策消费首个`MigrationIntentContract`；这不授权一次性铺满完整
+SIR → Admission → Oracle → Candidate权威链或恢复预建架构。
 
 ## 2. 可复用基础
 

@@ -21,7 +21,9 @@ DEV-004 generic DeepSeek SIR proposal path
 ```
 
 DEV-004/005现已accepted，CP0结论为Go：SIR当前落在proposal-only seam，并保留随真实consumer扩展的口子。
-当前位于“plan the smallest authority/migration consumer”，尚未授权完整CP1能力集。
+当前已确定最小consumer-driven方向：完整`IntentRecoveryInputV1`/`IntentHypothesisSetV1` → claim-scoped
+Intent Admission/`NeedsUserDecision` → 一个消费`MigrationIntentContract`的真实Oracle决策。该方向继续建设
+SIR并建立首个正式consumer，尚未授权完整CP1能力集、Candidate链或通用governance。
 
 在DEV-005之前，不创建独立Admission、mechanism qualification registry、七类Planner、十一位置Agent catalog、
 空SIR/Proposal Host crate或面向未来stage的兼容接口。

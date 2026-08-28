@@ -26,8 +26,10 @@
    [`../SYSTEM_DESIGN.md`](../SYSTEM_DESIGN.md)，确认产品与 authority 边界；
 2. 读本目录总览，理解软件形态；
 3. 按当前任务进入代码、逻辑、运行、Agent 或 Admission 架构；
-4. 涉及 Oracle 实施前，再逐项检查
-   [`../oracle/DESIGN_INVARIANTS.md`](../oracle/DESIGN_INVARIANTS.md) 和相应 focused design；
+4. 涉及 SIR 或 Oracle 实施前，再逐项检查
+   [`../oracle/DESIGN_INVARIANTS.md`](../oracle/DESIGN_INVARIANTS.md) 和相应 focused design；SIR 以
+   [`../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md)
+   为规范性业务设计；
 5. 以 [`../dev/CURRENT_BASELINE.md`](../dev/CURRENT_BASELINE.md) 判断哪些目标已经实现。
 
 规划实现顺序、slice、entry/exit gate 和并行 workstream 时，另读
