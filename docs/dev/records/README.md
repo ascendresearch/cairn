@@ -10,7 +10,7 @@
 
 | Slice | Record | Review status | Catalog status | 下一条件 |
 | --- | --- | --- | --- | --- |
-| `DEV-001` | [`DEV-001.md`](DEV-001.md)；[`private review`](DEV-001-PRIVATE-REVIEW.md) | `ActiveConformance` | `InProgress` | independent review/receipt已闭合；完成G1–G6 evidence和acceptance ledger |
+| `DEV-001` | [`DEV-001.md`](DEV-001.md)；[`private review`](DEV-001-PRIVATE-REVIEW.md) | `Accepted` | `Accepted` | DEV-002消费commit `9dc8243`冻结的public bundle与redacted review receipt identities |
 | `DEV-003` | [`DEV-003.md`](DEV-003.md) | `Accepted` | `Accepted` | DEV-306消费fixtures后按disposition删除superseded旧路径 |
 
 本轮评审还需明确接受两项由 G0 audit 发现的计划修正：

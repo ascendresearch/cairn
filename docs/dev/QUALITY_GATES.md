@@ -1,6 +1,6 @@
 # Cairn 开发质量与晋级 Gate
 
-- 状态：规范性开发计划设计，尚未授权代码实施
+- 状态：规范性开发质量Gate；各slice按独立入口评审授权实施
 - 日期：2026-08-27
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - Slice catalog：[`SLICE_CATALOG.md`](SLICE_CATALOG.md)

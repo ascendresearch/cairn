@@ -5,6 +5,7 @@
 - Decision：[`D-039`](../../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
 - Public implementation commit：`98c4681f783ffcc1f759ef1fd697725ef9c3990c`
 - Review-contract commit：`9997a3e`
+- Frozen implementation commit：`9dc8243dc9432745f84a8dd987a839a8eade8341`
 - Reviewer：`private-reviewer-user`
 - Outcome：六项检查全部接受（用户于2026-08-27明确attest）
 
@@ -81,6 +82,9 @@ public summary只写入由receipt exact bytes派生的`RestrictedReviewReceiptId
 Receipt生成后仍需重跑strict decode、identity binding、public sanitation、`.cairn`零tracked-file、workspace CI
 和backwards audit。只有这些证据全部通过，DEV-001才能从`InProgress`变为`Accepted`；随后DEV-002才消费
 frozen public bundle identity和redacted review receipt identity。
+
+上述检查均已通过，DEV-001由frozen implementation commit `9dc8243dc9432745f84a8dd987a839a8eade8341`
+及其acceptance ledger正式接受。CUDA/Ascend执行不属于本slice required lane，继续保留为`NotExecuted`。
 
 ## 6. Completed receipt and freeze transition
 
