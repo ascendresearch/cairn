@@ -3,7 +3,55 @@ use std::{fmt, path::Path, str::FromStr};
 use cairn_protocol::{ContentId, ContentType, IdentityError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-use super::{FixtureError, PublicFixturePath};
+use super::FixtureError;
+
+const REGRESSION_ROOT: &str = "fixtures/regressions/v1/";
+const INTENT_ROOT: &str = "fixtures/cuda-ascend/intent/reduce-sum-f32/v1/";
+
+/// Repository-relative path scanned under one approved public fixture root.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct PublicSanitationPath(String);
+
+impl PublicSanitationPath {
+    /// Validates a path under either current public fixture root.
+    ///
+    /// # Errors
+    ///
+    /// Rejects paths outside the approved roots and any private, absolute, or traversing path.
+    pub fn new(value: impl Into<String>) -> Result<Self, FixtureError> {
+        let value = value.into();
+        let path = Path::new(&value);
+        let approved_root = value.starts_with(REGRESSION_ROOT) || value.starts_with(INTENT_ROOT);
+        if !approved_root
+            || value.contains('\\')
+            || path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::CurDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+            || value
+                .split('/')
+                .any(|part| matches!(part, ".cairn" | "secrets" | "restricted"))
+        {
+            return Err(FixtureError::InvalidPath {
+                kind: "public sanitation path",
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the repository-relative wire path.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SchemaV1;
@@ -178,7 +226,7 @@ impl SanitationScanProfileV1 {
 /// One sanitation finding. It intentionally contains no matching content snippet.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SanitationFinding {
-    path: PublicFixturePath,
+    path: PublicSanitationPath,
     check: SanitationCheckKind,
 }
 
@@ -194,7 +242,7 @@ impl SanitationFinding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SanitationScanReportV1 {
     profile: SanitationScanProfileId,
-    scanned_paths: Vec<PublicFixturePath>,
+    scanned_paths: Vec<PublicSanitationPath>,
     findings: Vec<SanitationFinding>,
 }
 
@@ -207,7 +255,7 @@ impl SanitationScanReportV1 {
 
     /// Returns the canonical scan scope.
     #[must_use]
-    pub fn scanned_paths(&self) -> &[PublicFixturePath] {
+    pub fn scanned_paths(&self) -> &[PublicSanitationPath] {
         &self.scanned_paths
     }
 
@@ -236,7 +284,7 @@ pub fn decode_scan_profile_v1(bytes: &[u8]) -> Result<SanitationScanProfileV1, F
 ///
 /// # Errors
 ///
-/// Returns an error when the root is not the expected public fixture path, a file cannot be read,
+/// Returns an error when the root is not an approved public fixture path, a file cannot be read,
 /// a path cannot be represented, or the scan profile cannot be identified.
 pub fn scan_public_tree(
     repository_root: &Path,
@@ -245,8 +293,11 @@ pub fn scan_public_tree(
 ) -> Result<SanitationScanReportV1, FixtureError> {
     let profile = decode_scan_profile_v1(profile_bytes)?;
     let profile_id = SanitationScanProfileId::derive(profile_bytes)?;
-    let expected_root = repository_root.join("fixtures/regressions/v1");
-    if fixture_root != expected_root || !fixture_root.is_dir() {
+    let approved_roots = [
+        repository_root.join("fixtures/regressions/v1"),
+        repository_root.join("fixtures/cuda-ascend/intent/reduce-sum-f32/v1"),
+    ];
+    if !approved_roots.iter().any(|root| fixture_root == root) || !fixture_root.is_dir() {
         return Err(FixtureError::InvalidPath {
             kind: "public scan root",
         });
@@ -262,7 +313,7 @@ pub fn scan_public_tree(
                 .map_err(|_| FixtureError::InvalidPath {
                     kind: "public scan path",
                 })?;
-        let path = PublicFixturePath::new(relative.to_string_lossy().replace('\\', "/"))?;
+        let path = PublicSanitationPath::new(relative.to_string_lossy().replace('\\', "/"))?;
         let bytes = std::fs::read(&file).map_err(|error| FixtureError::Codec {
             message: error.to_string(),
         })?;
@@ -301,7 +352,7 @@ fn collect_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(),
 }
 
 fn scan_one(
-    path: &PublicFixturePath,
+    path: &PublicSanitationPath,
     bytes: &[u8],
     profile: &SanitationScanProfileV1,
     findings: &mut Vec<SanitationFinding>,

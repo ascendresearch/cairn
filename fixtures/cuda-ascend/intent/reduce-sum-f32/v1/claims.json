@@ -1,0 +1,1 @@
+{"hypotheses":[{"kind":"mathematical-real-sum","status":"required-intent"},{"kind":"source-tree-bit-identity","status":"competing-refuted-control"},{"kind":"deployment-specialization","status":"competing-refuted-control"},{"kind":"accumulation-order-unknown","status":"explicit-unknown"}],"operator":"reduce-sum-f32","schema_version":1}

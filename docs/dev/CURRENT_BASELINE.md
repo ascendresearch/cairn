@@ -149,8 +149,10 @@ DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
 [`records/`](records/README.md)，精确列出了计划路径、authority/data boundary、controls、外部 lane、历史
 材料 disposition 和删除时机。用户于2026-08-27审查并接受review package commit `fe88f4e`。DEV-003已
 通过G1–G6 repository evidence并以`79a1174`接受；DEV-001的设计评审和依赖回填均已完成，现处于
-`InProgress`。当前尚未冻结CUDA source或public/restricted Intent corpus。为避免重复fixture schema，
-DEV-001必须直接消费DEV-003已接受的`cairn-testkit` contract，不另建并行V1 fixture manifest。
+`InProgress`。其active change set已物化clean-room CUDA/host source、public controls和六分区private batch，
+并直接扩展/消费DEV-003已接受的`cairn-testkit` contract；private batch仍为`review-pending`，因此尚未生成
+redacted review receipt或冻结为accepted input。当前未运行CUDA/Ascend lane，也未另建并行V1 fixture
+manifest。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 
