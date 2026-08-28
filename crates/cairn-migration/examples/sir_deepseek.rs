@@ -16,8 +16,8 @@ use cairn_agent::{
     recover_agent_episode,
 };
 use cairn_migration::{
-    SirEpisodeRunInput, SirReadByteLimit, SirReadLineLimit, SirTaskByteLimit, SirTaskFileLimit,
-    SirTaskLimits, SirTaskWorkspace, run_sir_episode,
+    IntentRecoveryRequestV1, SirEpisodeRunInput, SirReadByteLimit, SirReadLineLimit,
+    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits, SirTaskWorkspace, run_sir_episode,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use cairn_record::ContentStore;
@@ -101,15 +101,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let task_root = args
         .next()
-        .ok_or("usage: sir_deepseek <task-root> [config-path]")?;
+        .ok_or("usage: sir_deepseek <task-root> <recovery-request-path> [config-path]")?;
+    let recovery_request_path = args
+        .next()
+        .ok_or("usage: sir_deepseek <task-root> <recovery-request-path> [config-path]")?;
     let config_path = args
         .next()
         .unwrap_or_else(|| "config/sir-deepseek.example.json".to_owned());
     if args.next().is_some() {
-        return Err("usage: sir_deepseek <task-root> [config-path]".into());
+        return Err("usage: sir_deepseek <task-root> <recovery-request-path> [config-path]".into());
     }
     let raw: LiveSirConfig = serde_json::from_slice(&fs::read(root.join(config_path))?)?;
     let live = raw.resolve(&root)?;
+    let recovery_request: IntentRecoveryRequestV1 =
+        serde_json::from_slice(&fs::read(root.join(recovery_request_path))?)?;
 
     let template: ModelTemplate = serde_json::from_slice(&fs::read(
         root.join("model-templates/deepseek/deepseek-v4-pro.json"),
@@ -145,6 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         workspace,
         SirEpisodeRunInput {
             task_id: TaskId::new(),
+            recovery_request,
             episode_id,
             model_configuration,
             selection: ModelSelection {
@@ -189,6 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "deployment": model.deployment().as_str(),
             "episode_id": outcome.episode_id(),
             "task_bundle": outcome.task_bundle(),
+            "recovery_input": outcome.recovery_input(),
             "proposal_id": outcome.proposal_id(),
             "proposal": outcome.proposal(),
             "completion_reason": outcome.completion_reason(),

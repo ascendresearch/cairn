@@ -120,7 +120,7 @@ Controller 不执行 generated source，不持 restricted store file/credential�
 ### 3.2 SIR process (`cairn-sir`)
 
 SIR 接收冻结 `IntentRecoveryInputV1` 与 capability manifest，执行静态分析/受控实验/模型推理，返回
-`IntentHypothesisSetV1`。它：
+`IntentHypothesisSetProposalV1`。它：
 
 - 使用独立 OS principal 和工作目录；
 - 只读 allowlist public artifacts；

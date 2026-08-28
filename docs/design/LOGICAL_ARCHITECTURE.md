@@ -247,7 +247,7 @@ sequenceDiagram
     participant P as Candidate proposal episode
 
     C->>S: frozen IntentRecoveryInputV1
-    S-->>C: IntentHypothesisSetV1
+    S-->>C: IntentHypothesisSetProposalV1
     C->>A: request Intent Admission
     A->>X: authorized disambiguation jobs (if required)
     X-->>A: authoritative receipts

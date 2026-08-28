@@ -21,6 +21,7 @@ mod reduction_candidate;
 mod reduction_control;
 mod reduction_mutation;
 mod sir;
+mod sir_contract;
 mod variant_execution;
 
 pub use assemble::{
@@ -187,13 +188,31 @@ pub use reduction_mutation::{
     compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
 };
 pub use sir::{
-    IntentHypothesisSetProposalV1, SirCitedFactV1, SirEpisodeRunError, SirEpisodeRunInput,
-    SirEpisodeRunOutcome, SirError, SirFactStatement, SirHypothesisSummary,
-    SirIntentHypothesisSetProposalArtifact, SirIntentHypothesisV1, SirProposalSubmissionV1,
-    SirReadByteLimit, SirReadLineLimit, SirSourceCitationV1, SirSourceLineCount,
-    SirSourceLineNumber, SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskArtifactV1,
-    SirTaskBundleArtifact, SirTaskBundleV1, SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits,
-    SirTaskWorkspace, SirUnknownQuestion, SirUnknownV1, run_sir_episode,
+    SirEpisodeRunError, SirEpisodeRunInput, SirEpisodeRunOutcome, SirError,
+    SirIntentHypothesisSetProposalArtifact, SirReadByteLimit, SirReadLineLimit,
+    SirSourceCitationV1, SirSourceLineCount, SirSourceLineNumber, SirTaskArtifactBytes,
+    SirTaskArtifactPath, SirTaskArtifactV1, SirTaskBundleArtifact, SirTaskBundleV1,
+    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits, SirTaskWorkspace, run_sir_episode,
+};
+pub use sir_contract::{
+    IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
+    IntentRecoveryRequestV1, SirArgumentName, SirAuthorizedEvidenceArtifact, SirCallerArgumentRole,
+    SirCallerArgumentV1, SirCallerClaimId, SirCallerClaimStatement, SirCallerClaimV1,
+    SirCallerDeclarationV1, SirCallerExclusionId, SirCallerExclusionV1, SirCallerReferenceArtifact,
+    SirCapability, SirCapabilityManifestV1, SirConflictId, SirConflictStatement,
+    SirDeclaredShapeV1, SirDeclaredUnknownId, SirDeclaredUnknownKind, SirDeclaredUnknownQuestion,
+    SirDeclaredUnknownV1, SirDisambiguationExperimentV1, SirDisambiguationTargetV1,
+    SirDispositionRationale, SirErrorBehaviorDeclaration, SirExclusionStatement, SirExperimentId,
+    SirExperimentPlan, SirExperimentPrediction, SirHypothesisClaim, SirHypothesisId,
+    SirIntentClaimRefV1, SirIntentConflictV1, SirIntentDomain, SirIntentEvidenceRefV1,
+    SirIntentHypothesisV1, SirIntentLayer, SirInvariantId, SirInvariantStatement, SirObservationId,
+    SirObservationStatement, SirObservedFactV1, SirOptimizationFreedomId,
+    SirOptimizationFreedomStatement, SirOptimizationFreedomV1, SirPriorFeedbackArtifact,
+    SirPriorFeedbackV1, SirProposalSubmissionV1, SirSemanticInvariantV1, SirShapeExpression,
+    SirSourceBehaviorDispositionKind, SirSourceBehaviorDispositionV1, SirSourceDispositionId,
+    SirTargetContextV1, SirTargetEnvironmentSelectionV1, SirTargetSoc, SirTargetSocSelectionV1,
+    SirTargetToolchain, SirTargetToolchainSelectionV1, SirUnknownId, SirUnknownKind,
+    SirUnknownQuestion, SirUnknownV1, SirValueDomainDeclaration,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,

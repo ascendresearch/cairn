@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "caller": {
+    "schema_version": 1,
+    "source_entry_point": "launch_compact_above_f32",
+    "arguments": [
+      {
+        "index": 0,
+        "name": "input",
+        "role": "input-buffer",
+        "data_type": "f32",
+        "shape": { "kind": "ranked", "dimensions": ["count"] },
+        "valid_domain": "Readable for count binary32 elements."
+      },
+      {
+        "index": 1,
+        "name": "count",
+        "role": "scalar",
+        "data_type": "u32",
+        "shape": { "kind": "scalar" },
+        "valid_domain": "Number of readable input elements and maximum output capacity."
+      },
+      {
+        "index": 2,
+        "name": "threshold",
+        "role": "scalar",
+        "data_type": "f32",
+        "shape": { "kind": "scalar" },
+        "valid_domain": "Caller-provided binary32 threshold."
+      },
+      {
+        "index": 3,
+        "name": "output",
+        "role": "output-buffer",
+        "data_type": "f32",
+        "shape": { "kind": "ranked", "dimensions": ["count"] },
+        "valid_domain": "Writable capacity for count binary32 elements."
+      },
+      {
+        "index": 4,
+        "name": "output_count",
+        "role": "output-buffer",
+        "data_type": "u32",
+        "shape": { "kind": "ranked", "dimensions": ["1"] },
+        "valid_domain": "Writable one-element count output."
+      },
+      {
+        "index": 5,
+        "name": "stream",
+        "role": "runtime-handle",
+        "data_type": null,
+        "shape": { "kind": "opaque-handle" },
+        "valid_domain": null
+      }
+    ],
+    "error_behaviors": [
+      "Return the source runtime status without making the operation host-synchronous."
+    ],
+    "claims": [
+      {
+        "id": "asynchronous-operation",
+        "layer": "observable-contract",
+        "statement": "The operation remains asynchronous with respect to the caller.",
+        "references": []
+      },
+      {
+        "id": "copies-strictly-above",
+        "layer": "algorithm",
+        "statement": "Copy every input value strictly greater than threshold into output.",
+        "references": []
+      },
+      {
+        "id": "output-capacity",
+        "layer": "observable-contract",
+        "statement": "The output buffer has capacity for count values.",
+        "references": []
+      },
+      {
+        "id": "reported-count",
+        "layer": "observable-contract",
+        "statement": "Report the number of copied values through output_count.",
+        "references": []
+      },
+      {
+        "id": "separate-input-output",
+        "layer": "observable-contract",
+        "statement": "Input and output storage do not overlap.",
+        "references": []
+      }
+    ],
+    "exclusions": [
+      {
+        "id": "input-output-aliasing",
+        "statement": "Behavior for overlapping input and output storage is outside the requested domain."
+      }
+    ],
+    "unknowns": [
+      {
+        "id": "output-order",
+        "kind": "observable-contract",
+        "question": "Is the order of copied output values part of the desired contract?"
+      }
+    ]
+  },
+  "target": {
+    "soc": { "kind": "not-selected" },
+    "toolchain": { "kind": "not-selected" },
+    "environment": { "kind": "not-selected" }
+  },
+  "authorized_evidence": [],
+  "prior_feedback": { "kind": "no-prior-feedback" }
+}

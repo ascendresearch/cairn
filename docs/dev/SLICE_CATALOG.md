@@ -30,6 +30,7 @@ mechanism authority。不得通过compatibility path复活。
 | --- | --- | --- | --- | --- |
 | `DEV-004` | Accepted | 复用现有`cairn-agent`建立task-generic DeepSeek SIR proposal episode | current agent runtime；DEV-001作为evaluation-only input；D-042；implementation note `be2985a` | commit `9e4711e`；recorded/full CI green；live episode `episode:01a04855-1c39-78b0-897e-ae5ff585c7ed`提交strict proposal并通过terminal restart |
 | `DEV-005` | Accepted | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | [`DEV-005 evaluation`](records/DEV-005-EVALUATION.md)；atomic compaction live成功；SIR改变order-sensitive Oracle选择；CP0 Go |
+| `DEV-006` | Accepted | 用完整caller/source分离的`IntentRecoveryInputV1`驱动同一runtime episode，并提交可供后续claim admission消费的完整typed hypothesis set | DEV-005 Go；[`DEV-006 DCR`](records/DEV-006-IMPLEMENTATION.md) | strict V1、recorded、absence与full CI green；live episode `episode:01a048a1-7279-7b22-807b-8756963ace78`严格修复后提交完整proposal并通过terminal restart |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要

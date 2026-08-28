@@ -1,7 +1,7 @@
 //! Task-generic semantic-intent-recovery proposal boundary.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     io::Cursor,
     path::{Component, Path, PathBuf},
 };
@@ -28,22 +28,22 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::sir_contract::{
+    IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
+    IntentRecoveryRequestV1, SirCapabilityManifestV1, SirProposalSubmissionV1,
+};
+
 const SCHEMA_V1: u16 = 1;
 const READ_TOOL: &str = "sir_read_task_artifact";
 const SUBMIT_TOOL: &str = "sir_submit_intent_hypotheses";
 const TOOL_VERSION: &str = "sir-proposal-v1";
-const SIR_USER_REQUEST_V1: &str =
-    "Inspect the offered task artifacts and submit one cited intent-hypothesis proposal.";
-const MAX_HYPOTHESES: usize = 8;
-const MAX_UNKNOWNS: usize = 16;
-const MAX_FACTS_PER_HYPOTHESIS: usize = 16;
-const MAX_CITATIONS_PER_FACT: usize = 8;
+const SIR_USER_REQUEST_V1: &str = "Recover higher-order intent from the frozen caller declaration and offered task evidence, then submit one complete typed proposal.";
 
 const SIR_INSTRUCTION_V1: &str = r"You are the semantic-intent-recovery analyst for one CUDA-to-Ascend-C migration task.
 
 Inspect only the offered task artifacts. First use sir_read_task_artifact to read the source, host launch, ABI, tests, or build files needed for your analysis. Treat observable source facts separately from intent inferences. Cite exact task-local paths and inclusive line ranges.
 
-Submit exactly one complete proposal through sir_submit_intent_hypotheses. It must contain at least two genuinely competing intent hypotheses and at least one unresolved question. Each hypothesis must cite supporting source facts; include counter-facts when the task artifacts challenge it. Preserve uncertainty instead of inventing caller requirements, deployment policy, numerical allowances, or hidden test expectations.
+The caller declaration is an attributed authority source, not a fact to overwrite. Keep caller claims separate from source observations and from your hypotheses. Submit exactly one complete proposal through sir_submit_intent_hypotheses. It must contain source-observed facts with citations, at least two genuinely competing hypotheses, an explicit conflict, at least one unknown, and at least one evidence-backed invariant. Also report applicable optimization freedoms, source-behavior dispositions, and disambiguation experiments; use empty arrays when none are justified. Every reference must point to an ID declared in this proposal or the frozen caller declaration. Use lowercase kebab-case local IDs and sort every top-level collection lexicographically by its id.
 
 The proposal is non-authoritative. Do not claim admission, correctness, a confidence score, or a migration verdict. Do not invent content identities or use paths outside the offered task bundle.";
 
@@ -283,68 +283,6 @@ impl<'de> Deserialize<'de> for SirTaskArtifactPath {
     }
 }
 
-macro_rules! bounded_text_type {
-    ($(#[$meta:meta])* $name:ident, $kind:literal, $max:expr) => {
-        $(#[$meta])*
-        #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
-
-        impl $name {
-            /// Creates bounded, trimmed, single-line semantic text.
-            ///
-            /// # Errors
-            ///
-            /// Rejects empty, oversized, surrounding-whitespace, or control-containing values.
-            pub fn new(value: impl Into<String>) -> Result<Self, SirError> {
-                let value = value.into();
-                if value.is_empty()
-                    || value.len() > $max
-                    || value.trim() != value
-                    || value.chars().any(char::is_control)
-                {
-                    return Err(SirError::InvalidValue($kind));
-                }
-                Ok(Self(value))
-            }
-
-            /// Returns the validated text.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
-            }
-        }
-    };
-}
-
-bounded_text_type!(
-    /// One source-grounded observation statement.
-    SirFactStatement,
-    "fact statement",
-    2_000
-);
-bounded_text_type!(
-    /// One proposed intent interpretation.
-    SirHypothesisSummary,
-    "hypothesis summary",
-    2_000
-);
-bounded_text_type!(
-    /// One unresolved intent question.
-    SirUnknownQuestion,
-    "unknown question",
-    2_000
-);
-
 /// Exact UTF-8 bytes of one task artifact.
 pub enum SirTaskArtifactBytes {}
 
@@ -557,7 +495,7 @@ impl SirTaskWorkspace {
             .map(|index| &self.bundle.artifacts[index])
     }
 
-    fn validate_citation(&self, citation: &SirSourceCitationV1) -> Result<(), SirError> {
+    pub(crate) fn validate_citation(&self, citation: &SirSourceCitationV1) -> Result<(), SirError> {
         let artifact = self
             .artifact(&citation.path)
             .ok_or(SirError::InvalidStructure(
@@ -649,344 +587,11 @@ impl<'de> Deserialize<'de> for SirSourceCitationV1 {
     }
 }
 
-/// Source-grounded fact embedded directly in a hypothesis.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SirCitedFactV1 {
-    statement: SirFactStatement,
-    citations: Vec<SirSourceCitationV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SirCitedFactWire {
-    statement: SirFactStatement,
-    citations: Vec<SirSourceCitationV1>,
-}
-
-impl TryFrom<SirCitedFactWire> for SirCitedFactV1 {
-    type Error = SirError;
-
-    fn try_from(wire: SirCitedFactWire) -> Result<Self, Self::Error> {
-        let fact = Self {
-            statement: wire.statement,
-            citations: wire.citations,
-        };
-        fact.validate()?;
-        Ok(fact)
-    }
-}
-
-impl<'de> Deserialize<'de> for SirCitedFactV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        SirCitedFactWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-impl SirCitedFactV1 {
-    fn validate(&self) -> Result<(), SirError> {
-        if self.citations.is_empty() || self.citations.len() > MAX_CITATIONS_PER_FACT {
-            return Err(SirError::InvalidStructure("fact citation count"));
-        }
-        Ok(())
-    }
-}
-
-/// One plausible intent interpretation and its directly embedded evidence.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SirIntentHypothesisV1 {
-    summary: SirHypothesisSummary,
-    supporting_facts: Vec<SirCitedFactV1>,
-    counter_facts: Vec<SirCitedFactV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SirIntentHypothesisWire {
-    summary: SirHypothesisSummary,
-    supporting_facts: Vec<SirCitedFactV1>,
-    counter_facts: Vec<SirCitedFactV1>,
-}
-
-impl TryFrom<SirIntentHypothesisWire> for SirIntentHypothesisV1 {
-    type Error = SirError;
-
-    fn try_from(wire: SirIntentHypothesisWire) -> Result<Self, Self::Error> {
-        let hypothesis = Self {
-            summary: wire.summary,
-            supporting_facts: wire.supporting_facts,
-            counter_facts: wire.counter_facts,
-        };
-        hypothesis.validate()?;
-        Ok(hypothesis)
-    }
-}
-
-impl<'de> Deserialize<'de> for SirIntentHypothesisV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        SirIntentHypothesisWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-impl SirIntentHypothesisV1 {
-    fn validate(&self) -> Result<(), SirError> {
-        if self.supporting_facts.is_empty()
-            || self.supporting_facts.len() > MAX_FACTS_PER_HYPOTHESIS
-            || self.counter_facts.len() > MAX_FACTS_PER_HYPOTHESIS
-        {
-            return Err(SirError::InvalidStructure("hypothesis fact count"));
-        }
-        for fact in self.supporting_facts.iter().chain(&self.counter_facts) {
-            fact.validate()?;
-        }
-        Ok(())
-    }
-}
-
-/// One unresolved question retained by the proposal.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SirUnknownV1 {
-    question: SirUnknownQuestion,
-    citations: Vec<SirSourceCitationV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SirUnknownWire {
-    question: SirUnknownQuestion,
-    citations: Vec<SirSourceCitationV1>,
-}
-
-impl TryFrom<SirUnknownWire> for SirUnknownV1 {
-    type Error = SirError;
-
-    fn try_from(wire: SirUnknownWire) -> Result<Self, Self::Error> {
-        let unknown = Self {
-            question: wire.question,
-            citations: wire.citations,
-        };
-        unknown.validate()?;
-        Ok(unknown)
-    }
-}
-
-impl<'de> Deserialize<'de> for SirUnknownV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        SirUnknownWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-impl SirUnknownV1 {
-    fn validate(&self) -> Result<(), SirError> {
-        if self.citations.len() > MAX_CITATIONS_PER_FACT {
-            return Err(SirError::InvalidStructure("unknown citation count"));
-        }
-        Ok(())
-    }
-}
-
-/// Complete model-authored body accepted only as a proposal.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SirProposalSubmissionV1 {
-    schema_version: u16,
-    hypotheses: Vec<SirIntentHypothesisV1>,
-    unknowns: Vec<SirUnknownV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SirProposalSubmissionWire {
-    schema_version: u16,
-    hypotheses: Vec<SirIntentHypothesisV1>,
-    unknowns: Vec<SirUnknownV1>,
-}
-
-impl TryFrom<SirProposalSubmissionWire> for SirProposalSubmissionV1 {
-    type Error = SirError;
-
-    fn try_from(wire: SirProposalSubmissionWire) -> Result<Self, Self::Error> {
-        if wire.schema_version != SCHEMA_V1 {
-            return Err(SirError::InvalidStructure("proposal schema"));
-        }
-        if !(2..=MAX_HYPOTHESES).contains(&wire.hypotheses.len()) {
-            return Err(SirError::InvalidStructure("hypothesis count"));
-        }
-        if wire.unknowns.is_empty() || wire.unknowns.len() > MAX_UNKNOWNS {
-            return Err(SirError::InvalidStructure("unknown count"));
-        }
-        let mut summaries = HashSet::new();
-        for hypothesis in &wire.hypotheses {
-            hypothesis.validate()?;
-            if !summaries.insert(hypothesis.summary.as_str()) {
-                return Err(SirError::InvalidStructure(
-                    "hypothesis summaries must be unique",
-                ));
-            }
-        }
-        let mut questions = HashSet::new();
-        for unknown in &wire.unknowns {
-            unknown.validate()?;
-            if !questions.insert(unknown.question.as_str()) {
-                return Err(SirError::InvalidStructure(
-                    "unknown questions must be unique",
-                ));
-            }
-        }
-        Ok(Self {
-            schema_version: wire.schema_version,
-            hypotheses: wire.hypotheses,
-            unknowns: wire.unknowns,
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for SirProposalSubmissionV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        SirProposalSubmissionWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-impl SirProposalSubmissionV1 {
-    /// Returns the competing hypotheses.
-    #[must_use]
-    pub fn hypotheses(&self) -> &[SirIntentHypothesisV1] {
-        &self.hypotheses
-    }
-
-    /// Returns the explicit unknowns.
-    #[must_use]
-    pub fn unknowns(&self) -> &[SirUnknownV1] {
-        &self.unknowns
-    }
-
-    fn validate_against(&self, workspace: &SirTaskWorkspace) -> Result<(), SirError> {
-        for citation in self
-            .hypotheses
-            .iter()
-            .flat_map(|hypothesis| {
-                hypothesis
-                    .supporting_facts
-                    .iter()
-                    .chain(&hypothesis.counter_facts)
-            })
-            .flat_map(|fact| &fact.citations)
-            .chain(self.unknowns.iter().flat_map(|unknown| &unknown.citations))
-        {
-            workspace.validate_citation(citation)?;
-        }
-        Ok(())
-    }
-}
-
-/// Trusted provenance envelope around one model-authored hypothesis set.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct IntentHypothesisSetProposalV1 {
-    schema_version: u16,
-    task_bundle: ContentId<SirTaskBundleArtifact>,
-    episode_id: EpisodeId,
-    model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
-    submission: SirProposalSubmissionV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct IntentHypothesisSetProposalWire {
-    schema_version: u16,
-    task_bundle: ContentId<SirTaskBundleArtifact>,
-    episode_id: EpisodeId,
-    model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
-    submission: SirProposalSubmissionV1,
-}
-
-impl TryFrom<IntentHypothesisSetProposalWire> for IntentHypothesisSetProposalV1 {
-    type Error = SirError;
-
-    fn try_from(wire: IntentHypothesisSetProposalWire) -> Result<Self, Self::Error> {
-        if wire.schema_version != SCHEMA_V1 {
-            return Err(SirError::InvalidStructure("proposal envelope schema"));
-        }
-        Ok(Self {
-            schema_version: wire.schema_version,
-            task_bundle: wire.task_bundle,
-            episode_id: wire.episode_id,
-            model_configuration: wire.model_configuration,
-            submission: wire.submission,
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for IntentHypothesisSetProposalV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        IntentHypothesisSetProposalWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-impl IntentHypothesisSetProposalV1 {
-    fn new(
-        task_bundle: ContentId<SirTaskBundleArtifact>,
-        episode_id: EpisodeId,
-        model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
-        submission: SirProposalSubmissionV1,
-    ) -> Self {
-        Self {
-            schema_version: SCHEMA_V1,
-            task_bundle,
-            episode_id,
-            model_configuration,
-            submission,
-        }
-    }
-
-    /// Returns the exact task bundle interpreted by the proposal.
-    #[must_use]
-    pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-        self.task_bundle
-    }
-
-    /// Returns the model-authored, non-authoritative body.
-    #[must_use]
-    pub const fn submission(&self) -> &SirProposalSubmissionV1 {
-        &self.submission
-    }
-
-    /// Derives the exact proposal identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error only if canonical encoding fails.
-    pub fn identity(&self) -> Result<ContentId<SirIntentHypothesisSetProposalArtifact>, SirError> {
-        ContentId::derive(&encode(self)?).map_err(|error| SirError::Codec(error.to_string()))
-    }
-}
-
 /// Exact archived model-input projection for a SIR episode.
 #[derive(Clone, Debug)]
 struct SirPromptProjectionV1 {
-    task_bundle: ContentId<SirTaskBundleArtifact>,
+    recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
+    recovery_input: IntentRecoveryInputV1,
     instruction: ContentId<InstructionBlock>,
     tool_catalog: ContentId<ToolCatalog>,
     request: ContentId<HistoryItem>,
@@ -999,7 +604,13 @@ impl SirPromptProjectionV1 {
     /// Returns the exact task bundle identity.
     #[must_use]
     const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-        self.task_bundle
+        self.recovery_input.task_bundle()
+    }
+
+    /// Returns the frozen recovery-input identity.
+    #[must_use]
+    const fn recovery_input_id(&self) -> ContentId<IntentRecoveryInputArtifact> {
+        self.recovery_input_id
     }
 
     /// Returns the exact initial provider-visible request containing only the task manifest.
@@ -1052,6 +663,9 @@ impl SirPromptProjectionV1 {
 fn archive_sir_prompt<S: ContentStore>(
     store: &mut S,
     workspace: &SirTaskWorkspace,
+    task_id: TaskId,
+    request_input: IntentRecoveryRequestV1,
+    task_limits: SirTaskLimits,
 ) -> Result<SirPromptProjectionV1, SirError> {
     for artifact in workspace.bundle().artifacts() {
         let source = workspace
@@ -1072,6 +686,21 @@ fn archive_sir_prompt<S: ContentStore>(
     let task_bundle = store
         .put::<SirTaskBundleArtifact>(&mut Cursor::new(bundle_bytes))?
         .content_id;
+    let recovery_input = IntentRecoveryInputV1::new(
+        task_id,
+        task_bundle,
+        request_input,
+        SirCapabilityManifestV1::proposal_only(task_limits),
+    )?;
+    let recovery_input_bytes = encode(&recovery_input)?;
+    let recovery_input_id = store
+        .put::<IntentRecoveryInputArtifact>(&mut Cursor::new(recovery_input_bytes))?
+        .content_id;
+    if recovery_input_id != recovery_input.identity()? {
+        return Err(SirError::InvalidStructure(
+            "archived recovery input identity changed",
+        ));
+    }
     let instruction = put_json::<InstructionBlock>(store, &json!({"text":SIR_INSTRUCTION_V1}))?;
     let tools = sir_native_tools()?;
     let tool_catalog = put_json::<ToolCatalog>(
@@ -1086,16 +715,17 @@ fn archive_sir_prompt<S: ContentStore>(
             })).collect::<Vec<_>>()
         }),
     )?;
-    let manifest = json!({
+    let model_context = json!({
         "schema_version":SCHEMA_V1,
-        "task_bundle":task_bundle,
-        "artifacts":workspace.bundle().artifacts()
+        "recovery_input_id":recovery_input_id,
+        "recovery_input":recovery_input,
+        "task_artifacts":workspace.bundle().artifacts()
     });
-    let manifest_text = String::from_utf8(encode(&manifest)?)
-        .map_err(|_| SirError::Codec("task manifest is not UTF-8".to_owned()))?;
-    let user_text = format!("{SIR_USER_REQUEST_V1}\n\nTask manifest:\n{manifest_text}");
+    let context_text = String::from_utf8(encode(&model_context)?)
+        .map_err(|_| SirError::Codec("recovery input is not UTF-8".to_owned()))?;
+    let user_text = format!("{SIR_USER_REQUEST_V1}\n\nFrozen recovery input:\n{context_text}");
     let request = put_json::<HistoryItem>(store, &json!({"role":"user","content":user_text}))?;
-    let context = put_json::<ContextBlock>(store, &manifest)?;
+    let context = put_json::<ContextBlock>(store, &model_context)?;
     let policy = put_json::<PolicyDocument>(
         store,
         &json!({
@@ -1107,7 +737,8 @@ fn archive_sir_prompt<S: ContentStore>(
         }),
     )?;
     Ok(SirPromptProjectionV1 {
-        task_bundle,
+        recovery_input_id,
+        recovery_input,
         instruction,
         tool_catalog,
         request,
@@ -1204,7 +835,8 @@ impl ToolGateway for SirReadTaskArtifactGateway {
 /// Pure gateway that validates and binds a model-authored hypothesis submission.
 struct SirSubmitIntentHypothesesGateway {
     workspace: SirTaskWorkspace,
-    task_bundle: ContentId<SirTaskBundleArtifact>,
+    recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
+    recovery_input: IntentRecoveryInputV1,
     episode_id: EpisodeId,
     model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
     accepted: Option<(
@@ -1218,13 +850,15 @@ impl SirSubmitIntentHypothesesGateway {
     #[must_use]
     const fn new(
         workspace: SirTaskWorkspace,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
+        recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
+        recovery_input: IntentRecoveryInputV1,
         episode_id: EpisodeId,
         model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
     ) -> Self {
         Self {
             workspace,
-            task_bundle,
+            recovery_input_id,
+            recovery_input,
             episode_id,
             model_configuration,
             accepted: None,
@@ -1252,10 +886,10 @@ impl ToolGateway for SirSubmitIntentHypothesesGateway {
         let submission: SirProposalSubmissionV1 =
             decode_tool_arguments(operation.argument_bytes())?;
         submission
-            .validate_against(&self.workspace)
+            .validate_against(&self.workspace, &self.recovery_input)
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
         let proposal = IntentHypothesisSetProposalV1::new(
-            self.task_bundle,
+            self.recovery_input_id,
             self.episode_id,
             self.model_configuration,
             submission,
@@ -1282,6 +916,8 @@ impl ToolGateway for SirSubmitIntentHypothesesGateway {
 pub struct SirEpisodeRunInput {
     /// Product task lifecycle identity; the exact source bytes are bound separately by the bundle.
     pub task_id: TaskId,
+    /// Caller/target/evidence declaration frozen by the Controller before model work.
+    pub recovery_request: IntentRecoveryRequestV1,
     /// Durable agent episode identity.
     pub episode_id: EpisodeId,
     /// Exact resolved runtime-model configuration identity.
@@ -1300,6 +936,7 @@ pub struct SirEpisodeRunInput {
 pub struct SirEpisodeRunOutcome {
     episode_id: EpisodeId,
     task_bundle: ContentId<SirTaskBundleArtifact>,
+    recovery_input: ContentId<IntentRecoveryInputArtifact>,
     proposal_id: ContentId<SirIntentHypothesisSetProposalArtifact>,
     proposal: IntentHypothesisSetProposalV1,
     completion_reason: EpisodeCompletionReason,
@@ -1317,6 +954,12 @@ impl SirEpisodeRunOutcome {
     #[must_use]
     pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
         self.task_bundle
+    }
+
+    /// Returns the exact caller/task/target/capability input visible to the model.
+    #[must_use]
+    pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
+        self.recovery_input
     }
 
     /// Returns the archived non-authoritative proposal identity.
@@ -1344,7 +987,7 @@ impl SirEpisodeRunOutcome {
     }
 }
 
-/// Runs the fixed DEV-004 SIR tool loop through the existing durable agent runtime.
+/// Runs the current-V1 SIR tool loop through the existing durable agent runtime.
 ///
 /// Recorded and live providers implement the same [`ModelTransport`] seam. All source reads and
 /// proposal submissions pass through durable operation admission and execution; the model never
@@ -1368,7 +1011,13 @@ where
     C: ContentStore,
     T: ModelTransport,
 {
-    let projection = archive_sir_prompt(content, &workspace)?;
+    let projection = archive_sir_prompt(
+        content,
+        &workspace,
+        input.task_id,
+        input.recovery_request.clone(),
+        input.task_limits,
+    )?;
     let spec =
         SirPromptProjectionV1::native_spec(input.selection.model.clone(), input.max_output_tokens)
             .map_err(SirEpisodeRunError::Sir)?;
@@ -1396,7 +1045,8 @@ where
     let mut read_gateway = SirReadTaskArtifactGateway::new(workspace.clone(), input.task_limits);
     let mut submit_gateway = SirSubmitIntentHypothesesGateway::new(
         workspace,
-        projection.task_bundle(),
+        projection.recovery_input_id(),
+        projection.recovery_input.clone(),
         input.episode_id,
         input.model_configuration,
     );
@@ -1656,8 +1306,9 @@ fn finish_sir_episode<C: ContentStore>(
         ));
     }
     Ok(SirEpisodeRunOutcome {
-        episode_id: proposal.episode_id,
+        episode_id: proposal.episode_id(),
         task_bundle: projection.task_bundle(),
+        recovery_input: projection.recovery_input_id(),
         proposal_id,
         proposal,
         completion_reason: reason,
@@ -1665,7 +1316,7 @@ fn finish_sir_episode<C: ContentStore>(
     })
 }
 
-/// Returns trusted registrations for the two DEV-004 tools.
+/// Returns trusted registrations for the two current-V1 SIR tools.
 ///
 /// # Errors
 ///
@@ -1692,7 +1343,16 @@ fn sir_tool_registrations() -> Result<[ToolRegistration; 2], SirError> {
 /// # Errors
 ///
 /// Returns an error only if repository-owned labels violate generic agent contracts.
+#[allow(clippy::too_many_lines)] // Keep the exact provider schema visibly aligned with the V1 types.
 fn sir_native_tools() -> Result<Vec<NativeToolDefinition>, SirError> {
+    let local_id = json!({
+        "type":"string",
+        "minLength":1,
+        "maxLength":64,
+        "pattern":"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    });
+    let text_1000 = json!({"type":"string","minLength":1,"maxLength":1000});
+    let text_2000 = json!({"type":"string","minLength":1,"maxLength":2000});
     let citation = json!({
         "type":"object",
         "properties":{
@@ -1703,13 +1363,89 @@ fn sir_native_tools() -> Result<Vec<NativeToolDefinition>, SirError> {
         "required":["path","start_line","end_line"],
         "additionalProperties":false
     });
-    let fact = json!({
+    let evidence_ref = json!({
+        "oneOf":[
+            {
+                "type":"object",
+                "properties":{
+                    "source":{"type":"string","const":"caller-claim"},
+                    "claim":local_id
+                },
+                "required":["source","claim"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "source":{"type":"string","const":"observed-fact"},
+                    "observation":local_id
+                },
+                "required":["source","observation"],
+                "additionalProperties":false
+            }
+        ]
+    });
+    let claim_ref = json!({
+        "oneOf":[
+            {
+                "type":"object",
+                "properties":{
+                    "source":{"type":"string","const":"caller-claim"},
+                    "claim":local_id
+                },
+                "required":["source","claim"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "source":{"type":"string","const":"hypothesis"},
+                    "hypothesis":local_id
+                },
+                "required":["source","hypothesis"],
+                "additionalProperties":false
+            }
+        ]
+    });
+    let target_ref = json!({
+        "oneOf":[
+            {
+                "type":"object",
+                "properties":{
+                    "kind":{"type":"string","const":"hypothesis"},
+                    "hypothesis":local_id
+                },
+                "required":["kind","hypothesis"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "kind":{"type":"string","const":"conflict"},
+                    "conflict":local_id
+                },
+                "required":["kind","conflict"],
+                "additionalProperties":false
+            },
+            {
+                "type":"object",
+                "properties":{
+                    "kind":{"type":"string","const":"unknown"},
+                    "unknown":local_id
+                },
+                "required":["kind","unknown"],
+                "additionalProperties":false
+            }
+        ]
+    });
+    let observed_fact = json!({
         "type":"object",
         "properties":{
-            "statement":{"type":"string","minLength":1,"maxLength":2000},
-            "citations":{"type":"array","minItems":1,"maxItems":MAX_CITATIONS_PER_FACT,"items":citation}
+            "id":local_id,
+            "statement":text_2000,
+            "citations":{"type":"array","minItems":1,"maxItems":8,"items":citation}
         },
-        "required":["statement","citations"],
+        "required":["id","statement","citations"],
         "additionalProperties":false
     });
     Ok(vec![
@@ -1740,33 +1476,111 @@ fn sir_native_tools() -> Result<Vec<NativeToolDefinition>, SirError> {
                 "type":"object",
                 "properties":{
                     "schema_version":{"type":"integer","const":1},
+                    "observed_facts":{
+                        "type":"array","minItems":1,"maxItems":64,"items":observed_fact
+                    },
                     "hypotheses":{
-                        "type":"array","minItems":2,"maxItems":MAX_HYPOTHESES,
+                        "type":"array","minItems":2,"maxItems":16,
                         "items":{
                             "type":"object",
                             "properties":{
-                                "summary":{"type":"string","minLength":1,"maxLength":2000},
-                                "supporting_facts":{"type":"array","minItems":1,"maxItems":MAX_FACTS_PER_HYPOTHESIS,"items":fact},
-                                "counter_facts":{"type":"array","maxItems":MAX_FACTS_PER_HYPOTHESIS,"items":fact}
+                                "id":local_id,
+                                "layer":{"type":"string","enum":["algorithm","numerical","model-deployment","observable-contract"]},
+                                "claim":text_2000,
+                                "domain":text_1000,
+                                "supporting_evidence":{"type":"array","minItems":1,"maxItems":32,"items":evidence_ref},
+                                "counter_evidence":{"type":"array","maxItems":32,"items":evidence_ref}
                             },
-                            "required":["summary","supporting_facts","counter_facts"],
+                            "required":["id","layer","claim","domain","supporting_evidence","counter_evidence"],
+                            "additionalProperties":false
+                        }
+                    },
+                    "conflicts":{
+                        "type":"array","minItems":1,"maxItems":16,
+                        "items":{
+                            "type":"object",
+                            "properties":{
+                                "id":local_id,
+                                "statement":text_2000,
+                                "claims":{"type":"array","minItems":2,"maxItems":32,"items":claim_ref},
+                                "evidence":{"type":"array","maxItems":32,"items":evidence_ref}
+                            },
+                            "required":["id","statement","claims","evidence"],
                             "additionalProperties":false
                         }
                     },
                     "unknowns":{
-                        "type":"array","minItems":1,"maxItems":MAX_UNKNOWNS,
+                        "type":"array","minItems":1,"maxItems":32,
                         "items":{
                             "type":"object",
                             "properties":{
-                                "question":{"type":"string","minLength":1,"maxLength":2000},
-                                "citations":{"type":"array","maxItems":MAX_CITATIONS_PER_FACT,"items":citation}
+                                "id":local_id,
+                                "kind":{"type":"string","enum":["desired-semantics","source-behavior","numerical-allowance","deployment-context","tool-or-evidence-gap"]},
+                                "question":text_2000,
+                                "evidence":{"type":"array","maxItems":32,"items":evidence_ref}
                             },
-                            "required":["question","citations"],
+                            "required":["id","kind","question","evidence"],
+                            "additionalProperties":false
+                        }
+                    },
+                    "invariants":{
+                        "type":"array","minItems":1,"maxItems":32,
+                        "items":{
+                            "type":"object",
+                            "properties":{
+                                "id":local_id,
+                                "statement":text_2000,
+                                "evidence":{"type":"array","minItems":1,"maxItems":32,"items":evidence_ref}
+                            },
+                            "required":["id","statement","evidence"],
+                            "additionalProperties":false
+                        }
+                    },
+                    "optimization_freedoms":{
+                        "type":"array","maxItems":32,
+                        "items":{
+                            "type":"object",
+                            "properties":{
+                                "id":local_id,
+                                "statement":text_2000,
+                                "protected_invariants":{"type":"array","minItems":1,"maxItems":32,"items":local_id},
+                                "evidence":{"type":"array","minItems":1,"maxItems":32,"items":evidence_ref}
+                            },
+                            "required":["id","statement","protected_invariants","evidence"],
+                            "additionalProperties":false
+                        }
+                    },
+                    "source_dispositions":{
+                        "type":"array","maxItems":32,
+                        "items":{
+                            "type":"object",
+                            "properties":{
+                                "id":local_id,
+                                "observation":local_id,
+                                "disposition":{"type":"string","enum":["preserve-observed-behavior","follow-proposed-semantic-intent","exclude-undefined-region","split-domain","block-pending-user-decision","unknown-classification"]},
+                                "rationale":text_2000,
+                                "evidence":{"type":"array","minItems":1,"maxItems":32,"items":evidence_ref}
+                            },
+                            "required":["id","observation","disposition","rationale","evidence"],
+                            "additionalProperties":false
+                        }
+                    },
+                    "disambiguation_experiments":{
+                        "type":"array","maxItems":32,
+                        "items":{
+                            "type":"object",
+                            "properties":{
+                                "id":local_id,
+                                "targets":{"type":"array","minItems":1,"maxItems":32,"items":target_ref},
+                                "plan":text_2000,
+                                "predictions":{"type":"array","minItems":2,"maxItems":32,"items":text_1000}
+                            },
+                            "required":["id","targets","plan","predictions"],
                             "additionalProperties":false
                         }
                     }
                 },
-                "required":["schema_version","hypotheses","unknowns"],
+                "required":["schema_version","observed_facts","hypotheses","conflicts","unknowns","invariants","optimization_freedoms","source_dispositions","disambiguation_experiments"],
                 "additionalProperties":false
             }),
             strict: true,

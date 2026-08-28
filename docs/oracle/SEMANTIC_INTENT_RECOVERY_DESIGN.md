@@ -30,7 +30,7 @@ proposal，由独立 Intent Admission 决定哪些 exact claim 可以进入正�
 flowchart LR
     input["IntentRecoveryInputV1\ncaller declaration + bounded evidence + capability manifest"]
     sir["Semantic Intent Recovery\n提取、假设、冲突、实验建议"]
-    proposals[["IntentHypothesisSetV1\nPROPOSED"]]
+    proposals[["IntentHypothesisSetProposalV1\nPROPOSED"]]
     admit{"Intent Admission\n独立准入"}
     contract[["MigrationIntentContract\nADMITTED"]]
     oracle["Oracle Explorer"]
@@ -165,7 +165,7 @@ capability 与生命周期 identity 不得擦除为通用字符串或 digest。�
 
 ### 5.2 Hypothesis set，而不是唯一答案
 
-`IntentHypothesisSetV1` 必须允许：
+`IntentHypothesisSetProposalV1` 必须允许：
 
 - 多个竞争解释；
 - 每个解释覆盖不同 domain region；
@@ -435,7 +435,7 @@ episode、带引用的 competing hypothesis proposal、durable provenance，以�
 下一条纵向链必须继续建设 SIR，同时让它面对第一个正式 consumer：
 
 1. 冻结完整 `IntentRecoveryInputV1`：调用者最小声明、目标环境、允许证据、显式 unknown、capability；
-2. 将当前 proposal 直接完善为当前 V1 的 `IntentHypothesisSetV1`：严格分开 observed facts、hypotheses、
+2. 将当前 proposal 直接完善为当前 V1 的 `IntentHypothesisSetProposalV1`：严格分开 observed facts、hypotheses、
    conflicts/unknowns、invariants、optimization freedoms、source behavior disposition 和实验提案；
 3. 建立 `IntentRecoveryRun` lifecycle 和 strategy coordinator；只按真实任务需要增加 static/model strategy，
    不固定多 Agent 或 reviewer 数量；
@@ -447,6 +447,10 @@ episode、带引用的 competing hypothesis proposal、durable provenance，以�
 结构化反馈、更强 IR/关系抽取/主动实验，以及可建模子域的形式化语义和 translation-validation
 obligations。第一条 authority integration 同时落实目标 `cairn-sir` 进程隔离；没有 consumer 的空 crate、
 全量 planner catalog 或资格体系不作为前置工作。
+
+DEV-006已经用现有production runtime闭合第1、2项，并以真实DeepSeek strict-repair/restart验证current V1。
+第3项及其后的authority工作必须围绕首个Intent Admission/Oracle consumer单独切片，不能因本次proposal
+contract通过而预建完整process tree。
 
 设计允许分块演进，但每一步都保持相同隔离边界：
 

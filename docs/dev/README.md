@@ -45,8 +45,10 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 - DEV-002：Superseded；D-040 的预建 qualification bundle、实现、测试、公开/私有材料从 current tree 删除；
 - DEV-004：Accepted，task-generic recorded/live DeepSeek SIR proposal episode 已闭合；
 - DEV-005：Accepted，第二个atomic compaction task复用同一路径，并产生可观察Oracle utility。
+- DEV-006：Accepted，完整typed recovery input/proposal contract通过recorded、full CI与真实DeepSeek
+  strict-repair/restart。
 
-CP0结论是`Go`：SIR继续留在当前建设路径。下一条纵向链以第一个正式consumer约束建设范围，完善
-`IntentRecoveryInputV1`/`IntentHypothesisSetV1`，接入最小claim-scoped Intent Admission与
+CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
+`IntentHypothesisSetProposalV1`已经闭合；下一条纵向链以第一个正式consumer约束建设范围，接入最小claim-scoped Intent Admission与
 `NeedsUserDecision`，再让一个真实Oracle决策消费`MigrationIntentContract`。这不授权一次性建设完整
 CP1，也不恢复DEV-002式第三人fixture review、通用Admission/qualification框架或固定多Agent拓扑。

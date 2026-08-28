@@ -201,7 +201,7 @@ symbolic execution、多模型或形式化工具。若它直接嵌入业务 aggr
 成为下游永久依赖。
 
 跨进程边界强制它只接收冻结的 `IntentRecoveryInputV1`，只产出
-`IntentHypothesisSetV1`/实验提案，并且：
+`IntentHypothesisSetProposalV1`/实验提案，并且：
 
 - 不能构造 `MigrationIntentContract`；
 - 不能读取 hidden intent corpus；
