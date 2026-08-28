@@ -28,11 +28,12 @@ mechanism authority。不得通过compatibility path复活。
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-004` | EvidencePending | 复用现有`cairn-agent`建立task-generic DeepSeek SIR proposal episode | current agent runtime；DEV-001作为evaluation-only input；D-042；implementation note `be2985a` | typed proposal含citations/competing hypotheses/unknown；recorded replay；opt-in live DeepSeek；model-visible context无fixture answer；无Admission/hidden/production special case |
-| `DEV-005` | Blocked | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | 无production branch/prompt结构变化；与source-preserving/user-declared baseline比较；至少一个downstream utility或明确停止SIR |
+| `DEV-004` | Accepted | 复用现有`cairn-agent`建立task-generic DeepSeek SIR proposal episode | current agent runtime；DEV-001作为evaluation-only input；D-042；implementation note `be2985a` | commit `9e4711e`；recorded/full CI green；live episode `episode:01a04855-1c39-78b0-897e-ae5ff585c7ed`提交strict proposal并通过terminal restart |
+| `DEV-005` | Ready | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | 无production branch/prompt结构变化；与source-preserving/user-declared baseline比较；至少一个downstream utility或明确停止SIR |
 
-DEV-004 implementation、recorded lane和full CI已闭合，现为`EvidencePending`。Live lane尚未执行：向外部
-DeepSeek发送task source与使用private credential需要用户明确授权；它不需要另一轮private fixture review。
+DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
+product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要
+另一轮private fixture review。该结果只解除DEV-005依赖，不证明SIR已有downstream value。
 
 ## 4. DEV-004边界
 

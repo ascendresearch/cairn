@@ -1,6 +1,6 @@
 # DEV-004 implementation note — generic DeepSeek SIR proposal
 
-- 状态：`EvidencePending`；不是 DCR，不授权 Admission 或其他 authority 实现
+- 状态：`Accepted`；不是 DCR，不授权 Admission 或其他 authority 实现
 - 日期：2026-08-28
 - Slice：[`DEV-004`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 决策：[`D-042`](../../DECISIONS.md#d-042--runtime-models-reason-per-task-fixtures-evaluate-but-do-not-define-the-product)
@@ -120,5 +120,11 @@ qualification或多Agent review。若实现本身失败，删除上述5个新增
 - `cargo test -p cairn-migration --test sir_episode`：通过，3 tests；
 - `cargo clippy -p cairn-migration --all-targets -- -D warnings`：通过；
 - `scripts/ci.sh`：沙箱内mTLS local-socket test被OS拒绝；在允许local socket的环境重跑full CI通过；
-- live DeepSeek：`NotExecuted`。外部调用在process启动前被安全审查拒绝，没有provider request发生；需要用户
-  明确授权把所选task source发送给配置的外部DeepSeek endpoint并使用private API credential。
+- live DeepSeek：用户明确授权后通过；runtime model/deployment为`deepseek-v4-pro` / `deepseek-responses`；
+  episode `episode:01a04855-1c39-78b0-897e-ae5ff585c7ed`在3 steps内执行5个bounded reads和1个strict
+  proposal submission后`Yielded`；input/output/cache-read tokens分别为18,340 / 6,729 / 13,440；
+- task bundle `cairn:v1:sha256:migration.sir-task-bundle.v1:b0bc15b4c1b78a81845e45c59be652516ebb2e717b3aeb4b0842c68a95c35975`；
+  proposal `cairn:v1:sha256:migration.sir-intent-hypothesis-set-proposal.v1:98788539135dc520cbc7afd3ca81ef2f09bc8c8ff02527d0f2e3de2bda08d825`；
+- SQLite/CAS关闭重开后恢复相同`Yielded` terminal projection；summary没有打印provider raw response、reasoning或
+  proposal正文。DEV-004因此accepted，但proposal quality、cross-task generalization和downstream utility仍由
+  DEV-005裁决。

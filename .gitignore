@@ -1,4 +1,5 @@
 /target/
 .cairn/secrets/
+.cairn/runs/
 *.db-shm
 *.db-wal

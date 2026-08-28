@@ -42,9 +42,9 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 - DEV-001：Accepted，保留为 reduction evaluation fixture；
 - DEV-003：Accepted，保留最小 fixture provenance/sanitation 基础；
 - DEV-002：Superseded；D-040 的预建 qualification bundle、实现、测试、公开/私有材料从 current tree 删除；
-- DEV-004：Proposed，复用现有 `cairn-agent` 建立 task-generic recorded/live DeepSeek SIR proposal episode；
-- DEV-005：Blocked by DEV-004，用第二个任务和 downstream utility 作 SIR go/no-go。
+- DEV-004：Accepted，task-generic recorded/live DeepSeek SIR proposal episode 已闭合；
+- DEV-005：Ready，用第二个任务和 downstream utility 作 SIR go/no-go。
 
-当前下一步不是直接启动 DEV-004，而是先让本次路线纠正确认并保持仓库 green。之后只需一份精简
-implementation note 确认 exact files、model-visible projection、typed output、recorded/live command、预算和
-删除路径；不再要求 DEV-002 式第三人 fixture review。
+当前下一步是DEV-005：同一production path必须处理第二个实质不同task，并回答SIR相对source-preserving或
+user-declared intent是否产生downstream value。该gate不增加DEV-002式第三人fixture review、Admission或
+qualification框架；No-go时删除SIR product path也是有效结论。
