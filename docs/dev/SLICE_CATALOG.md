@@ -64,12 +64,14 @@ Go需要同时满足：
 - SIR对至少一个下游选择有可观察价值，或相对user-declared intent减少实际工作；
 - cost/reliability在声明预算内。
 
-No-go后：删除SIR product path，保留domain-neutral agent runtime；后续迁移由user-declared intent、静态事实和
-自动verification驱动。No-go是合法产品结论，不以扩benchmark或增加评审延后。
+No-go后：SIR离开critical path，保留最小task-generic extension seam；近期迁移由user-declared intent、静态
+事实和自动verification驱动，待端到端架构稳定或真实consumer出现再扩展。No-go是合法优先级结论，不以扩
+benchmark或增加评审延后，也不等于永久否定SIR。
 
-DEV-005结论为Go，但只保留proposal-only SIR preflight。它没有admit intent：第二个task的proposal使downstream
-Oracle在owner回答顺序问题前禁止sequence-sensitive correctness claim，并把current-source observation限定为
-count + multiset。容量与non-overlap仍来自owner brief，证明SIR不能替代用户声明。
+DEV-005结论为Go；SIR当前成熟度是proposal-only seam，不是永久能力上限。它没有admit intent：第二个task的
+proposal使downstream Oracle在owner回答顺序问题前禁止sequence-sensitive correctness claim，并把
+current-source observation限定为count + multiset。容量与non-overlap仍来自owner brief，证明SIR不能替代
+用户声明。
 
 ## 6. Future backlog（未切片）
 

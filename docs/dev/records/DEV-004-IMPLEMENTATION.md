@@ -114,7 +114,8 @@ DEV-004 接受必须同时满足：
 
 如果真实run无法形成有效proposal，DEV-004保持`EvidencePending`并记录first divergence，不增加Admission、
 qualification或多Agent review。若实现本身失败，删除上述5个新增/修改入口；若DEV-005 No-go，删除
-`sir.rs`、example/config/tests和exports，保留未修改的domain-neutral `cairn-agent`。
+尚无consumer的扩建项并让SIR离开critical path，但保留已验证的最小generic seam与未修改的domain-neutral
+`cairn-agent`，待端到端架构稳定后再评估。
 
 ## 8. Current evidence
 

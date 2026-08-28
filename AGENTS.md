@@ -22,6 +22,10 @@ uses authorized tools, and proposes intent, Oracle, or candidate artifacts. Ther
 - A first fixture is an integration control, not the architecture. Before generalizing a mechanism,
   show that a materially different migration task can run through the same production path without
   a product-code branch or fixture-derived prompt change.
+- Treat SIR as a supported architectural extension point, neither a mandatory detour for every
+  migration nor a disposable experiment. Preserve the smallest task-generic seam that has a real
+  consumer, prioritize the end-to-end migration workflow, and expand SIR authority or topology only
+  when a later consumer and a sufficiently stable architecture require it.
 
 ## Development-stage versioning and compatibility
 

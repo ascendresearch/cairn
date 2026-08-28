@@ -45,5 +45,6 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 - DEV-004：Accepted，task-generic recorded/live DeepSeek SIR proposal episode 已闭合；
 - DEV-005：Accepted，第二个atomic compaction task复用同一路径，并产生可观察Oracle utility。
 
-CP0结论是保留proposal-only SIR preflight。当前下一步应以第一个真实CUDA→Ascend C迁移结果为consumer，
-再规划最小intent/Oracle/candidate边界；不恢复DEV-002式第三人fixture review、Admission或qualification框架。
+CP0结论是SIR当前落在proposal-only seam，同时保留未来扩展口。当前下一步应以第一个真实CUDA→Ascend C
+迁移结果为consumer，再规划最小intent/Oracle/candidate边界；不因为保留SIR就恢复DEV-002式第三人fixture
+review、Admission或qualification框架，也不因为主线暂时不依赖SIR就否定或删除这条能力。

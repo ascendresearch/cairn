@@ -88,4 +88,4 @@ Pure function按其风险运行unit/property tests即可。未跨外部effect不
 - DEV-004不需要Admission、mechanism qualification、private review或NPU lane；
 - required lanes是recorded workflow，声明DeepSeek能力时增加opt-in live model；
 - DEV-005必须证明cross-task path和downstream utility；
-- 若DEV-005 No-go，删除SIR product path即为合格closure。
+- 若DEV-005 No-go，SIR离开critical path、保留最小generic extension seam并停止扩建即为合格closure。

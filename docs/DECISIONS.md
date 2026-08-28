@@ -945,3 +945,10 @@ answers, or claim SIR value from plausible prose. If the cross-task and downstre
 fail, SIR leaves the critical path and the product uses user-declared intent plus automated
 verification. Exact mechanism qualification is added only with the first real authority consumer and
 in proportion to that mechanism's risk; the superseded DEV-002 qualification bundle is not retained.
+
+“Leaves the critical path” means pause disproportionate SIR investment while preserving the smallest
+task-generic extension seam already justified by a real consumer. It does not mean SIR is rejected as
+an architectural direction or must be erased whenever the immediate vertical workflow can proceed
+without it. Conversely, preserving that seam does not justify prebuilding Admission, process trees,
+review roles, or qualification. SIR may grow after the end-to-end workflow is stable or when a concrete
+consumer requires the next capability.

@@ -45,8 +45,9 @@ WS-PRODUCT: generic task projection + typed proposal shape
 WS-PRODUCT 提供一个实质不同的 CUDA task；WS-AGENT 不改 profile schema 或 control flow；WS-QUALITY 比较
 source-preserving、user-declared intent 和 runtime SIR 三条路径；WS-RECORD保留 exact episode/cost/failure。
 
-Go 必须有 cross-task reuse 和至少一个 downstream utility。No-go 时删除 product SIR adapter/profile，保留
-domain-neutral agent runtime。停止一条无价值路径是成功的工程结论。
+Go 必须有 cross-task reuse 和至少一个 downstream utility。No-go 时SIR离开critical path，只保留已有的最小
+task-generic extension seam与domain-neutral agent runtime，待端到端架构稳定或真实consumer出现再评估扩展。
+停止过度投入是成功的工程结论，不等于永久否定SIR。
 
 ## 5. Review 强度
 

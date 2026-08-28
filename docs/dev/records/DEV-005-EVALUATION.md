@@ -3,7 +3,7 @@
 - 状态：`Accepted / CP0 Go`
 - 日期：2026-08-28
 - Slice：[`DEV-005`](../SLICE_CATALOG.md#5-dev-005-gono-go)
-- 决策边界：保留proposal-only SIR preflight；不授权Admission、Gate或固定Agent topology
+- 决策边界：SIR当前落在proposal-only seam并保留扩展口；不授权现在建设Admission、Gate或固定Agent topology
 
 ## 1. Exact comparison
 
@@ -48,12 +48,13 @@ case branch，输出也没有复用fixture-specific答案。
 
 ## 4. Go/no-go
 
-结论：`Go`，但范围只到proposal-only SIR preflight。
+结论：`Go`。当前实现范围到proposal-only SIR seam，但这不是对SIR长期能力的否定或永久上限。
 
 - 保留`SirTaskWorkspace`、bounded reads、strict cited proposal和durable episode；
 - 不创建Intent Admission、qualification registry、多Agent review或SIR专用crate；
 - 下一步只为第一个真实CUDA→Ascend C迁移consumer规划最小intent/Oracle/candidate边界；
-- 若真实迁移consumer没有使用proposal改变任何决定，再删除SIR仍是有效后续结论。
+- 若近期真实迁移consumer没有使用proposal改变决定，让SIR退出critical path并暂停扩建；保留最小generic
+  seam，待端到端架构稳定或新consumer出现再继续。
 
 Remaining limits：只有2个task、2次live success；第二个owner brief是synthetic而非真实项目用户输入；未证明
 广泛泛化、proposal correctness、Ascend build/device结果或成本稳定性。放宽预算只防止过早截断，不构成
