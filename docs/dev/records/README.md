@@ -1,26 +1,17 @@
-# DesignConformanceRecord 索引
+# Development record index
 
-- 状态：开发入口评审记录索引
+- 状态：历史记录索引
 - 日期：2026-08-28
-- 模板：[`../DESIGN_CONFORMANCE_RECORD_TEMPLATE.md`](../DESIGN_CONFORMANCE_RECORD_TEMPLATE.md)
 
-本目录保存 development slice 的持久化设计符合性记录。记录存在不等于已经审查，也不自动改变
-[`SLICE_CATALOG.md`](../SLICE_CATALOG.md) 中的状态；评审结论与状态变化必须同时更新 catalog 和
-[`CURRENT_BASELINE.md`](../CURRENT_BASELINE.md)。
+记录只说明一次 slice 曾如何被设计和审查，不自动成为 current product dependency 或实施前置条件。当前状态
+以 [`SLICE_CATALOG.md`](../SLICE_CATALOG.md) 和 [`CURRENT_BASELINE.md`](../CURRENT_BASELINE.md) 为准。
 
-| Slice | Record | Review status | Catalog status | 下一条件 |
-| --- | --- | --- | --- | --- |
-| `DEV-001` | [`DEV-001.md`](DEV-001.md)；[`private review`](DEV-001-PRIVATE-REVIEW.md) | `Accepted` | `Accepted` | 已由DEV-002消费其commit `9dc8243`、public bundle与redacted review receipt identities |
-| `DEV-002` | [`DEV-002.md`](DEV-002.md)；[`private review`](DEV-002-PRIVATE-REVIEW.md) | `Accepted` | `Accepted` | DEV-004消费commit `71c32e6`冻结的qualification bundle与redacted control-review receipt identity |
-| `DEV-003` | [`DEV-003.md`](DEV-003.md) | `Accepted` | `Accepted` | DEV-306消费fixtures后按disposition删除superseded旧路径 |
+| Slice | Current status | Record | 当前用途 |
+| --- | --- | --- | --- |
+| DEV-001 | Accepted | [`DEV-001.md`](DEV-001.md)、[`historical private review`](DEV-001-PRIVATE-REVIEW.md) | evaluator fixture history；expected/private answer 不进入 runtime context |
+| DEV-002 | Superseded | [`DEV-002.md`](DEV-002.md) | 只记录 D-040 qualification framework 被删除的原因；详细旧评审在 Git history |
+| DEV-003 | Accepted | [`DEV-003.md`](DEV-003.md) | current fixture provenance/sanitation foundation |
 
-此前G0评审已经接受两项计划修正：
-
-1. DEV-003先交付被首批fixtures真实消费的最小`cairn-testkit` provenance/sanitation contract，DEV-001
-   随后复用，避免并行定义两套V1 fixture manifest；
-2. DEV-002在ST0冻结D-040 qualification contract和独立controls，不为尚未实现的mechanism预填receipt；
-   exact qualification identities/receipts由DEV-100/102/103/104在实现存在后、首次用于Gate前生成。
-
-DEV-002评审已经确认：十项slot没有合并或缺失；golden expectations与mechanism under test分离；
-public/private qualification controls和review authority分离；real-host calibration归future owning slice；任何
-尚不存在的implementation identity或qualification receipt均不能由DEV-002预填。
+DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
+authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按
+[`DESIGN_CONFORMANCE_RECORD_TEMPLATE.md`](../DESIGN_CONFORMANCE_RECORD_TEMPLATE.md) 做风险分级记录。

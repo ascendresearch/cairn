@@ -36,10 +36,10 @@ fn public_manifest_recomputes_every_fixture_and_scan_is_clean() {
     );
     let report = scan_public_tree(&root, &fixtures, &profile).expect("public scan");
     assert!(report.is_clean(), "findings: {:?}", report.findings());
-    assert_eq!(report.scanned_paths().len(), 11);
+    assert_eq!(report.scanned_paths().len(), 10);
 
     assert!(!fixtures.join("workflows/st1-identity-graph.json").exists());
-    assert!(fixtures.join("st1-identity-graph-plan.md").is_file());
+    assert!(!fixtures.join("st1-identity-graph-plan.md").exists());
 }
 
 #[test]

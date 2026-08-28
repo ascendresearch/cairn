@@ -851,28 +851,15 @@ compile-fail/static boundary tests。
 
 ## 20. 首期范围与实施边界
 
-第一个 architecture proof slice 只需要：
+Admission不属于第一个runtime-model SIR proof。该proof只有proposal authority，不读取restricted material，
+不构造`MigrationIntentContract`，也不预建deterministic recipe、十项mechanism set或qualification registry。
+这避免在实际DeepSeek episode证明跨task价值前先固定评测答案和trust framework。
 
-1. 一个 CUDA kernel 的 `IntentHypothesisSet`；
-2. type-specific `RequiredIntentEvidenceSet` 机械派生；
-3. 一个 `IntentEvidencePlannerProfile` 或明确的 deterministic recipe；
-4. typed plan validation；
-5. separate Admission process 的 Intent gate；
-6. `MigrationIntentContract` 或非成功 outcome；
-7. 下游生成一个 Oracle claim proposal后停止。
-
-它不要求同时实现七类 planner，不要求真实 NPU/performance，不要求多 Agent，也不授权建立万能
-`AdmissionPlannerV1` schema。首个 operator、claim 和 non-adaptive hidden corpus 已由
-[`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
-确定；首片使用 D-040 的 deterministic recipe 和十项 Intent-scoped mechanism set，不启动 model-backed
-Admission Planner。Mechanism semantic inventory、source bytes、corpus bytes、independent qualification
-controls 和 qualification/requalification plans 仍须在 ST0 物化并审查后，首个 ST1 code slice 才能进入
-`Ready`。Exact implementation identity 和 qualification receipt 必须由 owning implementation slice 在源码、
-依赖与 calibration environment 冻结后、首次用于 Gate 前生成；不得在实现存在前预填。
-
-后续建议按真实依赖扩展：Oracle Control → Hardware deterministic recipes → Candidate deterministic
-scheduler → Performance adaptive planning → Knowledge/Skill governance。顺序仍需进入 Implementation Plan
-并为每个 slice 写 `DesignConformanceRecord`，本文不构成本轮实施授权。
+只有SIR value gate通过后，才以第一个真实authority consumer为边界设计`RequiredIntentEvidenceSet`、plan
+validation、separate Admission process和Intent gate。届时exact mechanism随其implementation、dependency、
+scope和risk一起qualification；不得复活D-040/DEV-002 fixture-specific bundle，也不得为尚不存在的机制预填
+identity/receipt。后续Oracle、Candidate、Hardware/Performance、Knowledge/Skill按实际纵向消费者逐步规划，
+不提前为每个概念创建slice或空模块。
 
 ## 21. 当前实现状态
 

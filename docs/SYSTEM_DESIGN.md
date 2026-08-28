@@ -292,12 +292,11 @@ Intent Admission 逐 claim 校验证据、冲突、隐藏区分 case 和用户�
 `MigrationIntentContract`，或局部 `Conflict`、`Unknown`、`NeedsUserDecision`。SIR 本身没有
 promotion edge。
 
-首个 Intent Authority Proof 按 D-039 使用 Cairn clean-room `f32` 一维求和：normal-or-signed-zero、
-`1 <= N <= 256`、`abs(x_i) <= 65536`、non-aliasing single-output ABI，并把 launch/reduction tree 视为
-implementation artifact。它采用 non-adaptive public/restricted corpus；首片按 D-040 使用 deterministic
-recipe 和 Intent-scoped qualified mechanisms。D-041 只允许 newly authored sanitized V1 fixtures 进入
-新架构测试。这些选择冻结首片 contract，但不表示 source、corpus、qualification receipt 或 fixture
-已经实现。
+首个 SIR evaluation 使用 D-039 的 Cairn clean-room `f32` 一维求和，但其expected claims、domain、corpus
+partition和review identity只属于evaluator。按D-042，运行时DeepSeek只接收task source、bounded context和
+authorized tools，不接收上述答案；同一production profile/API还必须处理一个语义形态不同的任务。D-040的
+预建qualification set已被supersede并删除，proposal-only proof不等待Admission或mechanism registry。
+D-041只允许newly authored sanitized V1 fixtures进入测试。
 
 ### 7.3 Oracle 探索与准入
 
@@ -773,5 +772,6 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 | API/open source | FR-API-*、FR-EXT-*、QR-OSS-* |
 
 本次架构刷新已经把 intent、performance、knowledge/skill 和 feedback 义务补入
-`SYSTEM_REQUIREMENTS.md`。D-039、D-040、D-041 进一步冻结首个 Intent profile、mechanism qualification
-profile 和 historical fixture policy。这些边界是规范性目标，不应被旧的较窄 Oracle 实施计划覆盖。
+`SYSTEM_REQUIREMENTS.md`。D-039、D-041 冻结 evaluator fixture 与 historical fixture policy；D-042 冻结
+runtime-model-first 的近期验证顺序并 supersede D-040 的预建 qualification profile。这些边界是规范性目标，
+不应被旧的较窄 Oracle 实施计划或历史 review 流程覆盖。

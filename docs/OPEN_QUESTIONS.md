@@ -43,14 +43,14 @@ it.
 - **OQ-018** — product generalization: resolved by
   [`D-024`](DECISIONS.md#d-024--cairn-product-scope-is-cuda--ascend-c). Cairn's product scope is
   CUDA → Ascend C; domain-neutral infrastructure does not broaden that scope.
-- **OQ-019** — first Intent Admission policy and corpus: resolved by
-  [`D-039`](DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction).
-  The first operator is a clean-room finite-`f32` reduction with an exact claim scope and a
-  non-adaptive public/restricted corpus profile.
-- **OQ-023** — first verifier-mechanism qualification profile: resolved by
-  [`D-040`](DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped).
-  The first deterministic Intent-scoped mechanism set, controls, review, and requalification policy
-  are fixed.
+- **OQ-019** — first SIR evaluation fixture and corpus: resolved by
+  [`D-039`](DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction).
+  The first evaluator fixture is a clean-room finite-`f32` reduction with an exact expected scope and
+  non-adaptive public/restricted corpus; D-042 forbids projecting its answer into runtime SIR context.
+- **OQ-023** — first verifier-mechanism qualification profile: the prebuilt answer in D-040 was
+  superseded by [`D-042`](DECISIONS.md#d-042--runtime-models-reason-per-task-fixtures-evaluate-but-do-not-define-the-product).
+  No qualification set is a prerequisite to the proposal-only runtime-model proof. Exact
+  qualification is decided just in time with the first authority consumer.
 
 ## OQ-004 — Independence of semantic reference
 

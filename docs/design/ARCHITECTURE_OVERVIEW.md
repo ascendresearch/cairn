@@ -293,16 +293,13 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 任何方案若要求 Controller 读取 hidden bytes、Proposal 获得 promotion edge、Worker 理解 Oracle 业务，
 或引入非 V1 fallback，就不再是“实现细节”，必须回到规范层重新讨论。
 
-第一个 architecture proof slice 仍限定为一个 kernel 的
-`IntentHypothesisSet → Intent Admission → MigrationIntentContract → 一个 Oracle claim proposal`，在
-Candidate Search 之前停止。Operator、claim scope 和 non-adaptive corpus 已由
-[`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
-冻结；首个 verifier qualification profile 由
-[`D-040`](../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
-冻结。Source artifact和sanitized fixtures已分别由DEV-001/003接受；DEV-002 conformance record已审查，
-qualification contracts/independent controls正在物化但尚未接受，且不授权ST1代码实施。Exact
-qualification receipt必须等对应verdict-relevant implementation存在后、首次用于Gate前生成，不能在ST0
-预填。
+第一个architecture proof限定为一个实际DeepSeek-backed、proposal-only的SIR episode：task-generic
+context/tool projection → typed `IntentHypothesisSet` proposal → recorded replay/opt-in live evidence。它在
+Intent Admission之前停止。Reduction evaluation fixture由
+[`D-039`](../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
+冻结，但expected answer不进入runtime context。D-040的prebuilt qualification profile已由D-042 supersede，
+DEV-002 code/fixtures被删除。通过同一production path运行一个语义形态不同的task并证明downstream utility
+后，才规划Admission和Oracle authority。
 
 ## 13. 当前实现与目标差距
 

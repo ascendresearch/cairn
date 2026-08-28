@@ -788,19 +788,15 @@ architecture 已实现。
 
 ## 23. 首期实施边界
 
-第一个 architecture proof slice 只需要：
+第一个architecture proof只实现一个实际model-backed SIR profile/episode：复用当前domain-neutral
+`cairn-agent` runtime，把task-generic immutable context和scoped read/search tools投影给DeepSeek，持久化带
+引用、竞争假设和unknown的typed proposal，并提供recorded replay与opt-in live lane。
 
-1. 一个 SIR strategy profile/episode contract；
-2. 一个 `IntentEvidencePlannerProfile` 或 deterministic recipe；
-3. 一个 Oracle synthesis profile，生成一个 Oracle claim proposal；
-4. exact episode/profile/capability/context/budget identities；
-5. artifact-mediated handoff；
-6. separate Admission gate；
-7. recorded replay 和 capability/continuation isolation controls。
-
-首个 slice 的 operator/claim/corpus 已由 D-039 冻结，Admission planning 按 D-040 使用 deterministic
-recipe；不为该 slice 启用 model-backed adversarial strategy，也不为凑齐 Agent 数量增加 episode。
-Candidate Search、Hardware/Performance Agent planners 和 Knowledge/Skill planners 不属于第一 slice。
+该slice不建立Admission、Planner、mechanism qualification registry、Oracle profile、Candidate Search或
+新的空process crate。D-039 reduction仅是evaluator fixture，其expected answer不进入profile。随后用一个
+语义形态不同的task复用相同production path；若需要product branch或fixture-derived prompt change，proof
+失败。只有SIR相对source-preserving/user-declared baseline显示downstream utility后，才规划后续authority
+和Oracle slices。
 
 ## 24. Catalog 维护规则
 

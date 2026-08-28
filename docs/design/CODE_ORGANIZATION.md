@@ -263,6 +263,11 @@ crates/cairn-server/src/
 
 ### 5.2 SIR 与 proposal host
 
+下列目录是value gate通过后的target organization，不是首个proof的脚手架授权。首个DeepSeek-backed SIR
+proof必须复用现有`cairn-agent`和当前product consumer，以最小模块/测试形成真实episode；不得先创建空的
+`cairn-sir`、`cairn-proposal-host`或Admission crates。只有跨进程data/capability boundary出现真实consumer
+后才拆分，并保持相同task-generic profile/API。
+
 ```text
 crates/cairn-sir/src/
 ├── main.rs

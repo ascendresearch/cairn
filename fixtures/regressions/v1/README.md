@@ -10,6 +10,6 @@ and public source path, obligation, replacement scope, data classification, and 
 contract strictly decodes all JSON, recomputes identities, validates cited paths, and runs seeded
 negative controls.
 
-The planned ST1 identity graph is documented but deliberately has no fixture bytes until DEV-105
-can produce a complete accepted graph. Recorded controls do not claim live-model, CUDA, Ascend,
-device, or performance evidence.
+No ST1 identity-graph plan or fixture is retained without a current producing and replaying
+consumer. A future workflow authors its exact current-V1 fixture with that consumer. Recorded
+controls do not claim live-model, CUDA, Ascend, device, or performance evidence.

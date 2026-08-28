@@ -1,134 +1,42 @@
-# Development Slice DesignConformanceRecord 模板
+# Development Slice Risk/Conformance Note
 
-- 状态：规范性计划模板
-- 日期：2026-08-27
-- 使用规则：每个代码 slice 在进入 `Ready` 前复制并填写；不得仅链接 PR 描述替代
+- 使用范围：authority、restricted/secret visibility、external effect、public API或persisted/wire contract变化
+- 普通fixture、pure proposal code和internal refactor不强制使用
 
-## 1. Identity
+## 1. Objective
 
-- Development Slice ID：
-- Title：
-- Stage / Integration Increment：
-- Owner role：
-- Review roles：
-- Proposed status：
-- Target branch/change set：
+- Slice ID/title：
+- 当前consumer和可观察结果：
+- 非目标与停止条件：
+- Superseded code/tests删除：
 
-## 2. Objective 与非目标
+## 2. Role与authority
 
-- 单一 objective：
-- 用户可观察或架构可验证的结果：
-- 明确非目标：
-- 完成后仍 unknown/not-executed 的 scope：
-
-## 3. Traceability
-
-- Requirement IDs：
-- Decision IDs：
-- System Design sections：
-- Focused design sections：
-- Open questions/blockers：
-- 被本 slice supersede/remove 的旧开发路径：
-
-## 4. Domain 与 Authority
-
-| 项目 | Exact type/process/port | Authority | 不允许的能力 |
+| Role | Input/output | Capability | 明确没有 |
 | --- | --- | --- | --- |
-| Applicant/proposal | | | |
-| Required obligations | | | |
-| Planner/strategy | | | |
-| Execution observation | | | |
-| Mechanical Gate | | | |
-| Admitted/output artifact | | | |
-| Record/store | | | |
+| Coding agent/builder | | | runtime conclusion authority |
+| Runtime model/proposal | | | admitted/hidden authority |
+| Evaluator | | | product mutation authority |
+| Admission/execution（如适用） | | | proposal self-certification |
 
-## 5. Strong types 与 V1 影响
+## 3. Data与effects
 
-- 新增/修改 identities：
-- 容易混淆的 types/units/states：
-- constructor/deserialization invariants：
-- compile-fail/static boundary tests：
-- V1 schemas/events/content domains/process protocols：
-- 被删除的 V1 code/tests/fixtures：
-- 确认无 version bump、alias、dual reader/writer、converter：
+- Model-visible projection：
+- Restricted/secret exclusions：
+- External effects和ambiguous outcome：
+- Recorded/live/hardware lanes与预算：
 
-## 6. Inputs、Context 与 Data Policy
+## 4. Types与current V1
 
-- Frozen public inputs：
-- Restricted inputs：
-- Secret/external references：
-- Model/tool-visible projection：
-- Knowledge/skill snapshot：
-- Previous feedback 与 contamination：
-- Hidden corpus/exposure policy：
-- 禁止进入该 role/process 的数据：
+- 新增/修改的semantic types/identities：
+- Strict decode/constructor/static boundaries：
+- 确认无version bump、alias、converter或dual path：
 
-## 7. Mechanisms 与 Qualification
+## 5. Controls与acceptance
 
-| Mechanism | Exact identity | Qualification evidence | Scope/limitations | Requalification trigger |
-| --- | --- | --- | --- | --- |
-| | | | | |
-
-## 8. Effects、Receipts 与 Recovery
-
-- External effects：
-- Authorization point：
-- Ambiguous-effect policy：
-- Authoritative receipts：
-- Commit/publish sequence：
-- Crash/restart points：
-- Retry/idempotency identity：
-- Cancellation/suspension：
-
-## 9. Controls 与 Evidence Lanes
-
-| Control/lane | Required? | Fixture/environment | Expected outcome | Evidence location |
-| --- | --- | --- | --- | --- |
-| Positive | | | | |
-| Negative | | | | |
-| Conflict | | | | |
-| Unknown | | | | |
-| Bypass/tamper | | | | |
-| Fault/restart | | | | |
-| Recorded workflow | | | | |
-| Live model | | | | |
-| CUDA | | | | |
-| Ascend build | | | | |
-| Ascend NPU | | | | |
-| Profiler/microbench | | | | |
-| Model integration | | | | |
-
-## 10. Budgets 与停止
-
-- Turn/token/tool/wall/external budgets：
-- CPU/CUDA/NPU budget：
-- Diagnostic/hidden exposure budget：
-- Stop/saturation policy：
-- Budget exhaustion outcome：
-
-## 11. Backwards Audit 与 Impact
-
-- Output → input/evidence edges：
-- Common dependencies：
-- Feedback/knowledge/skill visibility edges：
-- Retraction/refutation impact：
-- Recorded replay scope：
-- Live counterfactual changed variables：
-
-## 12. Acceptance
-
-- Slice-specific exit criteria：
-- Applicable G0–G6 gates：
-- Required repository checks：
-- Required external lanes：
-- Documentation updates：
-- Fact-ledger update：
-
-## 13. Final Review（完成时填写）
-
-- Accepted commit(s)：
-- Evidence identities/paths：
-- 与初始设计的偏差：
-- Remaining gaps：
-- Revalidation triggers：
-- Final status：
+- Positive/primary negative：
+- Fixture-answer absence/generalization control：
+- Recovery/replay（如适用）：
+- Commands/evidence：
+- Remaining unknown/not-executed：
+- Final commit/status：

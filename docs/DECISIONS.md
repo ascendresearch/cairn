@@ -788,11 +788,19 @@ Processes split when data visibility, external tools, OS sandbox, credentials, o
 not merely because role names differ. The mechanical Admission Gate remains model-free and outside
 every Agent Host.
 
-## D-039 — The first Intent Admission operator is a clean-room finite-f32 reduction
+## D-039 — The first SIR evaluation fixture is a clean-room finite-f32 reduction
 
 - Decision: accepted
 
-The first Intent Authority Proof uses a Cairn-authored, MIT-compatible, clean-room CUDA `f32`
+The reduction is an evaluator-owned integration fixture, not product knowledge. Its expected claims,
+domain, competing interpretations, corpus partition labels, and review identities MUST NOT enter the
+runtime SIR profile, model-visible context, generic production types, prompts, or deterministic
+recipes. The runtime proposal agent receives the migration task artifacts and authorized tools, not
+this decision's expected answer. Passing this fixture proves only that one evaluation path works;
+architecture generality requires a materially different task to use the same product code and
+profile shape without a fixture-derived branch.
+
+The first SIR evaluation fixture uses a Cairn-authored, MIT-compatible, clean-room CUDA `f32`
 one-dimensional reduction with an explicit host launch. Historical Alloyport `cuda-reduction-v1`
 behavior and receipts may inform control design, but its source bytes are not imported unless their
 provenance and license are independently cleared. Fixed `matmul-zero-k` remains a
@@ -835,7 +843,12 @@ General adaptive-query and replenishment policy remains OQ-024.
 
 ## D-040 — The first verifier qualification set is deterministic and Intent-scoped
 
-- Decision: accepted
+- Decision: superseded by D-042
+
+This decision records the previously accepted prebuilt ten-mechanism qualification plan. D-042
+removes it from the current development baseline because it built an evaluator-specific trust
+framework before a runtime-model SIR path demonstrated product value. Its development artifacts are
+deleted rather than retained as a compatibility or future-authority path.
 
 The first architecture proof uses a deterministic Intent-evidence recipe rather than a model-backed
 Admission Planner. Its initial `VerificationMechanismSet` contains separately identified and
@@ -885,7 +898,8 @@ The first public fixture families cover:
 - recoverable wrong citation;
 - output-capture failure;
 - stale lease and duplicate live worker controls;
-- one complete ST1 end-to-end identity graph.
+- no speculative ST1 identity graph; workflow fixtures are authored only when a current consumer
+  can produce and replay their exact bytes.
 
 Private deployment state, credentials, PKI, enrollment bundles, SQLite/CAS contents, logs, raw live
 provider requests/responses or private continuation data, absolute host paths, complete third-party
@@ -896,3 +910,37 @@ restricted store, not the public test tree.
 Superseded product-specific fixtures and code are deleted only after their new V1 consumers and
 controls are accepted. No compatibility reader, alias, converter, dual fixture path, or historical
 admitted shape is retained.
+
+## D-042 — Runtime models reason per task; fixtures evaluate but do not define the product
+
+- Decision: accepted
+
+The repository coding agent is the builder and outside observer of a generic agent-based CUDA to
+Ascend C migration application. DeepSeek or another configured runtime model is the per-task
+reasoning actor. It reads a previously unseen task's source, bounded caller context, documentation,
+tests, and authorized tool results and may submit typed proposals. The coding agent does not solve a
+known fixture and encode that answer as the application.
+
+Fixtures are evaluator inputs. Public fixture bytes may be visible to developers, but expected
+answers and restricted controls are not model-visible product context. Production profiles, prompts,
+APIs, and mechanisms must be task-generic and must not contain the first reduction's name, D-039
+identities, domain values, hypothesis labels, or expected outcomes. `cairn-testkit` is not a
+production dependency.
+
+Before implementing Intent Admission, a mechanism qualification registry, or a dedicated SIR
+process tree, Cairn must run one minimal model-backed vertical proof through the existing durable
+agent runtime:
+
+1. project task-generic immutable source/context and scoped read/search tools;
+2. invoke the configured DeepSeek runtime profile;
+3. persist a typed proposal containing cited facts, competing hypotheses, and explicit unknowns;
+4. replay the same profile shape with a materially different migration task and no production-code
+   branch or fixture-derived prompt change;
+5. measure whether the proposal changes a downstream migration decision or reduces user work
+   relative to source-preserving and user-declared-intent baselines.
+
+This proof has proposal authority only. It does not create `MigrationIntentContract`, read restricted
+answers, or claim SIR value from plausible prose. If the cross-task and downstream-utility checks
+fail, SIR leaves the critical path and the product uses user-declared intent plus automated
+verification. Exact mechanism qualification is added only with the first real authority consumer and
+in proportion to that mechanism's risk; the superseded DEV-002 qualification bundle is not retained.

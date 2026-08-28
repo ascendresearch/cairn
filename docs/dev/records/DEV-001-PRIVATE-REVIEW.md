@@ -1,8 +1,12 @@
 # DEV-001 independent private review
 
+> Current-status note (2026-08-28): this file records a completed historical fixture review. Under
+> D-042, DEV-001 is evaluator-only and DEV-002 is superseded. This receipt is not a runtime-model
+> input, product dependency, or prerequisite for the next proposal-only value proof.
+
 - 状态：`Accepted`
 - Parent record：[`DEV-001.md`](DEV-001.md)
-- Decision：[`D-039`](../../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
+- Decision：[`D-039`](../../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
 - Public implementation commit：`98c4681f783ffcc1f759ef1fd697725ef9c3990c`
 - Review-contract commit：`9997a3e`
 - Frozen implementation commit：`9dc8243dc9432745f84a8dd987a839a8eade8341`

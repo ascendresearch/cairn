@@ -1,91 +1,50 @@
-# Cairn 开发计划设计
+# Cairn 开发计划
 
-- 状态：规范性开发计划；实施授权按slice入口记录独立管理
+- 状态：规范性开发计划；runtime-model value first
 - 日期：2026-08-28
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 上位规范：[`../SYSTEM_REQUIREMENTS.md`](../SYSTEM_REQUIREMENTS.md)、
   [`../DECISIONS.md`](../DECISIONS.md)、[`../SYSTEM_DESIGN.md`](../SYSTEM_DESIGN.md)
 - 软件架构：[`../design/README.md`](../design/README.md)
-- Oracle 设计不变量：[`../oracle/DESIGN_INVARIANTS.md`](../oracle/DESIGN_INVARIANTS.md)
 
-## 1. 目的
+## 1. 当前目的
 
-本目录定义 Cairn 如何从当前实现基线演进到新的 CUDA → Ascend C 架构。它回答：
+Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构建通用运行时、边界和评测；DeepSeek
+等 configured runtime model 才是面对每个未知迁移任务、阅读代码并提出高阶意图假设的 actor。
 
-- 开发工作按什么原则和依赖排序；
-- 当前代码哪些可以复用、哪些只是控制证据、哪些方向已经停止；
-- 一个开发 slice 在何种条件下可以开始、合并和宣称完成；
-- SIR、Oracle、Admission、Candidate、Hardware/Performance、Knowledge/Skill 和 Feedback 如何逐步接入；
-- 哪些工作可并行，哪些必须等待 authority contract 或真实设备证据；
-- 如何防止旧 Phase G、当前代码形态或模型演示反向定义新架构。
-
-本目录不是实施授权。开始任何代码 slice 前，仍需满足其 entry gate、关闭对应 blocker，并形成
-`DesignConformanceRecord`。
+当前先回答一个产品问题：SIR 相比 source-preserving 或用户直接声明 intent，是否真的改善后续迁移决策。
+在这个问题有证据之前，不建设完整 Admission、Oracle、Candidate、qualification 或多 Agent 拓扑。
 
 ## 2. 文档地图
 
-| 文档 | 主要问题 | 权威 |
-| --- | --- | --- |
-| [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 开发计划如何表示阶段、increment、slice、状态、依赖和证据？ | 规范性开发方法 |
-| [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前实现事实、可复用基础、历史控制、缺口和停止方向是什么？ | 事实基线与迁移约束 |
-| [`ROADMAP.md`](ROADMAP.md) | 从当前状态到 M2–M5 的阶段、关键路径和并行路径是什么？ | 规范性路线图 |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | 具体规划了哪些开发 slice，各自的输入、输出、依赖和验收是什么？ | 规范性 slice catalog |
-| [`QUALITY_GATES.md`](QUALITY_GATES.md) | 开始、合并、阶段晋级和完成声明需要哪些控制？ | 规范性开发 gate |
-| [`WORKSTREAMS.md`](WORKSTREAMS.md) | 工作流、代码归属、并行协作和集成顺序如何安排？ | 规范性协作设计 |
-| [`DESIGN_CONFORMANCE_RECORD_TEMPLATE.md`](DESIGN_CONFORMANCE_RECORD_TEMPLATE.md) | 每个 slice 开始前如何记录其设计符合性？ | 必填计划模板 |
-| [`records/README.md`](records/README.md) | 哪些 slice 已有持久化 conformance record，评审和 catalog 状态是什么？ | 开发入口评审记录 |
+| 文档 | 用途 |
+| --- | --- |
+| [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
+| [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
+| [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..005 的当前状态和边界 |
+| [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
+| [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
+| [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
 
-## 3. 阅读顺序
+## 3. 固定边界
 
-1. 先读本索引和 [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md)，区分“已经实现”和“目标设计”；
-2. 读 [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md)，理解计划语言和状态含义；
-3. 读 [`ROADMAP.md`](ROADMAP.md)，理解关键路径和阶段目标；
-4. 进入 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 查看具体工作；
-5. 开始 slice 前逐项执行 [`QUALITY_GATES.md`](QUALITY_GATES.md)，并填写 conformance record；
-6. 多条工作流并行时遵循 [`WORKSTREAMS.md`](WORKSTREAMS.md)。
+- coding agent 不替 DeepSeek 解 fixture，也不把已知答案写入 prompt、product type 或 policy；
+- fixture 是 evaluator input，不是产品知识或架构；
+- production crate 不依赖 `cairn-testkit`；expected/private material 不进入 proposal episode；
+- 第一个 case 只证明接线，第二个实质不同的 task 才检验通用路径；
+- Proposal 没有 Admission、execution、hidden evidence 或 verdict authority；
+- pre-release V1 直接替换，删除 superseded code/tests/data，不建兼容路径；
+- 没有当前 consumer 的 crate、registry、role、fixture taxonomy 和 review ceremony 不实施。
 
-## 4. 计划与事实的关系
+## 4. 当前状态
 
-[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 保存当前实现事实、已验证基础、历史控制摘要和目标差距；
-未来阶段、依赖、slice 和 gate 由本目录其他文档定义。Slice 开始、状态变化、accepted commit 和证据
-链接同步写入当前基线或由其引用的后续状态记录。
+- DEV-001：Accepted，保留为 reduction evaluation fixture；
+- DEV-003：Accepted，保留最小 fixture provenance/sanitation 基础；
+- DEV-002：Superseded；D-040 的预建 qualification bundle、实现、测试、公开/私有材料从 current tree 删除；
+- DEV-004：Proposed，复用现有 `cairn-agent` 建立 task-generic recorded/live DeepSeek SIR proposal episode；
+- DEV-005：Blocked by DEV-004，用第二个任务和 downstream utility 作 SIR go/no-go。
 
-旧 Phase G、Blue/Red prompt 和 dogfood 详细流水已从当前文档集删除，通过 Git 历史追溯。旧 Phase G
-未完成条目不能未经 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 映射直接恢复。
-
-## 5. 固定开发边界
-
-- 产品始终是 CUDA → Ascend C，不为未来异构迁移预建产品抽象；
-- Cairn 尚处 pre-release V1，修改当前 V1 并同步更新代码、测试、fixture 和文档，不增加兼容层；
-- 强类型是 authority boundary，不以 generic ID、字符串 role、整数单位或布尔 outcome 换取短期速度；
-- 每个 slice 必须产生可验证的纵向结果，不能只铺空 crate、空 trait 或未来 plugin 框架；
-- Proposal、Execution、Admission、Record 和 Policy/User authority 不在临时实现中合并；
-- 模型、知识、skill、CUDA observation 和历史 fixture 都不能因开发便利获得正式 authority；
-- hardware-free、recorded、live-model、CUDA、Ascend build、Ascend NPU 和 model-integration 是不同 lane；
-- 设计完成、代码编译、模型看似合理和真实设备运行分别是不同完成事实。
-
-## 6. 当前启动条件
-
-三个 P0 选择已经关闭：D-039 冻结首个 Intent operator/claim/corpus，D-040 冻结首个 verifier
-qualification profile，D-041 冻结历史 fixture curation policy。它们关闭的是设计选择，不是 ST0 evidence。
-
-首个新架构product increment按依赖顺序推进：
-
-- DEV-003已由commit `79a1174`接受，建立最小`cairn-testkit` provenance/sanitation contract并生成sanitized
-  V1 fixtures、public/private disposition和扫描记录；
-- DEV-001已由commit `9dc8243`接受，复用该contract物化D-039 clean-room CUDA/host source、public corpus和
-  independently reviewed restricted sealed corpus；
-- DEV-002已由commit `71c32e6`冻结D-040十项qualification contracts、独立golden/mutation/fault controls和
-  review assignment；exact implementation receipts仍由DEV-100/102/103/104在对应实现写出后、首次进入
-  Gate前生成；
-- 完成 DEV-004 的 `DesignConformanceRecord` 与 exact change inventory。
-
-用户于2026-08-28接受DEV-002 [`DesignConformanceRecord`](records/DEV-002.md) review package `955a09d`；entry
-由`9b2502d`闭合，bundle由`a713d00`物化，exact
-[`independent private review`](records/DEV-002-PRIVATE-REVIEW.md)与freeze由`71c32e6`完成。Frozen public bundle为
-`cairn:v1:sha256:testkit.intent-qualification-public-bundle.v1:acb24e22e011b2a57573f1e11c6c26e4cd63156605ce2fe0c7e9832e70a61acc`，
-redacted control-review receipt为
-`cairn:v1:sha256:testkit.qualification-control-review-receipt.v1:1b8b892807530fb47b5b4df1f65cf4a9df291932fed047164d346e1d565688b1`。
-DEV-002现为`Accepted`，只冻结future mechanism的考试与复核边界；在DEV-004接受前，ST1代码slice仍是
-`Blocked`。见[`records/README.md`](records/README.md)。
-决策、fixture或qualification contract已接受不能被误报为mechanism已经qualified。
+当前下一步不是直接启动 DEV-004，而是先让本次路线纠正确认并保持仓库 green。之后只需一份精简
+implementation note 确认 exact files、model-visible projection、typed output、recorded/live command、预算和
+删除路径；不再要求 DEV-002 式第三人 fixture review。

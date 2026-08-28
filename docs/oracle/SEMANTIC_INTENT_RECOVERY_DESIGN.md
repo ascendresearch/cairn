@@ -312,6 +312,11 @@ SIR 的评估不能只看模型生成文本是否“合理”。至少需要：
 - provenance completeness：每项结论能否追溯；
 - replacement stability：更换 SIR 实现是否不影响下游协议。
 
+评估必须以实际runtime-model episode为对象，不能由repository coding agent阅读fixture答案后代写结果。
+至少比较source-preserving、user-declared intent和runtime SIR三条路径。若SIR没有改变下游Oracle/candidate
+判断，也没有减少用户工作，或换一个语义形态不同的task就要求修改production代码/prompt结构，则SIR不进入
+critical path。
+
 意图恢复 admission corpus 应包含：硬件特化但语义不变、模型/checkpoint 依赖的非教科书行为、
 文档与源码冲突、CUDA 源 bug、多个合理解释、信息不足、融合和 side effect 等案例。
 
@@ -344,25 +349,21 @@ SIR 不应：
 - 将高层 IR 设计成不可替换的全项目中心模型；
 - 把未来可能的通用迁移抽象引入当前 CUDA → Ascend C 产品边界。
 
-## 12. 首个 Intent Admission profile
+## 12. 首个 runtime-model evaluation profile
 
-首个 architecture proof 使用 [`D-039`](../DECISIONS.md#d-039--the-first-intent-admission-operator-is-a-clean-room-finite-f32-reduction)
-冻结的 clean-room CUDA `f32` 一维求和及显式 host launch。首个 admitted domain 只包括 contiguous、
-normal-or-signed-zero binary32、`1 <= N <= 256`、`abs(x_i) <= 65536`；input/output alias、空输入、
-subnormal、非有限值和更宽 shape 不被临时猜测，而是保持 domain-outside 或 user-decision obligation。
+首个evaluation fixture使用
+[`D-039`](../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
+的clean-room CUDA `f32`一维求和及显式host launch。D-039中的expected domain、数学解释、竞争标签、public/
+restricted case和review identity都属于evaluator，不属于SIR input。
 
-SIR 必须至少产生并保留下列可竞争解释：数学求和、source reduction-tree bit identity、部署 shape
-特化，以及证据不足的 unknown。Intent Admission 的目标选择 real-number sum；任意 permutation/
-parenthesization、每个节点 round-to-nearest-ties-to-even binary32 addition 的 family 只作为后续 allowance
-calibration evidence，signed zero 数值等价。Launch geometry、block decomposition 和 tree order 是实现
-伪影。具体 allowance 和 evidence strength 仍由后续 Oracle Admission 独立建立，Intent contract 不预先
-制造该结论。
+Runtime DeepSeek profile只接收该task实际提供的source、host launch、bounded caller/context、文档/测试和
+authorized tool results。Prompt可以要求引用事实、保留竞争假设和unknown，但不能列出本fixture应产生的
+具体答案。Proposal是否发现数学归约、source-order行为、deployment specialization或证据不足，由evaluator
+在episode完成后判断；production代码不得为这些标签建fixture-specific branch。
 
-首个 corpus 是 non-adaptive sealed batch。Public controls 覆盖 honest、tail/non-power-of-two、
-order-sensitive cancellation、wrong exact-bit、wrong deployment-specialization 和 unknown；restricted
-controls 分别覆盖 implementation artifact、source defect、deployment quirk、competing meaning、genuine
-unknown 和 tamper/wrong binding。任一 hidden diagnostic 泄漏区分信息后按 D-031 burn 为公开 regression。
-一般 adaptive-query/replenishment policy 仍由 OQ-024 决定。
+第一项fixture只证明integration path。进入Intent Admission设计前，还必须选择一个在算法骨架、memory/
+side-effect或multi-kernel structure上实质不同的CUDA task，并在不修改production profile/API/code的情况下
+运行。若做不到，或SIR相对user-declared intent没有可观测下游收益，则停止SIR路线。
 
 ## 13. 分步建设原则
 

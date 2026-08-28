@@ -66,7 +66,8 @@
 - [ ] 正确变体的 construction claim 独立于 Oracle-under-test。
 - [ ] Mutation/coverage 只评价已建模 fault，不表示正确概率。
 - [ ] CUDA undefined behavior 不进入正常 differential Oracle。
-- [ ] Comparator、runner、adapter、parser、sanitizer/profiler adapter、gate 和 policy 自身已有 qualification。
+- [ ] 任何 comparator、runner、adapter、parser、sanitizer/profiler adapter、gate 或 policy 在首次形成
+  authority 前按 exact implementation、scope 和风险完成 qualification；尚无 consumer 的机制不预建考试集。
 
 ### 3.3 Feedback、hidden corpus 与学习
 
@@ -134,9 +135,10 @@
 
 ## 5. 进入实现前仍需关闭的选择
 
-首个 Intent operator/corpus、首个 verifier qualification profile 和历史 fixture curation policy 已分别由
-D-039、D-040、D-041 关闭。它们的 source/corpus bytes、qualification receipts 和 sanitized fixture
-manifests 仍是 ST0 entry evidence，不因 decision accepted 而视为已经生成。
+首个 evaluation fixture 和历史 fixture curation policy 已分别由 D-039、D-041 冻结。D-042 已 supersede
+D-040 的预建 verifier qualification profile：DEV-002 不再是当前 entry evidence，相关 current-tree artifacts
+已删除。近期 proposal-only proof 先运行实际 runtime model；只有出现 verdict-relevant consumer 后，才为
+exact mechanism 建 qualification evidence。
 
 以下 open questions 对相应后续 slice 仍是真正 blocker：
 

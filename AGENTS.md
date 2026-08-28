@@ -1,5 +1,28 @@
 # Cairn agent rules
 
+## Runtime-agent builder role
+
+The coding agent working on this repository is the builder and outside observer of a generic
+agent-based CUDA-to-Ascend-C migration application. DeepSeek (or another configured runtime model),
+not the coding agent, is the per-task reasoning actor that reads previously unseen migration code,
+uses authorized tools, and proposes intent, Oracle, or candidate artifacts. Therefore:
+
+- Treat fixtures only as tests of the application and its authority boundaries. Never use a known
+  fixture answer as product knowledge, runtime context, a hard-coded hypothesis, a deterministic
+  recipe, or a production special case.
+- Keep production APIs and prompts task-generic. They may describe how a runtime agent cites facts,
+  represents competing hypotheses, requests evidence, or preserves unknowns; they must not encode
+  `reduce-sum-f32`, D-039 identities, fixture-specific domains, or expected outcomes.
+- Public fixtures may be visible to repository developers, but restricted expectations are visible
+  only to the evaluation/admission side authorized for them. The runtime proposal agent must not
+  receive hidden answers, receipt authority, or test-only identities.
+- The coding agent may implement orchestration, typed boundaries, tools, persistence, evaluation,
+  and mechanical policy checks. It must not substitute its own interpretation of a fixture for an
+  actual runtime-model execution and then report the application as working.
+- A first fixture is an integration control, not the architecture. Before generalizing a mechanism,
+  show that a materially different migration task can run through the same production path without
+  a product-code branch or fixture-derived prompt change.
+
 ## Development-stage versioning and compatibility
 
 Until the user explicitly declares that Cairn has completed its first end-to-end workflow and is
