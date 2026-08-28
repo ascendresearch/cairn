@@ -4,6 +4,7 @@
 - Parent record：[`DEV-002.md`](DEV-002.md)
 - Decision：[`D-040`](../../DECISIONS.md#d-040--the-first-verifier-qualification-set-is-deterministic-and-intent-scoped)
 - Public implementation commit：`a713d0059c331fef8da188b02f2c5854a39a9980`
+- Frozen implementation commit：`71c32e6db972cda24f36dc0ffcae83dbbbc892ea`
 - Reviewer：`qualification-reviewer-user`
 - Outcome：四项检查全部接受（用户于2026-08-28明确attest）
 

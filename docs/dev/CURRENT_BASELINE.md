@@ -144,12 +144,15 @@ scan profile和current-V1 `cairn-testkit` contract已由DEV-003 commit
 `cairn:v1:sha256:testkit.intent-public-bundle.v1:fa2eb4064e772775e886e4feb2f39ca330d8988b7b5227fa6af2f497b7b488fc`，
 redacted private review receipt为
 `cairn:v1:sha256:testkit.restricted-review-receipt.v1:746b5bb5a718d3508311ec7b596299f4c30df2fe04a57a1d77bccb9e6553028e`。
-D-040 qualification contract/independent controls尚未冻结；用户于2026-08-28接受DEV-002
-[`DesignConformanceRecord`](records/DEV-002.md) review package `955a09d`，entry由`9b2502d`闭合后
-DEV-002已从clean worktree进入`InProgress`。Review-pending public contract/control bundle已由commit
-`a713d0059c331fef8da188b02f2c5854a39a9980`物化，exact public review subject与private control set正等待
-[`non-author review`](records/DEV-002-PRIVATE-REVIEW.md)，尚无control-review receipt，下游代码slice保持
-`Blocked`。Qualification receipt不能在
+D-040 qualification contract/independent controls已由DEV-002 commit
+`71c32e6db972cda24f36dc0ffcae83dbbbc892ea`冻结；其frozen public bundle为
+`cairn:v1:sha256:testkit.intent-qualification-public-bundle.v1:acb24e22e011b2a57573f1e11c6c26e4cd63156605ce2fe0c7e9832e70a61acc`，
+redacted control-review receipt为
+`cairn:v1:sha256:testkit.qualification-control-review-receipt.v1:1b8b892807530fb47b5b4df1f65cf4a9df291932fed047164d346e1d565688b1`。
+用户于2026-08-28完成exact public/private
+[`non-author review`](records/DEV-002-PRIVATE-REVIEW.md)，G1–G6 repository evidence闭合，DEV-002为
+`Accepted`。DEV-004现已解除依赖阻塞但仍需DCR审查，ST1代码slice保持`Blocked`。Mechanism qualification
+receipt不能在
 verdict-relevant implementation、dependency和calibration
 environment存在前预填；十项exact receipts按catalog mapping由DEV-100/102/103/104在首次使用前生成，
 DEV-104负责set closure。
@@ -164,8 +167,8 @@ receipt identity与六个`frozen-reviewed` partition已写入public summary；ca
 分离，freeze-transition audit证明final bundle只改变authority projection。CUDA/Ascend lane明确为
 `NotExecuted`，也未另建并行V1 fixture manifest。DEV-002记录已经列出十项slot、exact planned public/private
 inventory、独立golden/mutation/fault obligations、review assignment和requalification triggers；单一
-DEV-002 change set已在`a713d00`物化这些contract/controls且未夹带future mechanism implementation，现保持
-`review-pending`直到exact private review与freeze closure完成。
+DEV-002 change set已物化并冻结这些contract/controls且未夹带future mechanism implementation。Control-review
+receipt只证明考试与controls经过独立审查，不能证明任何mechanism qualified。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 

@@ -75,15 +75,17 @@ qualification profile，D-041 冻结历史 fixture curation policy。它们关�
   V1 fixtures、public/private disposition和扫描记录；
 - DEV-001已由commit `9dc8243`接受，复用该contract物化D-039 clean-room CUDA/host source、public corpus和
   independently reviewed restricted sealed corpus；
-- 为 D-040 冻结十项 qualification contracts、独立 golden/mutation/fault controls和review assignment；
-  exact implementation receipts由DEV-100/102/103/104在对应实现写出后、首次进入Gate前生成；
+- DEV-002已由commit `71c32e6`冻结D-040十项qualification contracts、独立golden/mutation/fault controls和
+  review assignment；exact implementation receipts仍由DEV-100/102/103/104在对应实现写出后、首次进入
+  Gate前生成；
 - 完成 DEV-004 的 `DesignConformanceRecord` 与 exact change inventory。
 
-用户于2026-08-28接受DEV-002 [`DesignConformanceRecord`](records/DEV-002.md) review package `955a09d`；
-entry由`9b2502d`闭合后DEV-002已进入`InProgress`。它只定义future mechanism的考试与复核边界，不预填qualification结果。见
-[`records/README.md`](records/README.md)。
-
-DEV-002 review-pending contract/control bundle已由commit `a713d00`物化；现在按
-[`independent private review`](records/DEV-002-PRIVATE-REVIEW.md)审查exact public subject和private controls，
-尚未生成control-review receipt。在DEV-002和DEV-004接受前，ST1代码slice仍是`Blocked`。
+用户于2026-08-28接受DEV-002 [`DesignConformanceRecord`](records/DEV-002.md) review package `955a09d`；entry
+由`9b2502d`闭合，bundle由`a713d00`物化，exact
+[`independent private review`](records/DEV-002-PRIVATE-REVIEW.md)与freeze由`71c32e6`完成。Frozen public bundle为
+`cairn:v1:sha256:testkit.intent-qualification-public-bundle.v1:acb24e22e011b2a57573f1e11c6c26e4cd63156605ce2fe0c7e9832e70a61acc`，
+redacted control-review receipt为
+`cairn:v1:sha256:testkit.qualification-control-review-receipt.v1:1b8b892807530fb47b5b4df1f65cf4a9df291932fed047164d346e1d565688b1`。
+DEV-002现为`Accepted`，只冻结future mechanism的考试与复核边界；在DEV-004接受前，ST1代码slice仍是
+`Blocked`。见[`records/README.md`](records/README.md)。
 决策、fixture或qualification contract已接受不能被误报为mechanism已经qualified。

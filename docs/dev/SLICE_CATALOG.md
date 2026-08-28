@@ -1,6 +1,6 @@
 # Cairn Development Slice Catalog
 
-- 状态：规范性开发catalog；DEV-003、DEV-001已接受，DEV-002正在实施
+- 状态：规范性开发catalog；DEV-001、DEV-002、DEV-003已接受，DEV-004待DCR
 - 日期：2026-08-28
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 路线图：[`ROADMAP.md`](ROADMAP.md)
@@ -13,18 +13,18 @@
 [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 或其引用的状态记录，并引用 commit/evidence，不能只改本表。
 
 DEV-003已由commit `79a1174`接受；其fixture provenance/sanitation contract满足了DEV-001的entry依赖。
-DEV-001已由commit `9dc8243`接受并冻结exact D-039 inputs；用户于2026-08-28接受DEV-002 review package
-`955a09d`，entry由`9b2502d`闭合后已从clean worktree进入`InProgress`；review-pending bundle由`a713d00`
-物化，正等待exact public/private non-author review。其余依赖slice保持`Proposed`或`Blocked`。
+DEV-001已由commit `9dc8243`接受并冻结exact D-039 inputs；DEV-002 review package `955a09d`、entry
+`9b2502d`、materialization `a713d00`和independent review/freeze `71c32e6`已经闭合，D-040 contract/control
+bundle为`Accepted`。DEV-004依赖已满足，现为`Proposed`并等待DCR；ST1及其余依赖slice保持`Blocked`。
 
 ## 2. ST0 — Planning Readiness
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
 | `DEV-001` | Accepted | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；DEV-003 contract accepted at `79a1174` | accepted commit `9dc8243`；frozen public bundle `cairn:v1:sha256:testkit.intent-public-bundle.v1:fa2eb4064e772775e886e4feb2f39ca330d8988b7b5227fa6af2f497b7b488fc`；redacted review receipt `cairn:v1:sha256:testkit.restricted-review-receipt.v1:746b5bb5a718d3508311ec7b596299f4c30df2fe04a57a1d77bccb9e6553028e` |
-| `DEV-002` | InProgress | 物化 D-040 首个 `VerificationMechanismSet` 的 qualification contract 与独立 controls | D-039 accepted；DEV-001 exact artifact/corpus inputs accepted at `9dc8243`；review package `955a09d` accepted；entry commit `9b2502d` | review-pending implementation `a713d00`；exact public/private non-author review、receipt/freeze与G1–G6 closure仍待完成；不预填 implementation identity/receipt |
+| `DEV-002` | Accepted | 物化 D-040 首个 `VerificationMechanismSet` 的 qualification contract 与独立 controls | D-039 accepted；DEV-001 exact artifact/corpus inputs accepted at `9dc8243`；review package `955a09d` accepted；entry commit `9b2502d` | accepted freeze commit `71c32e6`；frozen public bundle `cairn:v1:sha256:testkit.intent-qualification-public-bundle.v1:acb24e22e011b2a57573f1e11c6c26e4cd63156605ce2fe0c7e9832e70a61acc`；redacted control-review receipt `cairn:v1:sha256:testkit.qualification-control-review-receipt.v1:1b8b892807530fb47b5b4df1f65cf4a9df291932fed047164d346e1d565688b1`；无implementation identity/receipt |
 | `DEV-003` | Accepted | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory；review package `fe88f4e` | accepted commit `79a1174`：`cairn-testkit` current-V1 contract及七个真实fixture消费者、seeded sanitation controls、保留/删除列表和ST1 graph fixture plan |
-| `DEV-004` | Blocked | 为 ST1 完成首份 `DesignConformanceRecord` 和 exact change inventory | DEV-001/002/003 | 已审查 record，列出 V1 类型、crate/file、authority、tests、删除路径和 unknown scope |
+| `DEV-004` | Proposed | 为 ST1 完成首份 `DesignConformanceRecord` 和 exact change inventory | DEV-001/002/003 accepted | 已审查 record，列出 V1 类型、crate/file、authority、tests、删除路径和 unknown scope |
 
 ### DEV-001 materialization 约束
 
