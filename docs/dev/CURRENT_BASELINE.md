@@ -1,7 +1,7 @@
 # Cairn 当前开发基线与迁移分类
 
 - 状态：当前事实基线与开发状态账本；以仓库代码、测试、commit 和 durable artifacts 为证据
-- 日期：2026-08-27
+- 日期：2026-08-28
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 说明：本文件不把目标设计误报为实现
 
@@ -144,8 +144,9 @@ scan profile和current-V1 `cairn-testkit` contract已由DEV-003 commit
 `cairn:v1:sha256:testkit.intent-public-bundle.v1:fa2eb4064e772775e886e4feb2f39ca330d8988b7b5227fa6af2f497b7b488fc`，
 redacted private review receipt为
 `cairn:v1:sha256:testkit.restricted-review-receipt.v1:746b5bb5a718d3508311ec7b596299f4c30df2fe04a57a1d77bccb9e6553028e`。
-D-040 qualification contract/independent controls尚未生成；DEV-002仍为`Proposed`，须完成自己的
-DesignConformanceRecord与入口评审，下游代码slice保持`Blocked`。Qualification receipt不能在
+D-040 qualification contract/independent controls尚未生成；DEV-002仍为`Proposed`，其
+[`DesignConformanceRecord`](records/DEV-002.md)已形成并处于`ReviewPending`，下游代码slice保持`Blocked`。
+Qualification receipt不能在
 verdict-relevant implementation、dependency和calibration
 environment存在前预填；十项exact receipts按catalog mapping由DEV-100/102/103/104在首次使用前生成，
 DEV-104负责set closure。
@@ -158,8 +159,9 @@ DEV-001 与 DEV-003 的首版 `DesignConformanceRecord` 已写入
 扩展/消费DEV-003已接受的`cairn-testkit` contract。`private-reviewer-user`已完成exact private review，redacted
 receipt identity与六个`frozen-reviewed` partition已写入public summary；case-set facts与review authority保持
 分离，freeze-transition audit证明final bundle只改变authority projection。CUDA/Ascend lane明确为
-`NotExecuted`，也未另建并行V1 fixture manifest。下一条件是为DEV-002编写并审查DesignConformanceRecord；
-在它达到`Ready`前不启动qualification contract实施。
+`NotExecuted`，也未另建并行V1 fixture manifest。DEV-002记录已经列出十项slot、exact planned public/private
+inventory、独立golden/mutation/fault obligations、review assignment和requalification triggers；下一条件是
+完成跨workstream与用户入口评审。在它达到`Ready`前不启动qualification contract实施。
 
 首个新 increment 的输入不是某段旧 Phase G 未完成代码，而是：
 

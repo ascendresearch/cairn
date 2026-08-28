@@ -1,7 +1,7 @@
 # Cairn 开发 Workstreams 与集成设计
 
-- 状态：规范性开发计划设计，尚未授权代码实施
-- 日期：2026-08-27
+- 状态：规范性开发协作设计；实施授权按slice入口记录独立管理
+- 日期：2026-08-28
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 路线图：[`ROADMAP.md`](ROADMAP.md)
 - Code organization：[`../design/CODE_ORGANIZATION.md`](../design/CODE_ORGANIZATION.md)

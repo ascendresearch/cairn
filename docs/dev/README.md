@@ -1,7 +1,7 @@
 # Cairn 开发计划设计
 
-- 状态：规范性开发计划设计，尚未授权代码实施
-- 日期：2026-08-27
+- 状态：规范性开发计划；实施授权按slice入口记录独立管理
+- 日期：2026-08-28
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 上位规范：[`../SYSTEM_REQUIREMENTS.md`](../SYSTEM_REQUIREMENTS.md)、
   [`../DECISIONS.md`](../DECISIONS.md)、[`../SYSTEM_DESIGN.md`](../SYSTEM_DESIGN.md)
@@ -69,18 +69,18 @@
 三个 P0 选择已经关闭：D-039 冻结首个 Intent operator/claim/corpus，D-040 冻结首个 verifier
 qualification profile，D-041 冻结历史 fixture curation policy。它们关闭的是设计选择，不是 ST0 evidence。
 
-首个新架构 product increment 按依赖顺序仍需完成：
+首个新架构product increment按依赖顺序推进：
 
-- 先由DEV-003按D-041建立最小`cairn-testkit` provenance/sanitation contract，生成sanitized V1 fixtures、
-  public/private disposition和扫描记录；
-- 再由DEV-001复用该contract，materialize D-039的clean-room CUDA/host source、public corpus和restricted
-  sealed corpus；
+- DEV-003已由commit `79a1174`接受，建立最小`cairn-testkit` provenance/sanitation contract并生成sanitized
+  V1 fixtures、public/private disposition和扫描记录；
+- DEV-001已由commit `9dc8243`接受，复用该contract物化D-039 clean-room CUDA/host source、public corpus和
+  independently reviewed restricted sealed corpus；
 - 为 D-040 冻结十项 qualification contracts、独立 golden/mutation/fault controls和review assignment；
   exact implementation receipts由DEV-100/102/103/104在对应实现写出后、首次进入Gate前生成；
 - 完成 DEV-004 的 `DesignConformanceRecord` 与 exact change inventory。
 
-DEV-001 与 DEV-003 的首版 conformance records 已形成，但仍是 `ReviewPending`，未授权 source/fixture
-写入。见 [`records/README.md`](records/README.md)。
+DEV-002的[`DesignConformanceRecord`](records/DEV-002.md)已形成但仍是`ReviewPending`；它只定义future
+mechanism的考试与复核边界，不预填qualification结果。见[`records/README.md`](records/README.md)。
 
-在这些 entry evidence 完成前，代码 slice 仍是 `Blocked`；决策已接受不能被误报为 fixture、qualification
-或实现已经完成。
+DEV-002通过入口评审前不得实施其contract/control bundle；DEV-002和DEV-004接受前，ST1代码slice仍是
+`Blocked`。决策或fixture已接受不能被误报为mechanism已经qualified。
