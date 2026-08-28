@@ -29,7 +29,7 @@ mechanism authority。不得通过compatibility path复活。
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
 | `DEV-004` | Accepted | 复用现有`cairn-agent`建立task-generic DeepSeek SIR proposal episode | current agent runtime；DEV-001作为evaluation-only input；D-042；implementation note `be2985a` | commit `9e4711e`；recorded/full CI green；live episode `episode:01a04855-1c39-78b0-897e-ae5ff585c7ed`提交strict proposal并通过terminal restart |
-| `DEV-005` | Ready | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | 无production branch/prompt结构变化；与source-preserving/user-declared baseline比较；至少一个downstream utility或明确停止SIR |
+| `DEV-005` | Accepted | 用同一production path运行reduction和一个实质不同CUDA task，并做SIR go/no-go | DEV-004 | [`DEV-005 evaluation`](records/DEV-005-EVALUATION.md)；atomic compaction live成功；SIR改变order-sensitive Oracle选择；CP0 Go |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要
@@ -67,8 +67,12 @@ Go需要同时满足：
 No-go后：删除SIR product path，保留domain-neutral agent runtime；后续迁移由user-declared intent、静态事实和
 自动verification驱动。No-go是合法产品结论，不以扩benchmark或增加评审延后。
 
+DEV-005结论为Go，但只保留proposal-only SIR preflight。它没有admit intent：第二个task的proposal使downstream
+Oracle在owner回答顺序问题前禁止sequence-sensitive correctness claim，并把current-source observation限定为
+count + multiset。容量与non-overlap仍来自owner brief，证明SIR不能替代用户声明。
+
 ## 6. Future backlog（未切片）
 
-只有DEV-005 Go后才按第一个真实consumer拆分：Intent authority、Oracle、Candidate、CUDA/Ascend execution、
+DEV-005已经Go。后续仍只按第一个真实consumer拆分：Intent authority、Oracle、Candidate、CUDA/Ascend execution、
 restricted evidence、mechanism qualification、performance、knowledge/skill、feedback和platform/release。
 目标设计中的概念清单不是开发待办，也不自动获得ID或entry gate。

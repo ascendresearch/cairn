@@ -9,9 +9,9 @@
 Cairn 已有可复用的 durable agent runtime、record/replay、tool loop、provider protocols、worker/scheduler 和
 局部验证基础，但新的 CUDA → Ascend C 端到端 workflow 尚未完成。
 
-当前最重要的问题不是先建设 SIR → Admission → Oracle 的完整权威链，而是让 DeepSeek 作为 runtime actor
-面对未知 task 产生 task-generic SIR proposal，并证明它相对 source-preserving 或用户直接声明 intent 有
-downstream value。没有这项事实，SIR 不应继续位于 critical path。
+CP0已经证明DeepSeek可作为runtime actor面对不同task产生task-generic SIR proposal，并在atomic compaction
+task上改变一个具体Oracle选择。SIR因此保留为proposal-only preflight；这不授权完整SIR → Admission → Oracle
+权威链。下一步应围绕第一个真实迁移结果规划最小consumer，而不是恢复预建架构。
 
 ## 2. 可复用基础
 
@@ -36,8 +36,6 @@ downstream value。没有这项事实，SIR 不应继续位于 critical path。
 
 ## 4. 当前仍未完成
 
-- 第二个语义形态不同任务的同路径验证；
-- SIR 对 downstream migration/Oracle choice 的可观察收益；
 - 正式 Intent Admission、Oracle/Candidate authority chain；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
@@ -75,8 +73,8 @@ typed cited facts
 + durable recorded/live episode facts
 ```
 
-它不是 `MigrationIntentContract`，没有 hidden access、execution、Gate 或 verdict authority。DEV-005 再用同一
-production path处理第二个实质不同 task，并据 downstream utility 决定继续还是删除 SIR product path。
+它不是 `MigrationIntentContract`，没有 hidden access、execution、Gate 或 verdict authority。DEV-005已用同一
+production path处理atomic compaction task，并证明proposal可阻止把atomic output order误升格为intent。
 
 ## 7. 当前状态
 
@@ -86,6 +84,6 @@ production path处理第二个实质不同 task，并据 downstream utility 决�
 | DEV-002 | Superseded | 过早 qualification framework 已从 current tree 删除 |
 | DEV-003 | Accepted | 最小 fixture provenance/sanitation foundation |
 | DEV-004 | Accepted | generic proposal path经recorded replay、full CI和真实DeepSeek episode闭合；只证明runtime workflow接通 |
-| DEV-005 | Ready | DEV-004依赖已闭合；承担cross-task、downstream utility与SIR go/no-go |
+| DEV-005 | Accepted | reduction与atomic compaction共享production path；SIR改变order-sensitive Oracle选择，CP0 Go |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

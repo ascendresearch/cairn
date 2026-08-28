@@ -20,6 +20,9 @@ DEV-004 generic DeepSeek SIR proposal path
 → No-go: remove SIR from the critical path and use user-declared intent
 ```
 
+DEV-004/005现已accepted，CP0结论为Go：保留proposal-only SIR preflight。当前位于“plan the smallest
+authority/migration consumer”，尚未授权完整CP1能力集。
+
 在DEV-005之前，不创建独立Admission、mechanism qualification registry、七类Planner、十一位置Agent catalog、
 空SIR/Proposal Host crate或面向未来stage的兼容接口。
 

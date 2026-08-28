@@ -190,11 +190,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "episode_id": outcome.episode_id(),
             "task_bundle": outcome.task_bundle(),
             "proposal_id": outcome.proposal_id(),
+            "proposal": outcome.proposal(),
             "completion_reason": outcome.completion_reason(),
             "steps_started": outcome.steps_started(),
             "state_directory": state,
             "terminal_restart_recovered": true,
-            "provider_response_or_reasoning_printed": false
+            "provider_raw_response_or_reasoning_printed": false
         }))?
     );
     Ok(())

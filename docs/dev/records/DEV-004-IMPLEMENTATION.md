@@ -96,8 +96,9 @@ cargo run -p cairn-migration --example sir_deepseek -- \
   config/sir-deepseek.example.json
 ```
 
-默认限额：最多8个model steps、24个tool operations、65,536 observed provider tokens、单turn 16,384 output
-tokens、900秒、32个task files、256 KiB task bytes。Live lane记录model/deployment、episode、task bundle、
+当前默认限额：最多24个model steps、96个tool operations、262,144 observed provider tokens、单turn65,536
+output tokens、3,600秒、32个task files、256 KiB task bytes。DEV-004 accepted live使用的是此前较低的
+8 / 24 / 65,536 / 16,384 / 900限额。Live lane记录model/deployment、episode、task bundle、
 proposal、request/response、usage、completion和restart facts，但不打印provider raw response或chain-of-thought。
 
 ## 7. Acceptance 与停止
