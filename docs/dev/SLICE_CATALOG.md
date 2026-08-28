@@ -1,6 +1,6 @@
 # Cairn Development Slice Catalog
 
-- 状态：规范性计划 catalog，尚未授权代码实施
+- 状态：规范性开发catalog；DEV-003已接受，DEV-001已授权进入实施
 - 日期：2026-08-27
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 路线图：[`ROADMAP.md`](ROADMAP.md)
@@ -12,16 +12,17 @@
 表中只列专属目标和增量验收。状态变化必须同步记录到
 [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 或其引用的状态记录，并引用 commit/evidence，不能只改本表。
 
-当前没有任何新架构代码 slice 处于 `InProgress`。DEV-003 已通过 entry review 并进入 `Ready`；DEV-001
-仍等待其 fixture provenance/sanitation contract，其余依赖 slice 保持 `Proposed` 或 `Blocked`。
+当前没有未闭合的slice处于`InProgress`。DEV-003已由commit `79a1174`接受；其fixture
+provenance/sanitation contract满足DEV-001的最后entry依赖，故DEV-001进入`Ready`。其余依赖slice保持
+`Proposed`或`Blocked`。
 
 ## 2. ST0 — Planning Readiness
 
 | ID | 状态 | Objective | 依赖 | 专属退出证据 |
 | --- | --- | --- | --- | --- |
-| `DEV-001` | Proposed | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；DEV-003 fixture provenance/sanitation contract | exact source/host artifact、provenance、正/竞争/unknown/user-decision fixtures 和 sealed partition manifest |
+| `DEV-001` | Ready | 物化 D-039 的 clean-room deterministic reduction、Intent claim set、公开/restricted corpus、冲突与用户决策 controls | D-039 accepted；DEV-003 contract accepted at `79a1174` | exact source/host artifact、provenance、正/竞争/unknown/user-decision fixtures 和 sealed partition manifest |
 | `DEV-002` | Proposed | 物化 D-040 首个 `VerificationMechanismSet` 的 qualification contract 与独立 controls | D-039 accepted；DEV-001 exact artifact/corpus inputs | semantic mechanism slots、independent golden/property expectations、mutation/fault controls、review assignment 和 qualification/requalification plans；不预填 implementation identity/receipt |
-| `DEV-003` | InProgress | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory；review package `fe88f4e` | `cairn-testkit` 的 current-V1 fixture provenance/sanitation contract及真实fixture消费者、secret/path/provider scan、保留/删除列表和完整 ST1 graph fixture plan |
+| `DEV-003` | Accepted | 执行 D-041 的首批 fixture sanitation 与 public/private disposition | D-041 accepted；历史 evidence inventory；review package `fe88f4e` | accepted commit `79a1174`：`cairn-testkit` current-V1 contract及七个真实fixture消费者、seeded sanitation controls、保留/删除列表和ST1 graph fixture plan |
 | `DEV-004` | Blocked | 为 ST1 完成首份 `DesignConformanceRecord` 和 exact change inventory | DEV-001/002/003 | 已审查 record，列出 V1 类型、crate/file、authority、tests、删除路径和 unknown scope |
 
 ### DEV-001 materialization 约束

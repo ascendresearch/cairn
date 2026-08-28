@@ -10,8 +10,8 @@
 
 | Slice | Record | Review status | Catalog status | 下一条件 |
 | --- | --- | --- | --- | --- |
-| `DEV-001` | [`DEV-001.md`](DEV-001.md) | `ReviewedDependencyPending` | `Proposed` | 先由DEV-003接受fixture provenance contract并回填exact identity，再完成开工worktree audit |
-| `DEV-003` | [`DEV-003.md`](DEV-003.md) | `ActiveConformance` | `InProgress` | 完成批准的单一DEV-003 change set及G1–G6 evidence |
+| `DEV-001` | [`DEV-001.md`](DEV-001.md) | `ReviewedForEntry` | `Ready` | 从DEV-003 accepted contract `79a1174`启动单一DEV-001 change set |
+| `DEV-003` | [`DEV-003.md`](DEV-003.md) | `Accepted` | `Accepted` | DEV-306消费fixtures后按disposition删除superseded旧路径 |
 
 本轮评审还需明确接受两项由 G0 audit 发现的计划修正：
 
