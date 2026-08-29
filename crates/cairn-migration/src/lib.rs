@@ -5,6 +5,7 @@ mod call_adapter;
 mod candidate_build;
 mod candidate_episode;
 mod candidate_native_followup;
+mod candidate_native_repair;
 mod candidate_revision;
 mod candidate_search;
 mod collection_oracle;
@@ -79,9 +80,11 @@ pub use candidate_episode::{
 #[cfg(feature = "agent-runtime")]
 pub use candidate_episode::{
     CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateNativeFollowupEpisodeRunInput,
-    CandidateNativeFollowupEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
+    CandidateNativeFollowupEpisodeRunOutcome, CandidateNativeRepairEpisodeRunInput,
+    CandidateNativeRepairEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
     CandidateRevisionEpisodeRunOutcome, run_collection_candidate_episode,
-    run_collection_candidate_native_followup_episode, run_collection_candidate_revision_episode,
+    run_collection_candidate_native_followup_episode,
+    run_collection_candidate_native_repair_episode, run_collection_candidate_revision_episode,
 };
 pub use candidate_native_followup::{
     CandidateNativeFollowupError, CollectionCandidateNativeBuildDiagnosticArtifact,
@@ -90,6 +93,16 @@ pub use candidate_native_followup::{
     PreparedCollectionCandidateNativeFollowupRevision, prepare_candidate_native_build_diagnostic,
     prepare_collection_candidate_native_followup_revision,
     validate_archived_collection_candidate_native_followup_revision,
+};
+pub use candidate_native_repair::{
+    CandidateNativeRepairError, CandidateNativeRepairParentV1, CandidateNativeRepairPrevious,
+    CollectionCandidateNativeRepairBuildDiagnosticArtifact,
+    CollectionCandidateNativeRepairBuildDiagnosticV1,
+    CollectionCandidateNativeRepairRevisionArtifact, CollectionCandidateNativeRepairRevisionV1,
+    PreparedCandidateNativeRepairBuildDiagnostic, PreparedCollectionCandidateNativeRepairRevision,
+    prepare_candidate_native_repair_build_diagnostic,
+    prepare_collection_candidate_native_repair_revision,
+    validate_archived_collection_candidate_native_repair_revision,
 };
 pub use candidate_revision::{
     CandidateBuildDiagnosticText, CandidateRevisionError,

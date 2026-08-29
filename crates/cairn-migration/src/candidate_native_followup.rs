@@ -7,7 +7,7 @@ use cairn_execution::{
     ExecutionReceipt, ExecutionReceiptArtifact, ExecutionStderrArtifact, InputBundleArtifact,
     JobContractArtifact, TrustedExecutionEvidence,
 };
-use cairn_protocol::{ContentId, ContentType, EpisodeId};
+use cairn_protocol::{ContentId, ContentType, EpisodeId, JobId};
 use cairn_record::{ContentStore, ContentStoreError};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
@@ -195,29 +195,15 @@ pub fn prepare_candidate_native_build_diagnostic(
     stderr_bytes: &[u8],
     evidence_bytes: &[u8],
 ) -> Result<PreparedCandidateNativeBuildDiagnostic, CandidateNativeFollowupError> {
-    let receipt_bytes = cairn_codec::to_vec(receipt).map_err(codec)?;
-    if ContentId::derive(&receipt_bytes).map_err(codec)? != receipt_id
-        || receipt.job_id() != build.contract().job_id()
-        || receipt.contract_id() != build.contract_id()
-        || receipt.outcome() != ExecutionOutcome::SubjectFailed
-        || ContentId::derive(stderr_bytes).map_err(codec)? != receipt.stderr_id()
-        || ContentId::derive(evidence_bytes).map_err(codec)? != receipt.evidence_id()
-    {
-        return Err(CandidateNativeFollowupError::BindingMismatch);
-    }
-    let evidence: TrustedExecutionEvidence =
-        cairn_codec::from_slice(evidence_bytes).map_err(codec)?;
-    if evidence.backend().as_str() != DOCKER_BACKEND
-        || evidence.observed_environment_id() != build.environment_id()
-        || !evidence
-            .observations()
-            .iter()
-            .any(|observation| observation.as_str() == "docker:accelerator:none")
-    {
-        return Err(CandidateNativeFollowupError::BindingMismatch);
-    }
-    let text = std::str::from_utf8(stderr_bytes)
-        .map_err(|_| CandidateNativeFollowupError::InvalidDiagnostic)?;
+    let bounded = validate_native_failed_receipt(
+        receipt_id,
+        receipt,
+        stderr_bytes,
+        evidence_bytes,
+        build.contract().job_id(),
+        build.contract_id(),
+        build.environment_id(),
+    )?;
     let diagnostic = CollectionCandidateNativeBuildDiagnosticV1 {
         schema_version: SCHEMA_V1,
         previous_revision: build.revision_id(),
@@ -227,7 +213,7 @@ pub fn prepare_candidate_native_build_diagnostic(
         receipt: receipt_id,
         stderr: receipt.stderr_id(),
         evidence: receipt.evidence_id(),
-        diagnostic: CandidateBuildDiagnosticText::new(text)?,
+        diagnostic: bounded,
     };
     let bytes = encode(&diagnostic)?;
     let id = ContentId::derive(&bytes).map_err(codec)?;
@@ -236,6 +222,41 @@ pub fn prepare_candidate_native_build_diagnostic(
         bytes,
         id,
     })
+}
+
+pub(crate) fn validate_native_failed_receipt(
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    stderr_bytes: &[u8],
+    evidence_bytes: &[u8],
+    expected_job: JobId,
+    expected_contract: ContentId<JobContractArtifact>,
+    expected_environment: ContentId<ExecutionEnvironmentArtifact>,
+) -> Result<CandidateBuildDiagnosticText, CandidateNativeFollowupError> {
+    let receipt_bytes = cairn_codec::to_vec(receipt).map_err(codec)?;
+    if ContentId::derive(&receipt_bytes).map_err(codec)? != receipt_id
+        || receipt.job_id() != expected_job
+        || receipt.contract_id() != expected_contract
+        || receipt.outcome() != ExecutionOutcome::SubjectFailed
+        || ContentId::derive(stderr_bytes).map_err(codec)? != receipt.stderr_id()
+        || ContentId::derive(evidence_bytes).map_err(codec)? != receipt.evidence_id()
+    {
+        return Err(CandidateNativeFollowupError::BindingMismatch);
+    }
+    let evidence: TrustedExecutionEvidence =
+        cairn_codec::from_slice(evidence_bytes).map_err(codec)?;
+    if evidence.backend().as_str() != DOCKER_BACKEND
+        || evidence.observed_environment_id() != expected_environment
+        || !evidence
+            .observations()
+            .iter()
+            .any(|observation| observation.as_str() == "docker:accelerator:none")
+    {
+        return Err(CandidateNativeFollowupError::BindingMismatch);
+    }
+    let text = std::str::from_utf8(stderr_bytes)
+        .map_err(|_| CandidateNativeFollowupError::InvalidDiagnostic)?;
+    CandidateBuildDiagnosticText::new(text).map_err(Into::into)
 }
 
 /// One complete source revision authored after exact native compiler feedback.

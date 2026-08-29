@@ -43,6 +43,7 @@ mechanism authority。不得通过compatibility path复活。
 | `DEV-016` | Accepted | 用product-owned ASC harness强制DEV-014 exact primary source经过`bisheng`/`dav-3510` native compilation gate | DEV-015；[`DEV-016 DCR`](records/DEV-016-IMPLEMENTATION.md) | exact primary bytes实际进入`bisheng`并取得`SubjectFailed` receipt，暴露host/device混合和launch macro错误；只形成native compile evidence，不含runtime/semantic/verdict |
 | `DEV-017` | Accepted | 让新isolated DeepSeek episode消费DEV-016 exact native compiler feedback并提交显式previous-revision-linked full revision | DEV-016；[`DEV-017 DCR`](records/DEV-017-IMPLEMENTATION.md) | live DeepSeek以3 steps完成bounded reads、full changed follow-up submit和explicit yield，重开恢复同一artifact；不自动循环、不build/verdict |
 | `DEV-018` | Accepted | 将DEV-017 exact native-follow-up publication原样送回同一product-owned ASC gate | DEV-017；[`DEV-018 DCR`](records/DEV-018-IMPLEMENTATION.md) | exact primary进入`bisheng`并取得可恢复`SubjectFailed` receipt；新divergence为kernel function type自动推导失败；不修源码、不循环、不含semantic/verdict |
+| `DEV-019` | In progress | 让新isolated DeepSeek episode消费DEV-018 exact receipt-bound linker feedback，并建立可重复但逐轮显式授权的native repair lineage | DEV-018；[`DEV-019 DCR`](records/DEV-019-IMPLEMENTATION.md) | current slice必须提交exact parent/diagnostic-bound changed full source并通过terminal restart；同一V1 parent enum可表达root follow-up或上一repair，但runtime不自动续轮、不build/verdict |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要
