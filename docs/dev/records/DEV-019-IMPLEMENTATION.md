@@ -1,6 +1,6 @@
 # DEV-019 implementation — explicit repeatable native repair episode
 
-- 状态：`In progress`
+- 状态：`Accepted`
 - 日期：2026-08-29
 - Slice：[`DEV-019`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 设计：[`Agent Architecture`](../../design/AGENT_ARCHITECTURE.md)、
@@ -88,9 +88,30 @@ local-only `--preflight`，`external_dispatch_performed=false`，得到：
 DeepSeek主动调用bounded read tool时返回的original task source片段。
 
 不会发送raw trusted evidence、Controller/Worker或provider credential、private control set、Oracle expected output/comparison/
-verdict、DEV-017 provider continuation/reasoning。不会在这次调用后自动build或自动开启下一轮repair。只有用户对这一个
-exact payload明确授权后才允许正式provider dispatch。
+verdict、DEV-017 provider continuation/reasoning。不会在这次调用后自动build或自动开启下一轮repair。用户确认这一个
+exact payload后才进行了正式provider dispatch。
 
 ## 8. Live evidence
 
-待用户授权后的live episode填写。
+2026-08-29 production-path live run得到：
+
+| Evidence | Exact fact |
+| --- | --- |
+| episode | `episode:01a04cb7-ce3e-7331-8fd4-a345d629e675` |
+| root follow-up | `cairn:v1:sha256:migration.candidate-native-followup-revision.v1:9bc0eeb94474c94c41bae002083d042808b502eb4c30021cba9e83ed1437534a` |
+| repair diagnostic | `cairn:v1:sha256:migration.candidate-native-repair-build-diagnostic.v1:8a3015d59cd30036fdce2879936cc96c523b4ee5f98ad1012f0e3d1027dbd23f` |
+| repair revision | `cairn:v1:sha256:migration.candidate-native-repair-revision.v1:be182db29ba68757e9fcdff6657ef26d3b54e259ba0240d643f168eee4a29b59` |
+| model provenance | `deepseek-v4-pro` / `deepseek-responses`；resolved configuration `cairn:v1:sha256:agent.resolved-runtime-model.v1:eee9ebffd5f2d5f86e4d5ba5de53cec4b01cd03bb3487ba72b5df30e2216275a` |
+| behavior | first response提出3次bounded reads，其中1次成功、2次被gateway拒绝；第二次response按反馈完成2次合法reads；第三次提交complete changed tree；第四次explicit yield |
+| repair shape | 5 files；primary `src/compact_above_kernel.asc`；保持root source tree形状 |
+| model strategy | kernel entry与host declaration从`__global__ __aicore__`改为`__global__ __kernel__`；device class methods仍为`__aicore__` |
+| usage | 4 responses；input tokens `50081`；output tokens `23595`；reported cache-read tokens `41728` |
+| durability | 4 steps；terminal reason `Yielded`；关闭并重开stores后恢复同一episode与repair artifact |
+| authority | `automatic_next_repair_round=false`；`build_or_execution_claimed=false`；没有运行native build、Oracle、Admission或verdict |
+
+两次rejected reads证明model不能绕过task manifest/path boundary；随后它使用可见gateway feedback自行纠正，没有人工改写
+请求或source。`__kernel__`修改是model-authored repair strategy，不是Cairn认定的正确语法或修复；只有下一次explicit
+native build才能判断它是否通过`bisheng` gate，也仍不能形成semantic correctness claim。
+
+DEV-019 Accepted因为exact DEV-018 feedback已经通过一个新isolated、可恢复的Candidate episode产生immutable、typed
+root/parent/diagnostic-linked repair，而统一lineage没有引入自动循环。是否构建该repair属于下一slice和下一次显式动作。

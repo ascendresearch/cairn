@@ -26,7 +26,7 @@
 | DEV-016 | Accepted | [`product-owned native Ascend Candidate gate`](DEV-016-IMPLEMENTATION.md) | exact revision primary source经固定ASC harness进入`bisheng`并取得真实`SubjectFailed` diagnostic |
 | DEV-017 | Accepted | [`first native-feedback Candidate follow-up`](DEV-017-IMPLEMENTATION.md) | 新isolated DeepSeek episode消费exact native receipt-bound diagnostic并提交previous-revision-linked full source |
 | DEV-018 | Accepted | [`first native-feedback follow-up remote ASC build`](DEV-018-IMPLEMENTATION.md) | DEV-017 exact follow-up经同一product-owned native ASC gate取得真实`SubjectFailed` receipt |
-| DEV-019 | In progress | [`explicit repeatable native repair episode`](DEV-019-IMPLEMENTATION.md) | DEV-018 exact linker receipt进入新的isolated DeepSeek episode；每轮repair显式开启且保留typed lineage |
+| DEV-019 | Accepted | [`explicit repeatable native repair episode`](DEV-019-IMPLEMENTATION.md) | DEV-018 exact linker receipt进入新的isolated DeepSeek episode并提交typed repair；没有自动续轮或build |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按
