@@ -24,6 +24,7 @@ claim，DEV-011又在restricted commit后发布它并生成首个answer-free Can
 | --- | --- |
 | [`../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | SIR 的规范性目标、authority 边界与当前建设路线 |
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
+| [`CURRENT_IMPLEMENTATION_WALKTHROUGH.md`](CURRENT_IMPLEMENTATION_WALKTHROUGH.md) | 用atomic compaction样例逐步解释当前SIR→Admission→Oracle→Candidate输入实现 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
 | [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..011 的当前状态和边界 |
