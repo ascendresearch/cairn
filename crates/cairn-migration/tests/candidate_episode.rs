@@ -7,18 +7,26 @@ use cairn_agent::{
     ProviderName, RecordedExchange, RecordedModelTransport, ResponsesReasoningReplay,
     ScriptedModelTransport, TransportError, recover_agent_episode,
 };
+use cairn_execution::{
+    DOCKER_BACKEND, DockerImageId, ExecutionBackend, ExecutionEvidenceArtifact,
+    ExecutionObservation, ExecutionReceipt, ExecutionReceiptArtifact, ExecutionStderrArtifact,
+    ExecutionStdoutArtifact, ResolvedProgramIdentity, TrustedExecutionEvidence,
+};
 use cairn_migration::{
-    AdmittedCollectionOracleClaimArtifact, CandidateEpisodeError, CandidateEpisodeRunInput,
+    AdmittedCollectionOracleClaimArtifact, CandidateBuildEnvironmentProfileV1,
+    CandidateEpisodeError, CandidateEpisodeRunInput, CandidateRevisionEpisodeRunInput,
     CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
     CollectionCandidateSearchAuthorityInput, CollectionCandidateSourcePath,
     CollectionOracleAdmissionPublicOutcomeArtifact, CollectionOracleClaimDomainV1,
     CollectionOracleClaimStrengthV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-    IntentRecoveryRequestV1, MigrationIntentContractArtifact,
+    IntentRecoveryRequestV1, MigrationIntentContractArtifact, PreparedCandidateBuildDiagnostic,
     PreparedCollectionCandidateSearchInput, SirCallerClaimId, SirCapabilityManifestV1,
     SirResolvedRuntimeModelArtifact, SirTaskLimits, SirTaskWorkspace,
+    prepare_candidate_build_diagnostic, prepare_candidate_build_job,
     prepare_collection_candidate_search_input, run_collection_candidate_episode,
+    run_collection_candidate_revision_episode,
 };
-use cairn_protocol::{ContentId, ContentType, EpisodeId, TaskId};
+use cairn_protocol::{AttemptId, ContentId, ContentType, EpisodeId, JobId, TaskId};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde_json::{Value, json};
 
@@ -144,6 +152,110 @@ fn responses() -> Vec<Vec<u8>> {
         serde_json::to_vec(&json!({"output":[{"type":"function_call","call_id":"candidate-submit","name":"candidate_submit_collection_proposal","arguments":submit_arguments}]})).expect("submit response"),
         serde_json::to_vec(&json!({"output":[{"type":"message","id":"candidate-final","phase":"final_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Candidate proposal submitted."}]}]})).expect("yield response"),
     ]
+}
+
+fn revision_submission() -> Value {
+    json!({
+        "schema_version":1,
+        "files":[
+            {
+                "path":"CMakeLists.txt",
+                "source":"cmake_minimum_required(VERSION 3.24)\nfind_package(ASC REQUIRED)\nproject(candidate LANGUAGES ASC CXX)\nadd_library(candidate STATIC src/compact_above.asc)\ntarget_compile_options(candidate PRIVATE $<$<COMPILE_LANGUAGE:ASC>:--npu-arch=dav-3510>)\n"
+            },
+            {
+                "path":"src/compact_above.asc",
+                "source":"#include \"kernel_operator.h\"\n\nextern \"C\" __global__ __aicore__ void compact_above() {\n  // Revised complete source after the public compiler diagnostic.\n}\n"
+            }
+        ],
+        "primary_source":"src/compact_above.asc",
+        "explanation":"Switches the kernel translation unit to the selected Ascend compiler integration while preserving the frozen local collection contract. This remains an unbuilt proposal."
+    })
+}
+
+fn revision_responses() -> Vec<Vec<u8>> {
+    let submit_arguments =
+        serde_json::to_string(&revision_submission()).expect("revision arguments");
+    vec![
+        serde_json::to_vec(&json!({"output":[{"type":"function_call","call_id":"candidate-revision-submit","name":"candidate_submit_collection_revision","arguments":submit_arguments}]})).expect("revision submit response"),
+        serde_json::to_vec(&json!({"output":[{"type":"message","id":"candidate-revision-final","phase":"final_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Candidate revision submitted."}]}]})).expect("revision yield response"),
+    ]
+}
+
+struct RevisionFixture {
+    parent: CollectionCandidateProposalV1,
+    parent_id: cairn_protocol::ContentId<cairn_migration::CollectionCandidateProposalArtifact>,
+    diagnostic: PreparedCandidateBuildDiagnostic,
+}
+
+fn revision_fixture(
+    search_input: cairn_protocol::ContentId<
+        cairn_migration::CollectionCandidateSearchInputArtifact,
+    >,
+) -> RevisionFixture {
+    let parent_bytes = cairn_codec::to_vec(&json!({
+        "schema_version":1,
+        "search_input":search_input,
+        "episode_id":EpisodeId::new(),
+        "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"parent model"),
+        "submission":{
+            "schema_version":1,
+            "files":[
+                {"path":"CMakeLists.txt","source":"cmake_minimum_required(VERSION 3.24)\nproject(candidate LANGUAGES CXX)\nadd_library(candidate STATIC src/compact_above.cpp)\ntarget_link_libraries(candidate PRIVATE ascendcl)\n"},
+                {"path":"src/compact_above.cpp","source":"#include <acl/acl.h>\n#include \"kernel_operator.h\"\n\nextern \"C\" __global__ __aicore__ void compact_above() {}\n"}
+            ],
+            "primary_source":"src/compact_above.cpp",
+            "explanation":"Initial proposal with an unresolved target build integration."
+        }
+    })).expect("parent bytes");
+    let parent_id = ContentId::derive(&parent_bytes).expect("parent ID");
+    let parent: CollectionCandidateProposalV1 =
+        cairn_codec::from_slice(&parent_bytes).expect("parent proposal");
+    let job_id = JobId::new();
+    let build = prepare_candidate_build_job(
+        job_id,
+        &parent_bytes,
+        parent_id,
+        DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+        CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+    )
+    .expect("Candidate build");
+    let stderr = b"src/compact_above.cpp:1:10: fatal error: acl/acl.h: No such file or directory\n";
+    let stderr_id = ContentId::<ExecutionStderrArtifact>::derive(stderr).expect("stderr ID");
+    let evidence_value = TrustedExecutionEvidence::new(
+        ExecutionBackend::new(DOCKER_BACKEND).expect("backend"),
+        build.environment_id(),
+        ResolvedProgramIdentity::new("sha256:recorded-candidate-build").expect("program"),
+        vec![ExecutionObservation::new("docker:accelerator:none").expect("observation")],
+    )
+    .expect("evidence");
+    let evidence = cairn_codec::to_vec(&evidence_value).expect("evidence bytes");
+    let evidence_id =
+        ContentId::<ExecutionEvidenceArtifact>::derive(&evidence).expect("evidence ID");
+    let receipt_bytes = cairn_codec::to_vec(&json!({
+        "schema_version":1,
+        "job_id":job_id,
+        "attempt_id":AttemptId::new(),
+        "contract_id":build.contract_id(),
+        "outcome":"subject-failed",
+        "exit_code":1,
+        "elapsed_ms":10,
+        "stdout_id":id::<ExecutionStdoutArtifact>(b"stdout"),
+        "stderr_id":stderr_id,
+        "evidence_id":evidence_id,
+        "outputs":[]
+    }))
+    .expect("receipt bytes");
+    let receipt: ExecutionReceipt = cairn_codec::from_slice(&receipt_bytes).expect("receipt");
+    let receipt_id =
+        ContentId::<ExecutionReceiptArtifact>::derive(&receipt_bytes).expect("receipt ID");
+    let diagnostic =
+        prepare_candidate_build_diagnostic(&build, receipt_id, &receipt, stderr, &evidence)
+            .expect("build diagnostic");
+    RevisionFixture {
+        parent,
+        parent_id,
+        diagnostic,
+    }
 }
 
 fn codec() -> cairn_agent::NativeProtocolCodec {
@@ -432,6 +544,162 @@ fn accepted_proposal_still_requires_an_explicit_model_yield() {
         response_index, 2,
         "budget completion dispatched another step"
     );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn receipt_bound_revision_is_isolated_restart_safe_and_replayable() {
+    let task = tempfile::tempdir().expect("task root");
+    write_task(task.path());
+    let workspace =
+        SirTaskWorkspace::load(task.path(), SirTaskLimits::default()).expect("workspace");
+    let (recovery, search) = candidate_inputs(&workspace, TaskId::new());
+    let fixture = revision_fixture(search.id());
+    let parent_episode = fixture.parent.episode_id();
+    let revision_episode = EpisodeId::new();
+    assert_ne!(revision_episode, parent_episode);
+    let model_configuration =
+        id::<SirResolvedRuntimeModelArtifact>(b"recorded revision model configuration");
+    let state = tempfile::tempdir().expect("state root");
+    let mut content =
+        SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
+            .expect("content store");
+    let mut events = SqliteEventStore::open(state.path().join("events.db")).expect("event store");
+    let response_bytes = revision_responses();
+    let mut request_bytes = Vec::new();
+    let mut response_index = 0_usize;
+    let run_input = |episode_id| CandidateRevisionEpisodeRunInput {
+        search_input: search.clone(),
+        recovery_input: recovery.clone(),
+        parent: fixture.parent.clone(),
+        parent_id: fixture.parent_id,
+        build_diagnostic: fixture.diagnostic.clone(),
+        episode_id,
+        model_configuration,
+        selection: ModelSelection {
+            provider: ProviderName::new("recorded").expect("provider"),
+            model: ModelName::new("deepseek-candidate-revision-recorded").expect("model"),
+            deployment: DeploymentName::new("local-recorded").expect("deployment"),
+            adapter_version: AdapterVersion::new("native-protocol-v1").expect("adapter"),
+        },
+        budget: EpisodeBudget {
+            step_limit: Some(EpisodeStepLimit::new(4).expect("step limit")),
+            tool_operation_limit: Some(EpisodeToolOperationLimit::new(8)),
+            provider_token_limit: None,
+            deadline_unix_ms: None,
+            external_meter_limits: None,
+        },
+        max_output_tokens: ModelOutputTokenLimit::new(16_384).expect("output limit"),
+        task_limits: SirTaskLimits::default(),
+    };
+    let outcome = {
+        let mut scripted = ScriptedModelTransport::new(
+            |request: &cairn_agent::PreparedModelRequest| -> Result<_, TransportError> {
+                request_bytes.push(request.request_bytes().to_vec());
+                let response = response_bytes
+                    .get(response_index)
+                    .expect("scripted response")
+                    .clone();
+                response_index += 1;
+                Ok(ModelTransportResponse::without_usage(response))
+            },
+        );
+        run_collection_candidate_revision_episode(
+            &mut events,
+            &mut content,
+            &mut scripted,
+            codec(),
+            workspace.clone(),
+            run_input(revision_episode),
+        )
+        .expect("scripted Candidate revision episode")
+    };
+    assert_eq!(outcome.steps_started(), 2);
+    assert_eq!(outcome.parent_id(), fixture.parent_id);
+    assert_eq!(outcome.diagnostic_id(), fixture.diagnostic.id());
+    assert_eq!(outcome.revision().episode_id(), revision_episode);
+    assert_eq!(
+        outcome.revision().model_configuration(),
+        model_configuration
+    );
+    assert_eq!(outcome.revision().parent_proposal(), fixture.parent_id);
+    assert_eq!(
+        outcome.revision().build_diagnostic(),
+        fixture.diagnostic.id()
+    );
+    assert_ne!(outcome.revision().submission(), fixture.parent.submission());
+    assert_eq!(request_bytes.len(), 2);
+
+    let initial = String::from_utf8(request_bytes[0].clone()).expect("initial request");
+    assert!(initial.contains("candidate_submit_collection_revision"));
+    assert!(initial.contains("#include <acl/acl.h>"));
+    assert!(initial.contains("fatal error: acl/acl.h: No such file or directory"));
+    assert!(initial.contains(&fixture.parent_id.to_string()));
+    assert!(initial.contains(&fixture.diagnostic.id().to_string()));
+    assert!(!initial.contains("accepted_candidate_proposal"));
+    for forbidden in [
+        "qualification_receipt",
+        "comparison_evidence",
+        "missing_occurrence",
+        "expected_collection",
+        "private_continuation",
+    ] {
+        assert!(!initial.contains(forbidden), "leaked {forbidden}");
+    }
+    let continuation = String::from_utf8(request_bytes[1].clone()).expect("revision continuation");
+    assert!(continuation.contains("accepted_candidate_revision"));
+    assert!(continuation.contains(&outcome.revision_id().to_string()));
+
+    drop(events);
+    drop(content);
+    let mut recovered_content =
+        SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
+            .expect("recovered content");
+    let recovered_events =
+        SqliteEventStore::open(state.path().join("events.db")).expect("recovered events");
+    assert!(matches!(
+        recover_agent_episode(
+            &recovered_events,
+            &mut recovered_content,
+            &AgentEpisode::new(revision_episode).expect("episode")
+        )
+        .expect("terminal recovery"),
+        AgentEpisodeState::Completed {
+            reason: EpisodeCompletionReason::Yielded,
+            steps_started: 2
+        }
+    ));
+
+    let replay_state = tempfile::tempdir().expect("replay state");
+    let mut replay_content = SqliteContentStore::open(
+        replay_state.path().join("content.db"),
+        replay_state.path().join("cas"),
+    )
+    .expect("replay content");
+    let mut replay_events =
+        SqliteEventStore::open(replay_state.path().join("events.db")).expect("replay events");
+    let exchanges = request_bytes
+        .iter()
+        .zip(revision_responses())
+        .map(|(request, response)| RecordedExchange {
+            request_id: ContentId::derive(request).expect("request identity"),
+            response_bytes: response,
+            usage: None,
+        })
+        .collect::<Vec<_>>();
+    let mut recorded = RecordedModelTransport::new(exchanges);
+    let replay = run_collection_candidate_revision_episode(
+        &mut replay_events,
+        &mut replay_content,
+        &mut recorded,
+        codec(),
+        workspace,
+        run_input(revision_episode),
+    )
+    .expect("recorded Candidate revision replay");
+    assert_eq!(replay.revision_id(), outcome.revision_id());
+    assert_eq!(replay.parent_id(), outcome.parent_id());
+    assert_eq!(replay.diagnostic_id(), outcome.diagnostic_id());
 }
 
 fn decode_submission(value: &Value) -> Result<CollectionCandidateProposalSubmissionV1, String> {
