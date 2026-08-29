@@ -1,13 +1,13 @@
 # Cairn Agent 与 Strategy 软件架构设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 父设计：[`ARCHITECTURE_OVERVIEW.md`](ARCHITECTURE_OVERVIEW.md)
 - Runtime 基础：[`../RECORD_REPLAY.md`](../RECORD_REPLAY.md)
 - Admission 关系：[`ADMISSION_ARCHITECTURE.md`](ADMISSION_ARCHITECTURE.md)
 - Requirements：`FR-AGENT-*`，尤其 `FR-AGENT-006/021/022/023`
-- Decisions：`D-022`、`D-034`、`D-037`、`D-038`
+- Decisions：`D-022`、`D-034`、`D-037`、`D-038`、`D-043`
 
 ## 1. 目的
 
@@ -467,16 +467,10 @@ Episodes 只有在下列条件全部相同或可由 Host 安全收窄时才可�
 flowchart TB
     controller["Controller\nprocess manager / public record / policy"]
 
-    subgraph sirzone["SIR process boundary"]
-      sir["SIR strategy coordinator"]
-      sirepisodes["Optional model-backed SIR episodes"]
-      sir --- sirepisodes
-    end
-
-    subgraph proposalzone["Proposal / Planning Host zone"]
+    subgraph proposalzone["Proposal Host zone"]
       hosta["Host A\ncapability class A"]
       hostb["Host B\ncapability class B"]
-      episodes["Synthesis / adversarial / planner / candidate episodes"]
+      episodes["SIR / synthesis / adversarial / planner / candidate episodes"]
       hosta --- episodes
       hostb --- episodes
     end
@@ -486,18 +480,19 @@ flowchart TB
     public[("Public event/CAS")]
     restricted[("Restricted admission event/CAS")]
 
-    controller <--> sir
     controller <--> hosta
     controller <--> hostb
     controller <--> admission
-    controller <--> workers
+    workers -->|"direct outbound mTLS/WSS"| controller
     controller --- public
     admission --- restricted
 ```
 
-SIR 保持独立进程是因为它是未来可大幅替换的高阶语义子系统。其他 proposal/planning episodes 可按
-capability class 共享 Host。Mechanical Gate、restricted store 和 generated-code Worker 永远不与 Agent
-episode 混在同一 authority process。
+SIR 保持独立的 role/profile/episode contract，但不保持专用进程。它与其他 proposal/planning episodes
+一样按 capability class 共享通用 Host implementation；context、continuation、budget、tool result、
+namespace 和 grant 仍逐 episode 隔离。Mechanical Gate、restricted store 和 generated-code Worker
+永远不与 Agent episode 混在同一 authority process。Agent 请求实验时只调用 Controller tool gateway，
+不能直接连接 Worker 或启动本地 Docker。
 
 ## 13. Episode lifecycle
 
@@ -712,10 +707,13 @@ Planner 或 Candidate 业务分支。
 
 ### 20.3 SIR 与 Proposal/Planning Host
 
-- `cairn-sir` 组合 SIR strategies 和可选 model episodes；
-- `cairn-proposal-host` 读取 product profile，形成 runtime episode spec，执行 model/tool loop；
+- `cairn-proposal-host` 读取 SIR/Oracle/Planner/Candidate product profile，形成 runtime episode spec，执行
+  model/tool loop；
 - Host 只实现 capability gateway，不拥有 admission policy；
 - 不同 capability class 使用不同 Host instance/config/principal。
+
+现有 `cairn-sir` 是 DEV-008 one-shot recorded-ingress/capability proof，不是目标长期 process crate。
+Proposal Host 接管 production SIR profile 时直接删除该路径。
 
 ### 20.4 Instructions 与 templates
 
@@ -773,8 +771,8 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 ### 22.2 尚未实现
 
 - 产品侧完整 11-position profile catalog；
-- 独立 SIR strategy/process；
 - generic Proposal/Planning Host process；
+- production SIR profile 在 generic Host 中的 supervisor/lifecycle；
 - Oracle strategy 插件式组合政策（不采用 native dynamic plugin ABI）；
 - 七个 Admission Planner profiles；
 - Agent invocation/expected-information-gain policy；
@@ -786,18 +784,21 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 当前 Blue/Red dogfood 证明模型 episode、结构化提交和 revision loop 的部分机制，不证明完整 Agent
 architecture 已实现。
 
-## 23. 首期实施边界
+## 23. 已完成的首期 proof 与下一边界
 
-第一个architecture proof只实现一个实际model-backed SIR profile/episode：复用当前domain-neutral
+第一个architecture proof实现了一个实际model-backed SIR profile/episode：复用当前domain-neutral
 `cairn-agent` runtime，把task-generic immutable context和按当前task规模所需的scoped source-inspection tools
 投影给DeepSeek，持久化带
 引用、竞争假设和unknown的typed proposal，并提供recorded replay与opt-in live lane。
 
-该slice不建立Admission、Planner、mechanism qualification registry、Oracle profile、Candidate Search或
-新的空process crate。D-039 reduction仅是evaluator fixture，其expected answer不进入profile。随后用一个
-语义形态不同的task复用相同production path；若需要product branch或fixture-derived prompt change，proof
-失败。只有SIR相对source-preserving/user-declared baseline显示downstream utility后，才规划后续authority
-和Oracle slices。
+该 value proof 后，DEV-008–020 已把同一 production lineage 推进到用户决定、Intent Admission、窄
+Oracle admission、Candidate generation、remote native build、typed diagnostic、model repair 与 rebuild。
+这些 slice 证明 Agent episode、authority、Worker 和反馈的接口可组合，但不证明完整 Oracle portfolio、
+native success、NPU correctness 或最终 verdict。
+
+下一边界是把这些已观察 transition 固化成
+[`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md) 的 Controller state machine 和 generic Proposal
+Host lifecycle；不为尚无 consumer 的 profile、reviewer 或 process 预建结构。
 
 ## 24. Catalog 维护规则
 

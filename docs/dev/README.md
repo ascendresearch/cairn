@@ -1,7 +1,7 @@
 # Cairn 开发计划
 
 - 状态：规范性开发计划；runtime-model value first
-- 日期：2026-08-28
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 上位规范：[`../SYSTEM_REQUIREMENTS.md`](../SYSTEM_REQUIREMENTS.md)、
   [`../DECISIONS.md`](../DECISIONS.md)、[`../SYSTEM_DESIGN.md`](../SYSTEM_DESIGN.md)
@@ -14,10 +14,11 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 
 CP0已经回答第一个产品问题：SIR相对source-preserving路径确实改变了atomic compaction的下游
 output-order决策；DEV-008又证明该结果可经用户authority和独立Admission进入contract-only comparator
-policy。DEV-009已让该policy约束真实child process和materialized comparison，DEV-010已资格化一个local-only
-claim，DEV-011又在restricted commit后发布它并生成首个answer-free Candidate search input。DEV-012已经让
-真实DeepSeek Candidate通过bounded source reads提交首个typed Ascend C proposal。当前目标是选择最短的真实
-target/toolchain build consumer，而不是因此建设完整Admission、Oracle portfolio、qualification或多Agent拓扑。
+policy。DEV-009–012 已把该 policy 推进到 local Oracle publication 与真实 DeepSeek Candidate proposal；
+DEV-013–020 又用现有 Controller/remote Worker 打通 generic/native build、receipt-bound diagnostic、隔离
+DeepSeek repair 与 rebuild。最新 native rebuild 仍为 `SubjectFailed`，因此当前目标不再是继续用手工 slice
+串接同类轮次，而是把已经观察到的 SIR → Admission → Oracle → Candidate → build/repair transition 固化成
+Controller workflow 和通用 Proposal Host，同时继续向 native success/NPU correctness 推进。
 
 ## 2. 文档地图
 
@@ -27,8 +28,8 @@ target/toolchain build consumer，而不是因此建设完整Admission、Oracle 
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
 | [`CURRENT_IMPLEMENTATION_WALKTHROUGH.md`](CURRENT_IMPLEMENTATION_WALKTHROUGH.md) | 用atomic compaction样例逐步解释当前SIR→Admission→Oracle→Candidate proposal实现 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
-| [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..012 的当前状态和边界 |
+| [`ROADMAP.md`](ROADMAP.md) | 已打通纵向路径后的近期 critical path |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..020 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -63,11 +64,19 @@ target/toolchain build consumer，而不是因此建设完整Admission、Oracle 
 - DEV-011：Accepted，restricted artifacts先commit，再返回exact public outcome并机械生成local-only Candidate
   search input。
 - DEV-012：Accepted，真实DeepSeek Candidate只消费answer-free authority与按需读取的task source，提交首个
-  strict typed source proposal并通过terminal restart；尚未build、run或形成verdict。
+  strict typed source proposal并通过terminal restart。
+- DEV-013–015：Accepted，exact proposal/revision 已经远端 build；generic success 同时暴露 host fallback，
+  因而没有被误报为 native success。
+- DEV-016–018：Accepted，product-owned ASC harness 强制 exact source 进入 `bisheng`/`dav-3510`，并把
+  native diagnostic 交给新的隔离 DeepSeek episode 后重建。
+- DEV-019–020：Accepted，建立显式可重复 repair lineage 并再次远端 native build；最新结果仍为
+  `SubjectFailed`，不含 NPU/semantic/verdict evidence。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
 `IntentHypothesisSetProposalV1`已经闭合；第一个正式consumer也已从scoped user decision走到真实execution
-observation、局部mechanism qualification、commit-before-publish local claim、answer-free Candidate input和
-真实Candidate source proposal。下一步只沿这份artifact接入实际target/toolchain的最短build consumer。局部
-claim和unbuilt proposal仍不等于完整CP1、`AdmittedOraclePortfolio`或release authority，也不恢复
-DEV-002式第三人fixture review、通用qualification框架或固定多Agent拓扑。
+observation、局部mechanism qualification、commit-before-publish local claim、Candidate source、remote
+native build 和 model repair。下一阶段采用
+[`WORKFLOW_ARCHITECTURE.md`](../design/WORKFLOW_ARCHITECTURE.md) 冻结的 Controller state machine、通用
+Proposal Host、统一 Worker 实验与 direct Worker→Controller 网络；局部 claim 和 compile feedback 仍不等于
+完整 CP1、`AdmittedOraclePortfolio` 或 release authority，也不恢复 DEV-002 式第三人 fixture review、
+预建通用 qualification 框架或固定多 Agent 拓扑。

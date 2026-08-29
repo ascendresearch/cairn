@@ -1,7 +1,7 @@
 # Cairn 当前开发基线
 
 - 状态：当前事实账本；不把目标设计误报为实现
-- 日期：2026-08-28
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 
 ## 1. 当前结论
@@ -21,7 +21,12 @@ DEV-010已用独立honest reversed-order和missing-occurrence实现资格化这�
 local-only claim。DEV-011又先把exact qualification/claim/decision材料提交到restricted store，再返回嵌入完整
 intent contract的public outcome并生成answer-free local Candidate search input。DEV-012已经让真实DeepSeek
 Candidate通过3次bounded reads提交首个strict typed Ascend C/CANN source proposal，并在3步后yield且通过terminal
-restart。该proposal尚未build、执行或形成verdict；这仍不授权一次性铺满完整权威链或恢复预建架构。
+restart。DEV-013–020 已把 exact proposal/revisions 多次经 Controller 调度到远端 no-device Ascend Worker，
+取得 generic build、product-owned native ASC build、typed diagnostic、隔离 DeepSeek repair 和 rebuild 的
+authoritative receipts。DEV-015 的 generic build 曾成功但暴露 host fallback，DEV-016 起的 fixed `bisheng`
+native gate 正确关闭该绕过；DEV-020 的最新 exact repair 仍为 `SubjectFailed`。因此当前已经打通可重复的
+远端 build/repair 控制闭环，但尚无 native build success、NPU execution、semantic Candidate Admission、
+performance 或最终 verdict。
 
 ## 2. 可复用基础
 
@@ -46,12 +51,14 @@ restart。该proposal尚未build、执行或形成verdict；这仍不授权一�
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008只有首个窄promotion，DEV-009–012
-  只覆盖一个host/finite-normal collection claim从observation、publication到unbuilt Candidate proposal；
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–020 只覆盖一个窄
+  host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build；
+- native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
-目标设计中的独立 process、十一位置 catalog、七类 Planner、mechanism registry 和 future crate 只是条件设计，
+目标设计中的通用 Proposal Host、十一位置 catalog、七类 Planner、完整 mechanism registry 和 future crate
+只是条件设计，
 不是当前待办或已实现事实。
 
 ## 5. 当前必须停止的外推
@@ -88,7 +95,7 @@ typed cited facts
 同一production path处理atomic compaction task，并证明proposal可阻止把atomic output order误升格为intent；
 DEV-008只允许独立Admission消费exact proposal + authority decision后构造contract。
 
-当前Candidate纵向交接已经是：
+当前 Candidate 纵向交接已经是：
 
 ```text
 committed public local Oracle outcome
@@ -97,10 +104,14 @@ committed public local Oracle outcome
 + bounded task-local source bundle
 → real DeepSeek Candidate episode
 → immutable CollectionCandidateProposalV1
+→ Controller scheduler → remote Worker build
+→ receipt-bound diagnostic → isolated DeepSeek revision/repair episode
+→ product-owned native ASC rebuild
 ```
 
-该proposal是current output artifact，不是admitted Candidate、build receipt或verdict。它列出的target/toolchain
-依赖仍是未验证假设；下一条工作必须用实际build consumer产生事实，不能由模型解释或文档把它升级为正确。
+最新 current output 是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
+或 verdict。它证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把
+compile failure 外推为语义错误，也不能把跨主机闭环误报为真实 NPU evidence。
 
 ## 7. 当前状态
 
@@ -118,5 +129,13 @@ committed public local Oracle outcome
 | DEV-010 | Accepted | actual honest/fault implementations资格化首个local-only Oracle claim；不声称portfolio closure或已发布Candidate authority |
 | DEV-011 | Accepted | restricted claim/qualification/decision先commit，再发布嵌入完整intent contract的outcome并生成answer-free local Candidate search input |
 | DEV-012 | Accepted | 真实DeepSeek Candidate经bounded reads提交strict typed Ascend C/CANN proposal并通过terminal restart；尚无build/run/verdict evidence |
+| DEV-013 | Accepted | exact Candidate 经 Controller/remote Worker 得到首个 authoritative `SubjectFailed` build receipt |
+| DEV-014 | Accepted | 新隔离 DeepSeek episode 消费 receipt-bound diagnostic，提交 parent-linked full revision |
+| DEV-015 | Accepted | exact revision remote build `Succeeded`，同时发现 Candidate-owned CMake 可走 host fallback，故不算 native success |
+| DEV-016 | Accepted | product-owned ASC harness 强制 exact primary 进入 `bisheng`/`dav-3510`，得到真实 native `SubjectFailed` |
+| DEV-017 | Accepted | 新隔离 DeepSeek episode 消费 native diagnostic 并提交 changed full-source follow-up |
+| DEV-018 | Accepted | exact follow-up 重新进入相同 native gate并得到可恢复 `SubjectFailed` |
+| DEV-019 | Accepted | 建立显式、可重复但不自动续轮的 native repair lineage；DeepSeek 提交 exact repair |
+| DEV-020 | Accepted | exact repair 远端 native rebuild 为 `SubjectFailed`；`__kernel__` 在当前 toolchain 为 unknown type |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

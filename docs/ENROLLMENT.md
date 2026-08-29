@@ -20,6 +20,13 @@ ordinary-control endpoint are required. The controller embeds both public endpoi
 and pinned trust material in a schema V1 bundle; no
 control address is hand-entered on the worker.
 
+In the single-lab profile, bind the ordinary control listener to `0.0.0.0:7443` and the enrollment
+listener to `0.0.0.0:7444` (or deployment-selected ports). Set `public_tcp_address`,
+`control_endpoint.tcp_address`, and both WebSocket URIs to the Controller DNS/IP reachable through
+the operator's existing private network/VPN. Never publish `0.0.0.0`, loopback, an SSH-tunnel
+endpoint, or a temporary port-forward address. The Worker initiates both enrollment and ordinary
+control connections directly; Cairn does not reverse-connect to the Worker or create another VPN.
+
 Controller configuration schema V1 has no static certificate list. Worker authentication and
 scheduling consume only the append-only registry; a controller may start with an empty registry so
 onboarding does not require any copied worker certificate.

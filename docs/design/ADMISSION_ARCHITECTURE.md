@@ -1,7 +1,7 @@
 # Cairn Admission 软件架构设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-28
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 父设计：[`ARCHITECTURE_OVERVIEW.md`](ARCHITECTURE_OVERVIEW.md)
 - Agent 设计：[`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)
@@ -510,7 +510,7 @@ flowchart TB
     controller <--> host
     controller <--> service
     service -. "sanitized planner input / typed plan proposal" .-> host
-    controller <--> workers
+    workers -->|"direct outbound mTLS/WSS"| controller
     service -. "one-time restricted data capability" .-> workers
     controller --- public
     service -. "scoped public read / decision publish" .-> public
@@ -863,13 +863,14 @@ identity/receipt。后续Oracle、Candidate、Hardware/Performance、Knowledge/S
 
 ## 21. 当前实现状态
 
-截至 2026-08-28，DEV-008已经实现第一条窄的Intent Admission architecture proof：独立
+截至 2026-08-29，DEV-008已经实现第一条窄的Intent Admission architecture proof：独立
 `cairn-admission` one-shot process以真正read-only方式读取Controller public CAS，机械重算exact
 proposal/input/request/grant/decision closure，把`MigrationIntentContractV1`与restricted decision先提交到
 Admission-owned store，再发布contract-bound public outcome。该binary正常依赖图不含agent、provider或
 network transport；不同UID smoke证明proposal principal不能读取restricted store。
 
-这不是通用Admission平台。当前尚未实现：
+DEV-009–020 已让一个 exact local Oracle claim 被 Candidate 与 remote build/repair consumer 使用，但未扩大
+DEV-008 Intent Gate 的适用范围。这不是通用 Admission 平台。当前尚未实现：
 
 - 通用service lifecycle、Controller event/outbox与crash publication recovery；
 - 外部用户身份认证/UI；当前grant由Controller归档路径提供；
@@ -877,7 +878,7 @@ network transport；不同UID smoke证明proposal principal不能读取restricte
 - planner profiles与Planning Host bridge；
 - hidden corpus、restricted device job data plane与七类gate的完整receipt closure；
 - profile/mechanism qualification与evaluation registry；
-- Oracle materialization、Candidate及Hardware/Performance authority链。
+- 完整 Oracle/Candidate Admission 及 Hardware/Performance authority 链。
 
 因此“Admission已经存在”只对DEV-008的exact user-decision promotion gate成立，不能外推到上面尚未实现的
 kind或runtime mechanics。

@@ -1,7 +1,7 @@
 # Cairn 软件架构总览
 
 - 状态：规范性目标设计
-- 日期：2026-08-28
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 父设计：[`../SYSTEM_DESIGN.md`](../SYSTEM_DESIGN.md)
 - Agent 设计：[`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)
@@ -10,16 +10,15 @@
 
 Cairn 采用下面的软件形态：
 
-> 模块化 Controller + 独立提案进程 + 独立 Admission authority + 通用执行 Worker +
+> 模块化 Controller + role-scoped Agent Loop / 通用 Proposal Host + 独立 Admission authority + 通用执行 Worker +
 > 按可见性分区的 event/CAS。
 
 这不是“每个概念一个微服务”。Controller 仍是控制面的模块化单体，拥有工作流、调度、公共记录、
 API 和反馈路由。只有必须获得替换性或 authority 隔离的能力跨进程：
 
-- Semantic Intent Recovery（SIR）从首个新架构 V1 起独立运行；
-- Oracle synthesis、adversarial exploration、typed Admission Planner 和 Candidate Search 作为
-  durable proposal episode/strategy 运行，不共享私有 continuation；相同 capability/data boundary 可
-  共用 Planning Host，不同边界按 policy 拆进程；
+- Semantic Intent Recovery（SIR）、Oracle synthesis、adversarial exploration、typed Admission Planner
+  和 Candidate Search 是不同的 durable Agent Loop，不共享私有 continuation；相同 capability/data
+  boundary 由通用 Proposal Host 承载，不同边界按 policy 拆 Host instance；
 - Admission Gate 与 restricted material 位于独立 Admission 进程；
 - CUDA、Ascend build、Ascend NPU 和模型集成通过 opaque job Worker 执行；
 - Hardware Performance Model 首期是 Controller 中的独立确定性领域服务，通过 ports 获取规格、
@@ -56,7 +55,7 @@ flowchart TB
     end
 
     subgraph proposals["Proposal plane — untrusted"]
-      sir["SIR process"]
+      sir["SIR Agent Loop"]
       blue["Oracle synthesis episodes/strategies"]
       red["Adversarial exploration episodes/strategies"]
       planner["Typed Admission Planner episodes"]
@@ -80,16 +79,21 @@ flowchart TB
     secrets[("Secret reference store")]
 
     client <--> controller
-    controller <--> sir
-    controller <--> blue
-    controller <--> red
-    controller <--> planner
-    controller <--> candidate
+    controller -->|"frozen episode input"| sir
+    sir -->|"typed proposal"| controller
+    controller -->|"frozen episode input"| blue
+    blue -->|"typed proposal"| controller
+    controller -->|"frozen episode input"| red
+    red -->|"typed attack"| controller
+    controller -->|"frozen episode input"| planner
+    planner -->|"typed plan"| controller
+    controller -->|"frozen episode input"| candidate
+    candidate -->|"typed revision"| controller
     controller <--> admission
-    controller <--> cuda
-    controller <--> build
-    controller <--> npu
-    controller <--> integration
+    cuda -->|"outbound mTLS/WSS"| controller
+    build -->|"outbound mTLS/WSS"| controller
+    npu -->|"outbound mTLS/WSS"| controller
+    integration -->|"outbound mTLS/WSS"| controller
     controller --- public
     admission -. "scoped public read / decision publish" .-> public
     admission --- restricted
@@ -102,6 +106,7 @@ flowchart TB
 - Controller 可以请求 admission，但不能枚举或读取 hidden corpus；
 - Admission 可以读取被授权的公共 artifact，不能改写 applicant；
 - Worker 只看 `JobContract`，不知道 job 属于 intent、Oracle 还是 candidate；
+- Proposal Host 不直接连接 Worker；所有实验请求由 Controller 授权、调度和恢复；
 - Secret store 返回临时能力或在 adapter 内解析，不把 secret bytes 写入 event/CAS。
 
 ## 4. 三种平面与五个 authority domain
@@ -194,13 +199,15 @@ Prompt、skill、知识正文、模型声明和进程命令行 role 名称都不
 Controller 不执行 applicant 代码，不读取 restricted corpus，不把 profiler 文本直接解释成 verdict，
 也不允许 model output 直接 append authoritative decision event。
 
-## 7. 为什么 SIR 从 V1 起跨进程
+## 7. 为什么 SIR 是独立 Loop，而不是专用进程
 
 SIR 是最可能快速演化的子系统：它未来可能组合 Clang/LLVM 静态事实、CUDA 动态画像、模型图、
-symbolic execution、多模型或形式化工具。若它直接嵌入业务 aggregate，很容易让抽取器的内部表示
-成为下游永久依赖。
+symbolic execution、公开知识/论文检索、多模型或形式化工具。它必须作为独立 durable Agent Loop
+保留冻结输入、profile、budget、continuation 和 proposal contract，不能嵌入业务 aggregate。
 
-跨进程边界强制它只接收冻结的 `IntentRecoveryInputV1`，只产出
+进入 authority path 的 SIR episode 由 Controller 在通用 Proposal Host 中打开。Host 位于 Controller
+与 Admission authority 之外；需要不同网络、凭据、工具或 OS sandbox 时拆独立 Host instance，而不是
+因为 role 名为 SIR 就维护专用 service。该边界强制它只接收冻结的 `IntentRecoveryInputV1`，只产出
 `IntentHypothesisSetProposalV1`/实验提案，并且：
 
 - 不能构造 `MigrationIntentContract`；
@@ -209,7 +216,9 @@ symbolic execution、多模型或形式化工具。若它直接嵌入业务 aggr
 - 不能直接调度未授权设备；
 - 失败或替换不改变 Controller 的 durable task truth。
 
-这项隔离服务于未来优化，不意味着把产品泛化为通用语义恢复平台。
+当前 `cairn-sir` one-shot binary 是已完成的 typed ingress/capability proof，不是目标架构长期要求。
+通用 Proposal Host 接管 production SIR 后直接删除 superseded path。详细工作流见
+[`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md)。
 
 ## 8. 为什么 Admission 必须是独立 authority
 
@@ -252,6 +261,9 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 | 所有能力都放进 `cairn-server` | SIR 不可替换、hidden 访问面过宽、proposal 与 authority 易混合 |
 | 每个 bounded context 一个微服务 | 首期引入无收益的网络和一致性复杂度 |
 | 一个通用 Planning Host 持有所有 role 权限并共享上下文 | continuation、知识、hidden diagnostic 和 candidate context 可能串流；Host 只能承载 capability-equivalent 的隔离 episode |
+| 每个 Agent role 一个专用进程/binary | role 与部署拓扑错误绑定；进程只按 capability/data/authority 拆分 |
+| Agent 直接运行 Docker 或连接 Worker | 绕过 Controller 的 effect authority、调度、receipt 和恢复 |
+| Worker 依赖 Controller 反向拨号或 SSH tunnel | 扩大设备侧入站面，并把临时部署拓扑变成产品协议 |
 | 一个全局 CAS API，以 content ID 控制访问 | identity 不是 authorization，枚举/泄漏后会越过 visibility |
 | Admission Planner 直接给最终结论 | Planner 是可选、typed、proposal-only 的实验规划器，不能替代 receipt 重算和 trusted gate |
 | Worker 理解 Oracle/candidate 业务 | 破坏 opaque execution，资源层会积累产品 authority |
@@ -263,7 +275,7 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 | 软件架构选择 | 主要依据 |
 | --- | --- |
 | 产品 crate 明确为 CUDA → Ascend C | D-024、D-036、QR-MNT-001/004 |
-| SIR 独立且 proposal-only | D-025、D-034、FR-INTENT-*、QR-SEC-006 |
+| SIR 是隔离、proposal-only 的 Agent Loop | D-025、D-034、D-043、FR-INTENT-*、QR-SEC-006 |
 | Proposal episode/context/capability 隔离 | D-022、D-034、FR-AGENT-*、QR-SEC-002/006 |
 | Agent catalog、调用和 artifact-mediated interaction | D-038、FR-AGENT-022/023 |
 | Admission 独立进程、typed Planner/Gate 分离 | D-032、D-034、D-037、QR-AUD-001/002/005、QR-SEC-006 |
@@ -271,6 +283,7 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 | Controller 模块化单体 | D-034、QR-REL-*、FR-REC-*、FR-COST-* |
 | Hardware Model 首期是 Controller domain service | D-027、D-034、FR-PERF-* |
 | Worker 保持 opaque/domain-neutral | D-024、FR-EXEC-*、QR-MNT-004 |
+| Worker 在现有私网/VPN 上直连 Controller | D-043、FR-EXEC-013 |
 | Event-driven long workflow | FR-REC-*、QR-REL-*、FR-API-003/004 |
 | V1 直接替换、不保留兼容层 | D-036、FR-REC-013、QR-MNT-003 |
 
@@ -299,25 +312,26 @@ Intent Admission之前停止。Reduction evaluation fixture由
 [`D-039`](../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
 冻结，但expected answer不进入runtime context。D-040的prebuilt qualification profile已由D-042 supersede，
 DEV-002 code/fixtures被删除。通过同一production path运行一个语义形态不同的task并证明downstream utility
-后，才规划Admission和Oracle authority。该value gate已通过；DEV-008现已增加最小独立SIR recorded
-ingress、独立Admission promotion、restricted commit和contract-only collection comparator policy。
+后，才规划Admission和Oracle authority。该value gate已通过；DEV-008–020 现已把最小 SIR ingress、
+Admission promotion、Oracle publication、Candidate generation、remote native build、diagnostic、repair 和
+rebuild 串成一条窄链。
 
 ## 13. 当前实现与目标差距
 
 当前已有 `cairn-server`、`cairn-worker`、agent/record/execution/verification 基础、
-`cairn-migration`中的SIR contract/process protocol，以及DEV-008的窄SIR/Admission child binaries和首个
-contract-only comparator policy。以下仍是目标而非实现：
+`cairn-migration`中的 SIR/Intent/Oracle/Candidate contracts、DEV-008 的窄 SIR/Admission child binaries，
+以及 DEV-009–020 的窄 Oracle → remote build/repair consumers。以下仍是目标而非实现：
 
 - `cairn-migration` 尚未重命名并重组为明确的 CUDA → Ascend C 产品 crate；
-- 尚无通用SIR service pool、proposal host、Controller supervisor和Admission service lifecycle；当前只有
+- 尚无通用 Proposal Host、Controller supervisor 和 Admission service lifecycle；当前只有
   exact one-shot child protocol与不同UID capability proof；
 - 产品侧 Agent profile catalog、invocation policy 和 interaction validator 尚未实现；
 - public read-only/restricted write-only路径已在DEV-008窄slice闭合；secret storage、public event/outbox和
   通用restricted data plane尚未实现；
 - Controller 还没有完整 product process manager；
 - Hardware Performance Model、knowledge/skill registry 和 feedback routing 尚未形成目标模块；
-- 第一条intent → comparator-policy路径已完成；CUDA reference/Ascend materialization、Candidate与device
-  observation路径尚未开始。
+- 第一条 intent → comparator-policy → Candidate → remote no-device native build/repair 路径已完成；native
+  success、CUDA reference、Ascend NPU runtime/semantic/safety/performance observation 尚未开始或闭合。
 
 实施必须从 [`../dev/SLICE_CATALOG.md`](../dev/SLICE_CATALOG.md) 选择 Ready slice，且每一片先形成
 `DesignConformanceRecord`。本文不授权直接实施。

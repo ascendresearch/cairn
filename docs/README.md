@@ -1,7 +1,7 @@
 # Cairn design baseline
 
 - Status: normative target design
-- Date: 2026-08-27
+- Date: 2026-08-29
 - Scope: CUDA → Ascend C migration system
 
 This directory is the authoritative design baseline for the rewrite. It replaces neither the old
@@ -16,6 +16,7 @@ document is complete.
 | [`SYSTEM_REQUIREMENTS.md`](SYSTEM_REQUIREMENTS.md) | What must the system do, refuse, expose, and prove? | Normative requirements |
 | [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) | What architecture is intended to satisfy those requirements? | Normative target design |
 | [`design/README.md`](design/README.md) | How are the target code, logical, and runtime architectures organized? | Normative software architecture index |
+| [`design/WORKFLOW_ARCHITECTURE.md`](design/WORKFLOW_ARCHITECTURE.md) | How do the Controller state machine, role-scoped Agent Loops, unified Workers, feedback routes, and direct network compose? | Normative workflow architecture |
 | [`design/CODE_ORGANIZATION.md`](design/CODE_ORGANIZATION.md) | Which crates/modules own each rule and which dependency directions are forbidden? | Normative code organization |
 | [`design/LOGICAL_ARCHITECTURE.md`](design/LOGICAL_ARCHITECTURE.md) | How do aggregates, commands/events, ports, capabilities, and workflows compose? | Normative logical architecture |
 | [`design/RUNTIME_ARCHITECTURE.md`](design/RUNTIME_ARCHITECTURE.md) | Which processes, stores, trust zones, data paths, and recovery rules exist at runtime? | Normative runtime architecture |

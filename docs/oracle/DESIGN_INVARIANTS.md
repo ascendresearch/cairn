@@ -1,7 +1,7 @@
 # Oracle 设计不变量与实施前检查清单
 
 - 状态：规范性跨文档约束
-- 日期：2026-08-27
+- 日期：2026-08-29
 - 范围：CUDA → Ascend C Oracle、意图、准入、反馈、性能和知识/skill 子系统
 
 ## 1. 用途
@@ -39,7 +39,8 @@
 - [ ] 产品范围仍严格是 CUDA → Ascend C；内部 domain-neutral runtime 不扩大产品定位。
 - [ ] 执行单元仍是一个 kernel + 显式 host launch；更宽 caller/model context 只服务意图恢复。
 - [ ] SIR 只产生 hypothesis/conflict/unknown，不产生正式 `MigrationIntentContract`。
-- [ ] Intent Admission 与 SIR 在 type、process/data/capability 和 hidden corpus 上隔离。
+- [ ] Intent Admission 与 SIR 在 type、Host/data/capability 和 hidden corpus 上隔离；SIR 是通用 Proposal
+  Host 中的独立 Agent Loop，不要求 role-specific process。
 - [ ] 用户只对 desired semantics/policy 有决策权，不能用决定覆盖 execution/math evidence。
 - [ ] CUDA observation 只证明 source 做了什么，不证明用户想要什么。
 - [ ] 异常 source region 有 preserve/follow-intent/exclude/split/block 的 claim-scoped disposition。

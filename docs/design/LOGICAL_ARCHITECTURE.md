@@ -1,7 +1,7 @@
 # Cairn 逻辑架构设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 相关设计：[`ARCHITECTURE_OVERVIEW.md`](ARCHITECTURE_OVERVIEW.md)、
   [`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)、
@@ -120,7 +120,7 @@ receipt。它不理解业务 claim。
 | Aggregate | 主要状态 | 只允许的 authority |
 | --- | --- | --- |
 | `MigrationTask` | Accepted → Active → Completed/terminal | Controller + 用户/policy command |
-| `IntentRecoveryRun` | Prepared → Running → Proposed/terminal | SIR proposal process，Controller 记账 |
+| `IntentRecoveryRun` | Prepared → Running → Proposed/terminal | Proposal Host 中的 SIR Agent Loop，Controller 记账 |
 | `IntentAdmissionRun` | Requested → Evaluating → decision/terminal | Admission service |
 | `OracleExplorationRun` | Prepared → synthesis/adversarial revisions → Proposed/terminal | proposal episodes/strategies，Controller 编排 |
 | `OracleAdmissionRun` | Requested → ControlsRunning → decision/terminal | Admission service |

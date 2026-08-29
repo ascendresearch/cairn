@@ -1,7 +1,7 @@
 # Cairn 系统设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-29
 - 产品范围：CUDA → Ascend C 算子移植
 - 对应需求：[SYSTEM_REQUIREMENTS.md](SYSTEM_REQUIREMENTS.md)
 - 软件架构细化：[design/README.md](design/README.md)
@@ -273,6 +273,10 @@ V1 并同步更新代码、测试、fixture 和文档；不增加兼容 reader�
 
 ## 7. 端到端工作流
 
+本节由 Controller 的一个 durable state machine 编排；SIR、Oracle Blue/Red、Candidate 和可选 Planner
+是不同的 Agent Loop，不是固定 Agent 数量或 role-specific process。完整 transition、反馈路由、实验路径
+和停止语义见 [WORKFLOW_ARCHITECTURE.md](design/WORKFLOW_ARCHITECTURE.md)。
+
 ### 7.1 Intake
 
 1. 接收严格 V1 `CudaToAscendMigrationTask`；
@@ -350,7 +354,8 @@ admission 后，才进入知识库 T1/T2。
 
 ## 8. Semantic Intent Recovery
 
-SIR 是可替换、proposal-only 子系统，独立进程/worker 运行，只读不可变输入。主要产物：
+SIR 是可替换、proposal-only 的独立 Agent Loop，在 Controller/Admission authority 外的通用 Proposal
+Host 运行，只读不可变输入。它不是执行 Worker，也不要求专用 SIR binary。主要产物：
 
 - `IntentHypothesisSet`；
 - `IntentEvidenceGraph`；
@@ -612,8 +617,8 @@ flowchart TB
     end
 
     subgraph proposal["Proposal processes"]
-      sir["SIR process"]
-      episodes["Synthesis / adversarial / typed Planner / Candidate episodes"]
+      sir["Proposal Host / SIR episodes"]
+      episodes["Proposal Host / Synthesis / adversarial / typed Planner / Candidate episodes"]
     end
 
     subgraph authority["Admission authority"]
@@ -628,16 +633,17 @@ flowchart TB
     server <--> admission
     model["Model providers"] <--> sir
     model <--> episodes
-    cuda["Managed CUDA worker"] --> server
-    build["Managed Ascend build worker"] --> server
-    npu["Managed Ascend NPU worker"] --> server
-    integration["Controlled model/deployment evaluator"] --> server
+    cuda["Managed CUDA worker"] -->|"direct outbound mTLS/WSS"| server
+    build["Managed Ascend build worker"] -->|"direct outbound mTLS/WSS"| server
+    npu["Managed Ascend NPU worker"] -->|"direct outbound mTLS/WSS"| server
+    integration["Controlled model/deployment evaluator"] -->|"direct outbound mTLS/WSS"| server
 ```
 
-Workers 通过认证 outbound connection 连接 Controller，公共 durable task truth 留在 Controller。
-Controller 保持模块化单体；SIR 从新架构 V1 起是独立进程。Oracle synthesis/adversarial、typed
-Planner 和 Candidate 以隔离 durable episode 运行；capability/data boundary 相同的 episode 可共用
-Proposal/Planning Host，不同边界按 policy 拆 process instance。Admission gate 与 restricted material
+Workers 在 operator 已有可路由私网/VPN 上通过 direct outbound mTLS/WSS 连接 Controller，公共 durable
+task truth 留在 Controller。Single-lab Controller listener 绑定 `0.0.0.0` 并发布 VPN 可达 endpoint；
+目标架构没有 SSH tunnel、反向拨号或 Cairn 自建 VPN。Controller 保持模块化单体；SIR、Oracle
+synthesis/adversarial、typed Planner 和 Candidate 都以隔离 durable Agent episode 运行；capability/data
+boundary 相同的 episode 可共用通用 Proposal Host，不同边界按 policy 拆 Host instance。Admission gate 与 restricted material
 位于独立 authority process。首期可以共用一台受控主机和相同存储技术，但 public/restricted 使用
 不同数据库/CAS root、进程身份和 capability port。
 
@@ -683,7 +689,8 @@ durable facts 必须可查询。Public protocol 与 internal schema 在 pre-rele
 | `cairn-verification` | generic claim/admission/comparator/mutation/verdict mechanics | 提案模型或 vendor source |
 | `cairn-cuda-ascend`（目标；直接替换当前 `cairn-migration`） | CUDA→Ascend C task、intent/Oracle/candidate workflow 与 domain artifacts | provider/worker implementations |
 | `cairn-server` | composition、API、provider/worker/storage adapters | 可复用 domain logic |
-| `cairn-sir` / `cairn-proposal-host`（目标） | 隔离 SIR 与不同 role 的 proposal episode | admitted constructor、restricted store |
+| `cairn-proposal-host`（目标） | 隔离承载 SIR、Oracle、Planner、Candidate 等 role-scoped proposal episode | admitted constructor、restricted store |
+| `cairn-sir`（当前、待替换） | DEV-008 one-shot SIR typed ingress/capability proof | 不扩展为专用长期 service；Proposal Host 接管后删除 |
 | `cairn-admission`（目标） | restricted store、typed mechanical gates、公开 decision surface | model transport、applicant 修改 |
 | `cairn-worker` | opaque authorized execution | product adjudication |
 | `cairn-testkit`（目标） | fake/recorded providers、fault injection、fixtures | production shortcuts |
@@ -711,7 +718,7 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 
 ## 23. 当前实现状态与设计差距
 
-截至 2026-08-27，以下基础已经存在或已有已记录控制：
+截至 2026-08-29，以下基础已经存在或已有已记录控制：
 
 - 强类型 V1 protocol/codec、event/CAS、record/replay；
 - agent provider/continuation/tool/budget 基础；
@@ -720,11 +727,14 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 - structured migration domain、boundary/dtype/memory obligations；
 - historical reduction 的 host admission→candidate verdict 控制；
 - 固定 `matmul-zero-k` f32 的模型提案→物化→真实 host adapter→比较管线；
-- Blue/Red role、external-test research 和 artifact-mediated dogfood。
+- Blue/Red role、external-test research 和 artifact-mediated dogfood；
+- 一条窄的 DeepSeek SIR → 用户决定 → Intent Admission → local Oracle publication → DeepSeek Candidate →
+  remote no-device Ascend build → native diagnostic → DeepSeek repair → native rebuild 控制链；最新 native
+  rebuild 为 `SubjectFailed`，不构成 native success、NPU correctness 或 verdict。
 
 以下是目标设计，尚不能由上述控制宣称完成：
 
-- 独立 SIR 与 Intent Admission；
+- 通用 Proposal Host 中的 SIR/Oracle/Candidate Agent Loop 与完整 Controller process manager；
 - claim-scoped authority graph 和多假设 intent contract；
 - 完整 Oracle portfolio 与多平面 verdict；
 - 真实 CUDA 和 Ascend C candidate adapter/device attestation；

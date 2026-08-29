@@ -1,7 +1,7 @@
 # Cairn 运行架构设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 说明：部署与进程均为目标形态；当前已实现状态见
   [`../dev/CURRENT_BASELINE.md`](../dev/CURRENT_BASELINE.md)
@@ -13,8 +13,7 @@ Cairn 的最小新架构部署不是单进程，也不是大规模微服务集�
 proposal host 可按 episode 启停：
 
 - 一个 active Controller；
-- 一个独立 SIR process pool（首期可只有一个实例）；
-- 若干按 episode 启停的 proposal host process；
+- 若干按 episode 启停、按 capability boundary 分实例的通用 Proposal Host；
 - 一个独立 Admission service；
 - 零到多个 managed execution workers；
 - public、restricted、secret 三种不同可见性存储边界。
@@ -39,11 +38,11 @@ flowchart TB
     end
 
     subgraph phost["Proposal / planning zone"]
-      sir["cairn-sir"]
-      blue["cairn-proposal-host\nOracle synthesis episodes"]
-      red["cairn-proposal-host\nAdversarial episodes"]
-      planner["cairn-proposal-host\nTyped Planner episodes"]
-      cand["cairn-proposal-host\nCandidate Search"]
+      sir["Proposal Host\nSIR episodes"]
+      blue["Proposal Host\nOracle synthesis episodes"]
+      red["Proposal Host\nAdversarial episodes"]
+      planner["Proposal Host\nTyped Planner episodes"]
+      cand["Proposal Host\nCandidate Search"]
     end
 
     subgraph ahost["Admission authority zone"]
@@ -70,10 +69,10 @@ flowchart TB
     controller <--> planner
     controller <--> cand
     controller <--> admission
-    controller <--> cuda
-    controller <--> build
-    controller <--> npu
-    controller <--> integ
+    cuda -->|"direct outbound mTLS/WSS"| controller
+    build -->|"direct outbound mTLS/WSS"| controller
+    npu -->|"direct outbound mTLS/WSS"| controller
+    integ -->|"direct outbound mTLS/WSS"| controller
     sir --> provider
     blue --> provider
     red --> provider
@@ -117,25 +116,30 @@ Controller 不执行 generated source，不持 restricted store file/credential�
 首期只要求一个 active Controller writer。HA、leader election 和多 region 不属于当前目标；restart-safe
 比横向扩 Controller 更优先。
 
-### 3.2 SIR process (`cairn-sir`)
+### 3.2 SIR Agent Loop
 
-SIR 接收冻结 `IntentRecoveryInputV1` 与 capability manifest，执行静态分析/受控实验/模型推理，返回
-`IntentHypothesisSetProposalV1`。它：
+SIR 是由 Controller 打开的 durable proposal episode，接收冻结 `IntentRecoveryInputV1` 与 capability
+manifest，执行静态分析、受控研究/实验和模型推理，返回 `IntentHypothesisSetProposalV1`。它与 Oracle、
+Candidate 一样由通用 `cairn-proposal-host` 承载；SIR 这个 role 本身不要求专用 binary 或 service pool。
+它：
 
-- 使用独立 OS principal 和工作目录；
+- 在 authority path 中运行于 Controller/Admission 之外的 Proposal Host，并使用与 capability class 匹配的
+  OS principal 和工作目录；
 - 只读 allowlist public artifacts；
 - 没有 restricted/secret store 枚举权限；
-- 通过 Controller 请求工具或 job；
+- 可查询获准知识、网络和论文快照，并通过 Controller 请求所有工具或 Worker job；
 - 只写 proposal artifact 与运行记录；
 - 一个 run 失败不会破坏 task stream，可按 effect policy 重启或开新 run。
 
-SIR process protocol 从 V1 开始稳定于“冻结输入/typed proposal/terminal outcome”，内部分析图和模型
-组合可替换。
+SIR episode protocol 稳定于“冻结输入/typed proposal/terminal outcome”，内部分析图和模型组合可替换。
+DEV-008 的 `cairn-sir` one-shot process 只证明 typed ingress 与 OS-principal boundary；通用 Proposal Host
+接管 production SIR 后删除该 superseded 专用路径。
 
-### 3.3 Proposal host (`cairn-proposal-host`)
+### 3.3 Proposal Host (`cairn-proposal-host`)
 
 一个 Host instance 可以承载一个或多个 capability-equivalent 的 durable episode，例如：
 
+- Semantic Intent Recovery；
 - Oracle synthesis strategies；
 - adversarial exploration strategies；
 - type-specific Admission Planner profiles；
@@ -289,7 +293,8 @@ metadata。
 
 ### 6.2 内部 process protocol
 
-SIR、proposal host 和 Admission 使用 typed V1 process/service protocol。它至少包含：
+Proposal Host（承载 SIR/Oracle/Candidate/Planner episode）和 Admission 使用 typed V1 process/service
+protocol。它至少包含：
 
 - process handshake 与 exact implementation identity；
 - run/episode identity；
@@ -305,9 +310,18 @@ wire 选择不改变语义。当前 pre-release 直接修改 V1，不实现多�
 
 ### 6.3 Worker control
 
-Worker 保持 outbound mTLS connection。Controller 下发 assignment、lease、cancel/reconcile；Worker 回传
-heartbeat、resource observation、attempt lifecycle 和 worker-controlled evidence descriptor。Heartbeat
-只证明 session liveness，不证明外部 effect 未发生。
+Single-lab profile 复用 operator 已部署的可路由私网/VPN；Cairn 不再增加 VPN overlay。Controller 的
+ordinary worker-control listener 监听 `0.0.0.0:7443`，启用 bootstrap 时 enrollment listener 监听
+`0.0.0.0:7444`；端口可由 policy 修改，但 single-lab listener 不得只绑定 loopback。对外发布的是 VPN
+内可达的 Controller DNS/IP，绝不能把 `0.0.0.0`、loopback 或 tunnel-local address 写入 enrollment bundle
+或 Worker config。
+
+Worker 作为客户端直接建立 outbound mTLS/WSS connection。Controller 下发 assignment、lease、
+cancel/reconcile；Worker 回传 heartbeat、resource observation、attempt lifecycle 和 worker-controlled
+evidence descriptor。Controller 不反向拨号 Worker，Worker 不暴露 Cairn inbound service。SSH local/reverse
+tunnel、临时端口转发和 Cairn 自建 VPN 都不是正常部署路径或 fallback。VPN 只提供可路由性，不能替代
+mTLS、registry/pool authority、lease 或 receipt binding。Heartbeat 只证明 session liveness，不证明
+外部 effect 未发生。
 
 ### 6.4 Provider/external research
 
@@ -318,8 +332,8 @@ native continuation/semantic projection。Admission gate 不走这条网络。
 ## 7. 一次完整任务的运行时路径
 
 1. Client 向 Controller 提交 CUDA kernel、host launch、context refs、target environment 和 policy；
-2. Controller 归档 public material，创建 task/intent run，启动独立 SIR；
-3. SIR 通过 scoped input/tool API 完成 proposal，Controller 归档结果；
+2. Controller 归档 public material，创建 task/intent run，在合适的 Proposal Host 打开 SIR episode；
+3. SIR 通过 scoped input/research/tool API 完成 proposal，Controller 归档结果；
 4. Controller 请求 Admission；Admission 运行 Intent gate，必要时调度区分实验；
 5. admitted intent 发布后，Controller 按 policy 启动 Oracle synthesis/adversarial strategies；
 6. portfolio proposal 冻结后进入 Oracle Admission，hidden controls 只走 restricted path；
@@ -400,10 +414,11 @@ Public store 恢复不能用 restricted backup 替代，反之亦然；secret �
 
 - Controller 与 public store 位于控制主机；
 - Admission 与 restricted store 位于同一或更受限主机的独立 principal；
-- SIR/proposal hosts 位于无 restricted filesystem 权限的 proposal zone；
+- SIR/Oracle/Candidate/Planner episodes 位于无 restricted filesystem 权限的 Proposal Host zone；
 - CUDA worker、Ascend build worker、Ascend NPU worker 可为不同机器，也可在 capabilities 可验证时合并
   物理主机；
-- 所有 worker outbound 连接，设备与 toolchain identity 写入 receipt；
+- Controller control/enrollment listener 绑定 `0.0.0.0`，发布 VPN 内可达 endpoint；
+- 所有 Worker 直接 outbound 连接，不使用 SSH tunnel/端口转发；设备与 toolchain identity 写入 receipt；
 - operator 明确开启真实执行和外部 provider。
 
 ### 10.3 Expanded lab profile（未来可选）
@@ -463,7 +478,7 @@ Metrics/logs 可丢失且只做观察。健康检查只报告 process/store/prov
 2. 启动 public/restricted store owner，并各自做 integrity check；
 3. 启动 Admission，加载 exact gate/mechanism qualification state；
 4. 启动 Controller，恢复 public process managers/outbox/leases；
-5. proposal process 按需启动，不在空闲时持有 broad token；
+5. Proposal Host 按需启动 role-scoped episode，不在空闲时持有 broad token；
 6. Workers enrollment/connect，resource facts 经 admission 后才可调度；
 7. 对外 API readiness 只在 Controller 恢复完成后开启。
 

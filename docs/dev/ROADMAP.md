@@ -1,7 +1,7 @@
 # Cairn 开发路线图
 
 - 状态：规范性开发路线图；runtime-model value first
-- 日期：2026-08-28
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 具体切片：[`SLICE_CATALOG.md`](SLICE_CATALOG.md)
 
@@ -24,20 +24,27 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-010 actual honest/fault qualification of one local Oracle claim
 → DEV-011 restricted commit/public local claim + first Candidate search input
 → DEV-012 bounded DeepSeek Candidate proposal episode
-→ next: shortest target/toolchain build consumer for the exact unbuilt proposal
+→ DEV-013..015 remote generic build/revision loop + host-fallback discovery
+→ DEV-016..018 product-owned native ASC gate + native-feedback follow-up
+→ DEV-019..020 repeatable explicit repair lineage + native rebuild
+→ next: solidify the observed Controller workflow and generic Proposal Host; continue toward native success
 ```
 
-DEV-004..012现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
+DEV-004..020现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1` → claim-scoped user decision → independent
 Admission → `MigrationIntentContractV1` → collection comparator policy → actual observation/comparison已经
 闭合；DEV-010/011又完成局部qualification、commit-before-publish local claim和answer-free Candidate input，
 DEV-012则让configured DeepSeek通过durable agent runtime读取task-scoped source并提交首个typed Candidate
-proposal。下一条纵向工作只为这个exact unbuilt artifact选择最短的实际target/toolchain build consumer，继续
-保持expected observation、candidate output与Admission authority分离。尚未授权完整CP1能力集、完整Candidate
-verdict链或通用governance。
+proposal。DEV-013–020 已经把该 artifact 推进到远端 generic/native build、receipt-bound diagnostic、隔离
+DeepSeek revision/repair 和 rebuild；最新 native gate 仍为 `SubjectFailed`。下一阶段把这些真实 transition
+固化到 Controller state machine 和通用 Proposal Host，并继续寻找 native success/NPU correctness 的最短
+consumer；仍保持 expected observation、candidate output 与 Admission authority 分离。尚未完成 CP1、完整
+Candidate verdict 链或通用 governance。
 
-DEV-008只因首个真实authority consumer建立最小独立SIR/Admission process；DEV-010的局部qualification也不授权mechanism
-qualification registry、七类Planner、十一位置Agent catalog、空Proposal Host crate或面向未来stage的兼容接口。
+DEV-008 的最小 one-shot SIR ingress 只是首个真实 authority consumer 的 capability proof，不再作为目标专用
+SIR process；production SIR、Oracle 和 Candidate loops 由通用 Proposal Host 承载。DEV-010 的局部
+qualification 也不授权完整 mechanism registry、七类 Planner、十一位置 Agent catalog 或面向未来 stage
+的兼容接口。
 
 ## 2. Checkpoints
 

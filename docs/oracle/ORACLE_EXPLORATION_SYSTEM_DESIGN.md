@@ -1,7 +1,7 @@
 # CUDA → Ascend C Oracle 探索子系统设计
 
 - 状态：规范性目标设计
-- 日期：2026-08-27
+- 日期：2026-08-29
 - 父设计：[系统设计](../SYSTEM_DESIGN.md)
 - 相关设计：[意图恢复](SEMANTIC_INTENT_RECOVERY_DESIGN.md)、
   [性能 Oracle](PERFORMANCE_ORACLE_DESIGN.md)、
@@ -301,7 +301,7 @@ mutation、property 或 counterexample search 等非 Agent strategy。轮数/预
 
 | 反馈 | Explorer 的动作 | 权威限制 |
 | --- | --- | --- |
-| Candidate counterexample | 增加 case/partition，挑战 claim/comparator | 只影响被定位的 domain |
+| Candidate counterexample | Candidate Loop 先修 candidate；只有独立证据证明 Oracle 缺陷时才打开 Oracle revalidation | 不得为当前 candidate 同步调宽 expected semantics/comparator |
 | Oracle false reject | 检查合法实现族、数值 allowance、错误 reference | 需独立证明该实现确实正确 |
 | Oracle false accept | 增加 fault model/mutant/observable | 不代表其他 fault 已覆盖 |
 | Real-model failure | 建立 e2e regression 和 first-divergence 任务 | 未归因前不能自动判定 kernel 错 |
@@ -310,6 +310,10 @@ mutation、property 或 counterexample search 等非 Agent strategy。轮数/预
 | User decision | 消解明确的语义/政策分叉 | 只在用户授权范围内有效 |
 
 反馈产生新的 proposal revision 和新的 admission attempt。旧 Oracle 和 verdict 保持原有身份与含义。
+Candidate build/source/runtime diagnostic 默认只进入 Candidate Loop。若反馈暴露的是实际意图歧义，必须
+回到 SIR → 用户决定 → Intent Admission；若独立归因证明是 Oracle 缺陷，则原 Oracle 进入
+`RevalidationRequired` 并阻塞或失效其依赖 verdict。任何一种情况都不能在当前 candidate lineage 中
+偷偷改变题目或 judge。
 
 ## 9. Oracle Admission
 
@@ -331,6 +335,12 @@ Oracle Admission 与 Explorer 进程、权限、hidden material 和状态存储�
 
 Admission agent 可以选择下一项检查、归纳失败并请求补证；最终 gate 由受信代码从 receipt 重算，
 不读取 applicant 自报的 `passed` 字段。
+
+所有 qualification experiment——包括 host/reference、CUDA、Ascend build/NPU、sanitizer、mutant 和
+hidden control——都由 Controller 调度到适配的 managed Worker。Explorer/Planner 只能提交 typed
+experiment proposal，不能直接启动本地 Docker、登录设备或连接 Worker。最低资格闭包必须同时证明
+honest path 可通过、目标 fault/mutant 确实发生且会被拒绝、correct variant 不被错误拒绝、binding/domain/
+bypass controls 生效，并明确未覆盖区域；评审人数或第二个 Agent 的赞同不能替代这些 receipt。
 
 ## 10. Candidate Admission 与结论模型
 

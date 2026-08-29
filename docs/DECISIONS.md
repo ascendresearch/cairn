@@ -1,7 +1,7 @@
 # Resolved design decisions
 
 - Status: normative decision register
-- Date: 2026-08-27
+- Date: 2026-08-29
 
 This register records decisions that close entries in [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 Detailed requirements remain in `SYSTEM_REQUIREMENTS.md`; detailed implementation boundaries remain
@@ -705,13 +705,14 @@ Cairn keeps workflow, public record/CAS, scheduling, API, feedback routing, know
 and the initial deterministic Hardware Performance Model in a modular Controller. It does not turn
 every domain concept into a microservice.
 
-Semantic Intent Recovery runs as a separate OS process from the first new-architecture V1 slice.
-Oracle synthesis/adversarial strategies, typed Admission Planners, and Candidate Search run as
-isolated durable episodes outside Admission authority. Capability-equivalent episodes may share a
-Proposal/Planning Host, while a different data/tool/OS capability boundary requires a different
-process instance. The mechanical Admission gate and restricted material run in a separate authority
-process. A process boundary is required by replaceability, hidden-data visibility, execution risk,
-or promotion authority—not by Agent count or module name.
+Semantic Intent Recovery runs outside Controller and Admission authority from its first authoritative
+V1 consumer, but D-043 clarifies that SIR is a logical Agent Loop rather than a dedicated process
+kind. SIR, Oracle synthesis/adversarial strategies, typed Admission Planners, and Candidate Search
+run as isolated durable episodes in capability-equivalent Proposal Host instances. A different
+data/tool/OS capability boundary requires a different Host instance. The mechanical Admission gate
+and restricted material run in a separate authority process. A process boundary is required by
+replaceability, hidden-data visibility, execution risk, or promotion authority—not by Agent count or
+module name.
 
 ## D-035 — Public, restricted-admission, and secret storage are separate capabilities
 
@@ -952,3 +953,35 @@ an architectural direction or must be erased whenever the immediate vertical wor
 without it. Conversely, preserving that seam does not justify prebuilding Admission, process trees,
 review roles, or qualification. SIR may grow after the end-to-end workflow is stable or when a concrete
 consumer requires the next capability.
+
+## D-043 — Workflow uses role-scoped Agent Loops, unified Workers, and direct Worker connections
+
+- Decision: accepted
+
+The first narrow workflow has reached remote native build, diagnostic, model repair, and rebuild, so
+Cairn now freezes the observed stages as one Controller-owned durable state machine. SIR, Oracle Blue,
+Oracle Red, Candidate Search, and optional typed Admission planning are distinct logical Agent Loops.
+They have different typed inputs, feedback routes, stop conditions, and proposal outputs, but none
+requires a role-specific OS process. Capability-equivalent loops use the generic Proposal Host;
+instances split only for data visibility, credentials, tool access, OS sandbox, or authority.
+
+SIR may use task-scoped source/caller context, frozen knowledge, allowlisted public web and paper
+research, and Controller-authorized experiments. It remains proposal-only. All experiments that run
+code, toolchains, Docker, host adapters, or devices are opaque jobs scheduled by the Controller onto
+managed Workers, including a local CPU/host Worker. Proposal Hosts do not launch Docker directly or
+connect to Workers. Oracle qualification uses independently bound honest, fault/mutant,
+wrong-binding, domain/conflict, bypass, and hidden-disjoint controls; an Agent may propose these
+checks but cannot certify its own judge.
+
+The single-lab network uses the operator's existing routable private network/VPN. The Controller
+ordinary control listener binds `0.0.0.0:7443`, and the optional enrollment listener binds
+`0.0.0.0:7444`, unless deployment policy selects different ports. Published endpoints are the
+Controller's VPN-reachable DNS/IP, never wildcard or loopback. Workers initiate direct outbound
+mTLS/WSS connections and reconnect from durable state. Controller-to-Worker reverse dialing, SSH
+tunnels, port-forwarding fallbacks, and a Cairn-managed VPN are not part of the target architecture.
+Network reachability does not replace mTLS, registry authority, pool assignment, leases, or exact
+receipt binding.
+
+The existing `cairn-sir` one-shot process remains current implementation evidence for a typed ingress
+and OS-principal boundary, not a permanent target service. When the generic Proposal Host consumes
+the production SIR profile, the superseded dedicated path is removed directly in current V1.
