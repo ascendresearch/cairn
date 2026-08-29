@@ -1,4 +1,4 @@
-# Cairn 当前实现详解：从 CUDA atomic compaction 到 Candidate 输入
+# Cairn 当前实现详解：从 CUDA atomic compaction 到 Candidate source proposal
 
 - 状态：当前实现 walkthrough；不把目标设计误报为已实现
 - 日期：2026-08-28
@@ -9,7 +9,8 @@
 ## 1. 一句话结论
 
 Cairn 已经把一个 CUDA 算子的“源码与用户声明”推进成了一个经过用户授权、Oracle 资格化、restricted
-commit，并且可安全交给 Candidate 模型的输入；但 Candidate 模型还没有启动，也还没有生成 Ascend C。
+commit的answer-free Candidate输入，并让真实DeepSeek Candidate按需读取源码后提交了首个typed Ascend C/CANN
+source proposal。该proposal仍未build、执行或被Oracle判定。
 
 当前完成的链路是：
 
@@ -65,10 +66,19 @@ CollectionOracleAdmissionPublicOutcomeV1
 CollectionCandidateSearchInputV1
         │
         ▼
-【当前停在这里】
+bounded DeepSeek Candidate episode
         │
         ▼
-下一步：bounded DeepSeek Candidate proposal episode
+3 次 task-scoped source reads
+        │
+        ▼
+CollectionCandidateProposalV1
+        │
+        ▼
+【当前停在这里：proposal 尚未 build】
+        │
+        ▼
+下一步：选择 exact target/toolchain 的最短 build consumer
 ```
 
 必须区分三件事：
@@ -836,7 +846,7 @@ executable
 expected
 ```
 
-下一步 DeepSeek 可以知道它生成的 Candidate 需要满足 exact qualifying-occurrence multiset 和 exact count，且
+DeepSeek Candidate可以知道它生成的Candidate需要满足exact qualifying-occurrence multiset和exact count，且
 顺序不重要；但它看不到测试输入、expected `[4, 3]`、honest control `[3, 4]` 或 fault control `[3]`。
 
 这就是 answer-free。
@@ -848,6 +858,60 @@ expected
 Rust compile-fail boundary 证明 `CollectionCandidateSearchInputV1` 不能传给要求完整
 `AdmittedOracleV1` 的 API。该限制不是注释提醒，而是静态类型不兼容。
 
+### 12.4 真实 Candidate episode 如何消费该输入
+
+DEV-012没有新建一个预想中的Candidate子系统，而是把第一个真实consumer接到现有`cairn-agent` durable
+runtime：
+
+```text
+exact Candidate search input
++ exact recovery input
++ task bundle manifest（只有路径、行数和identity）
++ fixed Candidate instruction/tool catalog/budget
+→ DeepSeek continuation
+→ candidate_read_task_artifact（ReadOnly）
+→ candidate_submit_collection_proposal（Pure）
+→ gateway注入search/model/episode provenance
+→ immutable CollectionCandidateProposalV1
+```
+
+初始model request不含任何source bytes。真实live episode的第一回合调用了3次read tool，分别读取冻结task
+bundle里的3个公开文件；模型不能改读仓库其他路径，也没有hidden/restricted tool。第二回合提交source，第三回合
+在看到accepted tool result后`Yielded`。
+
+模型提交了3个canonical relative-path文件：
+
+```text
+CMakeLists.txt
+include/compact_above.h
+src/compact_above.cpp       ← primary source
+```
+
+proposal中的设计大意是：保留一个C-linkage host入口，用`aclrtStream`接收调用方stream；host侧先异步清零
+`output_count`，然后启动单AI-core Ascend C kernel；kernel顺序扫描input，将严格大于threshold的值写入output，
+最后写回count。模型同时明确列出尚未解决的环境假设：CANN headers、`ACLRT_LAUNCH_KERNEL`、GM scalar access
+API和device-visible pointer约定是否在实际目标toolchain中可用。
+
+这段解释只能理解为模型的实现意图，不能理解为正确性证据。特别是：
+
+- `candidate_submit_collection_proposal`是`Pure` tool，不执行编译器或设备；
+- gateway只检查V1 shape、path/order/size/primary membership和provenance，不审核CANN API是否真实可编译；
+- proposal绑定了exact answer-free search input、episode和model configuration，但没有build receipt；
+- terminal restart恢复了同一个proposal，只证明durability，不证明source correctness。
+
+live evidence是：
+
+```text
+episode  = episode:01a04bb8-3eb5-7c50-9bc8-00f4eddd35b1
+proposal = cairn:v1:sha256:migration.candidate-collection-proposal.v1:
+           41809ea7233868fc33cfc23c099d80192c4625dc66b9031f00f76e7101055a38
+steps    = 3
+terminal = Yielded
+restart  = recovered
+```
+
+因此DEV-012证明的是“真正的Candidate模型已经入场并越过answer-free边界”，不是“Ascend迁移已经成功”。
+
 ## 13. 当前角色与权限
 
 | 角色 | 当前职责 | 能看到 | 不能做 |
@@ -858,7 +922,7 @@ Rust compile-fail boundary 证明 `CollectionCandidateSearchInputV1` 不能传�
 | Admission process | 验证 authority/binding，形成 contract 和 Oracle admission decision | public authority artifacts、restricted store | 不调用模型、不从 prose 猜语义 |
 | execution/coordinator | 执行 adapter 并产生 authoritative receipt | execution input、output allocation | 不决定 desired semantics |
 | trusted Oracle | 派生 expected、重建 observation、比较 | contract、trusted reference、receipt outputs | 不向 Candidate 暴露 expected |
-| DeepSeek Candidate actor | 下一步生成 Ascend C proposal | source/public context、answer-free Candidate input | 不能读取 hidden expected 或自判 verdict |
+| DeepSeek Candidate actor | 已生成首个 Ascend C/CANN source proposal | source/public context、answer-free Candidate input | 不能读取 hidden expected、自判 verdict或宣称build evidence |
 | 固定第三人 reviewer | 当前关键路径中没有该角色 | — | 不再作为每个 slice 的强制仪式 |
 
 DEV-002 那种“每件事都要第三人审查”的预建框架已经 superseded，并从 current tree 删除。现在保留的是：
@@ -868,7 +932,7 @@ DEV-002 那种“每件事都要第三人审查”的预建框架已经 supersed
 - Oracle mechanism 使用可重复自动控制；
 - 只有出现真实独立性或安全需求时，才增加新的 reviewer/process。
 
-## 14. DEV-004 到 DEV-011 的进展
+## 14. DEV-004 到 DEV-012 的进展
 
 | Slice | 完成内容 | 在样例中的意义 |
 | --- | --- | --- |
@@ -880,6 +944,7 @@ DEV-002 那种“每件事都要第三人审查”的预建框架已经 supersed
 | DEV-009 | actual child output、receipt、materialization | `[3,4]` 真实进程输出被 contract-selected Oracle 接受 |
 | DEV-010 | honest/fault qualification | honest reversed output 通过，missing-occurrence 实现失败，形成 local claim |
 | DEV-011 | restricted commit、public outcome、Candidate input | 只有提交 restricted evidence 后，才产生 answer-free Candidate 输入 |
+| DEV-012 | bounded real DeepSeek Candidate episode | 3次按需读源码后提交3文件typed proposal；3步yield并通过terminal restart |
 
 DEV-011 对应提交：
 
@@ -895,6 +960,7 @@ DEV-011 对应提交：
 - [`DEV-009-IMPLEMENTATION.md`](records/DEV-009-IMPLEMENTATION.md)
 - [`DEV-010-IMPLEMENTATION.md`](records/DEV-010-IMPLEMENTATION.md)
 - [`DEV-011-IMPLEMENTATION.md`](records/DEV-011-IMPLEMENTATION.md)
+- [`DEV-012-IMPLEMENTATION.md`](records/DEV-012-IMPLEMENTATION.md)
 
 ## 15. 当前可以跑通什么
 
@@ -917,6 +983,9 @@ DEV-011 对应提交：
 → restricted commit
 → public Oracle outcome
 → answer-free Candidate search input
+→ real DeepSeek Candidate episode
+→ bounded task-source reads
+→ typed Ascend C/CANN source proposal
 ```
 
 其中：
@@ -929,6 +998,7 @@ DEV-011 对应提交：
 - actual host child process 跑过；
 - honest/fault qualification 跑过；
 - restricted-store failure control 跑过；
+- answer-free live Candidate、pure typed submission与terminal restart跑过；
 - 全量 CI、Clippy、doc compile-fail 全部通过。
 
 ## 16. 当前不能声称什么
@@ -936,8 +1006,6 @@ DEV-011 对应提交：
 当前还没有：
 
 ```text
-DeepSeek Candidate episode
-Ascend C source proposal
 Candidate revision lineage
 Ascend build
 CUDA reference device run
@@ -954,12 +1022,12 @@ CP1 First Migration Outcome
 
 因此目前不是“CUDA → Ascend C 迁移已经完成了 80%”。更准确地说：
 
-> 我们已经完成首条迁移 workflow 的前半段 authority 和 Oracle 接线，并把一个安全、answer-free 的任务交接面
-> 送到了 Candidate actor 门口。
+> 我们已经完成首条迁移 workflow 的前半段 authority 和 Oracle 接线，并让Candidate actor基于安全、answer-free
+> 的任务交接面提交了第一份source proposal；现在停在真实build evidence之前。
 
-从产品价值上看，最关键的结果是：Candidate 即将开始生成代码时，拿到的不是裸 CUDA source，也不是 repository
-coding agent 根据 fixture 总结出来的答案，而是一个经过真实 SIR、用户授权和局部 Oracle admission 的迁移
-contract。
+从产品价值上看，最关键的结果是：Candidate生成代码时拿到的不是fixture答案，也不是repository coding agent
+代写的实现，而是一个经过真实SIR、用户授权和局部Oracle admission的迁移contract；实际source则来自configured
+runtime model。proposal identity和durability已经成立，但技术正确性仍要由后续build/execution evidence回答。
 
 ## 17. 哪些严谨性有实际作用
 
@@ -993,28 +1061,28 @@ contract。
 
 ## 18. 下一步
 
-下一步不是继续扩建 SIR，也不是再做一轮 review，而是直接连接第一个 Candidate runtime actor：
+下一步不是继续扩建SIR、Candidate registry或review，而是让exact DEV-012 proposal遇到第一条真实
+target/toolchain build boundary：
 
 ```text
-CollectionCandidateSearchInputV1
-+ task-scoped CUDA source/public context
-→ existing durable cairn-agent runtime
-→ configured DeepSeek Candidate episode
-→ typed Candidate proposal
+CollectionCandidateProposalV1
++ explicit actual target/toolchain/environment facts
+→ materialize proposal files
+→ existing no-device Ascend build worker/toolchain
+→ authoritative build receipt and diagnostics
 ```
 
 预期边界是：
 
-- 复用现有 durable episode/tool/restart/provider runtime；
-- DeepSeek 作为 Candidate actor，而不是 repository coding agent；
-- 读取 task-scoped public source/context；
-- 看得到 admitted intent 和 local Oracle scope；
-- 看不到 expected、honest/fault outputs或 qualification evidence；
-- 提交首个 typed Candidate proposal；
-- 不在启动模型之前增加 Candidate registry、Planner、review role 或完整 portfolio。
+- 不猜测target SoC、CANN版本或toolchain；这些在recovery input中仍是`not-selected`；
+- 先选择能够消费该exact 3-file proposal的最短真实build lane；
+- build worker只返回authoritative build fact/diagnostic，不产生Candidate或verdict；
+- 首次build失败若发生，才根据真实diagnostic切出最小revision consumer；
+- build成功也只证明可构建，不证明CUDA/Ascend语义等价，更不自动形成Candidate verdict；
+- 不预建revision topology、完整execution portfolio或performance系统。
 
 整个当前方案可以概括为：
 
 > SIR 负责发现“我们可能想要什么”，用户负责决定“我们确实想要什么”，Admission 把决定变成 contract，
-> Oracle 把 contract 变成可执行判定，Candidate 模型随后在不知道答案的情况下生成 Ascend C。当前已经走到
-> Candidate 模型即将入场的位置。
+> Oracle 把 contract 变成可执行判定，Candidate 模型随后在不知道答案的情况下生成 Ascend C。当前Candidate
+> 已经提交第一份非权威proposal，下一步让它接受真实toolchain事实检验。

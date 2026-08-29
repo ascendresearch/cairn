@@ -2,6 +2,7 @@
 
 mod assemble;
 mod call_adapter;
+mod candidate_episode;
 mod candidate_search;
 mod collection_oracle;
 mod collection_oracle_admission;
@@ -59,11 +60,21 @@ pub use call_adapter::{
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
     validate_memory_surface_call_adapter_receipt,
 };
+pub use candidate_episode::{
+    CandidateEpisodeError, CollectionCandidateExplanation, CollectionCandidateProposalArtifact,
+    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
+    CollectionCandidateSourceFileV1, CollectionCandidateSourcePath, CollectionCandidateSourceText,
+};
+#[cfg(feature = "agent-runtime")]
+pub use candidate_episode::{
+    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, run_collection_candidate_episode,
+};
 pub use candidate_search::{
     CandidateSearchInputError, CollectionCandidateSearchAuthorityInput,
     CollectionCandidateSearchInputArtifact, CollectionCandidateSearchInputV1,
     CollectionCandidateSearchScopeV1, CollectionOracleAdmissionPublicOutcomeArtifact,
     PreparedCollectionCandidateSearchInput, prepare_collection_candidate_search_input,
+    validate_archived_collection_candidate_search_input,
 };
 pub use collection_oracle::{
     AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,

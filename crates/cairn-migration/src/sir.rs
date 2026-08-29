@@ -437,11 +437,11 @@ impl SirTaskWorkspace {
         &self.bundle
     }
 
-    fn source(&self, path: &SirTaskArtifactPath) -> Option<&str> {
+    pub(crate) fn source(&self, path: &SirTaskArtifactPath) -> Option<&str> {
         self.sources.get(path).map(String::as_str)
     }
 
-    fn artifact(&self, path: &SirTaskArtifactPath) -> Option<&SirTaskArtifactV1> {
+    pub(crate) fn artifact(&self, path: &SirTaskArtifactPath) -> Option<&SirTaskArtifactV1> {
         self.bundle
             .artifacts
             .binary_search_by(|artifact| artifact.path.cmp(path))

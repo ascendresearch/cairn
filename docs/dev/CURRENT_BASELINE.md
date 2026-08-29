@@ -19,8 +19,9 @@ live proposal生成首个output-order request，实际任务authority选择了un
 reported-count policy。DEV-009已让actual child process经generic authoritative receipt进入可信物化与比较；
 DEV-010已用独立honest reversed-order和missing-occurrence实现资格化这一exact mechanism，并把结果限制为
 local-only claim。DEV-011又先把exact qualification/claim/decision材料提交到restricted store，再返回嵌入完整
-intent contract的public outcome并生成answer-free local Candidate search input。尚未运行Candidate model、生成
-Ascend C或形成verdict；这仍不授权一次性铺满完整权威链或恢复预建架构。
+intent contract的public outcome并生成answer-free local Candidate search input。DEV-012已经让真实DeepSeek
+Candidate通过3次bounded reads提交首个strict typed Ascend C/CANN source proposal，并在3步后yield且通过terminal
+restart。该proposal尚未build、执行或形成verdict；这仍不授权一次性铺满完整权威链或恢复预建架构。
 
 ## 2. 可复用基础
 
@@ -45,8 +46,8 @@ Ascend C或形成verdict；这仍不授权一次性铺满完整权威链或恢�
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008只有首个窄promotion，DEV-009–011
-  只覆盖一个host/finite-normal collection claim从observation、publication到local Candidate input；
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008只有首个窄promotion，DEV-009–012
+  只覆盖一个host/finite-normal collection claim从observation、publication到unbuilt Candidate proposal；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
@@ -87,6 +88,20 @@ typed cited facts
 同一production path处理atomic compaction task，并证明proposal可阻止把atomic output order误升格为intent；
 DEV-008只允许独立Admission消费exact proposal + authority decision后构造contract。
 
+当前Candidate纵向交接已经是：
+
+```text
+committed public local Oracle outcome
++ exact answer-free CollectionCandidateSearchInputV1
++ exact IntentRecoveryInputV1
++ bounded task-local source bundle
+→ real DeepSeek Candidate episode
+→ immutable CollectionCandidateProposalV1
+```
+
+该proposal是current output artifact，不是admitted Candidate、build receipt或verdict。它列出的target/toolchain
+依赖仍是未验证假设；下一条工作必须用实际build consumer产生事实，不能由模型解释或文档把它升级为正确。
+
 ## 7. 当前状态
 
 | Slice | 状态 | 事实 |
@@ -102,5 +117,6 @@ DEV-008只允许独立Admission消费exact proposal + authority decision后构�
 | DEV-009 | Accepted | actual host child经双ABI output、generic authoritative receipt进入contract-bound collection materialization/comparison；expected不进入candidate-visible input |
 | DEV-010 | Accepted | actual honest/fault implementations资格化首个local-only Oracle claim；不声称portfolio closure或已发布Candidate authority |
 | DEV-011 | Accepted | restricted claim/qualification/decision先commit，再发布嵌入完整intent contract的outcome并生成answer-free local Candidate search input |
+| DEV-012 | Accepted | 真实DeepSeek Candidate经bounded reads提交strict typed Ascend C/CANN proposal并通过terminal restart；尚无build/run/verdict evidence |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

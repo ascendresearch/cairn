@@ -292,6 +292,31 @@ pub fn prepare_collection_candidate_search_input(
     Ok(PreparedCollectionCandidateSearchInput { input, bytes, id })
 }
 
+/// Revalidates one exact public Candidate input loaded by its expected published identity.
+///
+/// This is the Controller/runtime read boundary. Supplying bytes without the expected typed
+/// publication identity is intentionally insufficient.
+///
+/// # Errors
+///
+/// Rejects non-canonical, non-V1, structurally invalid, or identity-mismatched public bytes.
+pub fn validate_archived_collection_candidate_search_input(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateSearchInputArtifact>,
+) -> Result<PreparedCollectionCandidateSearchInput, CandidateSearchInputError> {
+    let input: CollectionCandidateSearchInputV1 = cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = cairn_codec::to_vec(&input).map_err(codec)?;
+    let id = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || id != expected {
+        return Err(CandidateSearchInputError::BindingMismatch);
+    }
+    Ok(PreparedCollectionCandidateSearchInput {
+        input,
+        bytes: canonical,
+        id,
+    })
+}
+
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum CandidateSearchInputError {
     #[error("Candidate search input is invalid for the current local scope")]
@@ -380,5 +405,16 @@ mod tests {
         let mut invalid = serde_json::to_value(&decoded).expect("input JSON");
         invalid["legacy_portfolio"] = serde_json::json!(true);
         assert!(serde_json::from_value::<CollectionCandidateSearchInputV1>(invalid).is_err());
+        let loaded =
+            validate_archived_collection_candidate_search_input(prepared.bytes(), prepared.id())
+                .expect("published input reload");
+        assert_eq!(loaded, prepared);
+        assert_eq!(
+            validate_archived_collection_candidate_search_input(
+                prepared.bytes(),
+                id::<CollectionCandidateSearchInputArtifact>(b"wrong published input"),
+            ),
+            Err(CandidateSearchInputError::BindingMismatch)
+        );
     }
 }

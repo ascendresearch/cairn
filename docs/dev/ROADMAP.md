@@ -23,16 +23,18 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-009 actual call-adapter observation + receipt-bound materialization
 → DEV-010 actual honest/fault qualification of one local Oracle claim
 → DEV-011 restricted commit/public local claim + first Candidate search input
-→ next: bounded DeepSeek Candidate proposal episode
+→ DEV-012 bounded DeepSeek Candidate proposal episode
+→ next: shortest target/toolchain build consumer for the exact unbuilt proposal
 ```
 
-DEV-004/005/006/007/008/009现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
+DEV-004..012现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1` → claim-scoped user decision → independent
 Admission → `MigrationIntentContractV1` → collection comparator policy → actual observation/comparison已经
-闭合；DEV-010/011又完成局部qualification、commit-before-publish local claim和answer-free Candidate input。下一条纵向工作应直接让
-configured DeepSeek通过durable agent runtime消费该input和task-scoped public source/context，提交首个typed
-Candidate proposal；继续保持expected observation、candidate output与Admission authority分离。尚未授权完整
-CP1能力集、完整Candidate verdict链或通用governance。
+闭合；DEV-010/011又完成局部qualification、commit-before-publish local claim和answer-free Candidate input，
+DEV-012则让configured DeepSeek通过durable agent runtime读取task-scoped source并提交首个typed Candidate
+proposal。下一条纵向工作只为这个exact unbuilt artifact选择最短的实际target/toolchain build consumer，继续
+保持expected observation、candidate output与Admission authority分离。尚未授权完整CP1能力集、完整Candidate
+verdict链或通用governance。
 
 DEV-008只因首个真实authority consumer建立最小独立SIR/Admission process；DEV-010的局部qualification也不授权mechanism
 qualification registry、七类Planner、十一位置Agent catalog、空Proposal Host crate或面向未来stage的兼容接口。

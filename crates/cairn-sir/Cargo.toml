@@ -12,11 +12,13 @@ cairn-migration.workspace = true
 
 [dev-dependencies]
 cairn-admission.workspace = true
+cairn-execution.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 cairn-store-sqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
