@@ -35,6 +35,7 @@ mechanism authority。不得通过compatibility path复活。
 | `DEV-008` | Accepted | 将exact typed user decision机械promotion为首个`MigrationIntentContractV1`，并仅用它驱动collection-output Oracle policy | DEV-007；[`DEV-008 DCR`](records/DEV-008-IMPLEMENTATION.md) | separate SIR/Admission child process、different-UID authority smoke、restricted commit、exact live replay与contract-only Oracle comparator green |
 | `DEV-009` | Accepted | 让DEV-008 admitted collection contract约束现有call-adapter的真实ABI observation与comparison evidence | DEV-008；[`DEV-009 record`](records/DEV-009-IMPLEMENTATION.md) | expected隔离、双ABI output、authoritative receipt、unordered controls、exact replay与full CI已闭合；不扩展portfolio/planner/hidden/device |
 | `DEV-010` | Accepted | 将DEV-009机制与actual honest/fault receipts资格化为首个claim-scoped local Oracle capability；发布仍是后续边界 | DEV-009；[`DEV-010 DCR`](records/DEV-010-IMPLEMENTATION.md) | strict proposal/receipt/claim、actual honest accept + missing-occurrence reject、partial/full静态边界、exact replay与full CI已闭合 |
+| `DEV-011` | Accepted | restricted-commit后发布exact local Oracle outcome，并立即生成首个local-only Candidate search input | DEV-010；[`DEV-011 DCR`](records/DEV-011-IMPLEMENTATION.md) | commit-before-publish、strict public/restricted artifacts、Candidate consumer、failure/static controls、exact replay与full CI已闭合 |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要
@@ -80,6 +81,7 @@ current-source observation限定为count + multiset。容量与non-overlap仍来
 
 ## 6. Future backlog（未切片）
 
-DEV-005已经Go，DEV-008已闭合第一条窄的Intent authority→Oracle policy consumer。后续仍只按下一个真实consumer拆分：Oracle materialization、Candidate、CUDA/Ascend execution、
-restricted evidence、mechanism qualification、performance、knowledge/skill、feedback和platform/release。
-目标设计中的概念清单不是开发待办，也不自动获得ID或entry gate。
+DEV-005已经Go，DEV-011已将第一条窄的Intent authority→local Oracle claim推进到answer-free Candidate input。
+下一条真实consumer是bounded DeepSeek Candidate proposal episode；之后才按实际证据继续拆分revision、CUDA/Ascend
+execution、verdict、performance、knowledge/skill、feedback和platform/release。目标设计中的概念清单不是开发
+待办，也不自动获得ID或entry gate。

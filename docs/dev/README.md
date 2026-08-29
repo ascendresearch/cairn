@@ -14,9 +14,9 @@ Cairn 是一个基于 Agent 的迁移应用。Repository coding agent 负责构�
 
 CP0已经回答第一个产品问题：SIR相对source-preserving路径确实改变了atomic compaction的下游
 output-order决策；DEV-008又证明该结果可经用户authority和独立Admission进入contract-only comparator
-policy。DEV-009已让该policy约束真实child process、双ABI output、authoritative execution receipt和
-materialized comparison；DEV-010正在把这个局部机制用actual honest/fault implementations资格化。当前目标
-仍是最短地推进首个迁移结果，不是因此建设完整Admission、Oracle、Candidate、qualification或多Agent拓扑。
+policy。DEV-009已让该policy约束真实child process和materialized comparison，DEV-010已资格化一个local-only
+claim，DEV-011又在restricted commit后发布它并生成首个answer-free Candidate search input。当前目标是直接
+运行真实Candidate model episode，而不是因此建设完整Admission、Oracle portfolio、qualification或多Agent拓扑。
 
 ## 2. 文档地图
 
@@ -26,7 +26,7 @@ materialized comparison；DEV-010正在把这个局部机制用actual honest/fau
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | runtime SIR value 的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..010 的当前状态和边界 |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..011 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -58,10 +58,12 @@ materialized comparison；DEV-010正在把这个局部机制用actual honest/fau
   materialization/comparison evidence。
 - DEV-010：Accepted，已用两个独立actual implementations资格化首个local-only Oracle claim；构造
   admitted type不等于Controller已经发布authority。
+- DEV-011：Accepted，restricted artifacts先commit，再返回exact public outcome并机械生成local-only Candidate
+  search input；没有启动模型或生成candidate source。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
 `IntentHypothesisSetProposalV1`已经闭合；第一个正式consumer也已从scoped user decision走到真实execution
-observation和局部mechanism qualification。DEV-010闭合后，下一步应把exact local claim的restricted
-commit/public publish与首个Candidate consumer放在同一纵向slice中，避免为了发布单独铺开通用Admission。
-局部claim仍不等于完整CP1、`AdmittedOraclePortfolio`或release authority，也不恢复DEV-002式第三人fixture
-review、通用qualification框架或固定多Agent拓扑。
+observation、局部mechanism qualification、commit-before-publish local claim和answer-free Candidate input。下一步应直接启动bounded
+DeepSeek Candidate episode，复用durable agent runtime读取task-scoped public source/context并提交首个typed
+candidate proposal。局部claim仍不等于完整CP1、`AdmittedOraclePortfolio`或release authority，也不恢复
+DEV-002式第三人fixture review、通用qualification框架或固定多Agent拓扑。

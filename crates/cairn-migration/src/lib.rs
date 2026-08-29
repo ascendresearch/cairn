@@ -2,6 +2,7 @@
 
 mod assemble;
 mod call_adapter;
+mod candidate_search;
 mod collection_oracle;
 mod collection_oracle_admission;
 mod corpus_execution;
@@ -57,6 +58,12 @@ pub use call_adapter::{
     validate_executable_oracle_call_adapter_receipt, validate_input_value_call_adapter_capture,
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
     validate_memory_surface_call_adapter_receipt,
+};
+pub use candidate_search::{
+    CandidateSearchInputError, CollectionCandidateSearchAuthorityInput,
+    CollectionCandidateSearchInputArtifact, CollectionCandidateSearchInputV1,
+    CollectionCandidateSearchScopeV1, CollectionOracleAdmissionPublicOutcomeArtifact,
+    PreparedCollectionCandidateSearchInput, prepare_collection_candidate_search_input,
 };
 pub use collection_oracle::{
     AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,

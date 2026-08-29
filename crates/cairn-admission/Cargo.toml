@@ -16,6 +16,7 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+cairn-execution.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
