@@ -1,6 +1,6 @@
 # DEV-020 implementation — exact native repair remote ASC build
 
-- 状态：`In progress`
+- 状态：`Accepted`
 - 日期：2026-08-29
 - Slice：[`DEV-020`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 设计：[`Agent Architecture`](../../design/AGENT_ARCHITECTURE.md)、
@@ -66,4 +66,26 @@ identities；live test compile与repair-vs-follow-up compile-fail boundary通过
 
 ## 7. Live remote evidence
 
-待exact remote build后填写。
+2026-08-29 exact DEV-019 repair经existing Controller、reverse tunnel和remote `npu-build` Worker得到：
+
+| Evidence | Exact fact |
+| --- | --- |
+| job | `job:01a04cc6-e951-7a91-b1d8-b36a92256f56` |
+| attempt | `attempt:01a04cc6-e98e-7f42-8e92-447b28effad8` |
+| repair | `cairn:v1:sha256:migration.candidate-native-repair-revision.v1:be182db29ba68757e9fcdff6657ef26d3b54e259ba0240d643f168eee4a29b59` |
+| input | `cairn:v1:sha256:execution.input-bundle.v1:d53254a4a3f6ae3341f97636c202741090d095b1e569cfafa909c7cfaecdc7d6` |
+| environment | `cairn:v1:sha256:execution.environment.v1:6f5324f204951a9b207a20ea9c542afc96f22beb143dd44e25a1c97179b8a803` |
+| contract | `cairn:v1:sha256:execution.job-contract.v1:9637d47b2db7fc1038442f996a4739f50d71b1eda11444eaafb7d0d7c2c8d690` |
+| receipt | `cairn:v1:sha256:execution.receipt.v1:56e3046973d337bd2e1b9f2e3e6ad4a1ff37ef93f3bae28a87fad993dbab04e5` |
+| outcome | `SubjectFailed` |
+| trusted evidence | exact observed environment；`docker:accelerator:none` |
+| durability | reservation released；Controller stores重开并恢复同一terminal receipt |
+
+Untrusted stderr证明fixed CMake再次选择real `bisheng`并开始构建exact `candidate_primary.asc`。Compiler明确报告
+`unknown type name '__kernel__'`；随后由于kernel entry没有形成合法void device function，又报告non-void kernel type、
+从host调用`__aicore__` constructor、`Init`与`Process`，共5个errors。DEV-019试图解决的linker auto-derivation错误不再是
+本次首要failure；这不是修复进展证明，而是real toolchain否定了model-authored `__kernel__`假设。
+
+DEV-020 Accepted因为目标是让exact repair通过同一authoritative native compilation gate并取得可恢复terminal receipt，
+不是要求compile success。若继续，下一slice应把这个exact receipt派生为repair-parent-bound diagnostic并打开新的explicit
+Candidate repair episode；不得自动续轮，也不得由Cairn修改source。
