@@ -1,6 +1,6 @@
 # DEV-013 implementation — first exact Candidate remote Ascend build
 
-- 状态：`InProgress`
+- 状态：`Accepted`
 - 日期：2026-08-28
 - Slice：[`DEV-013`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 设计：[`Runtime Architecture`](../../design/RUNTIME_ARCHITECTURE.md)、
@@ -104,4 +104,32 @@ Controller当前在线且持续接收另一个remote worker heartbeat；`npu-bui
 截至2026-08-28，本地产品桥接和live gate已经实现：strict loader要求exact typed proposal ID；materializer逐字
 保留proposal/source并生成`npu-build` no-device generic contract；live test只调用Controller scheduler并按
 authoritative receipt分类。Focused tests、no-default-features library check、integration compile、Clippy与full
-`scripts/ci.sh`均已通过。尚未调度live job，因此本DCR保持`InProgress`，也没有Candidate build结论。
+`scripts/ci.sh`均已通过。
+
+## 8. Live acceptance
+
+2026-08-28恢复原managed reverse tunnel和原`npu-build` Worker binary/config/state后，Controller记录了fresh
+registration和连续heartbeat。没有重新enroll、修改worker profile、替换image或建立新的execution adapter。
+
+DEV-012 exact proposal经normal scheduler得到以下不可变事实：
+
+| Fact | Exact value |
+| --- | --- |
+| job | `job:01a04c29-e10d-7063-bb6b-bbff0e869f00` |
+| attempt | `attempt:01a04c29-e145-7fb0-aafb-e5e5d2b3963d` |
+| proposal | `cairn:v1:sha256:migration.candidate-collection-proposal.v1:41809ea7233868fc33cfc23c099d80192c4625dc66b9031f00f76e7101055a38` |
+| input bundle | `cairn:v1:sha256:execution.input-bundle.v1:c3a453a0fa3b74b87413f71aee7dd67b0b671428707d68e239cda10736fee184` |
+| environment | `cairn:v1:sha256:execution.environment.v1:6f5324f204951a9b207a20ea9c542afc96f22beb143dd44e25a1c97179b8a803` |
+| contract | `cairn:v1:sha256:execution.job-contract.v1:0e903592e3ebbed652e1b88905b2273013e244c615d9f35f2d4c3f7f866c1774` |
+| receipt | `cairn:v1:sha256:execution.receipt.v1:0b8c7300a51352ce3472289997805fee287001947cc19207fb9a6495d5b98445` |
+| outcome | `SubjectFailed` |
+
+Trusted evidence包含`docker:accelerator:none`。Assignment经历leased、accepted、started和completed；terminal后exact
+reservation已释放，Controller SQLite/CAS重开后恢复到同一receipt。
+
+首个untrusted compiler diagnostic是`include/compact_above.h`引用的`acl/acl.h`不在当前compile include path。
+这回答了“该exact proposal在该exact environment是否build”：没有。它不回答为什么应如何修复，不证明其他潜在
+compile divergence，不改变Candidate proposal，也不构成correctness或migration verdict。DEV-014只能消费这份
+exact proposal、receipt和bounded diagnostic来生成显式revision；不得由Cairn旁观者静默修源码。
+
+由此DEV-013 acceptance闭合，状态变为`Accepted`。

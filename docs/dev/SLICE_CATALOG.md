@@ -37,7 +37,7 @@ mechanism authority。不得通过compatibility path复活。
 | `DEV-010` | Accepted | 将DEV-009机制与actual honest/fault receipts资格化为首个claim-scoped local Oracle capability；发布仍是后续边界 | DEV-009；[`DEV-010 DCR`](records/DEV-010-IMPLEMENTATION.md) | strict proposal/receipt/claim、actual honest accept + missing-occurrence reject、partial/full静态边界、exact replay与full CI已闭合 |
 | `DEV-011` | Accepted | restricted-commit后发布exact local Oracle outcome，并立即生成首个local-only Candidate search input | DEV-010；[`DEV-011 DCR`](records/DEV-011-IMPLEMENTATION.md) | commit-before-publish、strict public/restricted artifacts、Candidate consumer、failure/static controls、exact replay与full CI已闭合 |
 | `DEV-012` | Accepted | 复用durable agent runtime，让bounded DeepSeek Candidate episode消费DEV-011 answer-free input并提交首个typed Ascend C proposal | DEV-011；[`DEV-012 DCR`](records/DEV-012-IMPLEMENTATION.md) | strict/recorded/absence/full CI green；live episode `episode:01a04bb8-3eb5-7c50-9bc8-00f4eddd35b1`经3次bounded reads提交proposal并通过terminal restart；不含build/run/verdict/revision framework |
-| `DEV-013` | InProgress | 将DEV-012 exact proposal原样物化为content-addressed job，经现有Controller调度到remote no-device Ascend build worker并取得authoritative terminal receipt | DEV-012；[`DEV-013 DCR`](records/DEV-013-IMPLEMENTATION.md) | strict materialization/identity/recorded/full CI后运行remote lane；`SubjectFailed`或`Succeeded`均是有效first-divergence evidence；不含自动修复/NPU/verdict |
+| `DEV-013` | Accepted | 将DEV-012 exact proposal原样物化为content-addressed job，经现有Controller调度到remote no-device Ascend build worker并取得authoritative terminal receipt | DEV-012；[`DEV-013 DCR`](records/DEV-013-IMPLEMENTATION.md) | exact remote job取得`SubjectFailed` receipt；trusted evidence确认no-device，Controller重开可恢复同一receipt；首个diagnostic为`acl/acl.h` include缺失；不含自动修复/NPU/verdict |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要
@@ -84,7 +84,7 @@ current-source observation限定为count + multiset。容量与non-overlap仍来
 ## 6. Future backlog（未切片）
 
 DEV-005已经Go，DEV-012已将第一条窄的Intent authority→local Oracle claim推进到真实、answer-free的DeepSeek
-Candidate source proposal。DEV-013只让这份exact unbuilt artifact进入现有remote no-device build lane；首次
-真实diagnostic出现后才决定revision consumer。CUDA/Ascend execution、verdict、performance、knowledge/skill、
-feedback和platform/release仍按真实证据逐步拆分。目标设计中的概念清单不是开发待办，也不自动获得ID或
-entry gate。
+Candidate source proposal。DEV-013已让这份exact unbuilt artifact进入现有remote no-device build lane，并取得
+首个真实`SubjectFailed` diagnostic；下一条slice只构造消费exact proposal/receipt/diagnostic的显式Candidate
+revision。CUDA/Ascend execution、verdict、performance、knowledge/skill、feedback和platform/release仍按真实
+证据逐步拆分。目标设计中的概念清单不是开发待办，也不自动获得ID或entry gate。
