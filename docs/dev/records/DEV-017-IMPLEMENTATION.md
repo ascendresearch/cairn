@@ -1,6 +1,6 @@
 # DEV-017 implementation — first native-feedback Candidate follow-up
 
-- 状态：`InProgress`
+- 状态：`Accepted`
 - 日期：2026-08-29
 - Slice：[`DEV-017`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 设计：[`Agent Architecture`](../../design/AGENT_ARCHITECTURE.md)、
@@ -71,7 +71,7 @@ generic build diagnostic不能替代native diagnostic。
 这些检查没有调用provider或remote Worker；因此当前仍没有DEV-017 model-authored follow-up revision，也没有新的build
 receipt。
 
-## 7. Pending exact external payload authorization
+## 7. Authorized external payload
 
 live调用将发送至`https://api.deepseek.com/v1/responses`，model-visible projection严格限于：
 
@@ -83,5 +83,28 @@ live调用将发送至`https://api.deepseek.com/v1/responses`，model-visible pr
 - public recovery/search/task manifest，以及模型主动调用bounded read tool时返回的original task source片段。
 
 不会发送private control set、Oracle expected output/comparison/verdict、Controller/Worker credential、raw trusted
-evidence、DEV-014 private continuation/reasoning或generic DEV-015 success。收到用户对这次新增external payload的明确授权
-后，才运行live episode并记录exact outcome。
+evidence、DEV-014 private continuation/reasoning或generic DEV-015 success。用户明确确认了这次新增external payload后，
+才启动live episode。
+
+## 8. Live DeepSeek evidence
+
+2026-08-29 production-path live run得到：
+
+| Evidence | Exact fact |
+| --- | --- |
+| episode | `episode:01a04c70-92c7-7200-b0a3-688ab3fa4e4c` |
+| previous revision | `cairn:v1:sha256:migration.candidate-collection-revision.v1:8f519cb18860127080a4e26560c3c38fcb517dbe21d07fb4b51081c83b3ad39d` |
+| native diagnostic | `cairn:v1:sha256:migration.candidate-native-build-diagnostic.v1:fe0b9390ac84c981c1711ef6c25a32e4e1b1c665dc6ca7b1ea45ffcd64191488` |
+| follow-up revision | `cairn:v1:sha256:migration.candidate-native-followup-revision.v1:9bc0eeb94474c94c41bae002083d042808b502eb4c30021cba9e83ed1437534a` |
+| model provenance | `deepseek-v4-pro` / `deepseek-responses`；resolved configuration `cairn:v1:sha256:agent.resolved-runtime-model.v1:eee9ebffd5f2d5f86e4d5ba5de53cec4b01cd03bb3487ba72b5df30e2216275a` |
+| behavior | first turn作3次bounded task-artifact reads；second turn提交one complete changed source tree；third turnexplicitly yielded |
+| follow-up shape | 5 files；primary source `src/compact_above_kernel.asc`；host wrapper分离为companion source |
+| usage | 3 responses；input tokens `65288`；output tokens `41747`；reported cache-read tokens `57216` |
+| durability | 3 steps；terminal reason `Yielded`；关闭并重开stores后恢复同一episode与artifact |
+| authority | `build_or_execution_claimed = false`；没有运行follow-up build、Oracle、Admission或verdict |
+
+模型在primary translation unit中移除了DEV-016报告的host-side `__aicore__` construction、host pointer到`GM_ADDR`
+binding和`ACLRT_LAUNCH_KERNEL`引用，并声明了`GlobalTensor GetValue/SetValue`等toolchain assumptions。这些是
+model-authored repair strategy与未验证假设，不是Cairn认定的修复，也不证明native compilation或semantic
+correctness。DEV-017 Accepted只因为exact native feedback已经通过新的isolated Candidate episode产生immutable、
+explicit previous-revision-linked full source artifact，并且terminal state可恢复；是否通过native gate属于下一slice。
