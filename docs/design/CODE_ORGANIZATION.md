@@ -269,6 +269,9 @@ crates/cairn-server/src/
 DEV-022已创建最小`cairn-proposal-host`并承载现有SIR/Candidate role-scoped lifecycle；Oracle role仍须等待
 真实consumer，不能按目录草图预建空实现。DEV-024又删除SIR/Candidate各自复制的runner主体与旁路测试；领域
 profile adapter现在只负责context/tool/submission schema，统一进入`cairn-migration::proposal_loop`。
+DEV-025在`cairn-server::controller_workflow`中新增完整typed composition skeleton。这里的“空”仅指stage trait
+port尚无concrete implementation；没有no-op body、伪artifact或persisted schema。后续仍不得按目录草图预建各
+role runtime，实现必须逐个绑定真实consumer。
 
 ```text
 crates/cairn-proposal-host/src/

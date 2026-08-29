@@ -45,6 +45,10 @@ validated capability grant，tool result先归档为`OperationResult`再进入co
 可在同一budget内修复。Host只执行pure/read-only capability，外部effect typed fail closed并保留给Controller。
 `run_proposal_loop`顶层只保留open/dispatch/settle/admit/authorized-execute/project/advance步骤，各步骤之间使用
 distinct internal typestate。本片没有调用live model、Worker、Docker或NPU。
+DEV-025又让Controller的完整十阶段产品顺序成为可读typed composition skeleton。每一阶段只有独立port且没有
+default成功实现；recorded control证明顺序，unavailable Oracle Blue control证明不会运行任何下游stage。现有真实
+Candidate manager turn同时收敛为recover/select/execute三步，原有effect authority与receipt folding不变。完整
+Controller aggregate仍未接通，本片也没有调用live model、Worker、Docker或NPU。
 
 ## 2. 可复用基础
 
@@ -53,7 +57,7 @@ distinct internal typestate。本片没有调用live model、Worker、Docker或N
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | task-owned Candidate native suffix aggregate、single-task Controller process manager、generic Proposal Host supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | 只监管一个配置中已存在Task；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
+| Product workflow | readable ten-stage Controller composition skeleton、task-owned Candidate native suffix aggregate、single-task Controller process manager、generic Proposal Host supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | 完整骨架只有Candidate suffix concrete implementation；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -167,5 +171,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-022 | Accepted | generic Proposal Host承载SIR/Candidate role profiles并消费persisted workflow request；child restart exact terminal replay与旧专用launcher删除闭合；无live model/Worker调用 |
 | DEV-023 | Accepted | active Controller单任务manager消费durable action并连接Host/scheduler/receipt；exact operation marker、blocked no-replacement与旧public helper删除闭合；无live model/Worker调用 |
 | DEV-024 | Accepted | SIR/Candidate role-specific runner与旁路测试删除；统一冻结request/profile/capability、durable observation、strict repair与terminal lifecycle；无live model/Worker调用 |
+| DEV-025 | Accepted | 完整Controller顺序固化为typed stage-port骨架；unavailable stage fail closed；真实Candidate turn收敛为recover/select/execute；无live effect调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

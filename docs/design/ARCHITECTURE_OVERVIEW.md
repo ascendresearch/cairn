@@ -221,6 +221,9 @@ symbolic execution、公开知识/论文检索、多模型或形式化工具。�
 重复loop和旁路测试。SIR领域profile/schema仍作为generic Host中的真实consumer保留。详细工作流见
 [`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md)。
 
+DEV-025把完整跨角色顺序写成`run_controller_workflow`的可读typed skeleton；它通过无default implementation的
+stage ports保留未接环节。当前只有Candidate suffix已有active Controller consumer，因此该骨架不是端到端完成声明。
+
 ## 8. 为什么 Admission 必须是独立 authority
 
 Admission 同时需要 hidden material、mechanism qualification 和产生 admitted type 的权限。把它作为

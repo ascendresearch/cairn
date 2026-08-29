@@ -85,6 +85,12 @@ SIR、Oracle synthesis/adversarial、Candidate Search 和可选 Admission Planne
 6. Agent 提交 strict typed proposal；无效提交原子拒绝，并可在预算内修复；
 7. Controller 保存 terminal outcome，并把冻结 artifact 交给下一个 Gate 或 Loop。
 
+DEV-025把上述跨角色顺序直接固化为`cairn-server::controller_workflow::run_controller_workflow`的可读业务
+骨架：freeze → SIR → Intent Admission → Oracle Blue → Oracle Red → Oracle Admission → Candidate → Worker
+observations → Candidate Admission → terminal。各环节通过`ControllerWorkflowStages`的distinct associated
+artifact type连接。尚未实现的环节只有port签名、没有default/no-op成功实现；因此这是composition seam，不是完整
+workflow已经运行的事实。
+
 逻辑 role 不映射为专用 binary。通用 `cairn-proposal-host` 承载 capability-equivalent episode；不同数据
 可见性、外部凭据、工具或 OS sandbox 才要求不同 Host instance。每个 episode 的 continuation、context、
 budget、tool result、write namespace 和 capability grant 始终隔离。
@@ -218,6 +224,9 @@ receipt折回。它只监管配置中一个已存在Task，不代表task intake�
 DEV-024把现有SIR/Candidate profile的duplicated runner收敛为一个request-bound durable Proposal Loop，并删除旧入口
 与测试。Controller↔Host的external experiment request/observation resume仍是明确缺口，不能把Host的fail-closed
 control误报成该协议已经实现。
+DEV-025进一步冻结完整Controller业务骨架，并把现有Candidate manager turn改为recover/select/execute子骨架。
+当前只有Candidate suffix concrete implementation仍在active Controller中；SIR、Intent Admission的历史独立路径尚未
+接入总aggregate，Oracle Blue/Red及两个后续Admission port仍为空。
 
 ## 12. 被拒绝的方案
 

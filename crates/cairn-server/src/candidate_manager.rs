@@ -299,49 +299,77 @@ pub(crate) fn validate_candidate_workflow_exists(
     Ok(())
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the closed next-action match keeps every durable effect boundary visible"
-)]
+struct RecoveredCandidateControllerTurnV1 {
+    events: SqliteEventStore,
+    workflow: MigrationWorkflowV1,
+    state: CandidateWorkflowStateV1,
+}
+
+struct SelectedCandidateControllerActionV1 {
+    recovered: RecoveredCandidateControllerTurnV1,
+    action: CandidateWorkflowNextActionV1,
+}
+
+/// Advances one real Candidate suffix turn through the readable Controller subflow.
 pub(crate) async fn drive_candidate_workflow_once(
     server: &ServerConfig,
     manager: &CandidateWorkflowManagerConfigV1,
 ) -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
-    let mut events =
-        SqliteEventStore::open(&server.storage.event_database).map_err(manager_error)?;
+    let recovered = recover_candidate_controller_turn(server, manager)?;
+    let selected = select_candidate_controller_action(recovered)?;
+    execute_candidate_controller_action(server, manager, selected).await
+}
+
+fn recover_candidate_controller_turn(
+    server: &ServerConfig,
+    manager: &CandidateWorkflowManagerConfigV1,
+) -> Result<RecoveredCandidateControllerTurnV1, ServerError> {
+    let events = SqliteEventStore::open(&server.storage.event_database).map_err(manager_error)?;
     let workflow = MigrationWorkflowV1::new(manager.task_id).map_err(manager_error)?;
     let state = recover_candidate_workflow(&events, &workflow).map_err(manager_error)?;
-    let action = state.next_action().map_err(manager_error)?;
+    Ok(RecoveredCandidateControllerTurnV1 {
+        events,
+        workflow,
+        state,
+    })
+}
+
+fn select_candidate_controller_action(
+    recovered: RecoveredCandidateControllerTurnV1,
+) -> Result<SelectedCandidateControllerActionV1, ServerError> {
+    let action = recovered.state.next_action().map_err(manager_error)?;
+    Ok(SelectedCandidateControllerActionV1 { recovered, action })
+}
+
+async fn execute_candidate_controller_action(
+    server: &ServerConfig,
+    manager: &CandidateWorkflowManagerConfigV1,
+    selected: SelectedCandidateControllerActionV1,
+) -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
+    let SelectedCandidateControllerActionV1 {
+        recovered:
+            RecoveredCandidateControllerTurnV1 {
+                mut events,
+                workflow,
+                state,
+            },
+        action,
+    } = selected;
     match action {
-        CandidateWorkflowNextActionV1::None => Err(ServerError::MigrationWorkflow(
-            "configured Candidate workflow does not exist".into(),
-        )),
+        CandidateWorkflowNextActionV1::None => missing_candidate_workflow(),
         CandidateWorkflowNextActionV1::PrepareNativeBuild {
             publication,
             image,
             profile,
-        } => {
-            let dispatch = prepare_candidate_native_build_dispatch(
-                server,
-                publication,
-                JobId::new(),
-                image,
-                profile,
-                schedule_ids(),
-            )?;
-            transition_or_recover(
-                request_candidate_native_build(
-                    &mut events,
-                    &workflow,
-                    dispatch,
-                    &CommandId::new(),
-                    observed_now()?,
-                ),
-                &mut events,
-                &workflow,
-                &state,
-            )
-        }
+        } => freeze_candidate_native_build(
+            server,
+            publication,
+            image,
+            profile,
+            &mut events,
+            &workflow,
+            &state,
+        ),
         CandidateWorkflowNextActionV1::ScheduleNativeBuild(dispatch) => {
             schedule_build(server, &workflow, &state, &dispatch, &mut events)
         }
@@ -349,61 +377,127 @@ pub(crate) async fn drive_candidate_workflow_once(
             reconcile_build(server, &workflow, &state, &dispatch)
         }
         CandidateWorkflowNextActionV1::PrepareCandidateEpisode { .. } => {
-            let episode_id = EpisodeId::new();
-            let runtime = manager.proposal_host.runtime(episode_id)?;
-            let invocation = archive_proposal_host_runtime(server, &runtime)?;
-            initialize_proposal_host_operation(&manager.proposal_host, &runtime)?;
-            transition_or_recover(
-                request_candidate_episode(
-                    &mut events,
-                    &workflow,
-                    episode_id,
-                    invocation,
-                    &CommandId::new(),
-                    observed_now()?,
-                ),
+            freeze_candidate_proposal_episode(server, manager, &mut events, &workflow, &state)
+        }
+        CandidateWorkflowNextActionV1::RequestCandidateEpisode(workflow_request) => {
+            run_candidate_proposal_episode(
+                server,
+                manager,
+                workflow_request,
                 &mut events,
                 &workflow,
                 &state,
             )
-        }
-        CandidateWorkflowNextActionV1::RequestCandidateEpisode(workflow_request) => {
-            let request = prepare_candidate_proposal_host_request(server, workflow_request)?;
-            match run_proposal_host_process(&manager.proposal_host, &request).await {
-                Ok(terminal) => transition_or_recover(
-                    record_candidate_proposal_host_terminal(
-                        &mut events,
-                        &workflow,
-                        &request,
-                        &terminal,
-                        &CommandId::new(),
-                        observed_now()?,
-                    ),
-                    &mut events,
-                    &workflow,
-                    &state,
-                ),
-                Err(failure) => {
-                    tracing::warn!(
-                        target: "cairn.server.candidate-workflow",
-                        event = "proposal_host_blocked",
-                        task_id = %manager.task_id,
-                        episode_id = %request.runtime().episode_id(),
-                        reason = ?failure.reason,
-                        diagnostic = %failure.diagnostic,
-                        "Proposal Host operation requires reconciliation"
-                    );
-                    Ok(CandidateWorkflowManagerStatusV1::Blocked(
-                        CandidateWorkflowBlockedV1::ProposalHost {
-                            episode_id: request.runtime().episode_id(),
-                            reason: failure.reason,
-                        },
-                    ))
-                }
-            }
+            .await
         }
         CandidateWorkflowNextActionV1::Terminal(terminal) => {
             Ok(CandidateWorkflowManagerStatusV1::Terminal(terminal))
+        }
+    }
+}
+
+fn missing_candidate_workflow() -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
+    Err(ServerError::MigrationWorkflow(
+        "configured Candidate workflow does not exist".into(),
+    ))
+}
+
+fn freeze_candidate_native_build(
+    server: &ServerConfig,
+    publication: CandidateNativePublicationV1,
+    image: cairn_execution::DockerImageId,
+    profile: cairn_migration::CandidateBuildEnvironmentProfileV1,
+    events: &mut SqliteEventStore,
+    workflow: &MigrationWorkflowV1,
+    state: &CandidateWorkflowStateV1,
+) -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
+    let dispatch = prepare_candidate_native_build_dispatch(
+        server,
+        publication,
+        JobId::new(),
+        image,
+        profile,
+        schedule_ids(),
+    )?;
+    transition_or_recover(
+        request_candidate_native_build(
+            events,
+            workflow,
+            dispatch,
+            &CommandId::new(),
+            observed_now()?,
+        ),
+        events,
+        workflow,
+        state,
+    )
+}
+
+fn freeze_candidate_proposal_episode(
+    server: &ServerConfig,
+    manager: &CandidateWorkflowManagerConfigV1,
+    events: &mut SqliteEventStore,
+    workflow: &MigrationWorkflowV1,
+    state: &CandidateWorkflowStateV1,
+) -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
+    let episode_id = EpisodeId::new();
+    let runtime = manager.proposal_host.runtime(episode_id)?;
+    let invocation = archive_proposal_host_runtime(server, &runtime)?;
+    initialize_proposal_host_operation(&manager.proposal_host, &runtime)?;
+    transition_or_recover(
+        request_candidate_episode(
+            events,
+            workflow,
+            episode_id,
+            invocation,
+            &CommandId::new(),
+            observed_now()?,
+        ),
+        events,
+        workflow,
+        state,
+    )
+}
+
+async fn run_candidate_proposal_episode(
+    server: &ServerConfig,
+    manager: &CandidateWorkflowManagerConfigV1,
+    workflow_request: cairn_migration::CandidateEpisodeRequestV1,
+    events: &mut SqliteEventStore,
+    workflow: &MigrationWorkflowV1,
+    state: &CandidateWorkflowStateV1,
+) -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
+    let request = prepare_candidate_proposal_host_request(server, workflow_request)?;
+    match run_proposal_host_process(&manager.proposal_host, &request).await {
+        Ok(terminal) => transition_or_recover(
+            record_candidate_proposal_host_terminal(
+                events,
+                workflow,
+                &request,
+                &terminal,
+                &CommandId::new(),
+                observed_now()?,
+            ),
+            events,
+            workflow,
+            state,
+        ),
+        Err(failure) => {
+            tracing::warn!(
+                target: "cairn.server.candidate-workflow",
+                event = "proposal_host_blocked",
+                task_id = %manager.task_id,
+                episode_id = %request.runtime().episode_id(),
+                reason = ?failure.reason,
+                diagnostic = %failure.diagnostic,
+                "Proposal Host operation requires reconciliation"
+            );
+            Ok(CandidateWorkflowManagerStatusV1::Blocked(
+                CandidateWorkflowBlockedV1::ProposalHost {
+                    episode_id: request.runtime().episode_id(),
+                    reason: failure.reason,
+                },
+            ))
         }
     }
 }

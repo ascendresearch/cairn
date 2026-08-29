@@ -1,5 +1,7 @@
 //! Runnable Cairn controller composition root.
 
+pub mod controller_workflow;
+
 #[cfg(feature = "proposal-host")]
 mod candidate_manager;
 #[cfg(feature = "proposal-host")]
