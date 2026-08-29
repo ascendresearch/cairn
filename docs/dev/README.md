@@ -26,10 +26,11 @@ Controller workflow 和通用 Proposal Host，同时继续向 native success/NPU
 | --- | --- |
 | [`../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | SIR 的规范性目标、authority 边界与当前建设路线 |
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
+| [`NEXT_SESSION.md`](NEXT_SESSION.md) | 下一会话的唯一启动入口、只读审计、DEV-021 边界和可复制启动消息 |
 | [`CURRENT_IMPLEMENTATION_WALKTHROUGH.md`](CURRENT_IMPLEMENTATION_WALKTHROUGH.md) | 用atomic compaction样例逐步解释当前SIR→Admission→Oracle→Candidate proposal实现 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | 已打通纵向路径后的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..020 的当前状态和边界 |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..021 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -71,6 +72,8 @@ Controller workflow 和通用 Proposal Host，同时继续向 native success/NPU
   native diagnostic 交给新的隔离 DeepSeek episode 后重建。
 - DEV-019–020：Accepted，建立显式可重复 repair lineage 并再次远端 native build；最新结果仍为
   `SubjectFailed`，不含 NPU/semantic/verdict evidence。
+- DEV-021：Proposed，先把已观察到的 workflow transition 固化为 Controller-owned durable spine；下一
+  会话先做 DCR/最小计划并经用户确认，不继续手工 repair，也不先建空 Proposal Host。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
 `IntentHypothesisSetProposalV1`已经闭合；第一个正式consumer也已从scoped user decision走到真实execution

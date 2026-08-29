@@ -1,7 +1,7 @@
 # Cairn 开发质量 Gate
 
 - 状态：规范性、风险分级
-- 日期：2026-08-28
+- 日期：2026-08-29
 - Slice catalog：[`SLICE_CATALOG.md`](SLICE_CATALOG.md)
 
 ## 1. 原则
@@ -83,7 +83,7 @@ Pure function按其风险运行unit/property tests即可。未跨外部effect不
 
 普通fixture expected update、test-only manifest和proposal-only内部模块不自动触发上述全部review。
 
-## 8. 当前DEV-004/005特例
+## 8. DEV-004/005 历史特例
 
 - DEV-004不需要Admission、mechanism qualification、private review或NPU lane；
 - required lanes是recorded workflow，声明DeepSeek能力时增加opt-in live model；

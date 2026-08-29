@@ -1,10 +1,15 @@
 # Cairn 当前实现详解：从 CUDA atomic compaction 到 Candidate source proposal
 
-- 状态：当前实现 walkthrough；不把目标设计误报为已实现
-- 日期：2026-08-28
+- 状态：DEV-004–012 历史 walkthrough；不把目标设计误报为已实现
+- 日期：2026-08-29
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 - 当前基线：[`CURRENT_BASELINE.md`](CURRENT_BASELINE.md)
 - 实施记录：[`records/README.md`](records/README.md)
+
+> 注意：本文的逐步样例叙事止于 DEV-012。DEV-013–020 已经继续完成 remote build、native gate、
+> diagnostic、DeepSeek repair 与 rebuild；当前事实和下一步分别以
+> [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) 和 [`NEXT_SESSION.md`](NEXT_SESSION.md) 为准。下文
+> “proposal 尚未 build/下一步 build”保留为当时的历史说明，不再是当前指令。
 
 ## 1. 一句话结论
 
@@ -1060,6 +1065,9 @@ runtime model。proposal identity和durability已经成立，但技术正确性�
 当前方向不是不讲严谨，而是只保留能够阻止真实错误、并且已有下游 consumer 的严谨性。
 
 ## 18. 下一步
+
+> 本节记录 DEV-012 当时的下一步，DEV-013–020 已经完成这里描述的 build/repair 路径。当前下一步见
+> [`NEXT_SESSION.md`](NEXT_SESSION.md)，不要从本节继续人工打开新 repair。
 
 下一步不是继续扩建SIR、Candidate registry或review，而是让exact DEV-012 proposal遇到第一条真实
 target/toolchain build boundary：

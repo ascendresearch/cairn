@@ -23,6 +23,7 @@ document is complete.
 | [`design/ADMISSION_ARCHITECTURE.md`](design/ADMISSION_ARCHITECTURE.md) | How do kind-specific Planner profiles, required evidence, execution, and mechanical Gates compose? | Normative Admission software architecture |
 | [`design/AGENT_ARCHITECTURE.md`](design/AGENT_ARCHITECTURE.md) | Which Agent-capable functions and profiles exist, and how do episodes, Hosts, processes, and artifact-mediated interaction compose? | Normative Agent software architecture |
 | [`dev/README.md`](dev/README.md) | How is development staged, sliced, gated, parallelized, and reconciled with the current implementation baseline? | Normative development-planning index; no implementation authorization |
+| [`dev/NEXT_SESSION.md`](dev/NEXT_SESSION.md) | Where should the next session start, what must it verify, and what is the proposed next slice? | Current session handoff |
 | [`oracle/README.md`](oracle/README.md) | In what order should the Oracle research and subsystem designs be read? | Oracle document index |
 | [`oracle/DESIGN_INVARIANTS.md`](oracle/DESIGN_INVARIANTS.md) | Which cross-document invariants and pre-implementation checks must every later session preserve? | Normative cross-cutting guardrail |
 | [`oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | How are high-order user-intent hypotheses recovered without giving the extractor contract authority? | Normative subsystem design |

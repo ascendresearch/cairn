@@ -1,28 +1,31 @@
 # Cairn 开发 Workstreams
 
-- 状态：规范性协作边界；近期 runtime-value first
-- 日期：2026-08-28
+- 状态：规范性协作边界；当前入口见 `NEXT_SESSION.md`
+- 日期：2026-08-29
 - 路线图：[`ROADMAP.md`](ROADMAP.md)
 
 ## 1. 角色定位
 
 Workstream 是代码 ownership，不是运行时 Agent 或产品 authority。Repository coding agent 是应用构建者和
 外部观察者；DeepSeek 等 configured runtime model 是逐任务推理 actor；evaluator 在 episode 后使用 fixture
-expected answer；未来 Admission/Gate 才可能形成正式 authority。这四个角色不得合并。
+expected answer；只有适用的 independent Admission/Gate 才能形成正式 authority。这四个角色不得合并。
 
 ## 2. 当前 workstreams
 
 | Workstream | 当前责任 | 禁止承担 |
 | --- | --- | --- |
-| `WS-AGENT` | 复用 domain-neutral episode/provider/tool/budget/replay runtime | fixture answer、CUDA operator branch、admitted constructor |
-| `WS-PRODUCT` | task projection、generic SIR profile、typed proposal adapter | hidden answer、execution/Gate authority |
-| `WS-QUALITY` | post-episode evaluation、context-absence、cross-task/value tests | 反向定义 prompt 或 product policy |
-| `WS-RECORD` | durable identities/events/replay 与 public projection | verdict semantics |
+| `WS-WORKFLOW` | product-owned strong state、transition、feedback routing 与 restart/replay | generic ID/string state、fixture/compiler-text policy |
+| `WS-CONTROL` | Controller process manager、operation authority、scheduler/Host composition | product semantics、restricted Gate 重算、直接执行 generated code |
+| `WS-AGENT` | domain-neutral episode/provider/tool/budget/replay runtime；有 consumer 后承载 generic Host | fixture answer、Worker credential、admitted constructor |
+| `WS-EXECUTION` | direct outbound Worker control、opaque job/receipt、local/remote adapters | SIR/Oracle/Candidate 业务 adjudication |
+| `WS-ADMISSION` | restricted evidence 与 mechanical Gate | model continuation、applicant 修改、普通 workflow orchestration |
+| `WS-QUALITY` | recorded/restart/invalid-transition、context absence 与适用 external lanes | 反向定义 prompt、Intent 或 Oracle policy |
 
-Admission、Oracle、Candidate、Execution、Performance、Knowledge 等 future workstream 只在 DEV-005 Go 且出现
-第一个真实 consumer 后展开，不为它们预建 crate、role 或 review assignment。
+DEV-005 Go 和 DEV-008–020 已经为 workflow、Admission、Candidate 与 Execution 提供真实 consumer；这不
+意味着每个 workstream 都要并行启动或拥有独立进程。当前只启动 DEV-021 实际触及的 ownership，其他能力
+仍由新 consumer 触发。
 
-## 3. DEV-004 集成顺序
+## 3. DEV-004 集成顺序（历史 CP0）
 
 ```text
 WS-PRODUCT: generic task projection + typed proposal shape
@@ -40,7 +43,7 @@ WS-PRODUCT: generic task projection + typed proposal shape
 - malformed output、missing citation、unknown/conflict 有 typed failure；
 - 不创建独立 SIR/Proposal Host/Admission 空 crate。
 
-## 4. DEV-005 协作
+## 4. DEV-005 协作（历史 CP0）
 
 WS-PRODUCT 提供一个实质不同的 CUDA task；WS-AGENT 不改 profile schema 或 control flow；WS-QUALITY 比较
 source-preserving、user-declared intent 和 runtime SIR 三条路径；WS-RECORD保留 exact episode/cost/failure。
