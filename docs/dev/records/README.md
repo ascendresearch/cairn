@@ -20,6 +20,7 @@
 | DEV-010 | Accepted | [`first qualified local Oracle claim`](DEV-010-IMPLEMENTATION.md) | 用actual honest/fault implementation receipts资格化首个局部Oracle capability；Controller发布后Candidate才可消费 |
 | DEV-011 | Accepted | [`publish local Oracle and open Candidate input`](DEV-011-IMPLEMENTATION.md) | restricted commit后发布exact local claim，并立即由local-only Candidate search input consumer消费 |
 | DEV-012 | Accepted | [`first bounded Candidate proposal episode`](DEV-012-IMPLEMENTATION.md) | 真实DeepSeek Candidate actor消费answer-free input并提交可重建typed source proposal；不含build/run/verdict |
+| DEV-013 | InProgress | [`first exact Candidate remote Ascend build`](DEV-013-IMPLEMENTATION.md) | exact proposal经Controller/scheduler进入remote no-device build lane；以真实receipt发现首次build divergence |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

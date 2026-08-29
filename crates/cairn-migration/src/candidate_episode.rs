@@ -336,6 +336,38 @@ impl CollectionCandidateProposalV1 {
     }
 }
 
+/// Revalidates one exact Candidate proposal loaded by its expected published identity.
+///
+/// Supplying proposal bytes without the typed publication identity is intentionally insufficient:
+/// the caller must identify the exact immutable proposal selected for execution.
+///
+/// A trusted execution receipt identity cannot substitute for a Candidate proposal identity.
+///
+/// ```compile_fail
+/// use cairn_execution::ExecutionReceiptArtifact;
+/// use cairn_migration::validate_archived_collection_candidate_proposal;
+/// use cairn_protocol::ContentId;
+/// fn invalid(bytes: &[u8], wrong: ContentId<ExecutionReceiptArtifact>) {
+///     let _ = validate_archived_collection_candidate_proposal(bytes, wrong);
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Rejects non-canonical, non-V1, structurally invalid, or identity-mismatched proposal bytes.
+pub fn validate_archived_collection_candidate_proposal(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateProposalArtifact>,
+) -> Result<CollectionCandidateProposalV1, CandidateEpisodeError> {
+    let proposal: CollectionCandidateProposalV1 = cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = encode(&proposal)?;
+    let identity = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || identity != expected {
+        return Err(CandidateEpisodeError::ProposalBindingMismatch);
+    }
+    Ok(proposal)
+}
+
 impl TryFrom<CollectionCandidateProposalWire> for CollectionCandidateProposalV1 {
     type Error = CandidateEpisodeError;
 
@@ -370,6 +402,8 @@ pub enum CandidateEpisodeError {
     InvalidValue(&'static str),
     #[error("invalid Candidate structure: {0}")]
     InvalidStructure(&'static str),
+    #[error("Candidate proposal does not match its committed publication identity")]
+    ProposalBindingMismatch,
     #[error("Candidate codec failed: {0}")]
     Codec(String),
     #[error(transparent)]

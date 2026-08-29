@@ -165,6 +165,28 @@ plus ASC static-library linkage. The receipt must report the exact success line 
 `docker:accelerator:none` evidence. This proves the real target toolchain without claiming target
 device correctness or compiling a generated reduction candidate.
 
+## Exact Candidate Ascend build gate
+
+The first Candidate consumer reuses that same managed remote lane without inheriting its fixture
+rewrites. Given an archived canonical `CollectionCandidateProposalV1` and its exact typed content
+ID, run:
+
+```bash
+scripts/real-candidate-ascend-build-smoke.sh \
+  controller.json \
+  sha256:<64-hex-Ascend-build-image-id> \
+  /path/to/completed-candidate-episode-state \
+  cairn:v1:sha256:migration.candidate-collection-proposal.v1:<64-hex-digest>
+```
+
+Controller materialization preserves the complete proposal and every proposed source file byte for
+byte, adds only a fixed offline CMake build runner, then submits the generic contract through the
+normal scheduler. The remote `npu-build` worker pulls and verifies those materials before its local
+Docker adapter executes them. `Succeeded` proves only that exact proposal built in that exact
+environment. `SubjectFailed` is equally valid first-divergence evidence; compiler output remains
+untrusted diagnostic material. Infrastructure, timeout, integrity, and ambiguous outcomes do not
+classify the Candidate.
+
 ## F2 boundary
 
 F2 is complete when a worker can receive verified materials, durably start a real Docker job,

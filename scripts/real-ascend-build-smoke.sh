@@ -25,4 +25,5 @@ done
 CAIRN_REAL_CONTROLLER_CONFIG="$CONTROLLER_CONFIG" \
 CAIRN_REAL_ASCEND_IMAGE_ID="$IMAGE_ID" \
 CAIRN_REAL_ASCEND_FIXTURE_ROOT="$FIXTURE_ROOT" \
-  cargo test -p cairn-server --test real_ascend_build_worker -- --ignored --nocapture
+  cargo test -p cairn-server --test real_ascend_build_worker \
+    scheduled_ascend_add_compiles_without_device -- --ignored --nocapture

@@ -9,6 +9,10 @@ use cairn_execution::{
     InputBundleV1, InputFileMode, JobContract, NetworkPolicy, OutputByteLimit, PlacementRequest,
     ResourceRequest, SandboxPath, TrustedExecutionEvidence, WorkerPoolName, recover_execution_job,
 };
+use cairn_migration::{
+    CandidateBuildEnvironmentProfileV1, CollectionCandidateProposalArtifact,
+    prepare_candidate_build_job,
+};
 use cairn_protocol::{
     AssignmentId, AttemptId, CommandId, ContentId, ControlMessageId, JobId, LeaseId, PlacementId,
     ReservationId,
@@ -50,6 +54,53 @@ fn scheduled_ascend_add_compiles_without_device() {
     ));
 
     await_build(&config, &content, job_id, ids, input_id);
+}
+
+#[test]
+#[ignore = "requires the live no-device Ascend build worker and an exact archived Candidate proposal"]
+fn scheduled_exact_candidate_proposal_reaches_remote_ascend_build() {
+    let config_path = env::var("CAIRN_REAL_CONTROLLER_CONFIG").expect("controller config path");
+    let candidate_state =
+        env::var("CAIRN_REAL_CANDIDATE_STATE_DIR").expect("Candidate episode state directory");
+    let proposal_id: ContentId<CollectionCandidateProposalArtifact> =
+        env::var("CAIRN_REAL_CANDIDATE_PROPOSAL_ID")
+            .expect("Candidate proposal ID")
+            .parse()
+            .expect("typed Candidate proposal ID");
+    let image = env::var("CAIRN_REAL_ASCEND_IMAGE_ID").expect("full Ascend image ID");
+    let candidate_content = SqliteContentStore::open(
+        Path::new(&candidate_state).join("content.db"),
+        Path::new(&candidate_state).join("cas"),
+    )
+    .expect("Candidate content store");
+    let proposal_bytes = read_content(&candidate_content, &proposal_id);
+    let config = load_config(Path::new(&config_path));
+    let mut controller_content = SqliteContentStore::open(
+        &config.storage.content_database,
+        &config.storage.content_directory,
+    )
+    .expect("controller content store");
+    let job_id = JobId::new();
+    let prepared = prepare_candidate_build_job(
+        job_id,
+        &proposal_bytes,
+        proposal_id,
+        DockerImageId::new(image).expect("full image ID"),
+        CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+    )
+    .expect("prepare exact Candidate build");
+    prepared
+        .archive_materials(&mut controller_content)
+        .expect("archive Candidate build materials");
+    let ids = schedule_ids();
+    let scheduled = schedule_execution_contract(&config, prepared.contract(), ids)
+        .expect("schedule Candidate build");
+    assert!(matches!(
+        scheduled,
+        ControllerSchedulingOutcome::Scheduled { .. }
+    ));
+
+    await_candidate_build(&config, job_id, ids, &prepared);
 }
 
 fn archive_ascend_materials(
@@ -227,6 +278,105 @@ fn await_build(
         }
     }
     panic!("real Ascend build did not become terminal within 120 seconds");
+}
+
+fn await_candidate_build(
+    config: &ServerConfig,
+    job_id: JobId,
+    ids: ControllerScheduleIds,
+    prepared: &cairn_migration::PreparedCandidateBuildJob,
+) {
+    let job = ExecutionJob::new(job_id).expect("job stream");
+    for _ in 0..1_200 {
+        let content = SqliteContentStore::open(
+            &config.storage.content_database,
+            &config.storage.content_directory,
+        )
+        .expect("controller content store");
+        let events = SqliteEventStore::open(&config.storage.event_database).expect("event store");
+        match recover_execution_job(&events, &content, &job).expect("recover Candidate build") {
+            ExecutionJobState::Completed {
+                receipt_id,
+                receipt,
+            } => {
+                let stdout =
+                    read_content::<ExecutionStdoutArtifact>(&content, &receipt.stdout_id());
+                let stderr =
+                    read_content::<ExecutionStderrArtifact>(&content, &receipt.stderr_id());
+                let evidence_bytes = read_content(&content, &receipt.evidence_id());
+                let evidence: TrustedExecutionEvidence =
+                    cairn_codec::from_slice(&evidence_bytes).expect("trusted evidence");
+                release_execution_reservation(config, ids.reservation_id, &CommandId::new())
+                    .expect("release terminal reservation");
+                assert_eq!(receipt.job_id(), job_id);
+                assert_eq!(receipt.attempt_id(), ids.attempt_id);
+                assert_eq!(receipt.contract_id(), prepared.contract_id());
+                assert!(
+                    evidence
+                        .observations()
+                        .iter()
+                        .any(|observation| observation.as_str() == "docker:accelerator:none")
+                );
+                match receipt.outcome() {
+                    ExecutionOutcome::Succeeded => assert_eq!(
+                        String::from_utf8(stdout).expect("UTF-8 stdout").trim(),
+                        "PASS candidate-build=complete device=none"
+                    ),
+                    ExecutionOutcome::SubjectFailed => eprintln!(
+                        "exact Candidate build divergence (untrusted stderr):\n{}",
+                        diagnostic_preview(&stderr)
+                    ),
+                    outcome => panic!(
+                        "Candidate build has no subject conclusion: {outcome:?}\n{}",
+                        diagnostic_preview(&stderr)
+                    ),
+                }
+                assert_recoverable_candidate_terminal(config, &job, receipt_id);
+                eprintln!(
+                    "real Candidate build terminal: job={job_id} attempt={} proposal={} input={} environment={} contract={} receipt={receipt_id} outcome={:?}",
+                    ids.attempt_id,
+                    prepared.proposal_id(),
+                    prepared.input_bundle_id(),
+                    prepared.environment_id(),
+                    prepared.contract_id(),
+                    receipt.outcome()
+                );
+                return;
+            }
+            ExecutionJobState::NotStarted { diagnostic, .. }
+            | ExecutionJobState::Ambiguous { diagnostic, .. } => {
+                panic!("real Candidate build did not complete: {diagnostic}")
+            }
+            ExecutionJobState::NotFound
+            | ExecutionJobState::ReadyToStart(_)
+            | ExecutionJobState::InDoubt { .. } => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    panic!("real Candidate build did not become terminal within 120 seconds");
+}
+
+fn assert_recoverable_candidate_terminal(
+    config: &ServerConfig,
+    job: &ExecutionJob,
+    expected_receipt: ContentId<cairn_execution::ExecutionReceiptArtifact>,
+) {
+    let content = SqliteContentStore::open(
+        &config.storage.content_database,
+        &config.storage.content_directory,
+    )
+    .expect("reopened controller content store");
+    let events =
+        SqliteEventStore::open(&config.storage.event_database).expect("reopened event store");
+    let ExecutionJobState::Completed { receipt_id, .. } =
+        recover_execution_job(&events, &content, job).expect("recover terminal after reopen")
+    else {
+        panic!("Candidate terminal was not recoverable after reopening Controller stores");
+    };
+    assert_eq!(receipt_id, expected_receipt);
+}
+
+fn diagnostic_preview(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(8_192)]).into_owned()
 }
 
 fn load_config(path: &Path) -> ServerConfig {
