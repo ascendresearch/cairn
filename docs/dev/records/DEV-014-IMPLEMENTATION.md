@@ -1,6 +1,6 @@
 # DEV-014 implementation — first receipt-bound Candidate revision
 
-- 状态：`InProgress`
+- 状态：`Accepted`
 - 日期：2026-08-28
 - Slice：[`DEV-014`](../SLICE_CATALOG.md#3-当前critical-slices)
 - 设计：[`Agent Architecture`](../../design/AGENT_ARCHITECTURE.md)、
@@ -96,6 +96,30 @@ identity不能替代初始parent proposal identity。
 - `cargo clippy -p cairn-migration --all-targets --all-features -- -D warnings`；
 - `scripts/ci.sh`，包括全仓tests、examples和doc compile-fail。
 
-首次live启动在provider网络发送之前得到durable `NotSent`，没有外发、没有模型响应、没有revision。外部执行审批
-要求用户再明确授权exact destination和payload；因此本记录继续保持`InProgress`，不得把local recorded revision当成
-DeepSeek live evidence。
+首次live启动在provider网络发送之前得到durable `NotSent`，没有外发、没有模型响应、没有revision。它作为失败
+attempt保留，未被复用或冒充真实作者结果。
+
+## 8. Authorized live evidence
+
+用户随后明确授权把完整parent proposal、receipt-bound公开编译诊断和DeepSeek按需读取的任务源码发送至
+`https://api.deepseek.com/v1/responses`。private control set、Oracle expected output/判定、Controller/Worker凭据、
+raw trusted evidence和DEV-012 private continuation/reasoning均未进入model-visible projection。
+
+2026-08-28的production-path live run得到：
+
+| Evidence | Exact fact |
+| --- | --- |
+| episode | `episode:01a04c40-5197-7843-8954-bb57745e1d4a` |
+| parent | `cairn:v1:sha256:migration.candidate-collection-proposal.v1:41809ea7233868fc33cfc23c099d80192c4625dc66b9031f00f76e7101055a38` |
+| diagnostic | `cairn:v1:sha256:migration.candidate-build-diagnostic.v1:d09a7629dd61e11615cd4f17e131e210758ec5d7e79169efb655a2e3d07d60ce` |
+| revision | `cairn:v1:sha256:migration.candidate-collection-revision.v1:8f519cb18860127080a4e26560c3c38fcb517dbe21d07fb4b51081c83b3ad39d` |
+| actor/runtime | configured `deepseek-v4-pro` through `deepseek-responses` |
+| behavior | first turn made 3 bounded task-artifact reads；second turn submitted one full changed revision；third turn yielded |
+| revision shape | `CMakeLists.txt`、two fallback headers、public ABI header和`src/compact_above.cpp`；primary source is the `.cpp` |
+| durability | 3 steps；terminal reason `Yielded`；close/reopen recovered the same episode and revision |
+| authority | `build_or_execution_claimed = false`；没有运行revision build、semantic Oracle或verdict |
+
+模型选择在CANN headers缺失时提供host fallback，并在native headers存在时保留Ascend C path。这是模型作者的repair
+strategy和未验证假设，不是Cairn认可的实现方向，也不是build/correctness evidence。DEV-014之所以Accepted，只因为
+exact failed receipt已经通过新的、隔离的Candidate episode产生了immutable parent-linked revision；下一slice必须把
+该revision原样送回execution lane，以真实receipt检验它。
