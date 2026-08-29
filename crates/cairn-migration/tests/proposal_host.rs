@@ -22,12 +22,12 @@ use cairn_migration::{
     CollectionCandidateRevisionV1, CollectionCandidateSearchAuthorityInput,
     CollectionOracleAdmissionPublicOutcomeArtifact, CollectionOracleClaimDomainV1,
     CollectionOracleClaimStrengthV1, IntentRecoveryInputV1, IntentRecoveryRequestV1,
-    MigrationIntentContractArtifact, ProposalHostPublicationV1, ProposalHostRequestV1,
-    ProposalHostRoleRequestV1, ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, SirCallerClaimId,
-    SirCapabilityManifestV1, SirTaskLimits, SirTaskWorkspace, open_candidate_workflow,
-    prepare_collection_candidate_search_input, record_candidate_native_subject_failure,
-    record_candidate_proposal_host_terminal, request_candidate_episode,
-    request_candidate_native_build, run_proposal_host_episode,
+    MigrationIntentContractArtifact, ProposalHostBinaryIdentity, ProposalHostPublicationV1,
+    ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
+    ProposalHostTaskSnapshotV1, SirCallerClaimId, SirCapabilityManifestV1, SirTaskLimits,
+    SirTaskWorkspace, open_candidate_workflow, prepare_collection_candidate_search_input,
+    record_candidate_native_subject_failure, record_candidate_proposal_host_terminal,
+    request_candidate_episode, request_candidate_native_build, run_proposal_host_episode,
 };
 use cairn_protocol::{
     AssignmentId, AttemptId, CommandId, ContentId, ContentType, ControlMessageId, EpisodeId, JobId,
@@ -51,6 +51,8 @@ fn codec() -> cairn_agent::NativeProtocolCodec {
 fn runtime(episode_id: EpisodeId, label: &[u8]) -> ProposalHostRuntimeV1 {
     ProposalHostRuntimeV1::new(
         episode_id,
+        ProposalHostBinaryIdentity::new(format!("sha256:{}", "1".repeat(64)))
+            .expect("Host binary identity"),
         id::<AgentResolvedRuntimeModelArtifact>(label),
         ModelSelection {
             provider: ProviderName::new("recorded").expect("provider"),

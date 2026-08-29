@@ -54,7 +54,7 @@ subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
 time = "0.3.45"
-tokio = { version = "1.49.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = "0.26.4"
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
 tracing = "0.1.44"

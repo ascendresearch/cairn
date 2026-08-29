@@ -312,23 +312,23 @@ Intent Admission之前停止。Reduction evaluation fixture由
 [`D-039`](../DECISIONS.md#d-039--the-first-sir-evaluation-fixture-is-a-clean-room-finite-f32-reduction)
 冻结，但expected answer不进入runtime context。D-040的prebuilt qualification profile已由D-042 supersede，
 DEV-002 code/fixtures被删除。通过同一production path运行一个语义形态不同的task并证明downstream utility
-后，才规划Admission和Oracle authority。该value gate已通过；DEV-008–020 现已把最小 SIR ingress、
+后，才规划Admission和Oracle authority。该value gate已通过；DEV-008–023 现已把最小 SIR ingress、
 Admission promotion、Oracle publication、Candidate generation、remote native build、diagnostic、repair 和
-rebuild 串成一条窄链。
+rebuild 串成一条窄链，并以单任务Controller manager连接durable Candidate action、Host与scheduler/receipt。
 
 ## 13. 当前实现与目标差距
 
 当前已有 `cairn-server`、`cairn-worker`、agent/record/execution/verification 基础、
-`cairn-migration`中的 SIR/Intent/Oracle/Candidate contracts、DEV-008 的窄 SIR/Admission child binaries，
-以及 DEV-009–020 的窄 Oracle → remote build/repair consumers。以下仍是目标而非实现：
+`cairn-migration`中的 SIR/Intent/Oracle/Candidate contracts、独立Admission authority，以及 DEV-009–023 的窄
+Oracle → remote build/repair/workflow-manager consumers。以下仍是目标而非实现：
 
 - `cairn-migration` 尚未重命名并重组为明确的 CUDA → Ascend C 产品 crate；
-- 已有最小通用 Proposal Host，尚无完整Controller supervisor和Admission service lifecycle；当前只有
-  exact one-shot child protocol与不同UID capability proof；
+- 已有最小通用 Proposal Host和一个existing Task的Controller supervisor，尚无task intake/global catalog、Host
+  pool或完整Admission service lifecycle；
 - 产品侧 Agent profile catalog、invocation policy 和 interaction validator 尚未实现；
 - public read-only/restricted write-only路径已在DEV-008窄slice闭合；secret storage、public event/outbox和
   通用restricted data plane尚未实现；
-- Controller 还没有完整 product process manager；
+- Controller process manager当前只消费一个配置中已存在的Candidate task，不代表完整product task lifecycle；
 - Hardware Performance Model、knowledge/skill registry 和 feedback routing 尚未形成目标模块；
 - 第一条 intent → comparator-policy → Candidate → remote no-device native build/repair 路径已完成；native
   success、CUDA reference、Ascend NPU runtime/semantic/safety/performance observation 尚未开始或闭合。

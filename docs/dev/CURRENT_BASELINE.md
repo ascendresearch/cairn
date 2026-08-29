@@ -33,6 +33,11 @@ DEV-022又以一个generic Proposal Host process接管SIR及Candidate initial/re
 DEV-021的persisted episode request现在可由Controller从public CAS物化、经Host运行并把typed publication返回
 同一workflow。跨role、strict binding、child-process restart replay均用recorded transport闭合，旧`cairn-sir`
 及SIR/Candidate专用one-shot launcher已删除。DEV-022同样没有调用live model或Worker。
+DEV-023现已让active Controller中的单任务process manager直接消费该durable next action：native dispatch先提交再
+schedule，Worker terminal receipt机械折回typed diagnostic/terminal，Candidate episode先冻结exact Host binary/
+model/runtime与operation marker再启动generic Host。`NoCandidate`、expired、ambiguous和Host invocation/process
+failure均保留原ID并typed blocked，不会隐式换attempt或episode。两个materially different task、local controlled
+receipt及real recorded Host child/restart controls已闭合；本片仍没有调用live model或Worker。
 
 ## 2. 可复用基础
 
@@ -41,7 +46,7 @@ DEV-021的persisted episode request现在可由Controller从public CAS物化、�
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | task-owned Candidate native suffix aggregate、typed next action、generic Proposal Host request/publication consumer、exact replay | 尚无完整top-level Controller process manager、native success或最终migration workflow |
+| Product workflow | task-owned Candidate native suffix aggregate、single-task Controller process manager、generic Proposal Host supervision、scheduler/reconcile/receipt折回、exact replay | 只监管一个配置中已存在Task；尚无task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -58,15 +63,15 @@ DEV-021的persisted episode request现在可由Controller从public CAS物化、�
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–022 只覆盖一个窄
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–023 只覆盖一个窄
   host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build和
   recorded durable suffix；
 - native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
-目标设计中的完整 Proposal Host pool/supervisor、十一位置 catalog、七类 Planner、完整 mechanism registry 和
-future crate只是条件设计，不是当前待办或已实现事实；DEV-022只实现已有SIR/Candidate消费者需要的最小Host。
+目标设计中的完整 Proposal Host pool、多任务catalog、十一位置 catalog、七类 Planner、完整 mechanism registry 和
+future crate只是条件设计，不是当前待办或已实现事实；DEV-023只实现一个已存在Task需要的最小Controller supervisor。
 
 ## 5. 当前必须停止的外推
 
@@ -116,10 +121,11 @@ committed public local Oracle outcome
 → product-owned native ASC rebuild
 → task-owned durable Candidate suffix state / exact next action
 → generic Proposal Host request / typed publication round-trip
+→ single-task Controller manager / scheduler and receipt reconciliation
 ```
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
-或 verdict。最新local product output是DEV-022 recorded generic-Host workflow round-trip与process terminal replay
+或 verdict。最新local product output是DEV-023 recorded/local manager、generic-Host process replay与receipt折回
 evidence，不是新的live build。
 DEV-020证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把compile
 failure外推为语义错误，也不能把recorded workflow或跨主机闭环误报为真实 NPU evidence。
@@ -150,5 +156,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-020 | Accepted | exact repair 远端 native rebuild 为 `SubjectFailed`；`__kernel__` 在当前 toolchain 为 unknown type |
 | DEV-021 | Accepted | task-owned current-V1 workflow固化native suffix；recorded two-material consumer、restart/replay与旧手工入口删除闭合；无model/remote Worker调用 |
 | DEV-022 | Accepted | generic Proposal Host承载SIR/Candidate role profiles并消费persisted workflow request；child restart exact terminal replay与旧专用launcher删除闭合；无live model/Worker调用 |
+| DEV-023 | Accepted | active Controller单任务manager消费durable action并连接Host/scheduler/receipt；exact operation marker、blocked no-replacement与旧public helper删除闭合；无live model/Worker调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

@@ -279,10 +279,11 @@ pub use oracle_workflow::{
 };
 #[cfg(feature = "agent-runtime")]
 pub use proposal_host::{
-    ProposalHostError, ProposalHostPublicationV1, ProposalHostRequestArtifact,
-    ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
-    ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1, ProposalHostTerminalArtifact,
-    ProposalHostTerminalV1, record_candidate_proposal_host_terminal, run_proposal_host_episode,
+    ProposalHostBinaryIdentity, ProposalHostError, ProposalHostPublicationV1,
+    ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostRoleRequestV1,
+    ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
+    ProposalHostTerminalArtifact, ProposalHostTerminalV1, record_candidate_proposal_host_terminal,
+    run_proposal_host_episode,
 };
 pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,

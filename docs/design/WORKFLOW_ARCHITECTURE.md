@@ -205,9 +205,10 @@ build 仍为 `SubjectFailed`，因此它证明了跨主机执行和反馈闭环�
 correctness、Oracle portfolio adequacy 或最终 MigrationVerdict。
 
 DEV-021已把Candidate native suffix固化进Controller-owned state machine，DEV-022已实现最小generic
-Proposal Host并接通persisted Candidate episode request。完整Controller product process manager/supervisor
-仍未实现；后续应连接已有durable next action、Host与Worker scheduler，同时保留现有V1强类型和receipts，
-不得为尚无consumer的Agent、reviewer、service或compatibility path预建结构。
+Proposal Host并接通persisted Candidate episode request。DEV-023又实现一个active Controller内的单任务process
+manager，把durable next action连接到exact Host binary/start marker、existing Worker scheduler/reconciliation与typed
+receipt折回。它只监管配置中一个已存在Task，不代表task intake、global catalog或Host pool已经实现；后续仍须保留
+现有V1强类型和receipts，不得为尚无consumer的Agent、reviewer、service或compatibility path预建结构。
 
 ## 12. 被拒绝的方案
 

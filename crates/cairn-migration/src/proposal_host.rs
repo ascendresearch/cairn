@@ -8,7 +8,7 @@ use cairn_protocol::{
     CommandId, ContentId, ContentType, EpisodeId, ObservedAtUnixMillis, SchemaVersion, TaskId,
 };
 use cairn_record::{ContentStore, EventStore};
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::{
@@ -50,6 +50,77 @@ pub enum ProposalHostTerminalArtifact {}
 
 impl ContentType for ProposalHostTerminalArtifact {
     const DOMAIN: &'static str = "migration.proposal-host-terminal.v1";
+}
+
+/// Exact digest of the generic Proposal Host executable authorized for an invocation.
+///
+/// This identity is intentionally distinct from a managed Worker's binary identity: a Proposal
+/// Host has model/proposal authority and never receives execution authority.
+///
+/// ```compile_fail
+/// use cairn_execution::WorkerBinaryIdentity;
+/// use cairn_migration::ProposalHostBinaryIdentity;
+/// fn require_host(_: ProposalHostBinaryIdentity) {}
+/// fn invalid(worker: WorkerBinaryIdentity) {
+///     require_host(worker);
+/// }
+/// ```
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProposalHostBinaryIdentity(String);
+
+impl ProposalHostBinaryIdentity {
+    /// Creates one exact lowercase SHA-256 executable identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any value outside the canonical `sha256:<64 lowercase hex>` representation.
+    pub fn new(value: impl Into<String>) -> Result<Self, ProposalHostError> {
+        let value = value.into();
+        let digest = value.strip_prefix("sha256:").ok_or_else(|| {
+            ProposalHostError::InvalidRequest(
+                "Proposal Host binary identity is not a canonical SHA-256 digest".into(),
+            )
+        })?;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return invalid(
+                "Proposal Host binary identity is not a canonical lowercase SHA-256 digest",
+            );
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Serialize for ProposalHostBinaryIdentity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProposalHostBinaryIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+impl std::fmt::Display for ProposalHostBinaryIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
 }
 
 /// One exact source entry in a Controller-materialized task snapshot.
@@ -113,6 +184,7 @@ impl ProposalHostTaskSnapshotV1 {
 pub struct ProposalHostRuntimeV1 {
     schema_version: SchemaVersion,
     episode_id: EpisodeId,
+    binary_identity: ProposalHostBinaryIdentity,
     model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     selection: ModelSelection,
     budget: EpisodeBudget,
@@ -124,6 +196,7 @@ impl ProposalHostRuntimeV1 {
     #[must_use]
     pub fn new(
         episode_id: EpisodeId,
+        binary_identity: ProposalHostBinaryIdentity,
         model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         selection: ModelSelection,
         budget: EpisodeBudget,
@@ -133,6 +206,7 @@ impl ProposalHostRuntimeV1 {
         Self {
             schema_version: schema_v1(),
             episode_id,
+            binary_identity,
             model_configuration,
             selection,
             budget,
@@ -144,6 +218,11 @@ impl ProposalHostRuntimeV1 {
     #[must_use]
     pub const fn episode_id(&self) -> EpisodeId {
         self.episode_id
+    }
+
+    #[must_use]
+    pub const fn binary_identity(&self) -> &ProposalHostBinaryIdentity {
+        &self.binary_identity
     }
 
     #[must_use]
@@ -987,4 +1066,21 @@ pub enum ProposalHostError {
     Role(String),
     #[error("Proposal Host workflow publication failed: {0}")]
     Workflow(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProposalHostBinaryIdentity;
+
+    #[test]
+    fn host_binary_identity_is_exact_lowercase_sha256_and_revalidated_on_decode() {
+        let valid = format!("sha256:{}", "a".repeat(64));
+        let identity = ProposalHostBinaryIdentity::new(valid.clone()).expect("identity");
+        assert_eq!(identity.as_str(), valid);
+        assert!(ProposalHostBinaryIdentity::new(format!("sha256:{}", "A".repeat(64))).is_err());
+        assert!(ProposalHostBinaryIdentity::new("sha256:short").is_err());
+        assert!(
+            serde_json::from_str::<ProposalHostBinaryIdentity>("\"sha256:not-a-digest\"").is_err()
+        );
+    }
 }

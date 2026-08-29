@@ -3,7 +3,7 @@
 - 状态：当前会话交接入口
 - 日期：2026-08-29
 - 架构基线提交：`c49e16a`（`docs: freeze agent-loop workflow architecture`）
-- 当前实现基线：DEV-001–022 已记录；DEV-022 为 `Accepted`
+- 当前实现基线：DEV-001–023 已记录；DEV-023 为 `Accepted`
 
 ## 1. 下一会话先建立的共同认识
 
@@ -25,8 +25,9 @@ DeepSeek SIR proposal
 DEV-020 的最新 native rebuild 是 `SubjectFailed`。它证明了跨主机 build/feedback/recovery 闭环，不证明
 native build success、NPU runtime、semantic correctness、完整 Oracle portfolio、performance 或最终
 `MigrationVerdict`。DEV-021已把Candidate native suffix固化为task-owned durable workflow；DEV-022又让同一
-generic Proposal Host承载SIR/Candidate role profile并消费persisted workflow request。两片都只有recorded/local
-evidence，没有新增live model或Worker事实。
+generic Proposal Host承载SIR/Candidate role profile并消费persisted workflow request；DEV-023再由active Controller
+single-task manager消费durable action并连接Host supervision、Worker scheduler/reconciliation与receipt折回。三片都
+只有recorded/local evidence，没有新增live model或Worker事实。
 
 架构已经由 D-043 冻结：
 
@@ -47,7 +48,7 @@ evidence，没有新增live model或Worker事实。
 1. 根目录 [`AGENTS.md`](../../AGENTS.md)；
 2. [`WORKFLOW_ARCHITECTURE.md`](../design/WORKFLOW_ARCHITECTURE.md)；
 3. [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md)；
-4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-022及其implementation record；
+4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-023及其implementation record；
 5. [`ARCHITECTURE_OVERVIEW.md`](../design/ARCHITECTURE_OVERVIEW.md) 和
    [`RUNTIME_ARCHITECTURE.md`](../design/RUNTIME_ARCHITECTURE.md)；
 6. 只有准备修改对应边界时，再读
@@ -66,8 +67,8 @@ evidence，没有新增live model或Worker事实。
 ```bash
 git status --short
 git log -5 --oneline --decorate
-rg -n "DEV-022|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
-rg -n "ProposalHostRequestV1|CandidateEpisodeRequestV1|prepare_candidate_proposal_host_request" \
+rg -n "DEV-023|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
+rg -n "CandidateWorkflowManagerConfigV1|drive_candidate_workflow_once|ProposalHostBinaryIdentity" \
   crates/cairn-migration crates/cairn-server crates/cairn-proposal-host
 ```
 
@@ -76,27 +77,29 @@ rg -n "ProposalHostRequestV1|CandidateEpisodeRequestV1|prepare_candidate_proposa
 不要在启动审计中连接 DeepSeek、远端 Worker、Docker、NPU 或互联网。外部 effect 只有在一个已确认 slice
 明确要求时才运行。
 
-## 4. DEV-022 已闭合的事实
+## 4. DEV-023 已闭合的事实
 
-- 同一个Host implementation承载SIR及Candidate initial/revision/native follow-up/repair，role-specific prompt、tools、
-  continuation、publication和episode保持隔离；
-- `ProposalHostRuntimeV1`、closed role request、task snapshot、invocation ID和terminal均为strict typed current V1；
-- DEV-021 workflow request冻结exact Host invocation，Controller只从public CAS重建输入，Host publication返回同一aggregate；
-- real child使用episode-local SQLite，正常完成后持久化canonical terminal checkpoint；第二次进程不带recorded
-  exchange也只能exact replay，不能再次dispatch；提交窗口歧义fail closed并要求reconciliation；
-- `cairn-sir`、`sir_process`及SIR/Candidate initial/revision专用one-shot examples/configs已删除，无alias/dual path；
-- 两个不同task/role的recorded controls、workflow round-trip、non-V1/task/invocation/domain negative tests闭合；
+- active Controller可选监管一个配置中明确给出的existing Candidate `TaskId`，没有另一个逐步手工launcher；
+- manager逐项消费durable next action，所有Host/Worker effect均先commit exact episode/dispatch IDs；
+- `ProposalHostBinaryIdentity`与Worker identity分离；Host要求Controller-prepared invocation marker，并在provider effect前
+  保存request-bound start marker，store丢失、binary/model/root drift均fail closed；
+- scheduler waiting/reconcile/terminal和Worker receipt进入同一task workflow；SubjectFailed只通过exact build、receipt、
+  stderr/evidence构造typed diagnostic，不解释compiler文本；
+- `NoCandidate`、expired、NotStarted、Ambiguous和Host failure均typed blocked且不生成replacement IDs；
+- 两个materially different task走同一manager path；real Host child replay、missing marker/store controls和local
+  controlled receipt折回闭合；
+- 四个旧public手工composition helper入口及helper-only test已删除，无alias/dual path；
 - 没有调用live model、remote Worker、Docker或NPU，没有新的live receipt或verdict claim。
 
 详细authority、current-V1 contract、tests、删除项与非目标见
-[`DEV-022-IMPLEMENTATION.md`](records/DEV-022-IMPLEMENTATION.md)。
+[`DEV-023-IMPLEMENTATION.md`](records/DEV-023-IMPLEMENTATION.md)。
 
 ## 5. 下一决策点
 
-DEV-022只实现最小generic Host与已有workflow consumer，没有实现top-level Controller process manager。
-下一片应从真实缺口中审计最短路径：把Controller durable next action连接到Host process supervision与existing
-Worker scheduler，或继续取得native build success/NPU Candidate Admission证据。不要预建Oracle/Planner profiles、
-Host pool、多租户协议或完整位置catalog；新增role必须先有真实typed consumer。
+DEV-023只实现一个已存在Task的Controller manager，没有task intake/global catalog，也没有新增live build事实。
+下一片应从真实缺口中审计最短路径：取得native build success后接入最小Candidate Admission/NPU evidence lane，或在
+出现真实task-intake consumer时增加task discovery。不要预建Oracle/Planner profiles、Host pool、多租户协议或完整
+位置catalog；新增role和supervision topology必须先有真实typed consumer。
 
 ## 6. 网络与部署启动规则
 
@@ -130,7 +133,7 @@ git diff --check
 请先读取 AGENTS.md、docs/dev/NEXT_SESSION.md、
 docs/design/WORKFLOW_ARCHITECTURE.md、docs/dev/CURRENT_BASELINE.md 和
 docs/dev/SLICE_CATALOG.md，并用 Git/代码核对交接事实。先不要调用模型、远端 Worker 或修改代码。
-请核对 Accepted DEV-022 的Host contract、workflow consumer、restart replay、删除项与CI事实，并审计下一处真实workflow接缝。
+请核对 Accepted DEV-023 的single-task manager、Host start authority、scheduler/receipt折回、blocked semantics、删除项与CI事实，并审计下一处真实workflow接缝。
 先给出最小slice/DCR、consumer、将替代的旧路径、测试与明确非目标；确认没有fixture-specific或generic-ID
 漂移后停下来让我确认。先不要调用模型、远端Worker或修改代码。
 ```

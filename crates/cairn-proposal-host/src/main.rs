@@ -12,11 +12,15 @@ use cairn_agent::{
     PreparedModelRequest, RecordedExchange, RecordedModelTransport, ResolvedRuntimeModel,
     ResolvedRuntimeModelArtifact, TransportError, recover_agent_episode,
 };
-use cairn_migration::{ProposalHostRequestV1, ProposalHostTerminalV1, run_proposal_host_episode};
+use cairn_migration::{
+    ProposalHostBinaryIdentity, ProposalHostRequestV1, ProposalHostTerminalV1,
+    run_proposal_host_episode,
+};
 use cairn_protocol::ContentId;
 use cairn_record::ContentStore;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -44,6 +48,10 @@ impl ModelTransport for HostTransport {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the one-shot process keeps invocation, durable-start, replay, and terminal checks visible"
+)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     cairn_observability::init("proposal-host")?;
     let root = std::env::current_dir()?;
@@ -67,6 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if cairn_codec::to_vec(&request)? != bytes {
         return Err("Proposal Host request is not canonical current-V1 bytes".into());
     }
+    if current_binary_identity()? != *request.runtime().binary_identity() {
+        return Err("Proposal Host executable changed the frozen Host invocation".into());
+    }
 
     let model_bytes = std::fs::read(model_path)?;
     let model: ResolvedRuntimeModel = cairn_codec::from_slice(&model_bytes)?;
@@ -83,10 +94,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let state = state_root.join(request.runtime().episode_id().to_string());
-    std::fs::create_dir_all(&state)?;
+    if !state.is_dir()
+        || std::fs::read(state.join("invocation.v1.json"))?
+            != cairn_codec::to_vec(request.runtime())?
+    {
+        return Err(
+            "Proposal Host operation lacks its exact Controller-prepared invocation".into(),
+        );
+    }
     let content_database = state.join("content.db");
     let event_database = state.join("events.db");
     let cas = state.join("cas");
+    let started_path = state.join("started.v1.json");
+    let terminal_path = state.join("terminal.v1.json");
+    let store_exists = content_database.is_file() && event_database.is_file() && cas.is_dir();
+    if (started_path.exists() || terminal_path.exists()) && !store_exists {
+        return Err(
+            "Proposal Host durable operation store is missing after start authority".into(),
+        );
+    }
     let mut content = SqliteContentStore::open(&content_database, &cas)?;
     let mut events = SqliteEventStore::open(&event_database)?;
     let archived = content
@@ -95,7 +121,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if archived != model.content_id()? {
         return Err("resolved runtime model identity changed during Host archival".into());
     }
-    let terminal_path = state.join("terminal.v1.json");
     if terminal_path.exists() {
         let terminal_bytes = std::fs::read(&terminal_path)?;
         let terminal: ProposalHostTerminalV1 = cairn_codec::from_slice(&terminal_bytes)?;
@@ -108,6 +133,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         validate_durable_episode(&events, &mut content, &request, &terminal)?;
         std::io::stdout().write_all(&terminal_bytes)?;
         return Ok(());
+    }
+    if started_path.exists() {
+        if std::fs::read(&started_path)? != bytes {
+            return Err("Proposal Host start authority changed its exact request".into());
+        }
+    } else {
+        persist_new_checkpoint(&started_path, &bytes, "start authority")?;
     }
     let codec = NativeProtocolCodec::from_config(model.protocol())?;
     let mut transport = if let Some(path) = recorded_path {
@@ -142,6 +174,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     std::io::stdout().write_all(&terminal_bytes)?;
     Ok(())
+}
+
+fn current_binary_identity() -> Result<ProposalHostBinaryIdentity, Box<dyn std::error::Error>> {
+    let executable = std::env::current_exe()?;
+    let mut file = std::fs::File::open(executable)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(ProposalHostBinaryIdentity::new(format!(
+        "sha256:{:x}",
+        digest.finalize()
+    ))?)
 }
 
 fn validate_durable_episode(
@@ -181,5 +231,20 @@ fn persist_terminal_checkpoint(
     file.write_all(terminal_bytes)?;
     file.sync_all()?;
     std::fs::rename(&pending, terminal_path)?;
+    Ok(())
+}
+
+fn persist_new_checkpoint(
+    path: &Path,
+    bytes: &[u8],
+    description: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("Proposal Host {description} requires reconciliation: {error}"))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
     Ok(())
 }

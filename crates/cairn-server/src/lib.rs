@@ -1,15 +1,26 @@
 //! Runnable Cairn controller composition root.
 
+#[cfg(feature = "proposal-host")]
+mod candidate_manager;
+#[cfg(feature = "proposal-host")]
 mod candidate_workflow;
 mod enrollment;
 mod scheduling;
 
 #[cfg(feature = "proposal-host")]
-pub use candidate_workflow::{
-    archive_proposal_host_runtime, prepare_candidate_proposal_host_request,
+pub use candidate_manager::{
+    CandidateWorkflowBlockedV1, CandidateWorkflowManagerConfigV1, CandidateWorkflowManagerStatusV1,
+    CandidateWorkflowPollIntervalMillis, CandidateWorkflowWaitingV1, ProposalHostProcessBlockedV1,
+    ProposalHostProcessConfigV1, ProposalHostProcessTimeoutMillis, ProposalHostStderrByteLimit,
+    ProposalHostStdoutByteLimit,
 };
-pub use candidate_workflow::{
-    prepare_candidate_native_build_dispatch, schedule_candidate_native_build,
+
+#[cfg(feature = "proposal-host")]
+use candidate_manager::{run_candidate_workflow_manager, validate_candidate_workflow_exists};
+#[cfg(feature = "proposal-host")]
+use candidate_workflow::{
+    archive_proposal_host_runtime, prepare_candidate_native_build_dispatch,
+    prepare_candidate_proposal_host_request, schedule_candidate_native_build,
 };
 
 pub use enrollment::{
@@ -80,6 +91,8 @@ pub struct ServerConfig {
     pub tls: ServerTlsFiles,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
+    #[cfg(feature = "proposal-host")]
+    pub candidate_workflow_manager: Option<CandidateWorkflowManagerConfigV1>,
     pub protocol_version: WorkerProtocolVersion,
     pub session_timeout_ms: WorkerSessionTimeoutMillis,
     /// Optional generic scheduler service. `null` disables new placement while worker control and
@@ -660,6 +673,8 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         )
         .map_err(|error| ServerError::Startup(error.to_string()))?,
     }));
+    #[cfg(feature = "proposal-host")]
+    validate_configured_candidate_workflow(&config)?;
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
@@ -711,6 +726,8 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         enrollment_enabled = config.enrollment_service.is_some(),
         "controller control listener ready"
     );
+    #[cfg(feature = "proposal-host")]
+    spawn_configured_candidate_workflow(config.clone());
     loop {
         let (tcp, _) = listener
             .accept()
@@ -737,6 +754,53 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
             }
         });
     }
+}
+
+#[cfg(feature = "proposal-host")]
+fn validate_configured_candidate_workflow(config: &ServerConfig) -> Result<(), ServerError> {
+    if let Some(manager) = &config.candidate_workflow_manager {
+        validate_candidate_workflow_exists(config, manager)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "proposal-host")]
+fn spawn_configured_candidate_workflow(config: ServerConfig) {
+    let Some(manager) = config.candidate_workflow_manager.clone() else {
+        return;
+    };
+    tokio::spawn(async move {
+        match run_candidate_workflow_manager(config, manager.clone()).await {
+            Ok(CandidateWorkflowManagerStatusV1::Terminal(outcome)) => tracing::info!(
+                target: "cairn.server.candidate-workflow",
+                event = "candidate_workflow_terminal",
+                task_id = %manager.task_id,
+                outcome = ?outcome,
+                "managed Candidate workflow reached terminal state"
+            ),
+            Ok(CandidateWorkflowManagerStatusV1::Blocked(reason)) => tracing::warn!(
+                target: "cairn.server.candidate-workflow",
+                event = "candidate_workflow_blocked",
+                task_id = %manager.task_id,
+                reason = ?reason,
+                "managed Candidate workflow requires reconciliation"
+            ),
+            Ok(status) => tracing::error!(
+                target: "cairn.server.candidate-workflow",
+                event = "candidate_workflow_manager_stopped",
+                task_id = %manager.task_id,
+                status = ?status,
+                "managed Candidate workflow stopped in a nonterminal state"
+            ),
+            Err(error) => tracing::error!(
+                target: "cairn.server.candidate-workflow",
+                event = "candidate_workflow_manager_failed",
+                task_id = %manager.task_id,
+                error = %error,
+                "managed Candidate workflow process manager failed"
+            ),
+        }
+    });
 }
 
 impl ServerConfig {
@@ -795,6 +859,10 @@ impl ServerConfig {
                 ));
             }
         }
+        #[cfg(feature = "proposal-host")]
+        if let Some(manager) = &self.candidate_workflow_manager {
+            manager.validate()?;
+        }
         Ok(())
     }
 
@@ -813,6 +881,10 @@ impl ServerConfig {
         resolve(&mut self.storage.event_database, base);
         resolve(&mut self.storage.content_database, base);
         resolve(&mut self.storage.content_directory, base);
+        #[cfg(feature = "proposal-host")]
+        if let Some(manager) = &mut self.candidate_workflow_manager {
+            manager.resolve_paths(base);
+        }
     }
 }
 

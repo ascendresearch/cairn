@@ -30,6 +30,7 @@
 | DEV-020 | Accepted | [`exact native repair remote ASC build`](DEV-020-IMPLEMENTATION.md) | DEV-019 exact repair经同一product-owned native ASC gate取得真实`SubjectFailed` receipt |
 | DEV-021 | Accepted | [`Controller-owned Candidate workflow spine`](DEV-021-IMPLEMENTATION.md) | current-V1 aggregate固化native build/diagnostic/follow-up/repair transition；recorded consumer、restart/replay与旧手工入口删除闭合 |
 | DEV-022 | Accepted | [`generic role-scoped Proposal Host`](DEV-022-IMPLEMENTATION.md) | 同一Host承载SIR与Candidate role profile；workflow request consumer、process restart replay与专用launcher删除闭合 |
+| DEV-023 | Accepted | [`Controller-owned Candidate process manager`](DEV-023-IMPLEMENTATION.md) | 单个已存在Task的durable next action连接generic Host supervision、scheduler recovery与typed receipt折回；blocked state不换ID |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

@@ -12,14 +12,16 @@ use cairn_agent::{
     ScriptedModelTransport, TransportError,
 };
 use cairn_migration::{
-    AgentResolvedRuntimeModelArtifact, IntentRecoveryRequestV1, ProposalHostRequestV1,
-    ProposalHostRoleRequestV1, ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1,
-    ProposalHostTerminalV1, SirTaskLimits, SirTaskWorkspace, run_proposal_host_episode,
+    AgentResolvedRuntimeModelArtifact, IntentRecoveryRequestV1, ProposalHostBinaryIdentity,
+    ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
+    ProposalHostTaskSnapshotV1, ProposalHostTerminalV1, SirTaskLimits, SirTaskWorkspace,
+    run_proposal_host_episode,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize)]
 struct RecordedExchangeWire {
@@ -32,6 +34,22 @@ fn repository_root() -> std::path::PathBuf {
         .join("../..")
         .canonicalize()
         .expect("repository root")
+}
+
+fn host_binary_identity() -> ProposalHostBinaryIdentity {
+    let bytes = fs::read(env!("CARGO_BIN_EXE_cairn-proposal-host")).expect("Host executable");
+    ProposalHostBinaryIdentity::new(format!("sha256:{:x}", Sha256::digest(bytes)))
+        .expect("Host binary identity")
+}
+
+fn prepare_host_operation(state_root: &Path, request: &ProposalHostRequestV1) {
+    let state = state_root.join(request.runtime().episode_id().to_string());
+    fs::create_dir_all(&state).expect("Host operation state");
+    fs::write(
+        state.join("invocation.v1.json"),
+        cairn_codec::to_vec(request.runtime()).expect("runtime bytes"),
+    )
+    .expect("Host invocation marker");
 }
 
 fn resolved_model() -> cairn_agent::ResolvedRuntimeModel {
@@ -123,6 +141,7 @@ fn child_process_consumes_canonical_recorded_sir_request_and_recovers_terminal()
     let request = ProposalHostRequestV1::new(
         ProposalHostRuntimeV1::new(
             episode_id,
+            host_binary_identity(),
             ContentId::<AgentResolvedRuntimeModelArtifact>::derive(
                 &model.canonical_bytes().expect("model bytes"),
             )
@@ -193,6 +212,60 @@ fn child_process_consumes_canonical_recorded_sir_request_and_recovers_terminal()
     )
     .expect("exchange file");
     let state = temporary.path().join("process-state");
+
+    let absent_state = temporary.path().join("absent-operation-state");
+    let mut unauthorized = Command::new(env!("CARGO_BIN_EXE_cairn-proposal-host"))
+        .arg(&absent_state)
+        .arg(&model_path)
+        .arg(&exchanges_path)
+        .current_dir(repository_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("unauthorized Proposal Host child");
+    unauthorized
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&cairn_codec::to_vec(&request).expect("request bytes"))
+        .expect("request write");
+    let unauthorized_output = unauthorized
+        .wait_with_output()
+        .expect("unauthorized output");
+    assert!(!unauthorized_output.status.success());
+    assert!(unauthorized_output.stdout.is_empty());
+
+    let mut forged_value: Value =
+        serde_json::from_slice(&cairn_codec::to_vec(&request).expect("request bytes"))
+            .expect("request value");
+    forged_value["runtime"]["binary_identity"] = json!(format!("sha256:{}", "0".repeat(64)));
+    let forged_request: ProposalHostRequestV1 =
+        cairn_codec::from_slice(&cairn_codec::to_vec(&forged_value).expect("forged request bytes"))
+            .expect("structurally valid forged request");
+    let forged_state = temporary.path().join("wrong-binary-state");
+    prepare_host_operation(&forged_state, &forged_request);
+    let mut forged_child = Command::new(env!("CARGO_BIN_EXE_cairn-proposal-host"))
+        .arg(&forged_state)
+        .arg(&model_path)
+        .arg(&exchanges_path)
+        .current_dir(repository_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("wrong-binary Proposal Host child");
+    forged_child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&cairn_codec::to_vec(&forged_request).expect("forged request bytes"))
+        .expect("request write");
+    let forged_output = forged_child.wait_with_output().expect("forged output");
+    assert!(!forged_output.status.success());
+    assert!(forged_output.stdout.is_empty());
+
+    prepare_host_operation(&state, &request);
     let mut child = Command::new(env!("CARGO_BIN_EXE_cairn-proposal-host"))
         .arg(&state)
         .arg(&model_path)
@@ -257,6 +330,29 @@ fn child_process_consumes_canonical_recorded_sir_request_and_recovers_terminal()
         String::from_utf8_lossy(&restarted_output.stderr)
     );
     assert_eq!(restarted_output.stdout, output.stdout);
+
+    fs::remove_file(state.join(episode_id.to_string()).join("events.db"))
+        .expect("remove temporary event store");
+    let mut missing_store = Command::new(env!("CARGO_BIN_EXE_cairn-proposal-host"))
+        .arg(&state)
+        .arg(&model_path)
+        .current_dir(repository_root())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("missing-store Proposal Host child");
+    missing_store
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&cairn_codec::to_vec(&request).expect("request bytes"))
+        .expect("request write");
+    let missing_output = missing_store
+        .wait_with_output()
+        .expect("missing-store output");
+    assert!(!missing_output.status.success());
+    assert!(missing_output.stdout.is_empty());
 }
 
 #[test]
