@@ -22,6 +22,7 @@
 | DEV-012 | Accepted | [`first bounded Candidate proposal episode`](DEV-012-IMPLEMENTATION.md) | 真实DeepSeek Candidate actor消费answer-free input并提交可重建typed source proposal；不含build/run/verdict |
 | DEV-013 | Accepted | [`first exact Candidate remote Ascend build`](DEV-013-IMPLEMENTATION.md) | exact proposal经Controller/scheduler进入remote no-device build lane；真实`SubjectFailed` receipt发现`acl/acl.h` include divergence |
 | DEV-014 | Accepted | [`first receipt-bound Candidate revision`](DEV-014-IMPLEMENTATION.md) | 新isolated DeepSeek episode消费exact receipt-bound diagnostic并提交parent-linked full-source revision |
+| DEV-015 | Accepted | [`first exact Candidate revision remote build`](DEV-015-IMPLEMENTATION.md) | DEV-014 exact revision取得remote `Succeeded` receipt，同时暴露当前gate未强制native Ascend compile |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

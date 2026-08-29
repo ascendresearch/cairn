@@ -485,6 +485,36 @@ pub fn prepare_collection_candidate_revision(
     })
 }
 
+/// Revalidates one exact published Candidate revision under its typed identity.
+///
+/// An initial proposal identity cannot substitute for a revision publication identity.
+///
+/// ```compile_fail
+/// use cairn_migration::{
+///     CollectionCandidateProposalArtifact, validate_archived_collection_candidate_revision,
+/// };
+/// use cairn_protocol::ContentId;
+/// fn invalid(bytes: &[u8], wrong: ContentId<CollectionCandidateProposalArtifact>) {
+///     let _ = validate_archived_collection_candidate_revision(bytes, wrong);
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Rejects noncanonical, non-V1, structurally invalid, or identity-mismatched revision bytes.
+pub fn validate_archived_collection_candidate_revision(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateRevisionArtifact>,
+) -> Result<CollectionCandidateRevisionV1, CandidateRevisionError> {
+    let revision: CollectionCandidateRevisionV1 = cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = encode(&revision)?;
+    let identity = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || identity != expected {
+        return Err(CandidateRevisionError::BindingMismatch);
+    }
+    Ok(revision)
+}
+
 /// Failure while deriving public Candidate build feedback or a source revision.
 #[derive(Debug, Error)]
 pub enum CandidateRevisionError {

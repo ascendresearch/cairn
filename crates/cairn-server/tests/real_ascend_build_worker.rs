@@ -11,7 +11,8 @@ use cairn_execution::{
 };
 use cairn_migration::{
     CandidateBuildEnvironmentProfileV1, CollectionCandidateProposalArtifact,
-    prepare_candidate_build_job,
+    CollectionCandidateRevisionArtifact, prepare_candidate_build_job,
+    prepare_candidate_revision_build_job,
 };
 use cairn_protocol::{
     AssignmentId, AttemptId, CommandId, ContentId, ControlMessageId, JobId, LeaseId, PlacementId,
@@ -100,7 +101,70 @@ fn scheduled_exact_candidate_proposal_reaches_remote_ascend_build() {
         ControllerSchedulingOutcome::Scheduled { .. }
     ));
 
-    await_candidate_build(&config, job_id, ids, &prepared);
+    await_candidate_build(
+        &config,
+        job_id,
+        ids,
+        &prepared.proposal_id().to_string(),
+        prepared.input_bundle_id(),
+        prepared.environment_id(),
+        prepared.contract_id(),
+    );
+}
+
+#[test]
+#[ignore = "requires the live no-device Ascend build worker and an exact archived Candidate revision"]
+fn scheduled_exact_candidate_revision_reaches_remote_ascend_build() {
+    let config_path = env::var("CAIRN_REAL_CONTROLLER_CONFIG").expect("controller config path");
+    let revision_state = env::var("CAIRN_REAL_CANDIDATE_REVISION_STATE_DIR")
+        .expect("Candidate revision episode state directory");
+    let revision_id: ContentId<CollectionCandidateRevisionArtifact> =
+        env::var("CAIRN_REAL_CANDIDATE_REVISION_ID")
+            .expect("Candidate revision ID")
+            .parse()
+            .expect("typed Candidate revision ID");
+    let image = env::var("CAIRN_REAL_ASCEND_IMAGE_ID").expect("full Ascend image ID");
+    let revision_content = SqliteContentStore::open(
+        Path::new(&revision_state).join("content.db"),
+        Path::new(&revision_state).join("cas"),
+    )
+    .expect("Candidate revision content store");
+    let revision_bytes = read_content(&revision_content, &revision_id);
+    let config = load_config(Path::new(&config_path));
+    let mut controller_content = SqliteContentStore::open(
+        &config.storage.content_database,
+        &config.storage.content_directory,
+    )
+    .expect("controller content store");
+    let job_id = JobId::new();
+    let prepared = prepare_candidate_revision_build_job(
+        job_id,
+        &revision_bytes,
+        revision_id,
+        DockerImageId::new(image).expect("full image ID"),
+        CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+    )
+    .expect("prepare exact Candidate revision build");
+    prepared
+        .archive_materials(&mut controller_content)
+        .expect("archive Candidate revision build materials");
+    let ids = schedule_ids();
+    let scheduled = schedule_execution_contract(&config, prepared.contract(), ids)
+        .expect("schedule Candidate revision build");
+    assert!(matches!(
+        scheduled,
+        ControllerSchedulingOutcome::Scheduled { .. }
+    ));
+
+    await_candidate_build(
+        &config,
+        job_id,
+        ids,
+        &prepared.revision_id().to_string(),
+        prepared.input_bundle_id(),
+        prepared.environment_id(),
+        prepared.contract_id(),
+    );
 }
 
 fn archive_ascend_materials(
@@ -284,7 +348,10 @@ fn await_candidate_build(
     config: &ServerConfig,
     job_id: JobId,
     ids: ControllerScheduleIds,
-    prepared: &cairn_migration::PreparedCandidateBuildJob,
+    publication: &str,
+    input_id: ContentId<InputBundleArtifact>,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+    contract_id: ContentId<cairn_execution::JobContractArtifact>,
 ) {
     let job = ExecutionJob::new(job_id).expect("job stream");
     for _ in 0..1_200 {
@@ -310,7 +377,7 @@ fn await_candidate_build(
                     .expect("release terminal reservation");
                 assert_eq!(receipt.job_id(), job_id);
                 assert_eq!(receipt.attempt_id(), ids.attempt_id);
-                assert_eq!(receipt.contract_id(), prepared.contract_id());
+                assert_eq!(receipt.contract_id(), contract_id);
                 assert!(
                     evidence
                         .observations()
@@ -333,12 +400,12 @@ fn await_candidate_build(
                 }
                 assert_recoverable_candidate_terminal(config, &job, receipt_id);
                 eprintln!(
-                    "real Candidate build terminal: job={job_id} attempt={} proposal={} input={} environment={} contract={} receipt={receipt_id} outcome={:?}",
+                    "real Candidate build terminal: job={job_id} attempt={} publication={} input={} environment={} contract={} receipt={receipt_id} outcome={:?}",
                     ids.attempt_id,
-                    prepared.proposal_id(),
-                    prepared.input_bundle_id(),
-                    prepared.environment_id(),
-                    prepared.contract_id(),
+                    publication,
+                    input_id,
+                    environment_id,
+                    contract_id,
                     receipt.outcome()
                 );
                 return;

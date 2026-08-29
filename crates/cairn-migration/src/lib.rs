@@ -64,7 +64,8 @@ pub use call_adapter::{
 };
 pub use candidate_build::{
     CandidateBuildEnvironmentProfileV1, CandidateBuildError, PreparedCandidateBuildJob,
-    prepare_candidate_build_job,
+    PreparedCandidateRevisionBuildJob, prepare_candidate_build_job,
+    prepare_candidate_revision_build_job,
 };
 pub use candidate_episode::{
     CandidateEpisodeError, CollectionCandidateExplanation, CollectionCandidateProposalArtifact,
@@ -84,6 +85,7 @@ pub use candidate_revision::{
     CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
     PreparedCandidateBuildDiagnostic, PreparedCollectionCandidateRevision,
     prepare_candidate_build_diagnostic, prepare_collection_candidate_revision,
+    validate_archived_collection_candidate_revision,
 };
 pub use candidate_search::{
     CandidateSearchInputError, CollectionCandidateSearchAuthorityInput,

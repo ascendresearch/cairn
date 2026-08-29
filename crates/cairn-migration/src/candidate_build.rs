@@ -1,4 +1,4 @@
-//! Exact Candidate proposal materialization for the existing remote build worker path.
+//! Exact Candidate publication materialization for the existing remote build worker path.
 
 use std::{collections::BTreeSet, io::Cursor};
 
@@ -16,8 +16,11 @@ use cairn_record::{ContentStore, ContentStoreError};
 use thiserror::Error;
 
 use crate::{
-    CandidateEpisodeError, CollectionCandidateProposalArtifact, CollectionCandidateProposalV1,
+    CandidateEpisodeError, CandidateRevisionError, CollectionCandidateProposalArtifact,
+    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
+    CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
     validate_archived_collection_candidate_proposal,
+    validate_archived_collection_candidate_revision,
 };
 
 const BUILD_RUNNER: &[u8] = b"#!/bin/sh\nset -eu\ncp -R /cairn/input/source/. /cairn/work/source\ncmake -S /cairn/work/source -B /cairn/work/build 1>&2\ncmake --build /cairn/work/build --parallel 1 1>&2\nprintf '%s\\n' 'PASS candidate-build=complete device=none'\n";
@@ -65,6 +68,23 @@ pub struct PreparedCandidateBuildJob {
     proposal: CollectionCandidateProposalV1,
     proposal_bytes: Vec<u8>,
     proposal_id: ContentId<CollectionCandidateProposalArtifact>,
+    input_bundle: InputBundleV1,
+    input_bundle_bytes: Vec<u8>,
+    input_bundle_id: ContentId<InputBundleArtifact>,
+    environment: DockerExecutionEnvironmentV1,
+    environment_bytes: Vec<u8>,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+    contract: JobContract,
+    contract_bytes: Vec<u8>,
+    contract_id: ContentId<JobContractArtifact>,
+}
+
+/// Exact revision, material tree, environment, and generic contract ready for Controller archival.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateRevisionBuildJob {
+    revision: CollectionCandidateRevisionV1,
+    revision_bytes: Vec<u8>,
+    revision_id: ContentId<CollectionCandidateRevisionArtifact>,
     input_bundle: InputBundleV1,
     input_bundle_bytes: Vec<u8>,
     input_bundle_id: ContentId<InputBundleArtifact>,
@@ -167,6 +187,95 @@ impl PreparedCandidateBuildJob {
     }
 }
 
+impl PreparedCandidateRevisionBuildJob {
+    #[must_use]
+    pub const fn revision(&self) -> &CollectionCandidateRevisionV1 {
+        &self.revision
+    }
+
+    #[must_use]
+    pub fn revision_bytes(&self) -> &[u8] {
+        &self.revision_bytes
+    }
+
+    #[must_use]
+    pub const fn revision_id(&self) -> ContentId<CollectionCandidateRevisionArtifact> {
+        self.revision_id
+    }
+
+    #[must_use]
+    pub const fn input_bundle(&self) -> &InputBundleV1 {
+        &self.input_bundle
+    }
+
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> &[u8] {
+        &self.input_bundle_bytes
+    }
+
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
+    }
+
+    #[must_use]
+    pub const fn environment(&self) -> &DockerExecutionEnvironmentV1 {
+        &self.environment
+    }
+
+    #[must_use]
+    pub fn environment_bytes(&self) -> &[u8] {
+        &self.environment_bytes
+    }
+
+    #[must_use]
+    pub const fn environment_id(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.environment_id
+    }
+
+    #[must_use]
+    pub const fn contract(&self) -> &JobContract {
+        &self.contract
+    }
+
+    #[must_use]
+    pub fn contract_bytes(&self) -> &[u8] {
+        &self.contract_bytes
+    }
+
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.contract_id
+    }
+
+    /// Archives the exact selected revision and worker material roots into Controller content.
+    ///
+    /// # Errors
+    ///
+    /// Fails if storage changes any typed identity or cannot durably publish exact bytes.
+    pub fn archive_materials<C: ContentStore>(
+        &self,
+        content: &mut C,
+    ) -> Result<(), CandidateBuildError> {
+        let revision = content
+            .put::<CollectionCandidateRevisionArtifact>(&mut Cursor::new(&self.revision_bytes))?
+            .content_id;
+        let input = content
+            .put::<InputBundleArtifact>(&mut Cursor::new(&self.input_bundle_bytes))?
+            .content_id;
+        let environment = content
+            .put::<ExecutionEnvironmentArtifact>(&mut Cursor::new(&self.environment_bytes))?
+            .content_id;
+        if revision != self.revision_id
+            || input != self.input_bundle_id
+            || environment != self.environment_id
+        {
+            return Err(CandidateBuildError::MaterialIdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Builds the exact immutable input and execution contract for one archived Candidate proposal.
 ///
 /// # Errors
@@ -182,7 +291,107 @@ pub fn prepare_candidate_build_job(
 ) -> Result<PreparedCandidateBuildJob, CandidateBuildError> {
     let proposal = validate_archived_collection_candidate_proposal(proposal_bytes, proposal_id)?;
     let proposal_bytes = proposal_bytes.to_vec();
-    let input_bundle = candidate_input_bundle(&proposal, &proposal_bytes)?;
+    let material = prepare_build_material(
+        job_id,
+        proposal.submission(),
+        "meta/candidate-proposal.json",
+        &proposal_bytes,
+        image,
+        profile,
+    )?;
+    Ok(PreparedCandidateBuildJob {
+        proposal,
+        proposal_bytes,
+        proposal_id,
+        input_bundle: material.input_bundle,
+        input_bundle_bytes: material.input_bundle_bytes,
+        input_bundle_id: material.input_bundle_id,
+        environment: material.environment,
+        environment_bytes: material.environment_bytes,
+        environment_id: material.environment_id,
+        contract: material.contract,
+        contract_bytes: material.contract_bytes,
+        contract_id: material.contract_id,
+    })
+}
+
+/// Builds the exact immutable input and execution contract for one archived Candidate revision.
+///
+/// A revision identity is semantically distinct from the initial proposal identity.
+///
+/// ```compile_fail
+/// use cairn_execution::DockerImageId;
+/// use cairn_migration::{
+///     CandidateBuildEnvironmentProfileV1, CollectionCandidateProposalArtifact,
+///     prepare_candidate_revision_build_job,
+/// };
+/// use cairn_protocol::{ContentId, JobId};
+/// fn invalid(bytes: &[u8], wrong: ContentId<CollectionCandidateProposalArtifact>) {
+///     let _ = prepare_candidate_revision_build_job(
+///         JobId::new(), bytes, wrong, DockerImageId::new("sha256:invalid").unwrap(),
+///         CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+///     );
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Rejects an unbound/noncanonical revision, invalid image, path/material construction failure, or
+/// any identity that cannot be represented by the current V1 execution contract.
+pub fn prepare_candidate_revision_build_job(
+    job_id: JobId,
+    revision_bytes: &[u8],
+    revision_id: ContentId<CollectionCandidateRevisionArtifact>,
+    image: DockerImageId,
+    profile: CandidateBuildEnvironmentProfileV1,
+) -> Result<PreparedCandidateRevisionBuildJob, CandidateBuildError> {
+    let revision = validate_archived_collection_candidate_revision(revision_bytes, revision_id)?;
+    let revision_bytes = revision_bytes.to_vec();
+    let material = prepare_build_material(
+        job_id,
+        revision.submission(),
+        "meta/candidate-revision.json",
+        &revision_bytes,
+        image,
+        profile,
+    )?;
+    Ok(PreparedCandidateRevisionBuildJob {
+        revision,
+        revision_bytes,
+        revision_id,
+        input_bundle: material.input_bundle,
+        input_bundle_bytes: material.input_bundle_bytes,
+        input_bundle_id: material.input_bundle_id,
+        environment: material.environment,
+        environment_bytes: material.environment_bytes,
+        environment_id: material.environment_id,
+        contract: material.contract,
+        contract_bytes: material.contract_bytes,
+        contract_id: material.contract_id,
+    })
+}
+
+struct PreparedBuildMaterial {
+    input_bundle: InputBundleV1,
+    input_bundle_bytes: Vec<u8>,
+    input_bundle_id: ContentId<InputBundleArtifact>,
+    environment: DockerExecutionEnvironmentV1,
+    environment_bytes: Vec<u8>,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+    contract: JobContract,
+    contract_bytes: Vec<u8>,
+    contract_id: ContentId<JobContractArtifact>,
+}
+
+fn prepare_build_material(
+    job_id: JobId,
+    submission: &CollectionCandidateProposalSubmissionV1,
+    publication_path: &str,
+    publication_bytes: &[u8],
+    image: DockerImageId,
+    profile: CandidateBuildEnvironmentProfileV1,
+) -> Result<PreparedBuildMaterial, CandidateBuildError> {
+    let input_bundle = candidate_input_bundle(submission, publication_path, publication_bytes)?;
     let input_bundle_bytes = input_bundle.to_bytes()?;
     let input_bundle_id = ContentId::derive(&input_bundle_bytes).map_err(codec)?;
     let environment = DockerExecutionEnvironmentV1::new(image, Vec::new())?;
@@ -213,10 +422,7 @@ pub fn prepare_candidate_build_job(
     );
     let contract_bytes = cairn_codec::to_vec(&contract).map_err(codec)?;
     let contract_id = ContentId::derive(&contract_bytes).map_err(codec)?;
-    Ok(PreparedCandidateBuildJob {
-        proposal,
-        proposal_bytes,
-        proposal_id,
+    Ok(PreparedBuildMaterial {
         input_bundle,
         input_bundle_bytes,
         input_bundle_id,
@@ -230,12 +436,13 @@ pub fn prepare_candidate_build_job(
 }
 
 fn candidate_input_bundle(
-    proposal: &CollectionCandidateProposalV1,
-    proposal_bytes: &[u8],
+    submission: &CollectionCandidateProposalSubmissionV1,
+    publication_path: &str,
+    publication_bytes: &[u8],
 ) -> Result<InputBundleV1, CandidateBuildError> {
     let mut directories =
         BTreeSet::from(["bin".to_owned(), "meta".to_owned(), "source".to_owned()]);
-    for file in proposal.submission().files() {
+    for file in submission.files() {
         let mut parent = file.path().as_str();
         while let Some((prefix, _)) = parent.rsplit_once('/') {
             directories.insert(format!("source/{prefix}"));
@@ -256,11 +463,11 @@ fn candidate_input_bundle(
         bytes: BUILD_RUNNER.to_vec(),
     });
     entries.push(InputBundleEntry::File {
-        path: path("meta/candidate-proposal.json")?,
+        path: path(publication_path)?,
         mode: InputFileMode::Data,
-        bytes: proposal_bytes.to_vec(),
+        bytes: publication_bytes.to_vec(),
     });
-    for file in proposal.submission().files() {
+    for file in submission.files() {
         entries.push(InputBundleEntry::File {
             path: path(&format!("source/{}", file.path().as_str()))?,
             mode: InputFileMode::Data,
@@ -284,6 +491,8 @@ pub enum CandidateBuildError {
     #[error(transparent)]
     Proposal(#[from] CandidateEpisodeError),
     #[error(transparent)]
+    Revision(#[from] CandidateRevisionError),
+    #[error(transparent)]
     Material(#[from] MaterialFormatError),
     #[error(transparent)]
     Docker(#[from] DockerEnvironmentError),
@@ -304,7 +513,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{CollectionCandidateSearchInputArtifact, SirResolvedRuntimeModelArtifact};
+    use crate::{
+        CollectionCandidateBuildDiagnosticArtifact, CollectionCandidateSearchInputArtifact,
+        SirResolvedRuntimeModelArtifact,
+    };
 
     fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
         ContentId::derive(label).expect("content ID")
@@ -327,6 +539,27 @@ mod tests {
             }
         }))
         .expect("proposal bytes")
+    }
+
+    fn revision_bytes() -> Vec<u8> {
+        cairn_codec::to_vec(&json!({
+            "schema_version":1,
+            "search_input":id::<CollectionCandidateSearchInputArtifact>(b"search"),
+            "parent_proposal":id::<CollectionCandidateProposalArtifact>(b"parent"),
+            "build_diagnostic":id::<CollectionCandidateBuildDiagnosticArtifact>(b"diagnostic"),
+            "episode_id":EpisodeId::new(),
+            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"revision model"),
+            "submission":{
+                "schema_version":1,
+                "files":[
+                    {"path":"CMakeLists.txt","source":"cmake_minimum_required(VERSION 3.24)\nproject(candidate_revision LANGUAGES CXX)\nadd_library(candidate_revision STATIC src/kernel.cpp)\n"},
+                    {"path":"src/kernel.cpp","source":"int candidate_revision() { return 8; }\n"}
+                ],
+                "primary_source":"src/kernel.cpp",
+                "explanation":"Exact revision build-only fixture."
+            }
+        }))
+        .expect("revision bytes")
     }
 
     fn prepared(job_id: JobId, bytes: &[u8], image_suffix: char) -> PreparedCandidateBuildJob {
@@ -523,5 +756,69 @@ mod tests {
         assert_ne!(first.proposal_id(), changed_proposal.proposal_id());
         assert_ne!(first.input_bundle_id(), changed_proposal.input_bundle_id());
         assert_ne!(first.contract_id(), changed_proposal.contract_id());
+    }
+
+    #[test]
+    fn exact_revision_has_a_distinct_build_boundary_and_preserves_source_bytes() {
+        let bytes = revision_bytes();
+        let revision_id = ContentId::derive(&bytes).expect("revision ID");
+        let prepared = prepare_candidate_revision_build_job(
+            JobId::new(),
+            &bytes,
+            revision_id,
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("revision build");
+        assert_eq!(prepared.revision_bytes(), bytes);
+        assert_eq!(prepared.revision_id(), revision_id);
+        assert_eq!(
+            prepared.contract().input_bundle_id(),
+            prepared.input_bundle_id()
+        );
+        assert_eq!(
+            prepared.contract().environment_id(),
+            prepared.environment_id()
+        );
+        let files = prepared
+            .input_bundle()
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                InputBundleEntry::File { path, mode, bytes } => {
+                    Some((path.as_str(), *mode, bytes.as_slice()))
+                }
+                InputBundleEntry::Directory { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(files.contains(&(
+            "meta/candidate-revision.json",
+            InputFileMode::Data,
+            prepared.revision_bytes()
+        )));
+        assert!(files.contains(&(
+            "source/src/kernel.cpp",
+            InputFileMode::Data,
+            b"int candidate_revision() { return 8; }\n".as_slice()
+        )));
+        assert!(
+            !files
+                .iter()
+                .any(|(path, _, _)| { *path == "meta/candidate-proposal.json" })
+        );
+
+        let wrong = id::<CollectionCandidateRevisionArtifact>(b"wrong revision");
+        assert!(matches!(
+            prepare_candidate_revision_build_job(
+                JobId::new(),
+                &bytes,
+                wrong,
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            ),
+            Err(CandidateBuildError::Revision(
+                CandidateRevisionError::BindingMismatch
+            ))
+        ));
     }
 }
