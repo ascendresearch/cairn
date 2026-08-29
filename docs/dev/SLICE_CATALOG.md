@@ -41,6 +41,7 @@ mechanism authority。不得通过compatibility path复活。
 | `DEV-014` | Accepted | 让新isolated DeepSeek Candidate episode消费DEV-013 exact receipt-bound diagnostic并提交显式parent-linked full-source revision | DEV-013；[`DEV-014 DCR`](records/DEV-014-IMPLEMENTATION.md) | live DeepSeek episode提交exact parent/diagnostic-bound full revision并显式yield，重开可恢复同一artifact；不复用private continuation，不由Cairn修源码，不含build/verdict |
 | `DEV-015` | Accepted | 将DEV-014 exact revision原样物化为新content-addressed job并送回现有remote no-device Ascend build lane | DEV-014；[`DEV-015 DCR`](records/DEV-015-IMPLEMENTATION.md) | exact revision取得可恢复`Succeeded` receipt；事实同时暴露CXX host fallback可绕过native Ascend compile，故只成立build gate、不成立target/semantic/verdict claim |
 | `DEV-016` | Accepted | 用product-owned ASC harness强制DEV-014 exact primary source经过`bisheng`/`dav-3510` native compilation gate | DEV-015；[`DEV-016 DCR`](records/DEV-016-IMPLEMENTATION.md) | exact primary bytes实际进入`bisheng`并取得`SubjectFailed` receipt，暴露host/device混合和launch macro错误；只形成native compile evidence，不含runtime/semantic/verdict |
+| `DEV-017` | InProgress | 让新isolated DeepSeek episode消费DEV-016 exact native compiler feedback并提交显式previous-revision-linked full revision | DEV-016；[`DEV-017 DCR`](records/DEV-017-IMPLEMENTATION.md) | native diagnostic必须绑定exact revision/job material/receipt；新artifact保留previous revision、episode和model provenance；不自动循环、不build/verdict |
 
 DEV-004 implementation、recorded lane、full CI和用户明确授权的live DeepSeek lane均已闭合。Live使用同一
 product runner，经5个bounded reads提交strict cited proposal，3 steps后yield，并通过terminal restart；它不需要

@@ -468,13 +468,18 @@ mod runtime {
         CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1, SCHEMA_V1, encode,
     };
     use crate::{
-        CollectionCandidateBuildDiagnosticArtifact, CollectionCandidateRevisionArtifact,
+        CollectionCandidateBuildDiagnosticArtifact,
+        CollectionCandidateNativeBuildDiagnosticArtifact,
+        CollectionCandidateNativeFollowupRevisionArtifact,
+        CollectionCandidateNativeFollowupRevisionV1, CollectionCandidateRevisionArtifact,
         CollectionCandidateRevisionV1, CollectionCandidateSearchInputArtifact,
         IntentRecoveryInputArtifact, IntentRecoveryInputV1, PreparedCandidateBuildDiagnostic,
+        PreparedCandidateNativeBuildDiagnostic, PreparedCollectionCandidateNativeFollowupRevision,
         PreparedCollectionCandidateRevision, PreparedCollectionCandidateSearchInput,
         SirReadLineLimit, SirResolvedRuntimeModelArtifact, SirSourceLineNumber,
         SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskBundleArtifact, SirTaskLimits,
-        SirTaskWorkspace, prepare_collection_candidate_revision,
+        SirTaskWorkspace, prepare_collection_candidate_native_followup_revision,
+        prepare_collection_candidate_revision,
     };
 
     const READ_TOOL: &str = "candidate_read_task_artifact";
@@ -482,6 +487,8 @@ mod runtime {
     const TOOL_VERSION: &str = "candidate-collection-proposal-v1";
     const REVISION_SUBMIT_TOOL: &str = "candidate_submit_collection_revision";
     const REVISION_TOOL_VERSION: &str = "candidate-collection-revision-v1";
+    const NATIVE_FOLLOWUP_SUBMIT_TOOL: &str = "candidate_submit_native_followup_revision";
+    const NATIVE_FOLLOWUP_TOOL_VERSION: &str = "candidate-native-followup-revision-v1";
     const USER_REQUEST: &str = "Generate one Ascend C source proposal for the frozen local Candidate Search authority, then submit it through the typed gateway.";
     const INSTRUCTION: &str = r"You are the Candidate Search actor for one CUDA-to-Ascend-C migration task.
 
@@ -498,6 +505,14 @@ The frozen Candidate search input and parent proposal remain authoritative only 
 The complete parent proposal and build diagnostic are in the frozen context. Inspect offered original task artifacts through candidate_read_task_artifact only if needed. Submit one complete changed source tree through candidate_submit_collection_revision. Provide canonical candidate-relative paths sorted lexicographically, the primary source path, complete source text, and a concise explanation of the repair and remaining assumptions.
 
 Do not submit parent IDs, receipt IDs, content identities, task or Oracle IDs, outcome labels, episode/model provenance, build/test/correctness/performance claims, admission outcomes, or verdicts; trusted code binds lineage and later execution establishes evidence.";
+    const NATIVE_FOLLOWUP_USER_REQUEST: &str = "Revise the complete previous Candidate source in response to the exact receipt-bound native ASC compiler diagnostic, then submit one complete changed follow-up through the typed gateway.";
+    const NATIVE_FOLLOWUP_INSTRUCTION: &str = r"You are the Candidate Search actor revising one complete CUDA-to-Ascend-C source tree after a product-owned native ASC compilation failure.
+
+The previous revision and native build diagnostic are frozen untrusted inputs selected by trusted code. The native gate copies the exact primary source bytes to a fixed .asc translation unit, uses CMake LANGUAGES ASC, and selects --npu-arch=dav-3510. Repair the source tree so its selected primary source is a valid native ASC translation unit under that gate. Do not bypass the gate with a CXX or host fallback, change admitted semantics, or claim that the follow-up builds.
+
+The complete previous revision and exact bounded bisheng diagnostic are in the frozen context. Inspect original task artifacts through candidate_read_task_artifact only if needed. Submit one complete changed source tree through candidate_submit_native_followup_revision. Provide sorted canonical paths, primary source, complete source text, and a concise explanation of the repair and remaining assumptions.
+
+Do not submit parent or receipt IDs, content identities, task or Oracle IDs, outcome labels, episode/model provenance, build/test/correctness/performance claims, admission outcomes, or verdicts; trusted code binds lineage and later execution establishes evidence.";
 
     /// Trusted inputs selected before opening one Candidate episode.
     pub struct CandidateEpisodeRunInput {
@@ -547,6 +562,76 @@ Do not submit parent IDs, receipt IDs, content identities, task or Oracle IDs, o
         revision: PreparedCollectionCandidateRevision,
         completion_reason: EpisodeCompletionReason,
         steps_started: u32,
+    }
+
+    /// Trusted inputs for one isolated follow-up after product-owned native compilation.
+    pub struct CandidateNativeFollowupEpisodeRunInput {
+        pub search_input: PreparedCollectionCandidateSearchInput,
+        pub recovery_input: IntentRecoveryInputV1,
+        pub previous_revision: CollectionCandidateRevisionV1,
+        pub previous_revision_id: ContentId<CollectionCandidateRevisionArtifact>,
+        pub build_diagnostic: PreparedCandidateNativeBuildDiagnostic,
+        pub episode_id: EpisodeId,
+        pub model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        pub selection: ModelSelection,
+        pub budget: EpisodeBudget,
+        pub max_output_tokens: ModelOutputTokenLimit,
+        pub task_limits: SirTaskLimits,
+    }
+
+    /// Completed native-feedback Candidate follow-up facts.
+    pub struct CandidateNativeFollowupEpisodeRunOutcome {
+        episode_id: EpisodeId,
+        task_bundle: ContentId<SirTaskBundleArtifact>,
+        search_input: ContentId<CollectionCandidateSearchInputArtifact>,
+        previous_revision_id: ContentId<CollectionCandidateRevisionArtifact>,
+        diagnostic_id: ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>,
+        followup: PreparedCollectionCandidateNativeFollowupRevision,
+        completion_reason: EpisodeCompletionReason,
+        steps_started: u32,
+    }
+
+    impl CandidateNativeFollowupEpisodeRunOutcome {
+        #[must_use]
+        pub const fn episode_id(&self) -> EpisodeId {
+            self.episode_id
+        }
+        #[must_use]
+        pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
+            self.task_bundle
+        }
+        #[must_use]
+        pub const fn search_input(&self) -> ContentId<CollectionCandidateSearchInputArtifact> {
+            self.search_input
+        }
+        #[must_use]
+        pub const fn previous_revision_id(&self) -> ContentId<CollectionCandidateRevisionArtifact> {
+            self.previous_revision_id
+        }
+        #[must_use]
+        pub const fn diagnostic_id(
+            &self,
+        ) -> ContentId<CollectionCandidateNativeBuildDiagnosticArtifact> {
+            self.diagnostic_id
+        }
+        #[must_use]
+        pub const fn followup_id(
+            &self,
+        ) -> ContentId<CollectionCandidateNativeFollowupRevisionArtifact> {
+            self.followup.id()
+        }
+        #[must_use]
+        pub const fn followup(&self) -> &CollectionCandidateNativeFollowupRevisionV1 {
+            self.followup.revision()
+        }
+        #[must_use]
+        pub const fn completion_reason(&self) -> EpisodeCompletionReason {
+            self.completion_reason
+        }
+        #[must_use]
+        pub const fn steps_started(&self) -> u32 {
+            self.steps_started
+        }
     }
 
     impl CandidateRevisionEpisodeRunOutcome {
@@ -907,6 +992,141 @@ Do not submit parent IDs, receipt IDs, content identities, task or Oracle IDs, o
         })
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn archive_candidate_native_followup_prompt<C: ContentStore>(
+        content: &mut C,
+        workspace: &SirTaskWorkspace,
+        search_input: &PreparedCollectionCandidateSearchInput,
+        recovery_input: &IntentRecoveryInputV1,
+        previous: &CollectionCandidateRevisionV1,
+        previous_id: ContentId<CollectionCandidateRevisionArtifact>,
+        diagnostic: &PreparedCandidateNativeBuildDiagnostic,
+    ) -> Result<CandidatePromptProjectionV1, CandidateEpisodeError> {
+        let task_bundle = workspace.bundle().identity()?;
+        if task_bundle != recovery_input.task_bundle()
+            || recovery_input.identity()? != search_input.input().recovery_input()
+            || recovery_input.task_id() != search_input.input().task_id()
+            || previous
+                .identity()
+                .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
+                != previous_id
+            || previous.search_input() != search_input.id()
+            || diagnostic.diagnostic().previous_revision() != previous_id
+        {
+            return Err(CandidateEpisodeError::InvalidStructure(
+                "Candidate native follow-up task/search/revision/diagnostic binding",
+            ));
+        }
+        for artifact in workspace.bundle().artifacts() {
+            let source = workspace.source(artifact.path()).ok_or(
+                CandidateEpisodeError::InvalidStructure("task source bytes are unavailable"),
+            )?;
+            let archived = content
+                .put::<SirTaskArtifactBytes>(&mut Cursor::new(source.as_bytes()))?
+                .content_id;
+            if archived != artifact.identity() {
+                return Err(CandidateEpisodeError::InvalidStructure(
+                    "task source identity changed",
+                ));
+            }
+        }
+        let archived_bundle = content
+            .put::<SirTaskBundleArtifact>(&mut Cursor::new(encode(workspace.bundle())?))?
+            .content_id;
+        let archived_recovery = content
+            .put::<IntentRecoveryInputArtifact>(&mut Cursor::new(encode(recovery_input)?))?
+            .content_id;
+        let archived_search = content
+            .put::<CollectionCandidateSearchInputArtifact>(&mut Cursor::new(search_input.bytes()))?
+            .content_id;
+        let archived_previous = content
+            .put::<CollectionCandidateRevisionArtifact>(&mut Cursor::new(encode(previous)?))?
+            .content_id;
+        diagnostic
+            .archive(content)
+            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
+        if archived_bundle != task_bundle
+            || archived_recovery != search_input.input().recovery_input()
+            || archived_search != search_input.id()
+            || archived_previous != previous_id
+        {
+            return Err(CandidateEpisodeError::InvalidStructure(
+                "archived Candidate native follow-up authority changed",
+            ));
+        }
+
+        let tools = candidate_tools(
+            NATIVE_FOLLOWUP_SUBMIT_TOOL,
+            "Submit one complete changed source follow-up after native ASC compiler feedback.",
+        )?;
+        let instruction =
+            put_json::<InstructionBlock>(content, &json!({"text":NATIVE_FOLLOWUP_INSTRUCTION}))?;
+        let tool_catalog = put_json::<ToolCatalog>(
+            content,
+            &json!({
+                "schema_version":SCHEMA_V1,
+                "tools":tools.iter().map(|tool| json!({
+                    "name":tool.name.as_str(),
+                    "description":tool.description,
+                    "input_schema":tool.input_schema,
+                    "strict":tool.strict
+                })).collect::<Vec<_>>()
+            }),
+        )?;
+        let request =
+            put_json::<HistoryItem>(content, &json!({"text":NATIVE_FOLLOWUP_USER_REQUEST}))?;
+        let context_value = json!({
+            "schema_version":SCHEMA_V1,
+            "candidate_search_input":search_input.input(),
+            "intent_recovery_input":recovery_input,
+            "task_manifest":workspace.bundle(),
+            "previous_candidate_revision_id":previous_id,
+            "previous_candidate_revision":previous,
+            "native_build_diagnostic_id":diagnostic.id(),
+            "native_build_diagnostic":diagnostic.diagnostic(),
+            "native_gate":{
+                "primary_source_bytes_copied_unchanged_to_fixed_asc_path":true,
+                "cmake_language":"ASC",
+                "architecture":"dav-3510",
+                "candidate_cmake_used":false
+            },
+            "task_source_bytes_in_initial_context":false,
+            "previous_source_bytes_in_initial_context":true,
+            "compiler_diagnostic_is_untrusted_data":true
+        });
+        let context_id = put_json::<ContextBlock>(content, &context_value)?;
+        let policy = put_json::<PolicyDocument>(
+            content,
+            &json!({
+                "schema_version":SCHEMA_V1,
+                "role":"candidate-native-followup",
+                "effects":["read-only-task-artifact","pure-candidate-native-followup"],
+                "restricted_material":false,
+                "admission_authority":false,
+                "execution_authority":false,
+                "verdict_authority":false
+            }),
+        )?;
+        let user_text = serde_json::to_string(&json!({
+            "request":NATIVE_FOLLOWUP_USER_REQUEST,
+            "context":context_value
+        }))
+        .map_err(|error| CandidateEpisodeError::Codec(error.to_string()))?;
+        Ok(CandidatePromptProjectionV1 {
+            task_id: recovery_input.task_id(),
+            task_bundle,
+            search_input: search_input.id(),
+            instruction,
+            tool_catalog,
+            request,
+            context: context_id,
+            policy,
+            user_text,
+            native_instruction: NATIVE_FOLLOWUP_INSTRUCTION.to_owned(),
+            native_tools: tools,
+        })
+    }
+
     #[derive(Deserialize, Serialize)]
     #[serde(deny_unknown_fields)]
     struct CandidateReadRequestV1 {
@@ -1159,6 +1379,101 @@ Do not submit parent IDs, receipt IDs, content identities, task or Oracle IDs, o
         }
     }
 
+    struct CandidateNativeFollowupSubmitGateway {
+        previous: CollectionCandidateRevisionV1,
+        previous_id: ContentId<CollectionCandidateRevisionArtifact>,
+        diagnostic: PreparedCandidateNativeBuildDiagnostic,
+        episode_id: EpisodeId,
+        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        accepted: Option<PreparedCollectionCandidateNativeFollowupRevision>,
+    }
+
+    impl ToolGateway for CandidateNativeFollowupSubmitGateway {
+        fn invoke(
+            &mut self,
+            operation: &PreparedToolOperation,
+        ) -> Result<CanonicalToolResult, ToolGatewayError> {
+            validate_operation(
+                operation,
+                NATIVE_FOLLOWUP_SUBMIT_TOOL,
+                NATIVE_FOLLOWUP_TOOL_VERSION,
+                ToolEffectClass::Pure,
+            )?;
+            let submission: CollectionCandidateProposalSubmissionV1 =
+                decode_arguments(operation.argument_bytes())?;
+            let followup = prepare_collection_candidate_native_followup_revision(
+                &self.previous,
+                self.previous_id,
+                &self.diagnostic,
+                self.episode_id,
+                self.model_configuration,
+                submission,
+            )
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+            if let Some(accepted) = &self.accepted {
+                if accepted.id() != followup.id() {
+                    return rejected("a different Candidate native follow-up was already accepted");
+                }
+            } else {
+                self.accepted = Some(followup);
+            }
+            CanonicalToolResult::from_value(&json!({
+                "schema_version":SCHEMA_V1,
+                "accepted_candidate_native_followup":self.accepted.as_ref().map(
+                    PreparedCollectionCandidateNativeFollowupRevision::id
+                )
+            }))
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+        }
+    }
+
+    impl CandidateSubmissionGateway for CandidateNativeFollowupSubmitGateway {
+        type Outcome = CandidateNativeFollowupEpisodeRunOutcome;
+
+        fn submit_tool() -> &'static str {
+            NATIVE_FOLLOWUP_SUBMIT_TOOL
+        }
+
+        fn tool_version() -> &'static str {
+            NATIVE_FOLLOWUP_TOOL_VERSION
+        }
+
+        fn finish<C: ContentStore>(
+            &self,
+            content: &mut C,
+            projection: &CandidatePromptProjectionV1,
+            reason: EpisodeCompletionReason,
+            steps_started: u32,
+        ) -> Result<Self::Outcome, CandidateEpisodeError> {
+            let Some(followup) = self.accepted.clone() else {
+                return Err(CandidateEpisodeError::MissingProposal(reason));
+            };
+            if reason != EpisodeCompletionReason::Yielded {
+                return Err(CandidateEpisodeError::ProposalNotYielded(reason));
+            }
+            let archived = content
+                .put::<CollectionCandidateNativeFollowupRevisionArtifact>(&mut Cursor::new(
+                    followup.bytes(),
+                ))?
+                .content_id;
+            if archived != followup.id() {
+                return Err(CandidateEpisodeError::InvalidStructure(
+                    "archived Candidate native follow-up identity changed",
+                ));
+            }
+            Ok(CandidateNativeFollowupEpisodeRunOutcome {
+                episode_id: followup.revision().episode_id(),
+                task_bundle: projection.task_bundle,
+                search_input: projection.search_input,
+                previous_revision_id: self.previous_id,
+                diagnostic_id: self.diagnostic.id(),
+                followup,
+                completion_reason: reason,
+                steps_started,
+            })
+        }
+    }
+
     /// Runs one current-V1 Candidate proposal episode through the durable agent runtime.
     ///
     /// # Errors
@@ -1260,6 +1575,61 @@ Do not submit parent IDs, receipt IDs, content identities, task or Oracle IDs, o
                 max_output_tokens: input.max_output_tokens,
                 task_limits: input.task_limits,
                 role: "candidate-search-revision",
+            },
+            submit_gateway,
+        )
+    }
+
+    /// Runs one isolated Candidate episode after exact native ASC compiler feedback.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on authority mismatch, model/tool failure, unchanged submission, budget
+    /// completion, or a terminal episode without one accepted explicitly yielded follow-up.
+    pub fn run_collection_candidate_native_followup_episode<E, C, T>(
+        events: &mut E,
+        content: &mut C,
+        transport: &mut T,
+        codec: NativeProtocolCodec,
+        workspace: SirTaskWorkspace,
+        input: CandidateNativeFollowupEpisodeRunInput,
+    ) -> Result<CandidateNativeFollowupEpisodeRunOutcome, CandidateEpisodeError>
+    where
+        E: EventStore,
+        C: ContentStore,
+        T: ModelTransport,
+    {
+        let projection = archive_candidate_native_followup_prompt(
+            content,
+            &workspace,
+            &input.search_input,
+            &input.recovery_input,
+            &input.previous_revision,
+            input.previous_revision_id,
+            &input.build_diagnostic,
+        )?;
+        let submit_gateway = CandidateNativeFollowupSubmitGateway {
+            previous: input.previous_revision,
+            previous_id: input.previous_revision_id,
+            diagnostic: input.build_diagnostic,
+            episode_id: input.episode_id,
+            model_configuration: input.model_configuration,
+            accepted: None,
+        };
+        run_candidate_episode_runtime(
+            events,
+            content,
+            transport,
+            codec,
+            workspace,
+            &projection,
+            CandidateRuntimeInput {
+                episode_id: input.episode_id,
+                selection: input.selection,
+                budget: input.budget,
+                max_output_tokens: input.max_output_tokens,
+                task_limits: input.task_limits,
+                role: "candidate-native-followup",
             },
             submit_gateway,
         )
@@ -1693,7 +2063,8 @@ Do not submit parent IDs, receipt IDs, content identities, task or Oracle IDs, o
 
 #[cfg(feature = "agent-runtime")]
 pub use runtime::{
-    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
+    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateNativeFollowupEpisodeRunInput,
+    CandidateNativeFollowupEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
     CandidateRevisionEpisodeRunOutcome, run_collection_candidate_episode,
-    run_collection_candidate_revision_episode,
+    run_collection_candidate_native_followup_episode, run_collection_candidate_revision_episode,
 };

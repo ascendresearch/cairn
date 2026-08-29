@@ -14,17 +14,19 @@ use cairn_execution::{
 };
 use cairn_migration::{
     AdmittedCollectionOracleClaimArtifact, CandidateBuildEnvironmentProfileV1,
-    CandidateEpisodeError, CandidateEpisodeRunInput, CandidateRevisionEpisodeRunInput,
-    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
-    CollectionCandidateSearchAuthorityInput, CollectionCandidateSourcePath,
-    CollectionOracleAdmissionPublicOutcomeArtifact, CollectionOracleClaimDomainV1,
-    CollectionOracleClaimStrengthV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-    IntentRecoveryRequestV1, MigrationIntentContractArtifact, PreparedCandidateBuildDiagnostic,
+    CandidateEpisodeError, CandidateEpisodeRunInput, CandidateNativeFollowupEpisodeRunInput,
+    CandidateRevisionEpisodeRunInput, CollectionCandidateProposalSubmissionV1,
+    CollectionCandidateProposalV1, CollectionCandidateSearchAuthorityInput,
+    CollectionCandidateSourcePath, CollectionOracleAdmissionPublicOutcomeArtifact,
+    CollectionOracleClaimDomainV1, CollectionOracleClaimStrengthV1, IntentRecoveryInputArtifact,
+    IntentRecoveryInputV1, IntentRecoveryRequestV1, MigrationIntentContractArtifact,
+    PreparedCandidateBuildDiagnostic, PreparedCandidateNativeBuildDiagnostic,
     PreparedCollectionCandidateSearchInput, SirCallerClaimId, SirCapabilityManifestV1,
     SirResolvedRuntimeModelArtifact, SirTaskLimits, SirTaskWorkspace,
     prepare_candidate_build_diagnostic, prepare_candidate_build_job,
+    prepare_candidate_native_build_diagnostic, prepare_candidate_native_revision_build_job,
     prepare_collection_candidate_search_input, run_collection_candidate_episode,
-    run_collection_candidate_revision_episode,
+    run_collection_candidate_native_followup_episode, run_collection_candidate_revision_episode,
 };
 use cairn_protocol::{AttemptId, ContentId, ContentType, EpisodeId, JobId, TaskId};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
@@ -181,10 +183,37 @@ fn revision_responses() -> Vec<Vec<u8>> {
     ]
 }
 
+fn native_followup_submission() -> Value {
+    json!({
+        "schema_version":1,
+        "files":[
+            {"path":"include/compact_above.h","source":"#pragma once\n#include <acl/acl.h>\nextern \"C\" aclError launch_compact_above_f32();\n"},
+            {"path":"src/compact_above.asc","source":"#include \"kernel_operator.h\"\nusing namespace AscendC;\nextern \"C\" __global__ __aicore__ void compact_above_kernel(GM_ADDR input) { (void)input; }\n"}
+        ],
+        "primary_source":"src/compact_above.asc",
+        "explanation":"Separates the native ASC translation unit from host launch code in response to the exact bisheng diagnostic. This remains unbuilt."
+    })
+}
+
+fn native_followup_responses() -> Vec<Vec<u8>> {
+    let arguments =
+        serde_json::to_string(&native_followup_submission()).expect("follow-up arguments");
+    vec![
+        serde_json::to_vec(&json!({"output":[{"type":"function_call","call_id":"native-followup-submit","name":"candidate_submit_native_followup_revision","arguments":arguments}]})).expect("follow-up submit response"),
+        serde_json::to_vec(&json!({"output":[{"type":"message","id":"native-followup-final","phase":"final_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Native follow-up submitted."}]}]})).expect("follow-up yield response"),
+    ]
+}
+
 struct RevisionFixture {
     parent: CollectionCandidateProposalV1,
     parent_id: cairn_protocol::ContentId<cairn_migration::CollectionCandidateProposalArtifact>,
     diagnostic: PreparedCandidateBuildDiagnostic,
+}
+
+struct NativeFollowupFixture {
+    previous: cairn_migration::CollectionCandidateRevisionV1,
+    previous_id: ContentId<cairn_migration::CollectionCandidateRevisionArtifact>,
+    diagnostic: PreparedCandidateNativeBuildDiagnostic,
 }
 
 fn revision_fixture(
@@ -254,6 +283,77 @@ fn revision_fixture(
     RevisionFixture {
         parent,
         parent_id,
+        diagnostic,
+    }
+}
+
+fn native_followup_fixture(
+    search_input: ContentId<cairn_migration::CollectionCandidateSearchInputArtifact>,
+) -> NativeFollowupFixture {
+    let previous_bytes = cairn_codec::to_vec(&json!({
+        "schema_version":1,
+        "search_input":search_input,
+        "parent_proposal":id::<cairn_migration::CollectionCandidateProposalArtifact>(b"parent proposal"),
+        "build_diagnostic":id::<cairn_migration::CollectionCandidateBuildDiagnosticArtifact>(b"generic diagnostic"),
+        "episode_id":EpisodeId::new(),
+        "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"previous model"),
+        "submission":{
+            "schema_version":1,
+            "files":[
+                {"path":"CMakeLists.txt","source":"project(previous LANGUAGES CXX)\nadd_library(previous STATIC src/compact.cpp)\n"},
+                {"path":"src/compact.cpp","source":"#include \"kernel_operator.h\"\nusing namespace AscendC;\nclass Kernel { public: __aicore__ Kernel() {} };\nvoid host() { Kernel kernel; }\n"}
+            ],
+            "primary_source":"src/compact.cpp",
+            "explanation":"Previous source before the native compiler feedback."
+        }
+    })).expect("previous revision bytes");
+    let previous_id = ContentId::derive(&previous_bytes).expect("previous revision ID");
+    let previous: cairn_migration::CollectionCandidateRevisionV1 =
+        cairn_codec::from_slice(&previous_bytes).expect("previous revision");
+    let job_id = JobId::new();
+    let build = prepare_candidate_native_revision_build_job(
+        job_id,
+        &previous_bytes,
+        previous_id,
+        DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+        CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+    )
+    .expect("native build");
+    let stderr =
+        b"candidate_primary.asc:4: error: call to __aicore__ function from __host__ function\n";
+    let stderr_id = ContentId::<ExecutionStderrArtifact>::derive(stderr).expect("stderr ID");
+    let evidence_value = TrustedExecutionEvidence::new(
+        ExecutionBackend::new(DOCKER_BACKEND).expect("backend"),
+        build.environment_id(),
+        ResolvedProgramIdentity::new("sha256:native-gate").expect("program"),
+        vec![ExecutionObservation::new("docker:accelerator:none").expect("observation")],
+    )
+    .expect("evidence");
+    let evidence = cairn_codec::to_vec(&evidence_value).expect("evidence bytes");
+    let evidence_id =
+        ContentId::<ExecutionEvidenceArtifact>::derive(&evidence).expect("evidence ID");
+    let receipt_bytes = cairn_codec::to_vec(&json!({
+        "schema_version":1,
+        "job_id":job_id,
+        "attempt_id":AttemptId::new(),
+        "contract_id":build.contract_id(),
+        "outcome":"subject-failed",
+        "exit_code":1,
+        "elapsed_ms":12,
+        "stdout_id":id::<ExecutionStdoutArtifact>(b"native stdout"),
+        "stderr_id":stderr_id,
+        "evidence_id":evidence_id,
+        "outputs":[]
+    }))
+    .expect("native receipt bytes");
+    let receipt: ExecutionReceipt = cairn_codec::from_slice(&receipt_bytes).expect("receipt");
+    let receipt_id = ContentId::derive(&receipt_bytes).expect("receipt ID");
+    let diagnostic =
+        prepare_candidate_native_build_diagnostic(&build, receipt_id, &receipt, stderr, &evidence)
+            .expect("native diagnostic");
+    NativeFollowupFixture {
+        previous,
+        previous_id,
         diagnostic,
     }
 }
@@ -699,6 +799,174 @@ fn receipt_bound_revision_is_isolated_restart_safe_and_replayable() {
     .expect("recorded Candidate revision replay");
     assert_eq!(replay.revision_id(), outcome.revision_id());
     assert_eq!(replay.parent_id(), outcome.parent_id());
+    assert_eq!(replay.diagnostic_id(), outcome.diagnostic_id());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn native_compiler_followup_is_isolated_restart_safe_and_replayable() {
+    let task = tempfile::tempdir().expect("task root");
+    write_task(task.path());
+    let workspace =
+        SirTaskWorkspace::load(task.path(), SirTaskLimits::default()).expect("workspace");
+    let (recovery, search) = candidate_inputs(&workspace, TaskId::new());
+    let fixture = native_followup_fixture(search.id());
+    let previous_episode = fixture.previous.episode_id();
+    let followup_episode = EpisodeId::new();
+    assert_ne!(followup_episode, previous_episode);
+    let model_configuration =
+        id::<SirResolvedRuntimeModelArtifact>(b"recorded native follow-up model configuration");
+    let state = tempfile::tempdir().expect("state root");
+    let mut content =
+        SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
+            .expect("content store");
+    let mut events = SqliteEventStore::open(state.path().join("events.db")).expect("event store");
+    let response_bytes = native_followup_responses();
+    let mut request_bytes = Vec::new();
+    let mut response_index = 0_usize;
+    let run_input = |episode_id| CandidateNativeFollowupEpisodeRunInput {
+        search_input: search.clone(),
+        recovery_input: recovery.clone(),
+        previous_revision: fixture.previous.clone(),
+        previous_revision_id: fixture.previous_id,
+        build_diagnostic: fixture.diagnostic.clone(),
+        episode_id,
+        model_configuration,
+        selection: ModelSelection {
+            provider: ProviderName::new("recorded").expect("provider"),
+            model: ModelName::new("deepseek-candidate-native-followup-recorded").expect("model"),
+            deployment: DeploymentName::new("local-recorded").expect("deployment"),
+            adapter_version: AdapterVersion::new("native-protocol-v1").expect("adapter"),
+        },
+        budget: EpisodeBudget {
+            step_limit: Some(EpisodeStepLimit::new(4).expect("step limit")),
+            tool_operation_limit: Some(EpisodeToolOperationLimit::new(8)),
+            provider_token_limit: None,
+            deadline_unix_ms: None,
+            external_meter_limits: None,
+        },
+        max_output_tokens: ModelOutputTokenLimit::new(16_384).expect("output limit"),
+        task_limits: SirTaskLimits::default(),
+    };
+    let outcome = {
+        let mut scripted = ScriptedModelTransport::new(
+            |request: &cairn_agent::PreparedModelRequest| -> Result<_, TransportError> {
+                request_bytes.push(request.request_bytes().to_vec());
+                let response = response_bytes
+                    .get(response_index)
+                    .expect("scripted response")
+                    .clone();
+                response_index += 1;
+                Ok(ModelTransportResponse::without_usage(response))
+            },
+        );
+        run_collection_candidate_native_followup_episode(
+            &mut events,
+            &mut content,
+            &mut scripted,
+            codec(),
+            workspace.clone(),
+            run_input(followup_episode),
+        )
+        .expect("scripted Candidate native follow-up episode")
+    };
+    assert_eq!(outcome.steps_started(), 2);
+    assert_eq!(outcome.search_input(), search.id());
+    assert_eq!(outcome.previous_revision_id(), fixture.previous_id);
+    assert_eq!(outcome.diagnostic_id(), fixture.diagnostic.id());
+    assert_eq!(outcome.followup().episode_id(), followup_episode);
+    assert_eq!(
+        outcome.followup().model_configuration(),
+        model_configuration
+    );
+    assert_eq!(outcome.followup().search_input(), search.id());
+    assert_eq!(outcome.followup().previous_revision(), fixture.previous_id);
+    assert_eq!(
+        outcome.followup().build_diagnostic(),
+        fixture.diagnostic.id()
+    );
+    assert_ne!(
+        outcome.followup().submission(),
+        fixture.previous.submission()
+    );
+    assert_eq!(request_bytes.len(), 2);
+
+    let initial = String::from_utf8(request_bytes[0].clone()).expect("initial request");
+    assert!(initial.contains("candidate_submit_native_followup_revision"));
+    assert!(initial.contains("void host() { Kernel kernel; }"));
+    assert!(initial.contains("call to __aicore__ function from __host__ function"));
+    assert!(initial.contains("primary_source_bytes_copied_unchanged_to_fixed_asc_path"));
+    assert!(initial.contains("cmake_language"));
+    assert!(initial.contains("ASC"));
+    assert!(initial.contains("dav-3510"));
+    assert!(initial.contains(&fixture.previous_id.to_string()));
+    assert!(initial.contains(&fixture.diagnostic.id().to_string()));
+    assert!(!initial.contains("candidate-build=complete"));
+    for forbidden in [
+        "qualification_receipt",
+        "comparison_evidence",
+        "missing_occurrence",
+        "expected_collection",
+        "private_continuation",
+    ] {
+        assert!(!initial.contains(forbidden), "leaked {forbidden}");
+    }
+    let continuation = String::from_utf8(request_bytes[1].clone()).expect("continuation");
+    assert!(continuation.contains("accepted_candidate_native_followup"));
+    assert!(continuation.contains(&outcome.followup_id().to_string()));
+
+    drop(events);
+    drop(content);
+    let mut recovered_content =
+        SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
+            .expect("recovered content");
+    let recovered_events =
+        SqliteEventStore::open(state.path().join("events.db")).expect("recovered events");
+    assert!(matches!(
+        recover_agent_episode(
+            &recovered_events,
+            &mut recovered_content,
+            &AgentEpisode::new(followup_episode).expect("episode")
+        )
+        .expect("terminal recovery"),
+        AgentEpisodeState::Completed {
+            reason: EpisodeCompletionReason::Yielded,
+            steps_started: 2
+        }
+    ));
+
+    let replay_state = tempfile::tempdir().expect("replay state");
+    let mut replay_content = SqliteContentStore::open(
+        replay_state.path().join("content.db"),
+        replay_state.path().join("cas"),
+    )
+    .expect("replay content");
+    let mut replay_events =
+        SqliteEventStore::open(replay_state.path().join("events.db")).expect("replay events");
+    let exchanges = request_bytes
+        .iter()
+        .zip(native_followup_responses())
+        .map(|(request, response)| RecordedExchange {
+            request_id: ContentId::derive(request).expect("request identity"),
+            response_bytes: response,
+            usage: None,
+        })
+        .collect::<Vec<_>>();
+    let mut recorded = RecordedModelTransport::new(exchanges);
+    let replay = run_collection_candidate_native_followup_episode(
+        &mut replay_events,
+        &mut replay_content,
+        &mut recorded,
+        codec(),
+        workspace,
+        run_input(followup_episode),
+    )
+    .expect("recorded Candidate native follow-up replay");
+    assert_eq!(replay.followup_id(), outcome.followup_id());
+    assert_eq!(
+        replay.previous_revision_id(),
+        outcome.previous_revision_id()
+    );
     assert_eq!(replay.diagnostic_id(), outcome.diagnostic_id());
 }
 

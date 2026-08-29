@@ -4,6 +4,7 @@ mod assemble;
 mod call_adapter;
 mod candidate_build;
 mod candidate_episode;
+mod candidate_native_followup;
 mod candidate_revision;
 mod candidate_search;
 mod collection_oracle;
@@ -76,9 +77,17 @@ pub use candidate_episode::{
 };
 #[cfg(feature = "agent-runtime")]
 pub use candidate_episode::{
-    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
+    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateNativeFollowupEpisodeRunInput,
+    CandidateNativeFollowupEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
     CandidateRevisionEpisodeRunOutcome, run_collection_candidate_episode,
-    run_collection_candidate_revision_episode,
+    run_collection_candidate_native_followup_episode, run_collection_candidate_revision_episode,
+};
+pub use candidate_native_followup::{
+    CandidateNativeFollowupError, CollectionCandidateNativeBuildDiagnosticArtifact,
+    CollectionCandidateNativeBuildDiagnosticV1, CollectionCandidateNativeFollowupRevisionArtifact,
+    CollectionCandidateNativeFollowupRevisionV1, PreparedCandidateNativeBuildDiagnostic,
+    PreparedCollectionCandidateNativeFollowupRevision, prepare_candidate_native_build_diagnostic,
+    prepare_collection_candidate_native_followup_revision,
 };
 pub use candidate_revision::{
     CandidateBuildDiagnosticText, CandidateRevisionError,

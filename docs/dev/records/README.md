@@ -24,6 +24,7 @@
 | DEV-014 | Accepted | [`first receipt-bound Candidate revision`](DEV-014-IMPLEMENTATION.md) | 新isolated DeepSeek episode消费exact receipt-bound diagnostic并提交parent-linked full-source revision |
 | DEV-015 | Accepted | [`first exact Candidate revision remote build`](DEV-015-IMPLEMENTATION.md) | DEV-014 exact revision取得remote `Succeeded` receipt，同时暴露当前gate未强制native Ascend compile |
 | DEV-016 | Accepted | [`product-owned native Ascend Candidate gate`](DEV-016-IMPLEMENTATION.md) | exact revision primary source经固定ASC harness进入`bisheng`并取得真实`SubjectFailed` diagnostic |
+| DEV-017 | InProgress | [`first native-feedback Candidate follow-up`](DEV-017-IMPLEMENTATION.md) | 新isolated DeepSeek episode消费exact native receipt-bound diagnostic并提交previous-revision-linked full source |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按
