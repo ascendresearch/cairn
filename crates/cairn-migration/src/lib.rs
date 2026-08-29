@@ -64,7 +64,8 @@ pub use call_adapter::{
 };
 pub use candidate_build::{
     CandidateBuildEnvironmentProfileV1, CandidateBuildError, PreparedCandidateBuildJob,
-    PreparedCandidateRevisionBuildJob, prepare_candidate_build_job,
+    PreparedCandidateNativeRevisionBuildJob, PreparedCandidateRevisionBuildJob,
+    prepare_candidate_build_job, prepare_candidate_native_revision_build_job,
     prepare_candidate_revision_build_job,
 };
 pub use candidate_episode::{

@@ -187,6 +187,15 @@ environment. `SubjectFailed` is equally valid first-divergence evidence; compile
 untrusted diagnostic material. Infrastructure, timeout, integrity, and ambiguous outcomes do not
 classify the Candidate.
 
+For a Candidate revision, the generic source-owned CMake gate is not evidence that the native
+Ascend path compiled: a proposal can select only CXX or provide a host fallback. The product-owned
+native gate therefore preserves the complete revision tree but copies the exact selected primary
+source bytes to a fixed `.asc` material path, configures a fixed `LANGUAGES ASC` target, and passes
+`--npu-arch=dav-3510`. Its prepared job is a distinct Rust type from the generic revision build.
+Success proves only native compilation in the selected no-device image; `SubjectFailed` provides
+bounded compiler feedback for another isolated Candidate revision episode. Neither outcome proves
+runtime semantics or a verdict.
+
 ## F2 boundary
 
 F2 is complete when a worker can receive verified materials, durably start a real Docker job,

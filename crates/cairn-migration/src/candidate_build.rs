@@ -24,6 +24,8 @@ use crate::{
 };
 
 const BUILD_RUNNER: &[u8] = b"#!/bin/sh\nset -eu\ncp -R /cairn/input/source/. /cairn/work/source\ncmake -S /cairn/work/source -B /cairn/work/build 1>&2\ncmake --build /cairn/work/build --parallel 1 1>&2\nprintf '%s\\n' 'PASS candidate-build=complete device=none'\n";
+const NATIVE_BUILD_RUNNER: &[u8] = b"#!/bin/sh\nset -eu\ncp -R /cairn/input/source/. /cairn/work/source\ncp -R /cairn/input/native/. /cairn/work/native\ncmake -S /cairn/work/native -B /cairn/work/native-build 1>&2\ncmake --build /cairn/work/native-build --target candidate_native --parallel 1 1>&2\nprintf '%s\\n' 'PASS candidate-native-asc-build=complete architecture=dav-3510 device=none'\n";
+const NATIVE_CMAKE: &[u8] = b"cmake_minimum_required(VERSION 3.24)\nfind_package(ASC REQUIRED)\nproject(cairn_candidate_native_gate LANGUAGES ASC)\nadd_library(candidate_native STATIC candidate_primary.asc)\ntarget_include_directories(candidate_native PRIVATE\n  ${CMAKE_CURRENT_SOURCE_DIR}/../source\n  ${CMAKE_CURRENT_SOURCE_DIR}/../source/include\n  $ENV{ASCEND_HOME_PATH}/x86_64-linux/include)\ntarget_compile_options(candidate_native PRIVATE --npu-arch=dav-3510)\n";
 
 /// Closed product-owned environment-under-test selection for the first Candidate build.
 ///
@@ -94,6 +96,12 @@ pub struct PreparedCandidateRevisionBuildJob {
     contract: JobContract,
     contract_bytes: Vec<u8>,
     contract_id: ContentId<JobContractArtifact>,
+}
+
+/// Revision build whose product-owned harness necessarily selects the native ASC compiler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateNativeRevisionBuildJob {
+    prepared: PreparedCandidateRevisionBuildJob,
 }
 
 impl PreparedCandidateBuildJob {
@@ -276,6 +284,70 @@ impl PreparedCandidateRevisionBuildJob {
     }
 }
 
+impl PreparedCandidateNativeRevisionBuildJob {
+    #[must_use]
+    pub const fn revision(&self) -> &CollectionCandidateRevisionV1 {
+        self.prepared.revision()
+    }
+
+    #[must_use]
+    pub fn revision_bytes(&self) -> &[u8] {
+        self.prepared.revision_bytes()
+    }
+
+    #[must_use]
+    pub const fn revision_id(&self) -> ContentId<CollectionCandidateRevisionArtifact> {
+        self.prepared.revision_id()
+    }
+
+    #[must_use]
+    pub const fn input_bundle(&self) -> &InputBundleV1 {
+        self.prepared.input_bundle()
+    }
+
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> &[u8] {
+        self.prepared.input_bundle_bytes()
+    }
+
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.prepared.input_bundle_id()
+    }
+
+    #[must_use]
+    pub const fn environment(&self) -> &DockerExecutionEnvironmentV1 {
+        self.prepared.environment()
+    }
+
+    #[must_use]
+    pub const fn environment_id(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.prepared.environment_id()
+    }
+
+    #[must_use]
+    pub const fn contract(&self) -> &JobContract {
+        self.prepared.contract()
+    }
+
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.prepared.contract_id()
+    }
+
+    /// Archives the exact revision and native-gate material roots into Controller content.
+    ///
+    /// # Errors
+    ///
+    /// Fails if storage changes any typed identity or cannot durably publish exact bytes.
+    pub fn archive_materials<C: ContentStore>(
+        &self,
+        content: &mut C,
+    ) -> Result<(), CandidateBuildError> {
+        self.prepared.archive_materials(content)
+    }
+}
+
 /// Builds the exact immutable input and execution contract for one archived Candidate proposal.
 ///
 /// # Errors
@@ -371,6 +443,51 @@ pub fn prepare_candidate_revision_build_job(
     })
 }
 
+/// Forces one exact revision primary source through the product-owned native ASC build harness.
+///
+/// A successful generic `CMake` build cannot substitute for this native gate.
+///
+/// ```compile_fail
+/// use cairn_migration::{
+///     PreparedCandidateNativeRevisionBuildJob, PreparedCandidateRevisionBuildJob,
+/// };
+/// fn require_native(_: PreparedCandidateNativeRevisionBuildJob) {}
+/// fn invalid(generic: PreparedCandidateRevisionBuildJob) { require_native(generic); }
+/// ```
+///
+/// # Errors
+///
+/// Rejects an unbound revision, missing primary material, invalid image, or any invalid native
+/// input/environment/contract material.
+pub fn prepare_candidate_native_revision_build_job(
+    job_id: JobId,
+    revision_bytes: &[u8],
+    revision_id: ContentId<CollectionCandidateRevisionArtifact>,
+    image: DockerImageId,
+    profile: CandidateBuildEnvironmentProfileV1,
+) -> Result<PreparedCandidateNativeRevisionBuildJob, CandidateBuildError> {
+    let revision = validate_archived_collection_candidate_revision(revision_bytes, revision_id)?;
+    let revision_bytes = revision_bytes.to_vec();
+    let input_bundle = candidate_native_input_bundle(&revision, &revision_bytes)?;
+    let material = prepare_build_material_from_input(job_id, input_bundle, image, profile)?;
+    Ok(PreparedCandidateNativeRevisionBuildJob {
+        prepared: PreparedCandidateRevisionBuildJob {
+            revision,
+            revision_bytes,
+            revision_id,
+            input_bundle: material.input_bundle,
+            input_bundle_bytes: material.input_bundle_bytes,
+            input_bundle_id: material.input_bundle_id,
+            environment: material.environment,
+            environment_bytes: material.environment_bytes,
+            environment_id: material.environment_id,
+            contract: material.contract,
+            contract_bytes: material.contract_bytes,
+            contract_id: material.contract_id,
+        },
+    })
+}
+
 struct PreparedBuildMaterial {
     input_bundle: InputBundleV1,
     input_bundle_bytes: Vec<u8>,
@@ -392,6 +509,15 @@ fn prepare_build_material(
     profile: CandidateBuildEnvironmentProfileV1,
 ) -> Result<PreparedBuildMaterial, CandidateBuildError> {
     let input_bundle = candidate_input_bundle(submission, publication_path, publication_bytes)?;
+    prepare_build_material_from_input(job_id, input_bundle, image, profile)
+}
+
+fn prepare_build_material_from_input(
+    job_id: JobId,
+    input_bundle: InputBundleV1,
+    image: DockerImageId,
+    profile: CandidateBuildEnvironmentProfileV1,
+) -> Result<PreparedBuildMaterial, CandidateBuildError> {
     let input_bundle_bytes = input_bundle.to_bytes()?;
     let input_bundle_id = ContentId::derive(&input_bundle_bytes).map_err(codec)?;
     let environment = DockerExecutionEnvironmentV1::new(image, Vec::new())?;
@@ -433,6 +559,69 @@ fn prepare_build_material(
         contract_bytes,
         contract_id,
     })
+}
+
+fn candidate_native_input_bundle(
+    revision: &CollectionCandidateRevisionV1,
+    revision_bytes: &[u8],
+) -> Result<InputBundleV1, CandidateBuildError> {
+    let submission = revision.submission();
+    let primary = submission
+        .files()
+        .iter()
+        .find(|file| file.path() == submission.primary_source())
+        .ok_or(CandidateBuildError::MissingPrimarySource)?;
+    let mut directories = BTreeSet::from([
+        "bin".to_owned(),
+        "meta".to_owned(),
+        "native".to_owned(),
+        "source".to_owned(),
+    ]);
+    for file in submission.files() {
+        let mut parent = file.path().as_str();
+        while let Some((prefix, _)) = parent.rsplit_once('/') {
+            directories.insert(format!("source/{prefix}"));
+            parent = prefix;
+        }
+    }
+    let mut entries = directories
+        .into_iter()
+        .map(|directory| {
+            Ok(InputBundleEntry::Directory {
+                path: path(&directory)?,
+            })
+        })
+        .collect::<Result<Vec<_>, CandidateBuildError>>()?;
+    entries.extend([
+        InputBundleEntry::File {
+            path: path("bin/run")?,
+            mode: InputFileMode::Executable,
+            bytes: NATIVE_BUILD_RUNNER.to_vec(),
+        },
+        InputBundleEntry::File {
+            path: path("meta/candidate-revision.json")?,
+            mode: InputFileMode::Data,
+            bytes: revision_bytes.to_vec(),
+        },
+        InputBundleEntry::File {
+            path: path("native/CMakeLists.txt")?,
+            mode: InputFileMode::Data,
+            bytes: NATIVE_CMAKE.to_vec(),
+        },
+        InputBundleEntry::File {
+            path: path("native/candidate_primary.asc")?,
+            mode: InputFileMode::Data,
+            bytes: primary.source().as_str().as_bytes().to_vec(),
+        },
+    ]);
+    for file in submission.files() {
+        entries.push(InputBundleEntry::File {
+            path: path(&format!("source/{}", file.path().as_str()))?,
+            mode: InputFileMode::Data,
+            bytes: file.source().as_str().as_bytes().to_vec(),
+        });
+    }
+    Ok(InputBundleV1::new(entries)?)
 }
 
 fn candidate_input_bundle(
@@ -504,6 +693,8 @@ pub enum CandidateBuildError {
     Codec(String),
     #[error("archived Candidate build material identity changed")]
     MaterialIdentityMismatch,
+    #[error("validated Candidate submission does not contain its selected primary source")]
+    MissingPrimarySource,
 }
 
 #[cfg(test)]
@@ -820,5 +1011,102 @@ mod tests {
                 CandidateRevisionError::BindingMismatch
             ))
         ));
+    }
+
+    #[test]
+    fn native_revision_gate_uses_fixed_asc_harness_and_exact_primary_bytes() {
+        let bytes = revision_bytes();
+        let revision_id = ContentId::derive(&bytes).expect("revision ID");
+        let image = DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image");
+        let job_id = JobId::new();
+        let generic = prepare_candidate_revision_build_job(
+            job_id,
+            &bytes,
+            revision_id,
+            image.clone(),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("generic revision build");
+        let native = prepare_candidate_native_revision_build_job(
+            job_id,
+            &bytes,
+            revision_id,
+            image,
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("native revision build");
+        assert_eq!(native.revision_bytes(), bytes);
+        assert_eq!(native.revision_id(), revision_id);
+        assert_eq!(native.environment_id(), generic.environment_id());
+        assert_ne!(native.input_bundle_id(), generic.input_bundle_id());
+        assert_ne!(native.contract_id(), generic.contract_id());
+
+        let files = native
+            .input_bundle()
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                InputBundleEntry::File { path, mode, bytes } => {
+                    Some((path.as_str(), *mode, bytes.as_slice()))
+                }
+                InputBundleEntry::Directory { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let candidate_cmake = b"cmake_minimum_required(VERSION 3.24)\nproject(candidate_revision LANGUAGES CXX)\nadd_library(candidate_revision STATIC src/kernel.cpp)\n";
+        let primary = b"int candidate_revision() { return 8; }\n";
+        assert!(files.contains(&(
+            "source/CMakeLists.txt",
+            InputFileMode::Data,
+            candidate_cmake.as_slice()
+        )));
+        assert!(files.contains(&(
+            "native/candidate_primary.asc",
+            InputFileMode::Data,
+            primary.as_slice()
+        )));
+        assert!(files.contains(&("native/CMakeLists.txt", InputFileMode::Data, NATIVE_CMAKE)));
+        let runner = files
+            .iter()
+            .find(|(path, _, _)| *path == "bin/run")
+            .expect("native runner")
+            .2;
+        assert_eq!(runner, NATIVE_BUILD_RUNNER);
+        assert!(
+            runner
+                .windows(b"/cairn/work/native".len())
+                .any(|window| { window == b"/cairn/work/native" })
+        );
+        assert!(
+            !runner
+                .windows(b"/cairn/work/source -B".len())
+                .any(|window| { window == b"/cairn/work/source -B" })
+        );
+        assert!(
+            NATIVE_CMAKE
+                .windows(b"LANGUAGES ASC".len())
+                .any(|window| { window == b"LANGUAGES ASC" })
+        );
+        assert!(
+            NATIVE_CMAKE
+                .windows(b"--npu-arch=dav-3510".len())
+                .any(|window| { window == b"--npu-arch=dav-3510" })
+        );
+
+        let mut changed: serde_json::Value =
+            cairn_codec::from_slice(&bytes).expect("revision JSON");
+        changed["submission"]["files"][1]["source"] =
+            serde_json::json!("int candidate_revision() { return 9; }\n");
+        let changed = cairn_codec::to_vec(&changed).expect("changed revision bytes");
+        let changed_id = ContentId::derive(&changed).expect("changed revision ID");
+        let changed_native = prepare_candidate_native_revision_build_job(
+            job_id,
+            &changed,
+            changed_id,
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("changed native build");
+        assert_ne!(native.input_bundle_id(), changed_native.input_bundle_id());
+        assert_ne!(native.contract_id(), changed_native.contract_id());
     }
 }
