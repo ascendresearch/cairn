@@ -19,7 +19,7 @@ use cairn_migration::{
     SirCallerClaimId, SirHypothesisId, SirIntentHypothesisSetProposalArtifact, SirProcessRequestV1,
     SirProcessTerminalV1, SirTaskBundleArtifact, SirTaskBundleV1,
     UserIntentDecisionRequestArtifact, assemble_collection_f32_oracle_case,
-    derive_user_intent_decision_requests,
+    derive_user_intent_decision_requests, prepare_collection_oracle_claim_proposal,
 };
 use cairn_protocol::{ContentId, ContentType, OperationId, SirRunId};
 use cairn_record::ContentStore;
@@ -145,6 +145,13 @@ fn exact_live_proposal_crosses_process_and_drives_first_admitted_oracle_policy()
     .expect("first exact promotion");
     let oracle = derive_collection_output_oracle_decision(prepared.public_outcome())
         .expect("contract-only Oracle decision");
+    let local_oracle_proposal =
+        prepare_collection_oracle_claim_proposal(&oracle).expect("local Oracle claim proposal");
+    assert_eq!(local_oracle_proposal.contract(), oracle.contract());
+    assert_eq!(
+        local_oracle_proposal.selection_claim(),
+        oracle.selection_claim()
+    );
     let first = ContentId::<CollectionOracleElementArtifact>::derive(b"selected-a").expect("first");
     let second =
         ContentId::<CollectionOracleElementArtifact>::derive(b"selected-b").expect("second");

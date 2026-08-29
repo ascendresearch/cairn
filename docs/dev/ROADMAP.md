@@ -20,16 +20,19 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-006 complete typed recovery input/proposal contract
 → DEV-007 model-free scoped user-decision request
 → DEV-008 typed user decision + smallest promotion boundary + contract-only Oracle policy
-→ next: actual Oracle materialization/call-adapter consumer
+→ DEV-009 actual call-adapter observation + receipt-bound materialization
+→ DEV-010 actual honest/fault qualification of one local Oracle claim
+→ next: publish exact local claim + first Candidate consumer
 ```
 
-DEV-004/005/006/007/008现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
+DEV-004/005/006/007/008/009现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1` → claim-scoped user decision → independent
-Admission → `MigrationIntentContractV1` → collection comparator policy已经闭合。下一条纵向工作应让实际
-Oracle materialization/call adapter消费该policy，并继续保持expected observation、candidate output与
-Admission authority分离；尚未授权完整CP1能力集、Candidate链或通用governance。
+Admission → `MigrationIntentContractV1` → collection comparator policy → actual observation/comparison已经
+闭合；DEV-010继续冻结局部qualification。下一条纵向工作应只发布这个exact local claim并立即由首个
+Candidate consumer消费，继续保持expected observation、candidate output与Admission authority分离；尚未
+授权完整CP1能力集、完整Candidate链或通用governance。
 
-DEV-008只因首个真实authority consumer建立最小独立SIR/Admission process；它不授权mechanism
+DEV-008只因首个真实authority consumer建立最小独立SIR/Admission process；DEV-010的局部qualification也不授权mechanism
 qualification registry、七类Planner、十一位置Agent catalog、空Proposal Host crate或面向未来stage的兼容接口。
 
 ## 2. Checkpoints

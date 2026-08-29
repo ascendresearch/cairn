@@ -3,6 +3,7 @@
 mod assemble;
 mod call_adapter;
 mod collection_oracle;
+mod collection_oracle_admission;
 mod corpus_execution;
 mod corpus_observation;
 mod domain;
@@ -70,6 +71,17 @@ pub use collection_oracle::{
     ObservedCollectionOracleOutputArtifact, ObservedCollectionOracleOutputV1,
     PreparedCollectionOutputComparisonEvidence, assemble_collection_f32_oracle_case,
     collection_oracle_mechanism_id, materialize_collection_output_comparison,
+};
+pub use collection_oracle_admission::{
+    AdmittedCollectionOracleClaimArtifact, AdmittedCollectionOracleClaimV1,
+    CollectionOracleAdmissionError, CollectionOracleAdmissionGateArtifact,
+    CollectionOracleClaimDomainV1, CollectionOracleClaimProposalArtifact,
+    CollectionOracleClaimProposalV1, CollectionOracleClaimStrengthV1, CollectionOracleClosureV1,
+    CollectionOracleQualificationExecution, CollectionOracleQualificationLimitV1,
+    CollectionOracleQualificationReceiptArtifact, CollectionOracleQualificationReceiptV1,
+    CollectionOracleQualificationTrialV1, CollectionOracleRequalificationTriggerV1,
+    PreparedAdmittedCollectionOracleClaim, collection_oracle_admission_gate_id,
+    prepare_admitted_collection_oracle_claim, prepare_collection_oracle_claim_proposal,
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,

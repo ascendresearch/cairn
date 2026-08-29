@@ -734,12 +734,33 @@ impl CollectionOutputComparisonEvidenceV1 {
     pub const fn comparison(&self) -> CollectionOutputComparisonV1 {
         self.comparison
     }
+
+    #[must_use]
+    pub const fn mechanism(&self) -> ContentId<CollectionOracleMechanismArtifact> {
+        self.mechanism
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> ContentId<CollectionOutputOracleDecisionArtifact> {
+        self.decision
+    }
+
+    #[must_use]
+    pub const fn invocation(&self) -> ContentId<CollectionF32InvocationArtifact> {
+        self.invocation
+    }
+
+    #[must_use]
+    pub const fn receipt(&self) -> ContentId<ExecutionReceiptArtifact> {
+        self.receipt
+    }
 }
 
 /// Canonical comparison evidence ready for archival.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedCollectionOutputComparisonEvidence {
     evidence: CollectionOutputComparisonEvidenceV1,
+    observed: ObservedCollectionOracleOutputV1,
     bytes: Vec<u8>,
     id: ContentId<CollectionOutputComparisonEvidenceArtifact>,
 }
@@ -748,6 +769,11 @@ impl PreparedCollectionOutputComparisonEvidence {
     #[must_use]
     pub const fn evidence(&self) -> &CollectionOutputComparisonEvidenceV1 {
         &self.evidence
+    }
+
+    #[must_use]
+    pub const fn observed(&self) -> &ObservedCollectionOracleOutputV1 {
+        &self.observed
     }
 
     #[must_use]
@@ -956,6 +982,7 @@ pub fn materialize_collection_output_comparison<C: ContentStore>(
         ContentId::<CollectionOutputComparisonEvidenceArtifact>::derive(&bytes).map_err(codec)?;
     Ok(PreparedCollectionOutputComparisonEvidence {
         evidence,
+        observed,
         bytes,
         id,
     })

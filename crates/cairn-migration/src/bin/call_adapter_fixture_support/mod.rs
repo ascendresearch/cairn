@@ -28,15 +28,24 @@ pub fn main_with_output_byte(output_byte: u8) {
 
 #[allow(dead_code, reason = "shared by the collection fixture binary")]
 pub fn main_collection_f32_reversed() {
-    if let Err(error) = run_collection_f32_reversed(std::env::args_os().skip(1)) {
+    if let Err(error) = run_collection_f32(std::env::args_os().skip(1), false) {
         eprintln!("collection call-adapter fixture failed: {error}");
         std::process::exit(1);
     }
 }
 
-#[allow(dead_code, reason = "shared by the collection fixture binary")]
-fn run_collection_f32_reversed(
+#[allow(dead_code, reason = "shared by the missing-occurrence fixture binary")]
+pub fn main_collection_f32_missing_occurrence() {
+    if let Err(error) = run_collection_f32(std::env::args_os().skip(1), true) {
+        eprintln!("missing-occurrence call-adapter fixture failed: {error}");
+        std::process::exit(1);
+    }
+}
+
+#[allow(dead_code, reason = "shared by the collection fixture binaries")]
+fn run_collection_f32(
     arguments: impl IntoIterator<Item = std::ffi::OsString>,
+    drop_last_selected: bool,
 ) -> Result<(), Box<dyn Error>> {
     let (request_path, output_root) = parse_arguments(arguments)?;
     let request_bytes = fs::read(&request_path)?;
@@ -73,6 +82,9 @@ fn run_collection_f32_reversed(
         })
         .collect::<Vec<_>>();
     selected.reverse();
+    if drop_last_selected {
+        selected.pop();
+    }
 
     let mut values = vec![0_u8; usize::try_from(invocation.values_output().byte_length().get())?];
     for (destination, source) in values.chunks_exact_mut(4).zip(&selected) {

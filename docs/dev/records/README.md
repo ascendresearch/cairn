@@ -17,6 +17,7 @@
 | DEV-007 | Accepted | [`typed decision request`](DEV-007-IMPLEMENTATION.md) | model-free process生成scoped request；用户选择由DEV-008继续promotion |
 | DEV-008 | Accepted | [`first admitted intent`](DEV-008-IMPLEMENTATION.md) | exact用户决策经独立Admission机械promotion；restricted commit后由contract-only collection Oracle policy消费 |
 | DEV-009 | Accepted | [`contract-bound collection observation`](DEV-009-IMPLEMENTATION.md) | 首个contract policy已约束真实双ABI output、authoritative receipt与comparison evidence |
+| DEV-010 | Accepted | [`first qualified local Oracle claim`](DEV-010-IMPLEMENTATION.md) | 用actual honest/fault implementation receipts资格化首个局部Oracle capability；Controller发布后Candidate才可消费 |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

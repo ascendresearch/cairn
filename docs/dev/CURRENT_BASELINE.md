@@ -16,7 +16,9 @@ submission被strict gateway拒绝后在同一continuation修复成功。DEV-007�
 live proposal生成首个output-order request，实际任务authority选择了unordered-set语义。DEV-008已经把该
 选择作为exact typed decision，经独立Admission child process机械promotion并restricted commit为首个
 `MigrationIntentContractV1`；一个collection-output comparator只能从该contract选择unordered multiset +
-reported-count policy。它接受正确重排并拒绝缺值、重复、错误元素或错误reported count。这仍不授权一次性
+reported-count policy。DEV-009已让actual child process经generic authoritative receipt进入可信物化与比较；
+DEV-010已用独立honest reversed-order和missing-occurrence实现资格化这一exact mechanism，并把结果限制为
+local-only claim。构造该类型仍不等于Controller已完成restricted commit/public publish。这仍不授权一次性
 铺满完整SIR → Admission → Oracle → Candidate权威链或恢复预建架构。
 
 ## 2. 可复用基础
@@ -42,8 +44,8 @@ reported-count policy。它接受正确重排并拒绝缺值、重复、错误�
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle materialization/Candidate authority chain；DEV-008只有首个窄promotion与
-  comparator-policy consumer；
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008只有首个窄promotion，DEV-009/
+  010只覆盖一个host/finite-normal collection claim的observation与qualification，尚未发布给Candidate；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
@@ -96,5 +98,7 @@ DEV-008只允许独立Admission消费exact proposal + authority decision后构�
 | DEV-006 | Accepted | 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1`通过strict、recorded、absence、full CI与真实DeepSeek repair/restart |
 | DEV-007 | Accepted | model-free process从exact live proposal机械生成scoped output-order request；实际任务authority选择unordered-set hypothesis；promotion由DEV-008完成 |
 | DEV-008 | Accepted | independent SIR ingress与Admission authority process闭合；exact typed decision restricted-commit为首个contract并驱动contract-only collection comparator policy |
+| DEV-009 | Accepted | actual host child经双ABI output、generic authoritative receipt进入contract-bound collection materialization/comparison；expected不进入candidate-visible input |
+| DEV-010 | Accepted | actual honest/fault implementations资格化首个local-only Oracle claim；不声称portfolio closure或已发布Candidate authority |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

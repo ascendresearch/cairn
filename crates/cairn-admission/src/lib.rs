@@ -3,13 +3,15 @@
 use std::{fmt, str::FromStr};
 
 use cairn_migration::{
+    AssembledCollectionF32OracleCaseInput, CollectionOracleQualificationExecution,
     CollectionOutputOracleDecisionV1, CollectionOutputOraclePolicyV1,
     IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-    MigrationIntentContractArtifact, SirCallerClaimId, SirHypothesisId,
-    SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
+    MigrationIntentContractArtifact, PreparedAdmittedCollectionOracleClaim, SirCallerClaimId,
+    SirHypothesisId, SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
     UserIntentDecisionRequestV1, derive_user_intent_decision_requests,
 };
 use cairn_protocol::{ContentId, ContentType, SchemaVersion, TaskId};
+use cairn_record::ContentStore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
@@ -736,6 +738,46 @@ pub fn derive_collection_output_oracle_decision(
         contract.selection_claim.clone(),
         policy,
     ))
+}
+
+/// Freezes the first local Oracle claim only from an already admitted public intent outcome and
+/// independently validated honest/fault execution controls.
+///
+/// A local proposal cannot substitute for the admitted intent outcome.
+///
+/// ```compile_fail
+/// use cairn_admission::admit_collection_oracle_claim;
+/// use cairn_migration::{
+///     AssembledCollectionF32OracleCaseInput, CollectionOracleClaimProposalV1,
+///     CollectionOracleQualificationExecution,
+/// };
+/// use cairn_record::ContentStore;
+/// fn invalid<C1: ContentStore, C2: ContentStore>(
+///     proposal: &CollectionOracleClaimProposalV1,
+///     case: &AssembledCollectionF32OracleCaseInput,
+///     honest: &CollectionOracleQualificationExecution<'_, C1>,
+///     fault: &CollectionOracleQualificationExecution<'_, C2>,
+/// ) {
+///     let _ = admit_collection_oracle_claim(proposal, case, honest, fault);
+/// }
+/// ```
+///
+/// Constructing the returned Rust value does not publish authority. The Controller must retain the
+/// qualification receipt in its Admission-owned evidence boundary and publish the exact admitted
+/// claim identity before a Candidate consumer may rely on it.
+///
+/// # Errors
+///
+/// Rejects a malformed admitted outcome or any failed qualification/binding control.
+pub fn admit_collection_oracle_claim<C1: ContentStore, C2: ContentStore>(
+    outcome: &IntentAdmissionPublicOutcomeV1,
+    case: &AssembledCollectionF32OracleCaseInput,
+    honest: &CollectionOracleQualificationExecution<'_, C1>,
+    fault: &CollectionOracleQualificationExecution<'_, C2>,
+) -> Result<PreparedAdmittedCollectionOracleClaim, IntentPromotionError> {
+    let decision = derive_collection_output_oracle_decision(outcome)?;
+    cairn_migration::prepare_admitted_collection_oracle_claim(&decision, case, honest, fault)
+        .map_err(migration_error)
 }
 
 /// Fail-closed errors from typed user decision promotion.

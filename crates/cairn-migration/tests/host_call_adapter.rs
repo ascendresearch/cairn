@@ -12,27 +12,31 @@ use cairn_execution::{
     prepare_execution_job, recover_execution_job,
 };
 use cairn_migration::{
-    ArgumentIndex, AssembledBoundaryCaseInput, AssembledCorpusExecutionCase, BooleanInputPattern,
+    AdmittedCollectionOracleClaimV1, ArgumentIndex, AssembledBoundaryCaseInput,
+    AssembledCollectionF32OracleCaseInput, AssembledCorpusExecutionCase, BooleanInputPattern,
     BufferAccessV1, BufferContractInput, BufferContractV1, BufferMemoryContractInput,
     BufferMemoryContractV1, BufferName, CallAdapterCaptureLimits, CallAdapterCompletionV1,
     CallAdapterExecutableByteLimit, CallAdapterObservedOutputV1, CallAdapterOutputBytesArtifact,
     CallAdapterResultV1, CaseExpectedOutcome, CaseTarget, CollectionF32Bits,
-    CollectionOutputOracleDecisionV1, CollectionOutputOraclePolicyV1, CorpusBufferByteLimit,
-    CorpusElementCount, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
-    CorpusExecutionPlanV1, CorpusExecutionReceipt, CorpusExecutionSubjectV1,
-    CorpusObservationSetArtifact, CorpusObservationSetError, CorpusObservationSetV1, DataType,
-    DimensionSpec, EntryPointName, ExactCorpusComparisonArtifact, ExactCorpusComparisonError,
-    ExactCorpusComparisonV1, ExactVariantTrialArtifact, ExactVariantTrialV1, ExtentValue,
-    InclusiveExtentRange, InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition,
-    InputValueDomainV1, IntegerValue, InvalidInputBehavior, MandatoryInputValueCasesV1,
-    MandatoryMemorySurfaceCasesV1, MemoryConditionDisposition, MigrationDomainContractInput,
-    MigrationDomainContractV1, MigrationExecutionNeed, MigrationIntentContractArtifact,
-    MigrationMandatoryCasesV1, MigrationValidationTier, PointerAlignmentContractV1,
-    PreparedCallAdapterInput, PreparedCallAdapterJob, PreparedCorpusExecutionCase,
-    PreparedCorpusExecutionPlan, RequestedSemanticsArtifact, ScalarParameterContractInput,
-    ScalarParameterContractV1, ScalarParameterName, ScalarParameterRole, SemanticClaimKind,
-    ShapeSymbolContractInput, ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource,
-    SirCallerClaimId, ValidatedCorpusExecutionCase, ValidatedCorpusObservationSet,
+    CollectionOracleAdmissionError, CollectionOracleClosureV1,
+    CollectionOracleQualificationExecution, CollectionOracleQualificationLimitV1,
+    CollectionOracleQualificationReceiptV1, CollectionOutputOracleDecisionV1,
+    CollectionOutputOraclePolicyV1, CorpusBufferByteLimit, CorpusElementCount,
+    CorpusExecutionPlanArtifact, CorpusExecutionPlanError, CorpusExecutionPlanV1,
+    CorpusExecutionReceipt, CorpusExecutionSubjectV1, CorpusObservationSetArtifact,
+    CorpusObservationSetError, CorpusObservationSetV1, DataType, DimensionSpec, EntryPointName,
+    ExactCorpusComparisonArtifact, ExactCorpusComparisonError, ExactCorpusComparisonV1,
+    ExactVariantTrialArtifact, ExactVariantTrialV1, ExtentValue, InclusiveExtentRange,
+    InclusiveIntegerRange, InputValueCaseTarget, InputValueDisposition, InputValueDomainV1,
+    IntegerValue, InvalidInputBehavior, MandatoryInputValueCasesV1, MandatoryMemorySurfaceCasesV1,
+    MemoryConditionDisposition, MigrationDomainContractInput, MigrationDomainContractV1,
+    MigrationExecutionNeed, MigrationIntentContractArtifact, MigrationMandatoryCasesV1,
+    MigrationValidationTier, PointerAlignmentContractV1, PreparedCallAdapterInput,
+    PreparedCallAdapterJob, PreparedCorpusExecutionCase, PreparedCorpusExecutionPlan,
+    RequestedSemanticsArtifact, ScalarParameterContractInput, ScalarParameterContractV1,
+    ScalarParameterName, ScalarParameterRole, SemanticClaimKind, ShapeSymbolContractInput,
+    ShapeSymbolContractV1, ShapeSymbolName, ShapeSymbolSource, SirCallerClaimId,
+    ValidatedCallAdapterExecution, ValidatedCorpusExecutionCase, ValidatedCorpusObservationSet,
     ValidatedVariantBuild, VariantBuildCaptureLimits, VariantBuildDriverByteLimit,
     VariantBuildPlanArtifact, VariantBuildPlanV1, VariantBuildReceiptArtifact,
     VariantBuildReceiptV1, VariantExecutionError, VariantImplementationByteLimit,
@@ -42,12 +46,12 @@ use cairn_migration::{
     compare_executable_oracle_output, compose_call_adapter_job, compose_exact_variant_trial,
     derive_mandatory_base_cases, derive_mandatory_input_value_cases,
     derive_mandatory_memory_surface_cases, materialize_collection_output_comparison,
-    materialize_input_value_case, prepare_boundary_call_adapter_input,
-    prepare_collection_output_call_adapter_input, prepare_corpus_execution_plan,
-    prepare_executable_oracle_call_adapter_input, prepare_variant_build_job,
-    validate_boundary_call_adapter_receipt, validate_collection_output_call_adapter_receipt,
-    validate_corpus_execution_receipts, validate_executable_oracle_call_adapter_capture,
-    validate_variant_build_receipt,
+    materialize_input_value_case, prepare_admitted_collection_oracle_claim,
+    prepare_boundary_call_adapter_input, prepare_collection_output_call_adapter_input,
+    prepare_corpus_execution_plan, prepare_executable_oracle_call_adapter_input,
+    prepare_variant_build_job, validate_boundary_call_adapter_receipt,
+    validate_collection_output_call_adapter_receipt, validate_corpus_execution_receipts,
+    validate_executable_oracle_call_adapter_capture, validate_variant_build_receipt,
 };
 use cairn_protocol::{AttemptId, CommandId, ContentId, ContentType, JobId, ObservedAtUnixMillis};
 use cairn_record::ContentStore;
@@ -196,6 +200,106 @@ fn admitted_policy_drives_receipt_bound_collection_materialization() {
     );
     let invocation_json = serde_json::to_string(assembled.invocation()).expect("invocation JSON");
     assert!(!invocation_json.contains("expected"));
+
+    assert_local_oracle_admission(&decision, &assembled, &completed, &execution);
+}
+
+fn assert_local_oracle_admission(
+    decision: &CollectionOutputOracleDecisionV1,
+    assembled: &AssembledCollectionF32OracleCaseInput,
+    completed: &CompletedAdapterInput,
+    execution: &ValidatedCallAdapterExecution,
+) {
+    let fault_executable = fs::read(env!(
+        "CARGO_BIN_EXE_cairn-collection-output-missing-fixture"
+    ))
+    .expect("missing-occurrence fixture executable");
+    let fault_adapter = prepare_collection_output_call_adapter_input(
+        assembled,
+        &fault_executable,
+        CallAdapterExecutableByteLimit::new(
+            u64::try_from(fault_executable.len()).expect("fault executable length"),
+        )
+        .expect("fault executable limit"),
+    )
+    .expect("fault adapter input");
+    let fault_completed = complete_adapter_input(fault_adapter);
+    let fault_execution = validate_collection_output_call_adapter_receipt(
+        assembled,
+        &fault_completed.adapter,
+        &fault_completed.job,
+        fault_completed.receipt_id,
+        &fault_completed.receipt,
+        &fault_completed.content,
+    )
+    .expect("fault receipt-bound observation");
+
+    let admitted = prepare_admitted_collection_oracle_claim(
+        decision,
+        assembled,
+        &CollectionOracleQualificationExecution {
+            adapter_input: &completed.adapter,
+            execution,
+            content: &completed.content,
+        },
+        &CollectionOracleQualificationExecution {
+            adapter_input: &fault_completed.adapter,
+            execution: &fault_execution,
+            content: &fault_completed.content,
+        },
+    )
+    .expect("local Oracle claim admission");
+    assert!(admitted.honest_comparison().matches());
+    assert!(!admitted.fault_comparison().matches());
+    assert_eq!(
+        admitted.claim().closure(),
+        CollectionOracleClosureV1::LocalClaimOnly
+    );
+    assert_eq!(
+        admitted.claim().identity().expect("claim identity"),
+        admitted.claim_id()
+    );
+    assert!(
+        admitted
+            .receipt()
+            .limitations()
+            .contains(&CollectionOracleQualificationLimitV1::NoPortfolioClosure)
+    );
+    admitted
+        .claim()
+        .validate_inputs(admitted.proposal(), admitted.receipt())
+        .expect("recomputed admitted claim");
+    let _: CollectionOracleQualificationReceiptV1 =
+        cairn_codec::from_slice(admitted.receipt_bytes()).expect("strict receipt round trip");
+    let _: AdmittedCollectionOracleClaimV1 =
+        cairn_codec::from_slice(admitted.claim_bytes()).expect("strict claim round trip");
+    assert_eq!(
+        prepare_admitted_collection_oracle_claim(
+            decision,
+            assembled,
+            &CollectionOracleQualificationExecution {
+                adapter_input: &completed.adapter,
+                execution,
+                content: &completed.content,
+            },
+            &CollectionOracleQualificationExecution {
+                adapter_input: &completed.adapter,
+                execution,
+                content: &completed.content,
+            },
+        ),
+        Err(CollectionOracleAdmissionError::ControlIndependence)
+    );
+
+    let mut forged = serde_json::to_value(admitted.claim()).expect("claim JSON");
+    forged["closure"] = serde_json::json!("full-portfolio");
+    assert!(serde_json::from_value::<AdmittedCollectionOracleClaimV1>(forged).is_err());
+    let mut incomplete = serde_json::to_value(admitted.receipt()).expect("receipt JSON");
+    incomplete["limitations"]
+        .as_array_mut()
+        .expect("limitations")
+        .pop();
+    assert!(serde_json::from_value::<CollectionOracleQualificationReceiptV1>(incomplete).is_err());
 }
 
 struct PreparedHostCase {
