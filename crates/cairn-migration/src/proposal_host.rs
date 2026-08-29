@@ -13,12 +13,12 @@ use thiserror::Error;
 
 use crate::{
     AgentResolvedRuntimeModelArtifact, CandidateEpisodeKindV1, CandidateEpisodeRequestV1,
-    CandidateEpisodeRunInput, CandidateNativeDiagnosticV1, CandidateNativeFollowupEpisodeRunInput,
-    CandidateNativePublicationV1, CandidateNativeRepairEpisodeRunInput,
-    CandidateRevisionEpisodeRunInput, CandidateWorkflowStateV1,
-    CollectionCandidateBuildDiagnosticArtifact, CollectionCandidateBuildDiagnosticV1,
-    CollectionCandidateNativeBuildDiagnosticArtifact, CollectionCandidateNativeBuildDiagnosticV1,
-    CollectionCandidateNativeFollowupRevisionArtifact, CollectionCandidateNativeFollowupRevisionV1,
+    CandidateInitialProfileInput, CandidateNativeDiagnosticV1, CandidateNativeFollowupProfileInput,
+    CandidateNativePublicationV1, CandidateNativeRepairProfileInput, CandidateRevisionProfileInput,
+    CandidateWorkflowStateV1, CollectionCandidateBuildDiagnosticArtifact,
+    CollectionCandidateBuildDiagnosticV1, CollectionCandidateNativeBuildDiagnosticArtifact,
+    CollectionCandidateNativeBuildDiagnosticV1, CollectionCandidateNativeFollowupRevisionArtifact,
+    CollectionCandidateNativeFollowupRevisionV1,
     CollectionCandidateNativeRepairBuildDiagnosticArtifact,
     CollectionCandidateNativeRepairBuildDiagnosticV1,
     CollectionCandidateNativeRepairRevisionArtifact, CollectionCandidateNativeRepairRevisionV1,
@@ -26,12 +26,11 @@ use crate::{
     CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
     CollectionCandidateSearchInputV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
     IntentRecoveryRequestV1, MigrationWorkflowV1, ProposalHostInvocationArtifact,
-    SirEpisodeRunInput, SirIntentHypothesisSetProposalArtifact, SirTaskArtifactPath,
-    SirTaskBundleV1, SirTaskLimits, SirTaskWorkspace, record_candidate_native_followup,
-    record_candidate_native_repair, run_collection_candidate_episode,
-    run_collection_candidate_native_followup_episode,
-    run_collection_candidate_native_repair_episode, run_collection_candidate_revision_episode,
-    run_sir_episode, validate_archived_candidate_build_diagnostic,
+    SirIntentHypothesisSetProposalArtifact, SirProfileInput, SirTaskArtifactPath, SirTaskBundleV1,
+    SirTaskLimits, SirTaskWorkspace, record_candidate_native_followup,
+    record_candidate_native_repair, run_candidate_initial_profile,
+    run_candidate_native_followup_profile, run_candidate_native_repair_profile,
+    run_candidate_revision_profile, run_sir_profile, validate_archived_candidate_build_diagnostic,
     validate_archived_candidate_native_build_diagnostic,
     validate_archived_candidate_native_repair_build_diagnostic,
     validate_archived_collection_candidate_proposal,
@@ -693,12 +692,28 @@ impl<'de> Deserialize<'de> for ProposalHostTerminalV1 {
     }
 }
 
-/// Runs any supported domain role through the same durable Proposal Host implementation.
+struct FrozenProposalHostRequestV1 {
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: ProposalHostRequestV1,
+    runtime: ProposalHostRuntimeV1,
+    workspace: SirTaskWorkspace,
+}
+
+struct CompletedProposalHostRequestV1 {
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: ProposalHostRequestV1,
+    episode_id: EpisodeId,
+    publication: ProposalHostPublicationV1,
+    completion_reason: EpisodeCompletionReason,
+    steps_started: u32,
+}
+
+/// Processes any supported request through the single frozen-input Proposal Host lifecycle.
 ///
 /// # Errors
 ///
-/// Rejects invalid role material or propagates the role-specific durable episode failure.
-#[allow(clippy::too_many_lines)]
+/// Rejects invalid frozen material, durable Agent Loop failures, invalid typed submissions, or a
+/// terminal outcome that does not bind to the exact request.
 pub fn run_proposal_host_episode<E, C, T>(
     events: &mut E,
     content: &mut C,
@@ -711,9 +726,17 @@ where
     C: ContentStore,
     T: ModelTransport,
 {
+    let frozen = freeze_proposal_host_request(request)?;
+    let completed =
+        drive_frozen_proposal_host_request(events, content, transport, protocol_codec, frozen)?;
+    freeze_proposal_host_terminal(completed)
+}
+
+fn freeze_proposal_host_request(
+    request: ProposalHostRequestV1,
+) -> Result<FrozenProposalHostRequestV1, ProposalHostError> {
     request.validate()?;
     let request_id = request.identity()?;
-    let terminal_request = request.clone();
     let runtime = request.runtime.clone();
     let workspace = match &request.role {
         ProposalHostRoleRequestV1::Sir { task, .. }
@@ -724,19 +747,47 @@ where
             task.workspace(runtime.task_limits)?
         }
     };
-    let (publication, reason, steps_started) = match request.role {
+    Ok(FrozenProposalHostRequestV1 {
+        request_id,
+        request,
+        runtime,
+        workspace,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn drive_frozen_proposal_host_request<E, C, T>(
+    events: &mut E,
+    content: &mut C,
+    transport: &mut T,
+    protocol_codec: NativeProtocolCodec,
+    frozen: FrozenProposalHostRequestV1,
+) -> Result<CompletedProposalHostRequestV1, ProposalHostError>
+where
+    E: EventStore,
+    C: ContentStore,
+    T: ModelTransport,
+{
+    let FrozenProposalHostRequestV1 {
+        request_id,
+        request,
+        runtime,
+        workspace,
+    } = frozen;
+    let terminal_request = request.clone();
+    let (publication, completion_reason, steps_started) = match request.role {
         ProposalHostRoleRequestV1::Sir {
             task_id,
             recovery_request,
             ..
         } => {
-            let outcome = run_sir_episode(
+            let outcome = run_sir_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                SirEpisodeRunInput {
+                SirProfileInput {
                     task_id,
                     recovery_request,
                     episode_id: runtime.episode_id,
@@ -763,13 +814,13 @@ where
             ..
         } => {
             let search = prepared_search(&search_input)?;
-            let outcome = run_collection_candidate_episode(
+            let outcome = run_candidate_initial_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                CandidateEpisodeRunInput {
+                CandidateInitialProfileInput {
                     search_input: search,
                     recovery_input,
                     episode_id: runtime.episode_id,
@@ -799,13 +850,13 @@ where
         } => {
             let parent_id = parent.identity().map_err(role_error)?;
             let diagnostic_id = diagnostic_id(&diagnostic)?;
-            let outcome = run_collection_candidate_revision_episode(
+            let outcome = run_candidate_revision_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                CandidateRevisionEpisodeRunInput {
+                CandidateRevisionProfileInput {
                     search_input: prepared_search(&search_input)?,
                     recovery_input,
                     parent,
@@ -842,13 +893,13 @@ where
         } => {
             let previous_revision_id = previous_revision.identity().map_err(role_error)?;
             let diagnostic_id = native_diagnostic_id(&diagnostic)?;
-            let outcome = run_collection_candidate_native_followup_episode(
+            let outcome = run_candidate_native_followup_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                CandidateNativeFollowupEpisodeRunInput {
+                CandidateNativeFollowupProfileInput {
                     search_input: prepared_search(&search_input)?,
                     recovery_input,
                     previous_revision,
@@ -886,13 +937,13 @@ where
         } => {
             let root_followup_id = root_followup.identity().map_err(role_error)?;
             let diagnostic_id = repair_diagnostic_id(&diagnostic)?;
-            let outcome = run_collection_candidate_native_repair_episode(
+            let outcome = run_candidate_native_repair_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                CandidateNativeRepairEpisodeRunInput {
+                CandidateNativeRepairProfileInput {
                     search_input: prepared_search(&search_input)?,
                     recovery_input,
                     root_followup,
@@ -921,15 +972,28 @@ where
             )
         }
     };
-    let terminal = ProposalHostTerminalV1 {
-        schema_version: schema_v1(),
-        request: request_id,
+    Ok(CompletedProposalHostRequestV1 {
+        request_id,
+        request: terminal_request,
         episode_id: runtime.episode_id,
         publication,
-        completion_reason: reason,
+        completion_reason,
         steps_started,
+    })
+}
+
+fn freeze_proposal_host_terminal(
+    completed: CompletedProposalHostRequestV1,
+) -> Result<ProposalHostTerminalV1, ProposalHostError> {
+    let terminal = ProposalHostTerminalV1 {
+        schema_version: schema_v1(),
+        request: completed.request_id,
+        episode_id: completed.episode_id,
+        publication: completed.publication,
+        completion_reason: completed.completion_reason,
+        steps_started: completed.steps_started,
     };
-    terminal.validate_against(&terminal_request)?;
+    terminal.validate_against(&completed.request)?;
     Ok(terminal)
 }
 

@@ -33,6 +33,8 @@ mod oracle_tools;
 mod oracle_workflow;
 #[cfg(feature = "agent-runtime")]
 mod proposal_host;
+#[cfg(feature = "agent-runtime")]
+mod proposal_loop;
 mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
@@ -81,13 +83,11 @@ pub use candidate_episode::{
     validate_archived_collection_candidate_proposal,
 };
 #[cfg(feature = "agent-runtime")]
-pub use candidate_episode::{
-    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateNativeFollowupEpisodeRunInput,
-    CandidateNativeFollowupEpisodeRunOutcome, CandidateNativeRepairEpisodeRunInput,
-    CandidateNativeRepairEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
-    CandidateRevisionEpisodeRunOutcome, run_collection_candidate_episode,
-    run_collection_candidate_native_followup_episode,
-    run_collection_candidate_native_repair_episode, run_collection_candidate_revision_episode,
+pub(crate) use candidate_episode::{
+    CandidateInitialProfileInput, CandidateNativeFollowupProfileInput,
+    CandidateNativeRepairProfileInput, CandidateRevisionProfileInput,
+    run_candidate_initial_profile, run_candidate_native_followup_profile,
+    run_candidate_native_repair_profile, run_candidate_revision_profile,
 };
 pub use candidate_native_followup::{
     CandidateNativeFollowupError, CollectionCandidateNativeBuildDiagnosticArtifact,
@@ -320,16 +320,14 @@ pub use reduction_mutation::{
     HistoricalReductionMutationVariantEvidence, PreparedHistoricalReductionMutationGrid,
     compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
 };
-#[cfg(feature = "agent-runtime")]
-pub use sir::{
-    SirEpisodeRunError, SirEpisodeRunInput, SirEpisodeRunOutcome, SirTaskWorkspace, run_sir_episode,
-};
 pub use sir::{
     SirError, SirIntentHypothesisSetProposalArtifact, SirReadByteLimit, SirReadLineLimit,
     SirSourceCitationV1, SirSourceLineCount, SirSourceLineNumber, SirTaskArtifactBytes,
     SirTaskArtifactPath, SirTaskArtifactV1, SirTaskBundleArtifact, SirTaskBundleV1,
-    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits,
+    SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits, SirTaskWorkspace,
 };
+#[cfg(feature = "agent-runtime")]
+pub(crate) use sir::{SirProfileInput, run_sir_profile};
 pub use sir_contract::{
     AgentResolvedRuntimeModelArtifact, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
     IntentRecoveryInputV1, IntentRecoveryRequestV1, SirArgumentName, SirAuthorizedEvidenceArtifact,

@@ -267,7 +267,8 @@ crates/cairn-server/src/
 下列目录是target organization，不是一次性重排清单。首个DeepSeek-backed SIR proof复用现有
 `cairn-agent`形成真实episode；DEV-008的one-shot `cairn-sir`只是一项历史typed ingress/capability proof。
 DEV-022已创建最小`cairn-proposal-host`并承载现有SIR/Candidate role-scoped lifecycle；Oracle role仍须等待
-真实consumer，不能按目录草图预建空实现。
+真实consumer，不能按目录草图预建空实现。DEV-024又删除SIR/Candidate各自复制的runner主体与旁路测试；领域
+profile adapter现在只负责context/tool/submission schema，统一进入`cairn-migration::proposal_loop`。
 
 ```text
 crates/cairn-proposal-host/src/

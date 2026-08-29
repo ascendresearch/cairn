@@ -38,6 +38,13 @@ schedule，Worker terminal receipt机械折回typed diagnostic/terminal，Candid
 model/runtime与operation marker再启动generic Host。`NoCandidate`、expired、ambiguous和Host invocation/process
 failure均保留原ID并typed blocked，不会隐式换attempt或episode。两个materially different task、local controlled
 receipt及real recorded Host child/restart controls已闭合；本片仍没有调用live model或Worker。
+DEV-024又删除了遗留的SIR/Candidate role-specific runner及可绕过generic Host的两套integration test，把所有
+现有profile收敛到一个durable Proposal Loop。Host application层现在明确执行freeze request、drive frozen
+episode、freeze terminal三段；共同loop在episode打开前冻结model-visible content IDs、tool catalog、budget和
+validated capability grant，tool result先归档为`OperationResult`再进入continuation，invalid strict submission
+可在同一budget内修复。Host只执行pure/read-only capability，外部effect typed fail closed并保留给Controller。
+`run_proposal_loop`顶层只保留open/dispatch/settle/admit/authorized-execute/project/advance步骤，各步骤之间使用
+distinct internal typestate。本片没有调用live model、Worker、Docker或NPU。
 
 ## 2. 可复用基础
 
@@ -46,7 +53,7 @@ receipt及real recorded Host child/restart controls已闭合；本片仍没有�
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | task-owned Candidate native suffix aggregate、single-task Controller process manager、generic Proposal Host supervision、scheduler/reconcile/receipt折回、exact replay | 只监管一个配置中已存在Task；尚无task intake/catalog、native success或最终migration workflow |
+| Product workflow | task-owned Candidate native suffix aggregate、single-task Controller process manager、generic Proposal Host supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | 只监管一个配置中已存在Task；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -63,7 +70,7 @@ receipt及real recorded Host child/restart controls已闭合；本片仍没有�
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–023 只覆盖一个窄
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–024 只覆盖一个窄
   host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build和
   recorded durable suffix；
 - native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
@@ -71,7 +78,8 @@ receipt及real recorded Host child/restart controls已闭合；本片仍没有�
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
 目标设计中的完整 Proposal Host pool、多任务catalog、十一位置 catalog、七类 Planner、完整 mechanism registry 和
-future crate只是条件设计，不是当前待办或已实现事实；DEV-023只实现一个已存在Task需要的最小Controller supervisor。
+future crate只是条件设计，不是当前待办或已实现事实；DEV-023只实现一个已存在Task需要的最小Controller supervisor，
+DEV-024只统一现有role consumer，不预建新role或Host pool。
 
 ## 5. 当前必须停止的外推
 
@@ -122,11 +130,12 @@ committed public local Oracle outcome
 → task-owned durable Candidate suffix state / exact next action
 → generic Proposal Host request / typed publication round-trip
 → single-task Controller manager / scheduler and receipt reconciliation
+→ one frozen Proposal Host lifecycle / common durable role loop
 ```
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
-或 verdict。最新local product output是DEV-023 recorded/local manager、generic-Host process replay与receipt折回
-evidence，不是新的live build。
+或 verdict。最新local product output是DEV-024 common-loop lifecycle controls；DEV-023 recorded/local manager、
+generic-Host process replay与receipt折回evidence仍不是新的live build。
 DEV-020证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把compile
 failure外推为语义错误，也不能把recorded workflow或跨主机闭环误报为真实 NPU evidence。
 
@@ -157,5 +166,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-021 | Accepted | task-owned current-V1 workflow固化native suffix；recorded two-material consumer、restart/replay与旧手工入口删除闭合；无model/remote Worker调用 |
 | DEV-022 | Accepted | generic Proposal Host承载SIR/Candidate role profiles并消费persisted workflow request；child restart exact terminal replay与旧专用launcher删除闭合；无live model/Worker调用 |
 | DEV-023 | Accepted | active Controller单任务manager消费durable action并连接Host/scheduler/receipt；exact operation marker、blocked no-replacement与旧public helper删除闭合；无live model/Worker调用 |
+| DEV-024 | Accepted | SIR/Candidate role-specific runner与旁路测试删除；统一冻结request/profile/capability、durable observation、strict repair与terminal lifecycle；无live model/Worker调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

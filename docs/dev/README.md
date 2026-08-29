@@ -16,9 +16,10 @@ CP0已经回答第一个产品问题：SIR相对source-preserving路径确实改
 output-order决策；DEV-008又证明该结果可经用户authority和独立Admission进入contract-only comparator
 policy。DEV-009–012 已把该 policy 推进到 local Oracle publication 与真实 DeepSeek Candidate proposal；
 DEV-013–020 又用现有 Controller/remote Worker 打通 generic/native build、receipt-bound diagnostic、隔离
-DeepSeek repair 与 rebuild。DEV-021/022已把Candidate native suffix固化成durable Controller workflow，并以
-通用Proposal Host接管已有SIR/Candidate role。最新native rebuild仍为`SubjectFailed`；当前继续审计完整
-Controller supervision或native success/NPU correctness的最短真实consumer。
+DeepSeek repair 与 rebuild。DEV-021–023已把Candidate native suffix固化成durable Controller workflow、通用
+Proposal Host和single-task manager；DEV-024又删除role-specific runner并统一Host request lifecycle。最新native
+rebuild仍为`SubjectFailed`；当前继续审计Controller-owned experiment round-trip或native success/NPU correctness
+的最短真实consumer。
 
 ## 2. 文档地图
 
@@ -26,11 +27,11 @@ Controller supervision或native success/NPU correctness的最短真实consumer�
 | --- | --- |
 | [`../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | SIR 的规范性目标、authority 边界与当前建设路线 |
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
-| [`NEXT_SESSION.md`](NEXT_SESSION.md) | 下一会话的唯一启动入口、只读审计、DEV-022 边界和可复制启动消息 |
+| [`NEXT_SESSION.md`](NEXT_SESSION.md) | 下一会话的唯一启动入口、只读审计、DEV-024 边界和可复制启动消息 |
 | [`CURRENT_IMPLEMENTATION_WALKTHROUGH.md`](CURRENT_IMPLEMENTATION_WALKTHROUGH.md) | 用atomic compaction样例逐步解释当前SIR→Admission→Oracle→Candidate proposal实现 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | 已打通纵向路径后的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..022 的当前状态和边界 |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..024 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -75,6 +76,9 @@ Controller supervision或native success/NPU correctness的最短真实consumer�
 - DEV-021：Accepted，Candidate native suffix已固化为Controller-owned durable spine。
 - DEV-022：Accepted，同一generic Proposal Host已承载SIR/Candidate role并接通persisted workflow request；
   没有live model/Worker或新的native evidence。
+- DEV-023：Accepted，active Controller single-task manager接通Host supervision、scheduler/reconcile和receipt折回。
+- DEV-024：Accepted，删除SIR/Candidate role-specific runner和旁路测试，统一freeze/episode/observation/strict
+  submission/terminal lifecycle；没有live model/Worker或新的native evidence。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
 `IntentHypothesisSetProposalV1`已经闭合；第一个正式consumer也已从scoped user decision走到真实execution

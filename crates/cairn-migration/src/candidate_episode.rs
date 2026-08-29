@@ -442,23 +442,13 @@ mod runtime {
     use std::io::Cursor;
 
     use cairn_agent::{
-        AgentEpisode, AgentStep, AgentStepState, CanonicalToolResult, ContextBlock,
-        DispatchCompletion, EpisodeAdvance, EpisodeBudget, EpisodeCompletionReason,
-        EpisodeOperationAdmissionOutcome, HistoryItem, InstructionBlock, ModelName,
-        ModelOutputTokenLimit, ModelSelection, ModelTransport, NativeProtocolCodec,
-        NativeRequestSpec, NativeToolDefinition, OperationResult, PolicyDocument,
-        PreparedToolOperation, SettledAgentStep, StepOperationSettlement, ToolCatalog,
-        ToolEffectClass, ToolGateway, ToolGatewayError, ToolImplementationVersion, ToolName,
-        ToolOperationAssignment, ToolRegistration, TurnInputDecision, admit_episode_operations,
-        advance_agent_episode, authorize_tool_operation, begin_model_dispatch,
-        begin_tool_operation, execute_model_dispatch, execute_tool_operation, open_agent_episode,
-        prepare_native_episode_step, recover_agent_step, settle_decoded_step,
-        settle_step_operations,
+        CanonicalToolResult, ContextBlock, EpisodeBudget, EpisodeCompletionReason, HistoryItem,
+        InstructionBlock, ModelName, ModelOutputTokenLimit, ModelSelection, ModelTransport,
+        NativeProtocolCodec, NativeRequestSpec, NativeToolDefinition, PolicyDocument,
+        PreparedToolOperation, ToolCatalog, ToolEffectClass, ToolGateway, ToolGatewayError,
+        ToolImplementationVersion, ToolName, ToolRegistration,
     };
-    use cairn_protocol::{
-        AttemptId, CommandId, ContentId, ContentType, EpisodeId, ModelAttemptId,
-        ObservedAtUnixMillis, OperationId, StepId,
-    };
+    use cairn_protocol::{ContentId, ContentType, EpisodeId};
     use cairn_record::{ContentStore, EventStore};
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
@@ -469,11 +459,8 @@ mod runtime {
     };
     use crate::{
         AgentResolvedRuntimeModelArtifact, CandidateNativeRepairPrevious,
-        CollectionCandidateBuildDiagnosticArtifact,
-        CollectionCandidateNativeBuildDiagnosticArtifact,
         CollectionCandidateNativeFollowupRevisionArtifact,
         CollectionCandidateNativeFollowupRevisionV1,
-        CollectionCandidateNativeRepairBuildDiagnosticArtifact,
         CollectionCandidateNativeRepairRevisionArtifact, CollectionCandidateNativeRepairRevisionV1,
         CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
         CollectionCandidateSearchInputArtifact, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
@@ -530,7 +517,7 @@ Inspect original task artifacts through candidate_read_task_artifact only if nee
 Do not submit parent or receipt IDs, content identities, task or Oracle IDs, outcome labels, episode/model provenance, build/test/correctness/performance claims, admission outcomes, or verdicts; trusted code binds lineage and later execution establishes evidence. This episode never opens another repair round automatically.";
 
     /// Trusted inputs selected before opening one Candidate episode.
-    pub struct CandidateEpisodeRunInput {
+    pub(crate) struct CandidateInitialProfileInput {
         pub search_input: PreparedCollectionCandidateSearchInput,
         pub recovery_input: IntentRecoveryInputV1,
         pub episode_id: EpisodeId,
@@ -542,10 +529,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     /// Completed proposal-only Candidate workflow facts.
-    pub struct CandidateEpisodeRunOutcome {
-        episode_id: EpisodeId,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
-        search_input: ContentId<CollectionCandidateSearchInputArtifact>,
+    pub(crate) struct CandidateInitialProfileOutcome {
         proposal_id: ContentId<CollectionCandidateProposalArtifact>,
         proposal: CollectionCandidateProposalV1,
         completion_reason: EpisodeCompletionReason,
@@ -553,7 +537,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     /// Trusted frozen inputs selected before opening one isolated Candidate revision episode.
-    pub struct CandidateRevisionEpisodeRunInput {
+    pub(crate) struct CandidateRevisionProfileInput {
         pub search_input: PreparedCollectionCandidateSearchInput,
         pub recovery_input: IntentRecoveryInputV1,
         pub parent: CollectionCandidateProposalV1,
@@ -568,19 +552,14 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     /// Completed receipt-bound Candidate revision episode facts.
-    pub struct CandidateRevisionEpisodeRunOutcome {
-        episode_id: EpisodeId,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
-        search_input: ContentId<CollectionCandidateSearchInputArtifact>,
-        parent_id: ContentId<CollectionCandidateProposalArtifact>,
-        diagnostic_id: ContentId<CollectionCandidateBuildDiagnosticArtifact>,
+    pub(crate) struct CandidateRevisionProfileOutcome {
         revision: PreparedCollectionCandidateRevision,
         completion_reason: EpisodeCompletionReason,
         steps_started: u32,
     }
 
     /// Trusted inputs for one isolated follow-up after product-owned native compilation.
-    pub struct CandidateNativeFollowupEpisodeRunInput {
+    pub(crate) struct CandidateNativeFollowupProfileInput {
         pub search_input: PreparedCollectionCandidateSearchInput,
         pub recovery_input: IntentRecoveryInputV1,
         pub previous_revision: CollectionCandidateRevisionV1,
@@ -595,7 +574,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     /// Trusted frozen inputs for the first explicit repair after a native follow-up build.
-    pub struct CandidateNativeRepairEpisodeRunInput {
+    pub(crate) struct CandidateNativeRepairProfileInput {
         pub search_input: PreparedCollectionCandidateSearchInput,
         pub recovery_input: IntentRecoveryInputV1,
         pub root_followup: CollectionCandidateNativeFollowupRevisionV1,
@@ -610,54 +589,20 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     /// Completed native-feedback Candidate follow-up facts.
-    pub struct CandidateNativeFollowupEpisodeRunOutcome {
-        episode_id: EpisodeId,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
-        search_input: ContentId<CollectionCandidateSearchInputArtifact>,
-        previous_revision_id: ContentId<CollectionCandidateRevisionArtifact>,
-        diagnostic_id: ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>,
+    pub(crate) struct CandidateNativeFollowupProfileOutcome {
         followup: PreparedCollectionCandidateNativeFollowupRevision,
         completion_reason: EpisodeCompletionReason,
         steps_started: u32,
     }
 
     /// Completed facts for one explicitly opened native repair episode.
-    pub struct CandidateNativeRepairEpisodeRunOutcome {
-        episode_id: EpisodeId,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
-        search_input: ContentId<CollectionCandidateSearchInputArtifact>,
-        root_followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
-        diagnostic_id: ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact>,
+    pub(crate) struct CandidateNativeRepairProfileOutcome {
         repair: PreparedCollectionCandidateNativeRepairRevision,
         completion_reason: EpisodeCompletionReason,
         steps_started: u32,
     }
 
-    impl CandidateNativeRepairEpisodeRunOutcome {
-        #[must_use]
-        pub const fn episode_id(&self) -> EpisodeId {
-            self.episode_id
-        }
-        #[must_use]
-        pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-            self.task_bundle
-        }
-        #[must_use]
-        pub const fn search_input(&self) -> ContentId<CollectionCandidateSearchInputArtifact> {
-            self.search_input
-        }
-        #[must_use]
-        pub const fn root_followup_id(
-            &self,
-        ) -> ContentId<CollectionCandidateNativeFollowupRevisionArtifact> {
-            self.root_followup_id
-        }
-        #[must_use]
-        pub const fn diagnostic_id(
-            &self,
-        ) -> ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact> {
-            self.diagnostic_id
-        }
+    impl CandidateNativeRepairProfileOutcome {
         #[must_use]
         pub const fn repair_id(
             &self,
@@ -678,29 +623,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         }
     }
 
-    impl CandidateNativeFollowupEpisodeRunOutcome {
-        #[must_use]
-        pub const fn episode_id(&self) -> EpisodeId {
-            self.episode_id
-        }
-        #[must_use]
-        pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-            self.task_bundle
-        }
-        #[must_use]
-        pub const fn search_input(&self) -> ContentId<CollectionCandidateSearchInputArtifact> {
-            self.search_input
-        }
-        #[must_use]
-        pub const fn previous_revision_id(&self) -> ContentId<CollectionCandidateRevisionArtifact> {
-            self.previous_revision_id
-        }
-        #[must_use]
-        pub const fn diagnostic_id(
-            &self,
-        ) -> ContentId<CollectionCandidateNativeBuildDiagnosticArtifact> {
-            self.diagnostic_id
-        }
+    impl CandidateNativeFollowupProfileOutcome {
         #[must_use]
         pub const fn followup_id(
             &self,
@@ -721,32 +644,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         }
     }
 
-    impl CandidateRevisionEpisodeRunOutcome {
-        #[must_use]
-        pub const fn episode_id(&self) -> EpisodeId {
-            self.episode_id
-        }
-
-        #[must_use]
-        pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-            self.task_bundle
-        }
-
-        #[must_use]
-        pub const fn search_input(&self) -> ContentId<CollectionCandidateSearchInputArtifact> {
-            self.search_input
-        }
-
-        #[must_use]
-        pub const fn parent_id(&self) -> ContentId<CollectionCandidateProposalArtifact> {
-            self.parent_id
-        }
-
-        #[must_use]
-        pub const fn diagnostic_id(&self) -> ContentId<CollectionCandidateBuildDiagnosticArtifact> {
-            self.diagnostic_id
-        }
-
+    impl CandidateRevisionProfileOutcome {
         #[must_use]
         pub const fn revision_id(&self) -> ContentId<CollectionCandidateRevisionArtifact> {
             self.revision.id()
@@ -768,22 +666,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         }
     }
 
-    impl CandidateEpisodeRunOutcome {
-        #[must_use]
-        pub const fn episode_id(&self) -> EpisodeId {
-            self.episode_id
-        }
-
-        #[must_use]
-        pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-            self.task_bundle
-        }
-
-        #[must_use]
-        pub const fn search_input(&self) -> ContentId<CollectionCandidateSearchInputArtifact> {
-            self.search_input
-        }
-
+    impl CandidateInitialProfileOutcome {
         #[must_use]
         pub const fn proposal_id(&self) -> ContentId<CollectionCandidateProposalArtifact> {
             self.proposal_id
@@ -807,7 +690,6 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
 
     struct CandidatePromptProjectionV1 {
         task_id: cairn_protocol::TaskId,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
         search_input: ContentId<CollectionCandidateSearchInputArtifact>,
         instruction: ContentId<InstructionBlock>,
         tool_catalog: ContentId<ToolCatalog>,
@@ -820,22 +702,6 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     impl CandidatePromptProjectionV1 {
-        fn turn_input_decision(
-            &self,
-            selection: ModelSelection,
-            pending_results: Vec<ContentId<OperationResult>>,
-        ) -> TurnInputDecision {
-            TurnInputDecision {
-                selection,
-                instructions: vec![self.instruction],
-                tool_catalog: self.tool_catalog,
-                history: vec![self.request],
-                context: vec![self.context],
-                pending_results,
-                policy: self.policy,
-            }
-        }
-
         fn native_spec(
             &self,
             wire_model: ModelName,
@@ -916,6 +782,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         let request = put_json::<HistoryItem>(content, &json!({"text":USER_REQUEST}))?;
         let context_value = json!({
             "schema_version":SCHEMA_V1,
+            "knowledge_snapshot":{"kind":"empty"},
             "candidate_search_input":search_input.input(),
             "intent_recovery_input":recovery_input,
             "task_manifest":workspace.bundle(),
@@ -941,7 +808,6 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         .map_err(|error| CandidateEpisodeError::Codec(error.to_string()))?;
         Ok(CandidatePromptProjectionV1 {
             task_id: recovery_input.task_id(),
-            task_bundle,
             search_input: search_input.id(),
             instruction,
             tool_catalog,
@@ -1035,6 +901,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         let request = put_json::<HistoryItem>(content, &json!({"text":REVISION_USER_REQUEST}))?;
         let context_value = json!({
             "schema_version":SCHEMA_V1,
+            "knowledge_snapshot":{"kind":"empty"},
             "candidate_search_input":search_input.input(),
             "intent_recovery_input":recovery_input,
             "task_manifest":workspace.bundle(),
@@ -1066,7 +933,6 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         .map_err(|error| CandidateEpisodeError::Codec(error.to_string()))?;
         Ok(CandidatePromptProjectionV1 {
             task_id: recovery_input.task_id(),
-            task_bundle,
             search_input: search_input.id(),
             instruction,
             tool_catalog,
@@ -1164,6 +1030,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
             put_json::<HistoryItem>(content, &json!({"text":NATIVE_FOLLOWUP_USER_REQUEST}))?;
         let context_value = json!({
             "schema_version":SCHEMA_V1,
+            "knowledge_snapshot":{"kind":"empty"},
             "candidate_search_input":search_input.input(),
             "intent_recovery_input":recovery_input,
             "task_manifest":workspace.bundle(),
@@ -1201,7 +1068,6 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         .map_err(|error| CandidateEpisodeError::Codec(error.to_string()))?;
         Ok(CandidatePromptProjectionV1 {
             task_id: recovery_input.task_id(),
-            task_bundle,
             search_input: search_input.id(),
             instruction,
             tool_catalog,
@@ -1302,6 +1168,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
             put_json::<HistoryItem>(content, &json!({"text":NATIVE_REPAIR_USER_REQUEST}))?;
         let context_value = json!({
             "schema_version":SCHEMA_V1,
+            "knowledge_snapshot":{"kind":"empty"},
             "candidate_search_input":search_input.input(),
             "intent_recovery_input":recovery_input,
             "task_manifest":workspace.bundle(),
@@ -1342,7 +1209,6 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         .map_err(|error| CandidateEpisodeError::Codec(error.to_string()))?;
         Ok(CandidatePromptProjectionV1 {
             task_id: recovery_input.task_id(),
-            task_bundle,
             search_input: search_input.id(),
             instruction,
             tool_catalog,
@@ -1493,7 +1359,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     impl CandidateSubmissionGateway for CandidateSubmitGateway {
-        type Outcome = CandidateEpisodeRunOutcome;
+        type Outcome = CandidateInitialProfileOutcome;
 
         fn submit_tool() -> &'static str {
             SUBMIT_TOOL
@@ -1563,7 +1429,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     impl CandidateSubmissionGateway for CandidateRevisionSubmitGateway {
-        type Outcome = CandidateRevisionEpisodeRunOutcome;
+        type Outcome = CandidateRevisionProfileOutcome;
 
         fn submit_tool() -> &'static str {
             REVISION_SUBMIT_TOOL
@@ -1576,7 +1442,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         fn finish<C: ContentStore>(
             &self,
             content: &mut C,
-            projection: &CandidatePromptProjectionV1,
+            _projection: &CandidatePromptProjectionV1,
             reason: EpisodeCompletionReason,
             steps_started: u32,
         ) -> Result<Self::Outcome, CandidateEpisodeError> {
@@ -1594,12 +1460,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                     "archived Candidate revision identity changed",
                 ));
             }
-            Ok(CandidateRevisionEpisodeRunOutcome {
-                episode_id: revision.revision().episode_id(),
-                task_bundle: projection.task_bundle,
-                search_input: projection.search_input,
-                parent_id: self.parent_id,
-                diagnostic_id: self.diagnostic.id(),
+            Ok(CandidateRevisionProfileOutcome {
                 revision,
                 completion_reason: reason,
                 steps_started,
@@ -1656,7 +1517,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     impl CandidateSubmissionGateway for CandidateNativeFollowupSubmitGateway {
-        type Outcome = CandidateNativeFollowupEpisodeRunOutcome;
+        type Outcome = CandidateNativeFollowupProfileOutcome;
 
         fn submit_tool() -> &'static str {
             NATIVE_FOLLOWUP_SUBMIT_TOOL
@@ -1669,7 +1530,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         fn finish<C: ContentStore>(
             &self,
             content: &mut C,
-            projection: &CandidatePromptProjectionV1,
+            _projection: &CandidatePromptProjectionV1,
             reason: EpisodeCompletionReason,
             steps_started: u32,
         ) -> Result<Self::Outcome, CandidateEpisodeError> {
@@ -1689,12 +1550,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                     "archived Candidate native follow-up identity changed",
                 ));
             }
-            Ok(CandidateNativeFollowupEpisodeRunOutcome {
-                episode_id: followup.revision().episode_id(),
-                task_bundle: projection.task_bundle,
-                search_input: projection.search_input,
-                previous_revision_id: self.previous_id,
-                diagnostic_id: self.diagnostic.id(),
+            Ok(CandidateNativeFollowupProfileOutcome {
                 followup,
                 completion_reason: reason,
                 steps_started,
@@ -1754,7 +1610,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     }
 
     impl CandidateSubmissionGateway for CandidateNativeRepairSubmitGateway {
-        type Outcome = CandidateNativeRepairEpisodeRunOutcome;
+        type Outcome = CandidateNativeRepairProfileOutcome;
 
         fn submit_tool() -> &'static str {
             NATIVE_REPAIR_SUBMIT_TOOL
@@ -1767,7 +1623,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         fn finish<C: ContentStore>(
             &self,
             content: &mut C,
-            projection: &CandidatePromptProjectionV1,
+            _projection: &CandidatePromptProjectionV1,
             reason: EpisodeCompletionReason,
             steps_started: u32,
         ) -> Result<Self::Outcome, CandidateEpisodeError> {
@@ -1787,12 +1643,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                     "archived Candidate native repair identity changed",
                 ));
             }
-            Ok(CandidateNativeRepairEpisodeRunOutcome {
-                episode_id: repair.revision().episode_id(),
-                task_bundle: projection.task_bundle,
-                search_input: projection.search_input,
-                root_followup_id: self.root_id,
-                diagnostic_id: self.diagnostic.id(),
+            Ok(CandidateNativeRepairProfileOutcome {
                 repair,
                 completion_reason: reason,
                 steps_started,
@@ -1807,14 +1658,14 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     /// Fails closed on task/authority mismatch, model/tool/runtime failure, budget completion, or a
     /// terminal episode without one accepted proposal.
     #[allow(clippy::too_many_lines)]
-    pub fn run_collection_candidate_episode<E, C, T>(
+    pub(crate) fn run_candidate_initial_profile<E, C, T>(
         events: &mut E,
         content: &mut C,
         transport: &mut T,
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
-        input: CandidateEpisodeRunInput,
-    ) -> Result<CandidateEpisodeRunOutcome, CandidateEpisodeError>
+        input: CandidateInitialProfileInput,
+    ) -> Result<CandidateInitialProfileOutcome, CandidateEpisodeError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1857,14 +1708,14 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     ///
     /// Fails closed on task/search/parent/diagnostic mismatch, model or tool failure, unchanged
     /// submission, budget completion, or a terminal episode without one accepted revision.
-    pub fn run_collection_candidate_revision_episode<E, C, T>(
+    pub(crate) fn run_candidate_revision_profile<E, C, T>(
         events: &mut E,
         content: &mut C,
         transport: &mut T,
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
-        input: CandidateRevisionEpisodeRunInput,
-    ) -> Result<CandidateRevisionEpisodeRunOutcome, CandidateEpisodeError>
+        input: CandidateRevisionProfileInput,
+    ) -> Result<CandidateRevisionProfileOutcome, CandidateEpisodeError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1912,14 +1763,14 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     ///
     /// Fails closed on authority mismatch, model/tool failure, unchanged submission, budget
     /// completion, or a terminal episode without one accepted explicitly yielded follow-up.
-    pub fn run_collection_candidate_native_followup_episode<E, C, T>(
+    pub(crate) fn run_candidate_native_followup_profile<E, C, T>(
         events: &mut E,
         content: &mut C,
         transport: &mut T,
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
-        input: CandidateNativeFollowupEpisodeRunInput,
-    ) -> Result<CandidateNativeFollowupEpisodeRunOutcome, CandidateEpisodeError>
+        input: CandidateNativeFollowupProfileInput,
+    ) -> Result<CandidateNativeFollowupProfileOutcome, CandidateEpisodeError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1970,14 +1821,14 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     ///
     /// Fails closed on authority mismatch, model/tool failure, unchanged submission, budget
     /// completion, or a terminal episode without one accepted explicitly yielded repair.
-    pub fn run_collection_candidate_native_repair_episode<E, C, T>(
+    pub(crate) fn run_candidate_native_repair_profile<E, C, T>(
         events: &mut E,
         content: &mut C,
         transport: &mut T,
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
-        input: CandidateNativeRepairEpisodeRunInput,
-    ) -> Result<CandidateNativeRepairEpisodeRunOutcome, CandidateEpisodeError>
+        input: CandidateNativeRepairProfileInput,
+    ) -> Result<CandidateNativeRepairProfileOutcome, CandidateEpisodeError>
     where
         E: EventStore,
         C: ContentStore,
@@ -2047,7 +1898,25 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         role: CandidateEpisodeRoleV1,
     }
 
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    struct CandidateProfileGateway<S> {
+        read: CandidateReadTaskArtifactGateway,
+        submit: S,
+    }
+
+    impl<S: ToolGateway> ToolGateway for CandidateProfileGateway<S> {
+        fn invoke(
+            &mut self,
+            operation: &PreparedToolOperation,
+        ) -> Result<CanonicalToolResult, ToolGatewayError> {
+            if operation.tool().as_str() == READ_TOOL {
+                self.read.invoke(operation)
+            } else {
+                self.submit.invoke(operation)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn run_candidate_episode_runtime<E, C, T, S>(
         events: &mut E,
         content: &mut C,
@@ -2056,7 +1925,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         workspace: SirTaskWorkspace,
         projection: &CandidatePromptProjectionV1,
         input: CandidateRuntimeInput,
-        mut submit_gateway: S,
+        submit_gateway: S,
     ) -> Result<S::Outcome, CandidateEpisodeError>
     where
         E: EventStore,
@@ -2064,252 +1933,63 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         T: ModelTransport,
         S: CandidateSubmissionGateway,
     {
-        let spec = projection.native_spec(input.selection.model.clone(), input.max_output_tokens);
-        let episode = AgentEpisode::new(input.episode_id)
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-        let mut authority = open_agent_episode(
-            events,
-            &episode,
-            projection.task_id,
-            cairn_agent::AgentRoleName::new(input.role.as_str())
+        let registrations = tool_registrations(S::submit_tool(), S::tool_version())?.to_vec();
+        let frozen = crate::proposal_loop::FrozenProposalLoopV1 {
+            task_id: projection.task_id,
+            episode_id: input.episode_id,
+            role: cairn_agent::AgentRoleName::new(input.role.as_str())
                 .map_err(|_| CandidateEpisodeError::Agent("invalid Candidate role".to_owned()))?,
-            input.budget,
-            StepId::new(),
-            ModelAttemptId::new(),
-            &CommandId::new(),
-            observed_now()?,
-        )
-        .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-        let mut native = codec
-            .prepare_initial(&spec, &projection.user_text)
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-        let mut pending_results = Vec::new();
-        let mut read_gateway = CandidateReadTaskArtifactGateway {
-            workspace,
-            limits: input.task_limits,
+            selection: input.selection.clone(),
+            budget: input.budget,
+            native_spec: projection.native_spec(input.selection.model, input.max_output_tokens),
+            user_text: projection.user_text.clone(),
+            instruction: projection.instruction,
+            tool_catalog: projection.tool_catalog,
+            history: projection.request,
+            context: projection.context,
+            policy: projection.policy,
+            capability_grant: crate::proposal_loop::ProposalLoopCapabilityGrantV1::new(
+                registrations,
+            )
+            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?,
+        };
+        let mut gateway = CandidateProfileGateway {
+            read: CandidateReadTaskArtifactGateway {
+                workspace,
+                limits: input.task_limits,
+            },
+            submit: submit_gateway,
         };
 
-        loop {
-            let step_id = authority.step_id();
-            let attempt_id = authority.model_attempt_id();
-            let decision =
-                projection.turn_input_decision(input.selection.clone(), pending_results.clone());
-            let dispatch = prepare_native_episode_step(
-                events,
-                content,
-                authority,
-                &decision,
-                &native,
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            let started =
-                begin_model_dispatch(events, dispatch, &CommandId::new(), observed_now()?)
-                    .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            match execute_model_dispatch(
-                events,
-                content,
-                transport,
-                started,
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-            {
-                DispatchCompletion::Response(_) => {}
-                DispatchCompletion::NotSent { diagnostic }
-                | DispatchCompletion::Rejected { diagnostic }
-                | DispatchCompletion::Ambiguous { diagnostic } => {
-                    return Err(CandidateEpisodeError::Agent(diagnostic));
-                }
+        let completion = crate::proposal_loop::run_proposal_loop(
+            events,
+            content,
+            transport,
+            codec,
+            &frozen,
+            &mut gateway,
+        )
+        .map_err(|error| match error {
+            crate::proposal_loop::ProposalLoopError::UnavailableTool(tool) => {
+                CandidateEpisodeError::UnavailableTool(tool)
             }
-
-            let step = AgentStep::new(step_id)
-                .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            let AgentStepState::ReadyToDecode(received) =
-                recover_agent_step(events, content, &step, attempt_id)
-                    .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-            else {
-                return Err(CandidateEpisodeError::Agent(
-                    "Candidate response did not recover at decode boundary".to_owned(),
-                ));
-            };
-            let decoded = codec
-                .decode_recovered_received(
-                    events,
-                    content,
-                    received,
-                    &CommandId::new(),
-                    observed_now()?,
-                )
-                .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            let continuation = decoded.continuation().clone();
-            let proposed_tools = decoded
-                .semantic()
-                .proposals()
-                .iter()
-                .map(|proposal| proposal.tool().as_str().to_owned())
-                .collect::<Vec<_>>();
-            let settled = settle_decoded_step(
-                events,
-                content,
-                &step,
-                attempt_id,
-                decoded.into_semantic(),
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            match settled {
-                SettledAgentStep::Yielded { .. } => {
-                    let EpisodeAdvance::Completed {
-                        reason,
-                        steps_started,
-                    } = advance_agent_episode(
-                        events,
-                        content,
-                        &episode,
-                        StepId::new(),
-                        ModelAttemptId::new(),
-                        &CommandId::new(),
-                        observed_now()?,
-                    )
-                    .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-                    else {
-                        return Err(CandidateEpisodeError::Agent(
-                            "yielded Candidate step unexpectedly advanced".to_owned(),
-                        ));
-                    };
-                    return submit_gateway.finish(content, projection, reason, steps_started);
-                }
-                SettledAgentStep::AwaitingOperations { .. } => {}
-            }
-
-            let registrations = tool_registrations(S::submit_tool(), S::tool_version())?;
-            let assignments = proposed_tools
-                .iter()
-                .map(|name| {
-                    let registration = registrations
-                        .iter()
-                        .find(|registration| registration.name().as_str() == name)
-                        .cloned()
-                        .ok_or_else(|| CandidateEpisodeError::UnavailableTool(name.clone()))?;
-                    Ok(ToolOperationAssignment::new(
-                        OperationId::new(),
-                        registration,
-                    ))
-                })
-                .collect::<Result<Vec<_>, CandidateEpisodeError>>()?;
-            let admission = match admit_episode_operations(
-                events,
-                content,
-                &episode,
-                assignments,
-                &CommandId::new(),
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-            {
-                EpisodeOperationAdmissionOutcome::Admitted(admission) => admission,
-                EpisodeOperationAdmissionOutcome::Completed {
-                    reason,
-                    steps_started,
-                } => {
-                    return submit_gateway.finish(content, projection, reason, steps_started);
-                }
-            };
-            for operation in admission.into_operations() {
-                let tool = operation.tool().as_str().to_owned();
-                let operation_authority =
-                    authorize_tool_operation(events, &CommandId::new(), observed_now()?, operation)
-                        .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-                let started = begin_tool_operation(
-                    events,
-                    operation_authority,
-                    AttemptId::new(),
-                    &CommandId::new(),
-                    observed_now()?,
-                )
-                .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-                if tool == READ_TOOL {
-                    let _ = execute_tool_operation(
-                        events,
-                        content,
-                        &mut read_gateway,
-                        started,
-                        &CommandId::new(),
-                        observed_now()?,
-                    )
-                    .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-                } else if tool == S::submit_tool() {
-                    let _ = execute_tool_operation(
-                        events,
-                        content,
-                        &mut submit_gateway,
-                        started,
-                        &CommandId::new(),
-                        observed_now()?,
-                    )
-                    .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-                } else {
-                    return Err(CandidateEpisodeError::UnavailableTool(tool));
-                }
-            }
-            let StepOperationSettlement::ReadyForNextStep {
-                pending_results: results,
-                ..
-            } = settle_step_operations(
-                events,
-                content,
-                &step,
-                attempt_id,
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-            else {
-                return Err(CandidateEpisodeError::Agent(
-                    "Candidate tool operation requires reconciliation".to_owned(),
-                ));
-            };
-            let settled_continuation = codec
-                .append_archived_tool_results(content, &continuation, &results)
-                .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            native = codec
-                .prepare_continuation(&spec, &settled_continuation)
-                .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?;
-            pending_results = results;
-            match advance_agent_episode(
-                events,
-                content,
-                &episode,
-                StepId::new(),
-                ModelAttemptId::new(),
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-            {
-                EpisodeAdvance::NextStep(next) => authority = next,
-                EpisodeAdvance::Completed {
-                    reason,
-                    steps_started,
-                } => {
-                    return submit_gateway.finish(content, projection, reason, steps_started);
-                }
-            }
-        }
+            error => CandidateEpisodeError::Agent(error.to_string()),
+        })?;
+        gateway.submit.finish(
+            content,
+            projection,
+            completion.reason,
+            completion.steps_started,
+        )
     }
 
     fn finish_candidate<C: ContentStore>(
         content: &mut C,
-        projection: &CandidatePromptProjectionV1,
+        _projection: &CandidatePromptProjectionV1,
         submit_gateway: &CandidateSubmitGateway,
         reason: EpisodeCompletionReason,
         steps_started: u32,
-    ) -> Result<CandidateEpisodeRunOutcome, CandidateEpisodeError> {
+    ) -> Result<CandidateInitialProfileOutcome, CandidateEpisodeError> {
         let Some((proposal_id, proposal)) = submit_gateway.accepted.clone() else {
             return Err(CandidateEpisodeError::MissingProposal(reason));
         };
@@ -2324,10 +2004,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                 "archived Candidate proposal identity changed",
             ));
         }
-        Ok(CandidateEpisodeRunOutcome {
-            episode_id: proposal.episode_id(),
-            task_bundle: projection.task_bundle,
-            search_input: projection.search_input,
+        Ok(CandidateInitialProfileOutcome {
             proposal_id,
             proposal,
             completion_reason: reason,
@@ -2452,24 +2129,12 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     fn rejected<T>(message: &str) -> Result<T, ToolGatewayError> {
         Err(ToolGatewayError::Rejected(message.to_owned()))
     }
-
-    fn observed_now() -> Result<ObservedAtUnixMillis, CandidateEpisodeError> {
-        let millis = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| CandidateEpisodeError::Agent(error.to_string()))?
-            .as_millis();
-        let millis = i64::try_from(millis)
-            .map_err(|_| CandidateEpisodeError::Agent("wall clock overflow".to_owned()))?;
-        Ok(ObservedAtUnixMillis::new(millis))
-    }
 }
 
 #[cfg(feature = "agent-runtime")]
-pub use runtime::{
-    CandidateEpisodeRunInput, CandidateEpisodeRunOutcome, CandidateNativeFollowupEpisodeRunInput,
-    CandidateNativeFollowupEpisodeRunOutcome, CandidateNativeRepairEpisodeRunInput,
-    CandidateNativeRepairEpisodeRunOutcome, CandidateRevisionEpisodeRunInput,
-    CandidateRevisionEpisodeRunOutcome, run_collection_candidate_episode,
-    run_collection_candidate_native_followup_episode,
-    run_collection_candidate_native_repair_episode, run_collection_candidate_revision_episode,
+pub(crate) use runtime::{
+    CandidateInitialProfileInput, CandidateNativeFollowupProfileInput,
+    CandidateNativeRepairProfileInput, CandidateRevisionProfileInput,
+    run_candidate_initial_profile, run_candidate_native_followup_profile,
+    run_candidate_native_repair_profile, run_candidate_revision_profile,
 };

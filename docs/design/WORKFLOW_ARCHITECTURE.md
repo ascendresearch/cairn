@@ -91,6 +91,12 @@ budget、tool result、write namespace 和 capability grant 始终隔离。
 
 DEV-008 的 `cairn-sir` one-shot process曾用于首个 authority consumer的typed ingress/capability proof。
 DEV-022已由通用 Proposal Host接管production SIR episode并直接删除该专用路径，没有双路径或兼容adapter。
+DEV-024又删除了遗留的`run_sir_episode`及Candidate同类role-specific runner与旁路测试。当前
+`run_proposal_host_episode`只编排freeze request、drive frozen episode、freeze terminal；所有现有role profile
+都进入同一个durable Proposal Loop。`run_proposal_loop`自身只表达open、dispatch、settle、admit、authorized
+execute、observation projection和advance步骤；每一步由独立函数和不可互换的内部typestate实现。共同loop只执行
+获准的pure/read-only Host tool，先归档observation再投影continuation；外部effect必须回到Controller，本片尚未
+实现其异步yield/resume协议。
 
 ## 5. SIR 的自主研究能力
 
@@ -209,6 +215,9 @@ Proposal Host并接通persisted Candidate episode request。DEV-023又实现一�
 manager，把durable next action连接到exact Host binary/start marker、existing Worker scheduler/reconciliation与typed
 receipt折回。它只监管配置中一个已存在Task，不代表task intake、global catalog或Host pool已经实现；后续仍须保留
 现有V1强类型和receipts，不得为尚无consumer的Agent、reviewer、service或compatibility path预建结构。
+DEV-024把现有SIR/Candidate profile的duplicated runner收敛为一个request-bound durable Proposal Loop，并删除旧入口
+与测试。Controller↔Host的external experiment request/observation resume仍是明确缺口，不能把Host的fail-closed
+control误报成该协议已经实现。
 
 ## 12. 被拒绝的方案
 

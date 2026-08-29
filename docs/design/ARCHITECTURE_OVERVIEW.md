@@ -217,7 +217,8 @@ symbolic execution、公开知识/论文检索、多模型或形式化工具。�
 - 失败或替换不改变 Controller 的 durable task truth。
 
 历史 `cairn-sir` one-shot binary只是一项typed ingress/capability proof；DEV-022的通用Proposal Host
-接管production SIR后已直接删除superseded path。详细工作流见
+接管production SIR后已直接删除superseded process path；DEV-024继续删除遗留`run_sir_episode`代码入口、
+重复loop和旁路测试。SIR领域profile/schema仍作为generic Host中的真实consumer保留。详细工作流见
 [`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md)。
 
 ## 8. 为什么 Admission 必须是独立 authority

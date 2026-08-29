@@ -165,8 +165,21 @@ fn sir_responses() -> Vec<Vec<u8>> {
         "disambiguation_experiments":[{"id":"inspect-launch","targets":[{"kind":"conflict","conflict":"coverage-conflict"},{"kind":"unknown","unknown":"host-coverage"}],"plan":"Inspect the exact host launch.","predictions":["Count-bounded coverage supports logical-count.","Partial coverage supports launched-indices."]}]
     }))
     .expect("submit args");
+    let invalid_submit = serde_json::to_string(&json!({
+        "schema_version":1,
+        "observed_facts":[],
+        "hypotheses":[],
+        "conflicts":[],
+        "unknowns":[],
+        "invariants":[],
+        "optimization_freedoms":[],
+        "source_dispositions":[],
+        "disambiguation_experiments":[]
+    }))
+    .expect("invalid submit args");
     vec![
         serde_json::to_vec(&json!({"output":[{"type":"function_call","call_id":"sir-read","name":"sir_read_task_artifact","arguments":read}]})).expect("response"),
+        serde_json::to_vec(&json!({"output":[{"type":"function_call","call_id":"sir-invalid-submit","name":"sir_submit_intent_hypotheses","arguments":invalid_submit}]})).expect("response"),
         serde_json::to_vec(&json!({"output":[{"type":"function_call","call_id":"sir-submit","name":"sir_submit_intent_hypotheses","arguments":submit}]})).expect("response"),
         serde_json::to_vec(&json!({"output":[{"type":"message","id":"sir-final","phase":"final_answer","role":"assistant","status":"completed","content":[{"type":"output_text","text":"submitted"}]}]})).expect("response"),
     ]
@@ -208,7 +221,7 @@ fn run_with_responses(
 }
 
 #[test]
-fn one_host_implementation_runs_isolated_sir_and_candidate_profiles() {
+fn one_host_lifecycle_atomically_rejects_repairs_and_isolates_sir_and_candidate_profiles() {
     let sir_task = tempfile::tempdir().expect("SIR task");
     write_sir_task(sir_task.path());
     let sir_workspace =

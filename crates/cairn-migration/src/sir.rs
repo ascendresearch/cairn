@@ -633,23 +633,13 @@ mod runtime {
     use std::io::Cursor;
 
     use cairn_agent::{
-        AgentEpisode, AgentStep, AgentStepState, CanonicalToolResult, ContextBlock,
-        DispatchCompletion, EpisodeAdvance, EpisodeBudget, EpisodeCompletionReason,
-        EpisodeOperationAdmissionOutcome, HistoryItem, InstructionBlock, ModelName,
-        ModelOutputTokenLimit, ModelSelection, ModelTransport, NativeProtocolCodec,
-        NativeRequestSpec, NativeToolDefinition, OperationResult, PolicyDocument,
-        PreparedToolOperation, SettledAgentStep, StepOperationSettlement, ToolCatalog,
-        ToolEffectClass, ToolGateway, ToolGatewayError, ToolImplementationVersion, ToolName,
-        ToolOperationAssignment, ToolRegistration, TurnInputDecision, admit_episode_operations,
-        advance_agent_episode, authorize_tool_operation, begin_model_dispatch,
-        begin_tool_operation, execute_model_dispatch, execute_tool_operation, open_agent_episode,
-        prepare_native_episode_step, recover_agent_step, settle_decoded_step,
-        settle_step_operations,
+        CanonicalToolResult, ContextBlock, EpisodeBudget, EpisodeCompletionReason, HistoryItem,
+        InstructionBlock, ModelName, ModelOutputTokenLimit, ModelSelection, ModelTransport,
+        NativeProtocolCodec, NativeRequestSpec, NativeToolDefinition, PolicyDocument,
+        PreparedToolOperation, ToolCatalog, ToolEffectClass, ToolGateway, ToolGatewayError,
+        ToolImplementationVersion, ToolName, ToolRegistration,
     };
-    use cairn_protocol::{
-        AttemptId, CommandId, EpisodeId, ModelAttemptId, ObservedAtUnixMillis, OperationId, StepId,
-        TaskId,
-    };
+    use cairn_protocol::{EpisodeId, TaskId};
     use cairn_record::{ContentStore, EventStore};
     use serde_json::{Value, json};
 
@@ -680,7 +670,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
 
     /// Failure while driving the product SIR workflow through the domain-neutral agent runtime.
     #[derive(Debug, Error)]
-    pub enum SirEpisodeRunError {
+    pub(crate) enum SirProfileError {
         /// Product input, proposal, or task adapter failed.
         #[error(transparent)]
         Sir(#[from] SirError),
@@ -709,12 +699,6 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
     }
 
     impl SirPromptProjectionV1 {
-        /// Returns the exact task bundle identity.
-        #[must_use]
-        const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-            self.recovery_input.task_bundle()
-        }
-
         /// Returns the frozen recovery-input identity.
         #[must_use]
         const fn recovery_input_id(&self) -> ContentId<IntentRecoveryInputArtifact> {
@@ -725,24 +709,6 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         #[must_use]
         fn user_text(&self) -> &str {
             &self.user_text
-        }
-
-        /// Constructs the generic audited decision for one episode step.
-        #[must_use]
-        fn turn_input_decision(
-            &self,
-            selection: ModelSelection,
-            pending_results: Vec<ContentId<OperationResult>>,
-        ) -> TurnInputDecision {
-            TurnInputDecision {
-                selection,
-                instructions: vec![self.instruction],
-                tool_catalog: self.tool_catalog,
-                history: vec![self.request],
-                context: vec![self.context],
-                pending_results,
-                policy: self.policy,
-            }
         }
 
         /// Builds the protocol-native request contract from the same tool definitions.
@@ -825,6 +791,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         )?;
         let model_context = json!({
             "schema_version":SCHEMA_V1,
+            "knowledge_snapshot":{"kind":"empty"},
             "recovery_input_id":recovery_input_id,
             "recovery_input":recovery_input,
             "task_artifacts":workspace.bundle().artifacts()
@@ -1023,8 +990,26 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         }
     }
 
+    struct SirProfileGateway {
+        read: SirReadTaskArtifactGateway,
+        submit: SirSubmitIntentHypothesesGateway,
+    }
+
+    impl ToolGateway for SirProfileGateway {
+        fn invoke(
+            &mut self,
+            operation: &PreparedToolOperation,
+        ) -> Result<CanonicalToolResult, ToolGatewayError> {
+            if operation.tool().as_str() == READ_TOOL {
+                self.read.invoke(operation)
+            } else {
+                self.submit.invoke(operation)
+            }
+        }
+    }
+
     /// Trusted inputs selected before opening one SIR episode.
-    pub struct SirEpisodeRunInput {
+    pub(crate) struct SirProfileInput {
         /// Product task lifecycle identity; the exact source bytes are bound separately by the bundle.
         pub task_id: TaskId,
         /// Caller/target/evidence declaration frozen by the Controller before model work.
@@ -1044,35 +1029,14 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
     }
 
     /// Completed proposal-only SIR workflow facts.
-    pub struct SirEpisodeRunOutcome {
-        episode_id: EpisodeId,
-        task_bundle: ContentId<SirTaskBundleArtifact>,
-        recovery_input: ContentId<IntentRecoveryInputArtifact>,
+    pub(crate) struct SirProfileOutcome {
         proposal_id: ContentId<SirIntentHypothesisSetProposalArtifact>,
         proposal: IntentHypothesisSetProposalV1,
         completion_reason: EpisodeCompletionReason,
         steps_started: u32,
     }
 
-    impl SirEpisodeRunOutcome {
-        /// Returns the durable episode identity.
-        #[must_use]
-        pub const fn episode_id(&self) -> EpisodeId {
-            self.episode_id
-        }
-
-        /// Returns the exact model-visible task bundle.
-        #[must_use]
-        pub const fn task_bundle(&self) -> ContentId<SirTaskBundleArtifact> {
-            self.task_bundle
-        }
-
-        /// Returns the exact caller/task/target/capability input visible to the model.
-        #[must_use]
-        pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
-            self.recovery_input
-        }
-
+    impl SirProfileOutcome {
         /// Returns the archived non-authoritative proposal identity.
         #[must_use]
         pub const fn proposal_id(&self) -> ContentId<SirIntentHypothesisSetProposalArtifact> {
@@ -1098,7 +1062,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         }
     }
 
-    /// Runs the current-V1 SIR tool loop through the existing durable agent runtime.
+    /// Prepares the SIR domain profile and delegates its episode to the common Proposal Host loop.
     ///
     /// Recorded and live providers implement the same [`ModelTransport`] seam. All source reads and
     /// proposal submissions pass through durable operation admission and execution; the model never
@@ -1108,15 +1072,14 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
     ///
     /// Returns a product-boundary, durable runtime, transport, tool, budget, or missing-proposal
     /// failure. A provider/tool ambiguity remains durable and is never retried implicitly.
-    #[allow(clippy::too_many_lines)]
-    pub fn run_sir_episode<E, C, T>(
+    pub(crate) fn run_sir_profile<E, C, T>(
         events: &mut E,
         content: &mut C,
         transport: &mut T,
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
-        input: SirEpisodeRunInput,
-    ) -> Result<SirEpisodeRunOutcome, SirEpisodeRunError>
+        input: SirProfileInput,
+    ) -> Result<SirProfileOutcome, SirProfileError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1129,301 +1092,82 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             input.recovery_request.clone(),
             input.task_limits,
         )?;
-        let spec = SirPromptProjectionV1::native_spec(
+        let native_spec = SirPromptProjectionV1::native_spec(
             input.selection.model.clone(),
             input.max_output_tokens,
         )
-        .map_err(SirEpisodeRunError::Sir)?;
-        let episode = AgentEpisode::new(input.episode_id)
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-        let first_step_id = StepId::new();
-        let first_attempt_id = ModelAttemptId::new();
-        let mut authority = open_agent_episode(
+        .map_err(SirProfileError::Sir)?;
+        let frozen = crate::proposal_loop::FrozenProposalLoopV1 {
+            task_id: input.task_id,
+            episode_id: input.episode_id,
+            role: cairn_agent::AgentRoleName::new("sir-intent-analyst")
+                .map_err(|_| SirProfileError::Agent("invalid built-in SIR role".to_owned()))?,
+            selection: input.selection,
+            budget: input.budget,
+            native_spec,
+            user_text: projection.user_text().to_owned(),
+            instruction: projection.instruction,
+            tool_catalog: projection.tool_catalog,
+            history: projection.request,
+            context: projection.context,
+            policy: projection.policy,
+            capability_grant: crate::proposal_loop::ProposalLoopCapabilityGrantV1::new(
+                sir_tool_registrations()?.to_vec(),
+            )
+            .map_err(|error| SirProfileError::Agent(error.to_string()))?,
+        };
+        let mut gateway = SirProfileGateway {
+            read: SirReadTaskArtifactGateway::new(workspace.clone(), input.task_limits),
+            submit: SirSubmitIntentHypothesesGateway::new(
+                workspace,
+                projection.recovery_input_id(),
+                projection.recovery_input.clone(),
+                input.episode_id,
+                input.model_configuration,
+            ),
+        };
+
+        let completion = crate::proposal_loop::run_proposal_loop(
             events,
-            &episode,
-            input.task_id,
-            cairn_agent::AgentRoleName::new("sir-intent-analyst")
-                .map_err(|_| SirEpisodeRunError::Agent("invalid built-in SIR role".to_owned()))?,
-            input.budget,
-            first_step_id,
-            first_attempt_id,
-            &CommandId::new(),
-            observed_now()?,
+            content,
+            transport,
+            codec,
+            &frozen,
+            &mut gateway,
         )
-        .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-        let mut native = codec
-            .prepare_initial(&spec, projection.user_text())
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-        let mut pending_results = Vec::new();
-        let mut read_gateway =
-            SirReadTaskArtifactGateway::new(workspace.clone(), input.task_limits);
-        let mut submit_gateway = SirSubmitIntentHypothesesGateway::new(
-            workspace,
-            projection.recovery_input_id(),
-            projection.recovery_input.clone(),
-            input.episode_id,
-            input.model_configuration,
-        );
-
-        loop {
-            let step_id = authority.step_id();
-            let attempt_id = authority.model_attempt_id();
-            let decision =
-                projection.turn_input_decision(input.selection.clone(), pending_results.clone());
-            let dispatch = prepare_native_episode_step(
-                events,
-                content,
-                authority,
-                &decision,
-                &native,
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-            let started =
-                begin_model_dispatch(events, dispatch, &CommandId::new(), observed_now()?)
-                    .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-            match execute_model_dispatch(
-                events,
-                content,
-                transport,
-                started,
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-            {
-                DispatchCompletion::Response(_) => {}
-                DispatchCompletion::NotSent { diagnostic }
-                | DispatchCompletion::Rejected { diagnostic }
-                | DispatchCompletion::Ambiguous { diagnostic } => {
-                    return Err(SirEpisodeRunError::Agent(diagnostic));
-                }
+        .map_err(|error| match error {
+            crate::proposal_loop::ProposalLoopError::UnavailableTool(tool) => {
+                SirProfileError::UnavailableTool(tool)
             }
-
-            let step = AgentStep::new(step_id)
-                .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-            let AgentStepState::ReadyToDecode(received) =
-                recover_agent_step(events, content, &step, attempt_id)
-                    .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-            else {
-                return Err(SirEpisodeRunError::Agent(
-                    "model response did not recover at the decode boundary".to_owned(),
-                ));
-            };
-            let decoded = codec
-                .decode_recovered_received(
-                    events,
-                    content,
-                    received,
-                    &CommandId::new(),
-                    observed_now()?,
-                )
-                .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-            let continuation = decoded.continuation().clone();
-            let proposed_tools = decoded
-                .semantic()
-                .proposals()
-                .iter()
-                .map(|proposal| proposal.tool().as_str().to_owned())
-                .collect::<Vec<_>>();
-            let settled = settle_decoded_step(
-                events,
-                content,
-                &step,
-                attempt_id,
-                decoded.into_semantic(),
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-
-            match settled {
-                SettledAgentStep::Yielded { .. } => {
-                    let EpisodeAdvance::Completed {
-                        reason,
-                        steps_started,
-                    } = advance_agent_episode(
-                        events,
-                        content,
-                        &episode,
-                        StepId::new(),
-                        ModelAttemptId::new(),
-                        &CommandId::new(),
-                        observed_now()?,
-                    )
-                    .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-                    else {
-                        return Err(SirEpisodeRunError::Agent(
-                            "yielded step unexpectedly advanced".to_owned(),
-                        ));
-                    };
-                    return finish_sir_episode(
-                        content,
-                        &projection,
-                        &submit_gateway,
-                        reason,
-                        steps_started,
-                    );
-                }
-                SettledAgentStep::AwaitingOperations { .. } => {}
-            }
-
-            let registrations = sir_tool_registrations()?;
-            let assignments = proposed_tools
-                .iter()
-                .map(|name| {
-                    let registration = registrations
-                        .iter()
-                        .find(|registration| registration.name().as_str() == name)
-                        .cloned()
-                        .ok_or_else(|| SirEpisodeRunError::UnavailableTool(name.clone()))?;
-                    Ok(ToolOperationAssignment::new(
-                        OperationId::new(),
-                        registration,
-                    ))
-                })
-                .collect::<Result<Vec<_>, SirEpisodeRunError>>()?;
-            let admission = match admit_episode_operations(
-                events,
-                content,
-                &episode,
-                assignments,
-                &CommandId::new(),
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-            {
-                EpisodeOperationAdmissionOutcome::Admitted(admission) => admission,
-                EpisodeOperationAdmissionOutcome::Completed {
-                    reason,
-                    steps_started,
-                } => {
-                    return finish_sir_episode(
-                        content,
-                        &projection,
-                        &submit_gateway,
-                        reason,
-                        steps_started,
-                    );
-                }
-            };
-
-            for operation in admission.into_operations() {
-                let tool = operation.tool().as_str().to_owned();
-                let operation_authority =
-                    authorize_tool_operation(events, &CommandId::new(), observed_now()?, operation)
-                        .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-                let started = begin_tool_operation(
-                    events,
-                    operation_authority,
-                    AttemptId::new(),
-                    &CommandId::new(),
-                    observed_now()?,
-                )
-                .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-                if tool == READ_TOOL {
-                    let _ = execute_tool_operation(
-                        events,
-                        content,
-                        &mut read_gateway,
-                        started,
-                        &CommandId::new(),
-                        observed_now()?,
-                    )
-                    .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-                } else if tool == SUBMIT_TOOL {
-                    let _ = execute_tool_operation(
-                        events,
-                        content,
-                        &mut submit_gateway,
-                        started,
-                        &CommandId::new(),
-                        observed_now()?,
-                    )
-                    .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-                } else {
-                    return Err(SirEpisodeRunError::UnavailableTool(tool));
-                }
-            }
-
-            let StepOperationSettlement::ReadyForNextStep {
-                pending_results: results,
-                ..
-            } = settle_step_operations(
-                events,
-                content,
-                &step,
-                attempt_id,
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-            else {
-                return Err(SirEpisodeRunError::Agent(
-                    "SIR tool operation requires explicit reconciliation".to_owned(),
-                ));
-            };
-            let settled_continuation = codec
-                .append_archived_tool_results(content, &continuation, &results)
-                .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-            native = codec
-                .prepare_continuation(&spec, &settled_continuation)
-                .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?;
-            pending_results = results;
-
-            match advance_agent_episode(
-                events,
-                content,
-                &episode,
-                StepId::new(),
-                ModelAttemptId::new(),
-                &CommandId::new(),
-                observed_now()?,
-            )
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-            {
-                EpisodeAdvance::NextStep(next) => authority = next,
-                EpisodeAdvance::Completed {
-                    reason,
-                    steps_started,
-                } => {
-                    return finish_sir_episode(
-                        content,
-                        &projection,
-                        &submit_gateway,
-                        reason,
-                        steps_started,
-                    );
-                }
-            }
-        }
+            error => SirProfileError::Agent(error.to_string()),
+        })?;
+        finish_sir_episode(
+            content,
+            &gateway.submit,
+            completion.reason,
+            completion.steps_started,
+        )
     }
 
     fn finish_sir_episode<C: ContentStore>(
         content: &mut C,
-        projection: &SirPromptProjectionV1,
         submit_gateway: &SirSubmitIntentHypothesesGateway,
         reason: EpisodeCompletionReason,
         steps_started: u32,
-    ) -> Result<SirEpisodeRunOutcome, SirEpisodeRunError> {
+    ) -> Result<SirProfileOutcome, SirProfileError> {
         let Some((proposal_id, proposal)) = submit_gateway.accepted().cloned() else {
-            return Err(SirEpisodeRunError::MissingProposal(reason));
+            return Err(SirProfileError::MissingProposal(reason));
         };
         let archived = content
             .put::<SirIntentHypothesisSetProposalArtifact>(&mut Cursor::new(encode(&proposal)?))
             .map_err(SirError::Content)?
             .content_id;
         if archived != proposal_id {
-            return Err(SirEpisodeRunError::Agent(
+            return Err(SirProfileError::Agent(
                 "archived SIR proposal identity changed".to_owned(),
             ));
         }
-        Ok(SirEpisodeRunOutcome {
-            episode_id: proposal.episode_id(),
-            task_bundle: projection.task_bundle(),
-            recovery_input: projection.recovery_input_id(),
+        Ok(SirProfileOutcome {
             proposal_id,
             proposal,
             completion_reason: reason,
@@ -1737,16 +1481,6 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         Err(ToolGatewayError::Rejected(message.to_owned()))
     }
 
-    fn observed_now() -> Result<ObservedAtUnixMillis, SirEpisodeRunError> {
-        let millis = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| SirEpisodeRunError::Agent(error.to_string()))?
-            .as_millis();
-        let millis = i64::try_from(millis)
-            .map_err(|_| SirEpisodeRunError::Agent("wall clock overflow".to_owned()))?;
-        Ok(ObservedAtUnixMillis::new(millis))
-    }
-
     fn put_json<T: ContentType>(
         store: &mut impl ContentStore,
         value: &Value,
@@ -1757,4 +1491,4 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
 }
 
 #[cfg(feature = "agent-runtime")]
-pub use runtime::{SirEpisodeRunError, SirEpisodeRunInput, SirEpisodeRunOutcome, run_sir_episode};
+pub(crate) use runtime::{SirProfileInput, run_sir_profile};

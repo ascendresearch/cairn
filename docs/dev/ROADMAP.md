@@ -29,18 +29,21 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-019..020 repeatable explicit repair lineage + native rebuild
 → DEV-021 Controller-owned durable Candidate workflow spine
 → DEV-022 generic Proposal Host + persisted workflow request consumer
-→ next: audit Controller supervision or the shortest native-success/NPU consumer
+→ DEV-023 Controller-owned single-task process manager
+→ DEV-024 unified Proposal Host request lifecycle
+→ next: minimal Controller-owned experiment observation round-trip or native-success/NPU consumer
 ```
 
-DEV-004..022现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
+DEV-004..024现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1` → claim-scoped user decision → independent
 Admission → `MigrationIntentContractV1` → collection comparator policy → actual observation/comparison已经
 闭合；DEV-010/011又完成局部qualification、commit-before-publish local claim和answer-free Candidate input，
 DEV-012则让configured DeepSeek通过durable agent runtime读取task-scoped source并提交首个typed Candidate
 proposal。DEV-013–020 已经把该 artifact 推进到远端 generic/native build、receipt-bound diagnostic、隔离
-DeepSeek revision/repair 和 rebuild；DEV-021/022已把这些transition固化到Controller state machine并由通用
-Proposal Host消费persisted episode request。最新native gate仍为`SubjectFailed`。下一阶段继续寻找完整
-Controller supervision或native success/NPU correctness的最短consumer；仍保持expected observation、
+DeepSeek revision/repair 和 rebuild；DEV-021–023已把这些transition固化到Controller state machine、通用
+Proposal Host和single-task manager，DEV-024统一了现有role的Host lifecycle。最新native gate仍为
+`SubjectFailed`。下一阶段继续寻找Controller-owned experiment observation round-trip或native success/NPU
+correctness的最短consumer；仍保持expected observation、
 candidate output与Admission authority分离。尚未完成CP1、完整
 Candidate verdict 链或通用 governance。
 
