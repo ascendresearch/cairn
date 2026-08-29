@@ -8,6 +8,7 @@ mod candidate_native_followup;
 mod candidate_native_repair;
 mod candidate_revision;
 mod candidate_search;
+mod candidate_workflow;
 mod collection_oracle;
 mod collection_oracle_admission;
 mod corpus_execution;
@@ -102,6 +103,7 @@ pub use candidate_native_repair::{
     CollectionCandidateNativeRepairRevisionArtifact, CollectionCandidateNativeRepairRevisionV1,
     PreparedCandidateNativeRepairBuildDiagnostic, PreparedCollectionCandidateNativeRepairRevision,
     prepare_candidate_native_repair_build_diagnostic,
+    prepare_candidate_native_repair_round_build_diagnostic,
     prepare_collection_candidate_native_repair_revision,
     validate_archived_collection_candidate_native_repair_revision,
 };
@@ -119,6 +121,17 @@ pub use candidate_search::{
     CollectionCandidateSearchScopeV1, CollectionOracleAdmissionPublicOutcomeArtifact,
     PreparedCollectionCandidateSearchInput, prepare_collection_candidate_search_input,
     validate_archived_collection_candidate_search_input,
+};
+pub use candidate_workflow::{
+    CandidateEpisodeKindV1, CandidateEpisodeRequestV1, CandidateNativeBuildDispatchV1,
+    CandidateNativeBuildScheduleV1, CandidateNativeDiagnosticV1, CandidateNativePublicationV1,
+    CandidateRevisionRoundCount, CandidateRevisionRoundLimit, CandidateSubjectFailureStopV1,
+    CandidateWorkflowAuthorityV1, CandidateWorkflowError, CandidateWorkflowNextActionV1,
+    CandidateWorkflowStateV1, CandidateWorkflowTerminalV1, MigrationWorkflowV1,
+    open_candidate_workflow, record_candidate_native_followup, record_candidate_native_repair,
+    record_candidate_native_subject_failure, record_candidate_native_terminal,
+    recover_candidate_workflow, request_candidate_episode, request_candidate_native_build,
+    require_candidate_native_build_reconciliation,
 };
 pub use collection_oracle::{
     AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,

@@ -13,6 +13,7 @@ use cairn_execution::{
 };
 use cairn_protocol::{ContentId, JobId};
 use cairn_record::{ContentStore, ContentStoreError};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -36,7 +37,8 @@ const NATIVE_CMAKE: &[u8] = b"cmake_minimum_required(VERSION 3.24)\nfind_package
 ///
 /// This is not the user-selected migration target. It projects one already-probed remote build
 /// lane into a domain-neutral worker placement and immutable Docker environment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CandidateBuildEnvironmentProfileV1 {
     /// Ascend CANN 9.1.0 beta 1, `dav-3510`, compilation only, with no accelerator exposed.
     AscendCann910Beta1Dav3510NoDevice,
@@ -367,6 +369,11 @@ impl PreparedCandidateNativeRevisionBuildJob {
     #[must_use]
     pub const fn contract(&self) -> &JobContract {
         self.prepared.contract()
+    }
+
+    #[must_use]
+    pub fn contract_bytes(&self) -> &[u8] {
+        self.prepared.contract_bytes()
     }
 
     #[must_use]

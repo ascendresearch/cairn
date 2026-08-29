@@ -17,7 +17,7 @@ use crate::{
     CandidateRevisionError, CollectionCandidateNativeFollowupRevisionArtifact,
     CollectionCandidateNativeFollowupRevisionV1, CollectionCandidateProposalSubmissionV1,
     CollectionCandidateSearchInputArtifact, PreparedCandidateNativeFollowupBuildJob,
-    SirResolvedRuntimeModelArtifact,
+    PreparedCandidateNativeRepairBuildJob, SirResolvedRuntimeModelArtifact,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -228,21 +228,86 @@ pub fn prepare_candidate_native_repair_build_diagnostic(
     stderr_bytes: &[u8],
     evidence_bytes: &[u8],
 ) -> Result<PreparedCandidateNativeRepairBuildDiagnostic, CandidateNativeRepairError> {
+    prepare_repair_build_diagnostic(
+        CandidateNativeRepairParentV1::RootFollowup(build.followup_id()),
+        build.input_bundle_id(),
+        build.environment_id(),
+        build.contract_id(),
+        build.contract().job_id(),
+        receipt_id,
+        receipt,
+        stderr_bytes,
+        evidence_bytes,
+    )
+}
+
+/// Derives a later repair-round diagnostic from the exact preceding repair native build.
+///
+/// A root-follow-up prepared job cannot substitute for the repair publication.
+///
+/// ```compile_fail
+/// use cairn_migration::{
+///     PreparedCandidateNativeFollowupBuildJob,
+///     prepare_candidate_native_repair_round_build_diagnostic,
+/// };
+/// fn invalid(wrong: &PreparedCandidateNativeFollowupBuildJob) {
+///     let _ = prepare_candidate_native_repair_round_build_diagnostic(
+///         wrong, todo!(), todo!(), b"stderr", b"evidence"
+///     );
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Rejects every build/receipt/stderr/evidence mismatch, non-subject outcomes, non-Docker
+/// execution, and execution that does not prove the expected no-device environment.
+pub fn prepare_candidate_native_repair_round_build_diagnostic(
+    build: &PreparedCandidateNativeRepairBuildJob,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    stderr_bytes: &[u8],
+    evidence_bytes: &[u8],
+) -> Result<PreparedCandidateNativeRepairBuildDiagnostic, CandidateNativeRepairError> {
+    prepare_repair_build_diagnostic(
+        CandidateNativeRepairParentV1::Repair(build.repair_id()),
+        build.input_bundle_id(),
+        build.environment_id(),
+        build.contract_id(),
+        build.contract().job_id(),
+        receipt_id,
+        receipt,
+        stderr_bytes,
+        evidence_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_repair_build_diagnostic(
+    parent: CandidateNativeRepairParentV1,
+    input_bundle: ContentId<InputBundleArtifact>,
+    environment: ContentId<ExecutionEnvironmentArtifact>,
+    contract: ContentId<JobContractArtifact>,
+    job_id: cairn_protocol::JobId,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    stderr_bytes: &[u8],
+    evidence_bytes: &[u8],
+) -> Result<PreparedCandidateNativeRepairBuildDiagnostic, CandidateNativeRepairError> {
     let bounded = validate_native_failed_receipt(
         receipt_id,
         receipt,
         stderr_bytes,
         evidence_bytes,
-        build.contract().job_id(),
-        build.contract_id(),
-        build.environment_id(),
+        job_id,
+        contract,
+        environment,
     )?;
     let diagnostic = CollectionCandidateNativeRepairBuildDiagnosticV1 {
         schema_version: SCHEMA_V1,
-        parent: CandidateNativeRepairParentV1::RootFollowup(build.followup_id()),
-        input_bundle: build.input_bundle_id(),
-        environment: build.environment_id(),
-        contract: build.contract_id(),
+        parent,
+        input_bundle,
+        environment,
+        contract,
         receipt: receipt_id,
         stderr: receipt.stderr_id(),
         evidence: receipt.evidence_id(),

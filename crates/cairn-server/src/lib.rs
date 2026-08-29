@@ -1,7 +1,12 @@
 //! Runnable Cairn controller composition root.
 
+mod candidate_workflow;
 mod enrollment;
 mod scheduling;
+
+pub use candidate_workflow::{
+    prepare_candidate_native_build_dispatch, schedule_candidate_native_build,
+};
 
 pub use enrollment::{
     RegistryCredentialInspection, RegistryCredentialProvenance, RegistryCredentialStatus,
@@ -163,6 +168,8 @@ pub enum ServerError {
     Session(String),
     #[error("controller scheduling failed: {0}")]
     Scheduling(String),
+    #[error("migration workflow composition failed: {0}")]
+    MigrationWorkflow(String),
     #[error("registry entry not found: {0}")]
     RegistryEntryNotFound(String),
 }

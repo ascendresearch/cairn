@@ -10,6 +10,7 @@ license.workspace = true
 cairn-control-transport.workspace = true
 cairn-codec.workspace = true
 cairn-execution.workspace = true
+cairn-migration = { workspace = true, default-features = false }
 cairn-observability.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
@@ -29,7 +30,6 @@ tracing.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
-cairn-migration.workspace = true
 cairn-worker = { path = "../cairn-worker" }
 tempfile.workspace = true
 

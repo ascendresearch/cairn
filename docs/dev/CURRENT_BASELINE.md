@@ -24,9 +24,11 @@ Candidate通过3次bounded reads提交首个strict typed Ascend C/CANN source pr
 restart。DEV-013–020 已把 exact proposal/revisions 多次经 Controller 调度到远端 no-device Ascend Worker，
 取得 generic build、product-owned native ASC build、typed diagnostic、隔离 DeepSeek repair 和 rebuild 的
 authoritative receipts。DEV-015 的 generic build 曾成功但暴露 host fallback，DEV-016 起的 fixed `bisheng`
-native gate 正确关闭该绕过；DEV-020 的最新 exact repair 仍为 `SubjectFailed`。因此当前已经打通可重复的
-远端 build/repair 控制闭环，但尚无 native build success、NPU execution、semantic Candidate Admission、
-performance 或最终 verdict。
+native gate 正确关闭该绕过；DEV-020 的最新 exact repair 仍为 `SubjectFailed`。DEV-021随后把这段反复手工
+串接的native build/diagnostic/follow-up/repair suffix固化为task-owned current-V1 durable workflow；recorded
+consumer、mid-episode SQLite restart、exact replay/changed-input和typed domain controls均已闭合，旧one-shot
+examples、专用smoke scripts和三项手工native ignored tests已删除。DEV-021没有调用模型或远端Worker，因此当前
+仍无 native build success、NPU execution、semantic Candidate Admission、performance 或最终 verdict。
 
 ## 2. 可复用基础
 
@@ -35,6 +37,7 @@ performance 或最终 verdict。
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
+| Product workflow | task-owned Candidate native suffix aggregate、typed next action、exact command replay、reconcile-only in-doubt state | 目前只有recorded episode consumer；尚无generic Proposal Host或完整migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -51,8 +54,9 @@ performance 或最终 verdict。
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–020 只覆盖一个窄
-  host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build；
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–021 只覆盖一个窄
+  host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build和
+  recorded durable suffix；
 - native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
@@ -107,11 +111,13 @@ committed public local Oracle outcome
 → Controller scheduler → remote Worker build
 → receipt-bound diagnostic → isolated DeepSeek revision/repair episode
 → product-owned native ASC rebuild
+→ task-owned durable Candidate suffix state / exact next action
 ```
 
-最新 current output 是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
-或 verdict。它证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把
-compile failure 外推为语义错误，也不能把跨主机闭环误报为真实 NPU evidence。
+最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
+或 verdict。最新local product output是DEV-021 recorded workflow terminal/restart evidence，不是新的live build。
+DEV-020证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把compile
+failure外推为语义错误，也不能把recorded workflow或跨主机闭环误报为真实 NPU evidence。
 
 ## 7. 当前状态
 
@@ -137,5 +143,6 @@ compile failure 外推为语义错误，也不能把跨主机闭环误报为真�
 | DEV-018 | Accepted | exact follow-up 重新进入相同 native gate并得到可恢复 `SubjectFailed` |
 | DEV-019 | Accepted | 建立显式、可重复但不自动续轮的 native repair lineage；DeepSeek 提交 exact repair |
 | DEV-020 | Accepted | exact repair 远端 native rebuild 为 `SubjectFailed`；`__kernel__` 在当前 toolchain 为 unknown type |
+| DEV-021 | Accepted | task-owned current-V1 workflow固化native suffix；recorded two-material consumer、restart/replay与旧手工入口删除闭合；无model/remote Worker调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。
