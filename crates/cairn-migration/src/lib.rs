@@ -11,6 +11,8 @@ mod candidate_search;
 mod candidate_workflow;
 mod collection_oracle;
 mod collection_oracle_admission;
+#[cfg(feature = "agent-runtime")]
+mod controller_workflow;
 mod corpus_execution;
 mod corpus_observation;
 mod domain;
@@ -160,6 +162,12 @@ pub use collection_oracle_admission::{
     CollectionOracleQualificationTrialV1, CollectionOracleRequalificationTriggerV1,
     PreparedAdmittedCollectionOracleClaim, collection_oracle_admission_gate_id,
     prepare_admitted_collection_oracle_claim, prepare_collection_oracle_claim_proposal,
+};
+#[cfg(feature = "agent-runtime")]
+pub use controller_workflow::{
+    ControllerWorkflowError, ControllerWorkflowNextActionV1, ControllerWorkflowStateV1,
+    ControllerWorkflowV1, FrozenSirAuthorityV1, authorize_sir_episode, freeze_controller_workflow,
+    record_intent_decision_requests, record_sir_proposal, recover_controller_workflow,
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,

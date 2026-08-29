@@ -3,7 +3,7 @@
 - 状态：当前会话交接入口
 - 日期：2026-08-29
 - 架构基线提交：`c49e16a`（`docs: freeze agent-loop workflow architecture`）
-- 当前实现基线：DEV-001–025 已记录；DEV-025 为 `Accepted`
+- 当前实现基线：DEV-001–026 已记录；DEV-026 为 `Accepted`
 
 ## 1. 下一会话先建立的共同认识
 
@@ -29,8 +29,9 @@ generic Proposal Host承载SIR/Candidate role profile并消费persisted workflow
 single-task manager消费durable action并连接Host supervision、Worker scheduler/reconciliation与receipt折回。三片都
 只有recorded/local evidence，没有新增live model或Worker事实。DEV-024进一步删除遗留role-specific runner和旁路
 测试，把现有SIR/Candidate profile固化到同一个freeze/episode/observation/submission/terminal lifecycle。
-DEV-025再把完整Controller十阶段顺序固化为typed composition skeleton；未实现stage只有无default port，当前真实
-concrete implementation仍只有Candidate suffix。
+DEV-025把完整Controller顺序固化为typed composition skeleton；DEV-026进一步接通task-owned durable
+SIR→decision-request prefix，并把真实user decision显式放在Intent Admission之前。当前prefix停在
+`AwaitingUserIntentDecision`，Candidate suffix仍是另一个已实现的durable segment。
 
 架构已经由 D-043 冻结：
 
@@ -51,7 +52,7 @@ concrete implementation仍只有Candidate suffix。
 1. 根目录 [`AGENTS.md`](../../AGENTS.md)；
 2. [`WORKFLOW_ARCHITECTURE.md`](../design/WORKFLOW_ARCHITECTURE.md)；
 3. [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md)；
-4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-025及其implementation record；
+4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-026及其implementation record；
 5. [`ARCHITECTURE_OVERVIEW.md`](../design/ARCHITECTURE_OVERVIEW.md) 和
    [`RUNTIME_ARCHITECTURE.md`](../design/RUNTIME_ARCHITECTURE.md)；
 6. 只有准备修改对应边界时，再读
@@ -70,8 +71,8 @@ concrete implementation仍只有Candidate suffix。
 ```bash
 git status --short
 git log -5 --oneline --decorate
-rg -n "DEV-025|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
-rg -n "run_controller_workflow|ControllerWorkflowStages|drive_candidate_workflow_once" \
+rg -n "DEV-026|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
+rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitingUserIntentDecision" \
   crates/cairn-migration crates/cairn-server crates/cairn-proposal-host
 ```
 
@@ -80,26 +81,28 @@ rg -n "run_controller_workflow|ControllerWorkflowStages|drive_candidate_workflow
 不要在启动审计中连接 DeepSeek、远端 Worker、Docker、NPU 或互联网。外部 effect 只有在一个已确认 slice
 明确要求时才运行。
 
-## 4. DEV-025 已闭合的事实
+## 4. DEV-026 已闭合的事实
 
-- `run_controller_workflow`只表达freeze、SIR、Intent Admission、Oracle Blue/Red、Oracle Admission、Candidate、
-  Worker observations、Candidate Admission和terminal十阶段；
+- `run_controller_workflow`显式表达freeze、SIR、derive decision requests、await user decision、Intent Admission、
+  Oracle Blue/Red、Oracle Admission、Candidate、Worker observations、Candidate Admission和terminal；
 - `ControllerWorkflowStages`为每一环定义distinct associated artifact type及async port，无default/no-op成功实现；
-- recorded driver证明十阶段exact order；Oracle Blue unavailable control证明所有下游stage都不会运行；
-- 当前production concrete implementation仍只有Candidate suffix；骨架不证明完整aggregate已接通；
+- `ControllerWorkflowV1`已durably接通exact SIR Host request→start authority→terminal/proposal observation→
+  decision requests，并明确停在`AwaitingUserIntentDecision`；
+- active prefix和Candidate suffix都以recover/select/execute表达，但尚未连成一个完整aggregate；
+- SIR/Candidate共享同一个Host supervisor，没有SIR独立进程或Candidate专属监督复制；
 - `drive_candidate_workflow_once`只表达recover durable turn、select exact action、execute one action；
-- build freeze/schedule/reconcile、Candidate episode freeze/run与terminal分别限制在小函数内，原有durable authority不变；
+- cross-task、restart、exact replay/changed-input、model drift和no-auto-decision controls闭合；
 - 没有调用live model、remote Worker、Docker或NPU，没有新的live receipt或verdict claim。
 
 详细authority、current-V1 contract、tests、删除项与非目标见
-[`DEV-025-IMPLEMENTATION.md`](records/DEV-025-IMPLEMENTATION.md)。
+[`DEV-026-IMPLEMENTATION.md`](records/DEV-026-IMPLEMENTATION.md)。
 
 ## 5. 下一决策点
 
-DEV-025只冻结完整composition skeleton，没有把空port冒充为implementation。下一片应选择一个真实相邻接缝接入：
-优先把已有SIR→Intent Admission artifact接到task-owned Controller aggregate，或实现Controller↔Host typed experiment
-request、durable yield、Worker observation provenance与same-episode resume。不要同时填满Oracle/Admission port；每次
-接入都必须有real typed consumer、authority和absence control。
+DEV-026已经到达必须由真实task authority提供输入的边界。下一片优先把existing typed user decision与独立Intent
+Admission接入同一Controller aggregate，并保持Admission为独立model-free/restricted authority；或者先实现
+Controller↔Host typed experiment request、durable yield、Worker observation provenance与same-episode resume。
+不要让Controller自动选择intent，也不要同时填满Oracle/Admission port。
 
 ## 6. 网络与部署启动规则
 
@@ -133,7 +136,7 @@ git diff --check
 请先读取 AGENTS.md、docs/dev/NEXT_SESSION.md、
 docs/design/WORKFLOW_ARCHITECTURE.md、docs/dev/CURRENT_BASELINE.md 和
 docs/dev/SLICE_CATALOG.md，并用 Git/代码核对交接事实。先不要调用模型、远端 Worker 或修改代码。
-请核对 Accepted DEV-025 的完整Controller typed skeleton、unavailable-stage fail-closed、Candidate recover/select/execute子骨架与CI事实，并选择第一个有真实consumer的空stage接入。
+请核对 Accepted DEV-026 的durable SIR→decision-request prefix、`AwaitingUserIntentDecision`边界、shared Host supervision、完整Controller typed skeleton与CI事实，并选择user decision + independent Intent Admission或external experiment round-trip中的下一个真实接缝。
 先给出最小slice/DCR、consumer、将替代的旧路径、测试与明确非目标；确认没有fixture-specific或generic-ID
 漂移后停下来让我确认。先不要调用模型、远端Worker或修改代码。
 ```

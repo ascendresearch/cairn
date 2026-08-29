@@ -26,11 +26,12 @@ use crate::{
     CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
     CollectionCandidateSearchInputV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
     IntentRecoveryRequestV1, MigrationWorkflowV1, ProposalHostInvocationArtifact,
-    SirIntentHypothesisSetProposalArtifact, SirProfileInput, SirTaskArtifactPath, SirTaskBundleV1,
-    SirTaskLimits, SirTaskWorkspace, record_candidate_native_followup,
-    record_candidate_native_repair, run_candidate_initial_profile,
-    run_candidate_native_followup_profile, run_candidate_native_repair_profile,
-    run_candidate_revision_profile, run_sir_profile, validate_archived_candidate_build_diagnostic,
+    SirCapabilityManifestV1, SirIntentHypothesisSetProposalArtifact, SirProfileInput,
+    SirTaskArtifactPath, SirTaskBundleV1, SirTaskLimits, SirTaskWorkspace,
+    record_candidate_native_followup, record_candidate_native_repair,
+    run_candidate_initial_profile, run_candidate_native_followup_profile,
+    run_candidate_native_repair_profile, run_candidate_revision_profile, run_sir_profile,
+    validate_archived_candidate_build_diagnostic,
     validate_archived_candidate_native_build_diagnostic,
     validate_archived_candidate_native_repair_build_diagnostic,
     validate_archived_collection_candidate_proposal,
@@ -239,6 +240,11 @@ impl ProposalHostRuntimeV1 {
         self.max_output_tokens
     }
 
+    #[must_use]
+    pub const fn task_limits(&self) -> SirTaskLimits {
+        self.task_limits
+    }
+
     /// Derives the exact invocation snapshot identity persisted by the workflow.
     ///
     /// # Errors
@@ -335,6 +341,30 @@ impl ProposalHostRequestV1 {
     #[must_use]
     pub const fn role(&self) -> &ProposalHostRoleRequestV1 {
         &self.role
+    }
+
+    /// Reconstructs the exact SIR input frozen by this Host request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-SIR role or an invalid task/capability binding.
+    pub fn sir_recovery_input(&self) -> Result<IntentRecoveryInputV1, ProposalHostError> {
+        self.validate()?;
+        let ProposalHostRoleRequestV1::Sir {
+            task_id,
+            recovery_request,
+            task,
+        } = &self.role
+        else {
+            return invalid("Proposal Host request is not an SIR role");
+        };
+        IntentRecoveryInputV1::new(
+            *task_id,
+            task.bundle.identity().map_err(role_error)?,
+            recovery_request.clone(),
+            SirCapabilityManifestV1::proposal_only(self.runtime.task_limits),
+        )
+        .map_err(role_error)
     }
 
     /// Derives the exact request identity used by the Host terminal.

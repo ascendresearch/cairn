@@ -6,15 +6,27 @@ pub mod controller_workflow;
 mod candidate_manager;
 #[cfg(feature = "proposal-host")]
 mod candidate_workflow;
+#[cfg(feature = "proposal-host")]
+mod controller_manager;
 mod enrollment;
+#[cfg(feature = "proposal-host")]
+mod proposal_host_supervisor;
 mod scheduling;
 
 #[cfg(feature = "proposal-host")]
 pub use candidate_manager::{
     CandidateWorkflowBlockedV1, CandidateWorkflowManagerConfigV1, CandidateWorkflowManagerStatusV1,
-    CandidateWorkflowPollIntervalMillis, CandidateWorkflowWaitingV1, ProposalHostProcessBlockedV1,
-    ProposalHostProcessConfigV1, ProposalHostProcessTimeoutMillis, ProposalHostStderrByteLimit,
-    ProposalHostStdoutByteLimit,
+    CandidateWorkflowPollIntervalMillis, CandidateWorkflowWaitingV1,
+};
+#[cfg(feature = "proposal-host")]
+pub use controller_manager::{
+    ControllerWorkflowManagerStatusV1, drive_controller_workflow_once,
+    freeze_sir_controller_request,
+};
+#[cfg(feature = "proposal-host")]
+pub use proposal_host_supervisor::{
+    ProposalHostProcessBlockedV1, ProposalHostProcessConfigV1, ProposalHostProcessTimeoutMillis,
+    ProposalHostStderrByteLimit, ProposalHostStdoutByteLimit,
 };
 
 #[cfg(feature = "proposal-host")]

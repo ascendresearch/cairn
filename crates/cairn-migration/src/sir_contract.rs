@@ -1455,6 +1455,11 @@ impl IntentHypothesisSetProposalV1 {
         self.episode_id
     }
 
+    #[must_use]
+    pub const fn model_configuration(&self) -> ContentId<AgentResolvedRuntimeModelArtifact> {
+        self.model_configuration
+    }
+
     /// Derives the exact proposal identity.
     ///
     /// # Errors

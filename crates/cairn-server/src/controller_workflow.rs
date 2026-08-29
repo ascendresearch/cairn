@@ -16,6 +16,8 @@ pub trait ControllerWorkflowStages: Send {
     type Request: Send;
     type FrozenRequest: Send + Sync;
     type SirProposal: Send + Sync;
+    type IntentDecisionRequests: Send + Sync;
+    type UserIntentDecision: Send + Sync;
     type AdmittedIntent: Send + Sync;
     type OracleBlueProposal: Send + Sync;
     type OracleRedProposal: Send + Sync;
@@ -35,10 +37,25 @@ pub trait ControllerWorkflowStages: Send {
         frozen: &Self::FrozenRequest,
     ) -> impl Future<Output = Result<Self::SirProposal, Self::Error>> + Send;
 
+    fn derive_intent_decision_requests(
+        &mut self,
+        frozen: &Self::FrozenRequest,
+        proposal: &Self::SirProposal,
+    ) -> impl Future<Output = Result<Self::IntentDecisionRequests, Self::Error>> + Send;
+
+    fn await_user_intent_decision(
+        &mut self,
+        frozen: &Self::FrozenRequest,
+        proposal: &Self::SirProposal,
+        requests: &Self::IntentDecisionRequests,
+    ) -> impl Future<Output = Result<Self::UserIntentDecision, Self::Error>> + Send;
+
     fn run_intent_admission_gate(
         &mut self,
         frozen: &Self::FrozenRequest,
         proposal: Self::SirProposal,
+        requests: Self::IntentDecisionRequests,
+        decision: Self::UserIntentDecision,
     ) -> impl Future<Output = Result<Self::AdmittedIntent, Self::Error>> + Send;
 
     fn run_oracle_blue_proposal_loop(
@@ -105,7 +122,15 @@ pub async fn run_controller_workflow<S: ControllerWorkflowStages>(
 ) -> Result<S::TerminalOutcome, S::Error> {
     let frozen = stages.freeze_controller_request(request).await?;
     let sir = stages.run_sir_proposal_loop(&frozen).await?;
-    let intent = stages.run_intent_admission_gate(&frozen, sir).await?;
+    let decision_requests = stages
+        .derive_intent_decision_requests(&frozen, &sir)
+        .await?;
+    let user_decision = stages
+        .await_user_intent_decision(&frozen, &sir, &decision_requests)
+        .await?;
+    let intent = stages
+        .run_intent_admission_gate(&frozen, sir, decision_requests, user_decision)
+        .await?;
     let blue = stages
         .run_oracle_blue_proposal_loop(&frozen, &intent)
         .await?;
@@ -139,6 +164,8 @@ mod tests {
     enum RecordedStage {
         Freeze,
         Sir,
+        IntentDecisionRequests,
+        UserIntentDecision,
         IntentAdmission,
         OracleBlue,
         OracleRed,
@@ -152,6 +179,8 @@ mod tests {
     struct Request;
     struct FrozenRequest;
     struct SirProposal;
+    struct IntentDecisionRequests;
+    struct UserIntentDecision;
     struct AdmittedIntent;
     struct OracleBlueProposal;
     struct OracleRedProposal;
@@ -187,6 +216,8 @@ mod tests {
         type Request = Request;
         type FrozenRequest = FrozenRequest;
         type SirProposal = SirProposal;
+        type IntentDecisionRequests = IntentDecisionRequests;
+        type UserIntentDecision = UserIntentDecision;
         type AdmittedIntent = AdmittedIntent;
         type OracleBlueProposal = OracleBlueProposal;
         type OracleRedProposal = OracleRedProposal;
@@ -210,10 +241,36 @@ mod tests {
             ready(self.record(RecordedStage::Sir).map(|()| SirProposal))
         }
 
+        fn derive_intent_decision_requests(
+            &mut self,
+            _frozen: &Self::FrozenRequest,
+            _proposal: &Self::SirProposal,
+        ) -> impl Future<Output = Result<Self::IntentDecisionRequests, Self::Error>> + Send
+        {
+            ready(
+                self.record(RecordedStage::IntentDecisionRequests)
+                    .map(|()| IntentDecisionRequests),
+            )
+        }
+
+        fn await_user_intent_decision(
+            &mut self,
+            _frozen: &Self::FrozenRequest,
+            _proposal: &Self::SirProposal,
+            _requests: &Self::IntentDecisionRequests,
+        ) -> impl Future<Output = Result<Self::UserIntentDecision, Self::Error>> + Send {
+            ready(
+                self.record(RecordedStage::UserIntentDecision)
+                    .map(|()| UserIntentDecision),
+            )
+        }
+
         fn run_intent_admission_gate(
             &mut self,
             _frozen: &Self::FrozenRequest,
             _proposal: Self::SirProposal,
+            _requests: Self::IntentDecisionRequests,
+            _decision: Self::UserIntentDecision,
         ) -> impl Future<Output = Result<Self::AdmittedIntent, Self::Error>> + Send {
             ready(
                 self.record(RecordedStage::IntentAdmission)
@@ -321,6 +378,8 @@ mod tests {
             vec![
                 RecordedStage::Freeze,
                 RecordedStage::Sir,
+                RecordedStage::IntentDecisionRequests,
+                RecordedStage::UserIntentDecision,
                 RecordedStage::IntentAdmission,
                 RecordedStage::OracleBlue,
                 RecordedStage::OracleRed,
@@ -350,6 +409,8 @@ mod tests {
             vec![
                 RecordedStage::Freeze,
                 RecordedStage::Sir,
+                RecordedStage::IntentDecisionRequests,
+                RecordedStage::UserIntentDecision,
                 RecordedStage::IntentAdmission,
                 RecordedStage::OracleBlue,
             ]

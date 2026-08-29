@@ -33,6 +33,7 @@
 | DEV-023 | Accepted | [`Controller-owned Candidate process manager`](DEV-023-IMPLEMENTATION.md) | 单个已存在Task的durable next action连接generic Host supervision、scheduler recovery与typed receipt折回；blocked state不换ID |
 | DEV-024 | Accepted | [`unified Proposal Host request lifecycle`](DEV-024-IMPLEMENTATION.md) | 删除SIR/Candidate role-specific runner与旁路测试；冻结request/profile/capability并统一durable loop、observation、strict repair和terminal |
 | DEV-025 | Accepted | [`readable Controller workflow skeleton`](DEV-025-IMPLEMENTATION.md) | 完整十阶段typed composition skeleton；未实现stage无default且fail closed；真实Candidate suffix收敛为recover/select/execute |
+| DEV-026 | Accepted | [`durable Controller SIR-to-user-decision prefix`](DEV-026-IMPLEMENTATION.md) | exact SIR request/start authority/proposal observation/decision requests进入task-owned aggregate，并明确停在user authority；shared Host supervision闭合 |
 
 DEV-004 是 proposal-only value proof，不因普通 fixture 或内部模块强制创建 DCR。若 implementation note 触及
 authority、restricted/secret visibility、external effect、public API 或 persisted/wire contract，再按

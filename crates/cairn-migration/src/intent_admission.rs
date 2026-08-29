@@ -278,6 +278,16 @@ impl IntentDecisionRequestBatchV1 {
         &self.requests
     }
 
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<SirIntentHypothesisSetProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
+        self.recovery_input
+    }
+
     /// Derives the semantic content identity of the exact batch.
     ///
     /// # Errors

@@ -18,8 +18,9 @@ policy。DEV-009–012 已把该 policy 推进到 local Oracle publication 与�
 DEV-013–020 又用现有 Controller/remote Worker 打通 generic/native build、receipt-bound diagnostic、隔离
 DeepSeek repair 与 rebuild。DEV-021–023已把Candidate native suffix固化成durable Controller workflow、通用
 Proposal Host和single-task manager；DEV-024又删除role-specific runner并统一Host request lifecycle。最新native
-rebuild仍为`SubjectFailed`；DEV-025已冻结完整Controller typed skeleton，但只有Candidate suffix接入真实实现。
-当前继续审计首个真实空stage consumer、Controller-owned experiment round-trip或native success/NPU correctness。
+rebuild仍为`SubjectFailed`；DEV-025冻结完整Controller typed skeleton，DEV-026已把SIR→decision requests接入
+task-owned durable prefix并明确等待真实user decision。当前继续接入independent Intent Admission，或建设
+Controller-owned experiment round-trip/native success/NPU correctness的真实consumer。
 
 ## 2. 文档地图
 
@@ -27,11 +28,11 @@ rebuild仍为`SubjectFailed`；DEV-025已冻结完整Controller typed skeleton�
 | --- | --- |
 | [`../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md`](../oracle/SEMANTIC_INTENT_RECOVERY_DESIGN.md) | SIR 的规范性目标、authority 边界与当前建设路线 |
 | [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md) | 当前代码事实、保留/删除边界和近期起点 |
-| [`NEXT_SESSION.md`](NEXT_SESSION.md) | 下一会话的唯一启动入口、只读审计、DEV-025 边界和可复制启动消息 |
+| [`NEXT_SESSION.md`](NEXT_SESSION.md) | 下一会话的唯一启动入口、只读审计、DEV-026 边界和可复制启动消息 |
 | [`CURRENT_IMPLEMENTATION_WALKTHROUGH.md`](CURRENT_IMPLEMENTATION_WALKTHROUGH.md) | 用atomic compaction样例逐步解释当前SIR→Admission→Oracle→Candidate proposal实现 |
 | [`DEVELOPMENT_MODEL.md`](DEVELOPMENT_MODEL.md) | 如何按产品证据而不是架构清单切片 |
 | [`ROADMAP.md`](ROADMAP.md) | 已打通纵向路径后的近期 critical path |
-| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..025 的当前状态和边界 |
+| [`SLICE_CATALOG.md`](SLICE_CATALOG.md) | DEV-001..026 的当前状态和边界 |
 | [`QUALITY_GATES.md`](QUALITY_GATES.md) | 风险分级 gate 与实际 workflow 证据 |
 | [`WORKSTREAMS.md`](WORKSTREAMS.md) | 当前协作和代码 ownership |
 | [`records/README.md`](records/README.md) | 仍有意义的历史 slice 记录 |
@@ -81,6 +82,8 @@ rebuild仍为`SubjectFailed`；DEV-025已冻结完整Controller typed skeleton�
   submission/terminal lifecycle；没有live model/Worker或新的native evidence。
 - DEV-025：Accepted，完整Controller十阶段顺序成为typed stage-port骨架；空stage无default并fail closed，真实
   Candidate suffix成为recover/select/execute子骨架；没有live effect或完整aggregate claim。
+- DEV-026：Accepted，durable Controller prefix接通exact SIR request、Host start authority、proposal observation
+  与decision requests，并停在真实user decision边界；SIR/Candidate共享Host supervision，没有live effect。
 
 CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInputV1`与
 `IntentHypothesisSetProposalV1`已经闭合；第一个正式consumer也已从scoped user decision走到真实execution
