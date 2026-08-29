@@ -16,11 +16,14 @@ use cairn_record::{ContentStore, ContentStoreError};
 use thiserror::Error;
 
 use crate::{
-    CandidateEpisodeError, CandidateNativeFollowupError, CandidateRevisionError,
-    CollectionCandidateNativeFollowupRevisionArtifact, CollectionCandidateNativeFollowupRevisionV1,
-    CollectionCandidateProposalArtifact, CollectionCandidateProposalSubmissionV1,
-    CollectionCandidateProposalV1, CollectionCandidateRevisionArtifact,
-    CollectionCandidateRevisionV1, validate_archived_collection_candidate_native_followup_revision,
+    CandidateEpisodeError, CandidateNativeFollowupError, CandidateNativeRepairError,
+    CandidateRevisionError, CollectionCandidateNativeFollowupRevisionArtifact,
+    CollectionCandidateNativeFollowupRevisionV1, CollectionCandidateNativeRepairRevisionArtifact,
+    CollectionCandidateNativeRepairRevisionV1, CollectionCandidateProposalArtifact,
+    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
+    CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
+    validate_archived_collection_candidate_native_followup_revision,
+    validate_archived_collection_candidate_native_repair_revision,
     validate_archived_collection_candidate_proposal,
     validate_archived_collection_candidate_revision,
 };
@@ -112,6 +115,23 @@ pub struct PreparedCandidateNativeFollowupBuildJob {
     followup: CollectionCandidateNativeFollowupRevisionV1,
     followup_bytes: Vec<u8>,
     followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
+    input_bundle: InputBundleV1,
+    input_bundle_bytes: Vec<u8>,
+    input_bundle_id: ContentId<InputBundleArtifact>,
+    environment: DockerExecutionEnvironmentV1,
+    environment_bytes: Vec<u8>,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+    contract: JobContract,
+    contract_bytes: Vec<u8>,
+    contract_id: ContentId<JobContractArtifact>,
+}
+
+/// Native ASC build of one exact Candidate native repair publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateNativeRepairBuildJob {
+    repair: CollectionCandidateNativeRepairRevisionV1,
+    repair_bytes: Vec<u8>,
+    repair_id: ContentId<CollectionCandidateNativeRepairRevisionArtifact>,
     input_bundle: InputBundleV1,
     input_bundle_bytes: Vec<u8>,
     input_bundle_id: ContentId<InputBundleArtifact>,
@@ -460,6 +480,97 @@ impl PreparedCandidateNativeFollowupBuildJob {
     }
 }
 
+impl PreparedCandidateNativeRepairBuildJob {
+    #[must_use]
+    pub const fn repair(&self) -> &CollectionCandidateNativeRepairRevisionV1 {
+        &self.repair
+    }
+
+    #[must_use]
+    pub fn repair_bytes(&self) -> &[u8] {
+        &self.repair_bytes
+    }
+
+    #[must_use]
+    pub const fn repair_id(&self) -> ContentId<CollectionCandidateNativeRepairRevisionArtifact> {
+        self.repair_id
+    }
+
+    #[must_use]
+    pub const fn input_bundle(&self) -> &InputBundleV1 {
+        &self.input_bundle
+    }
+
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> &[u8] {
+        &self.input_bundle_bytes
+    }
+
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
+    }
+
+    #[must_use]
+    pub const fn environment(&self) -> &DockerExecutionEnvironmentV1 {
+        &self.environment
+    }
+
+    #[must_use]
+    pub fn environment_bytes(&self) -> &[u8] {
+        &self.environment_bytes
+    }
+
+    #[must_use]
+    pub const fn environment_id(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.environment_id
+    }
+
+    #[must_use]
+    pub const fn contract(&self) -> &JobContract {
+        &self.contract
+    }
+
+    #[must_use]
+    pub fn contract_bytes(&self) -> &[u8] {
+        &self.contract_bytes
+    }
+
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.contract_id
+    }
+
+    /// Archives the exact repair and native-gate material roots into Controller content.
+    ///
+    /// # Errors
+    ///
+    /// Fails if storage changes any typed identity or cannot durably publish exact bytes.
+    pub fn archive_materials<C: ContentStore>(
+        &self,
+        content: &mut C,
+    ) -> Result<(), CandidateBuildError> {
+        let repair = content
+            .put::<CollectionCandidateNativeRepairRevisionArtifact>(&mut Cursor::new(
+                &self.repair_bytes,
+            ))?
+            .content_id;
+        let input = content
+            .put::<InputBundleArtifact>(&mut Cursor::new(&self.input_bundle_bytes))?
+            .content_id;
+        let environment = content
+            .put::<ExecutionEnvironmentArtifact>(&mut Cursor::new(&self.environment_bytes))?
+            .content_id;
+        if repair != self.repair_id
+            || input != self.input_bundle_id
+            || environment != self.environment_id
+        {
+            return Err(CandidateBuildError::MaterialIdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Builds the exact immutable input and execution contract for one archived Candidate proposal.
 ///
 /// # Errors
@@ -642,6 +753,54 @@ pub fn prepare_candidate_native_followup_build_job(
         followup,
         followup_bytes,
         followup_id,
+        input_bundle: material.input_bundle,
+        input_bundle_bytes: material.input_bundle_bytes,
+        input_bundle_id: material.input_bundle_id,
+        environment: material.environment,
+        environment_bytes: material.environment_bytes,
+        environment_id: material.environment_id,
+        contract: material.contract,
+        contract_bytes: material.contract_bytes,
+        contract_id: material.contract_id,
+    })
+}
+
+/// Forces one exact Candidate native repair primary source through the fixed native ASC gate.
+///
+/// A native-follow-up prepared job cannot substitute for the repair publication.
+///
+/// ```compile_fail
+/// use cairn_migration::{
+///     PreparedCandidateNativeFollowupBuildJob, PreparedCandidateNativeRepairBuildJob,
+/// };
+/// fn require_repair(_: PreparedCandidateNativeRepairBuildJob) {}
+/// fn invalid(previous: PreparedCandidateNativeFollowupBuildJob) { require_repair(previous); }
+/// ```
+///
+/// # Errors
+///
+/// Rejects an unbound repair, missing primary material, invalid image, or invalid native
+/// input/environment/contract material.
+pub fn prepare_candidate_native_repair_build_job(
+    job_id: JobId,
+    repair_bytes: &[u8],
+    repair_id: ContentId<CollectionCandidateNativeRepairRevisionArtifact>,
+    image: DockerImageId,
+    profile: CandidateBuildEnvironmentProfileV1,
+) -> Result<PreparedCandidateNativeRepairBuildJob, CandidateBuildError> {
+    let repair =
+        validate_archived_collection_candidate_native_repair_revision(repair_bytes, repair_id)?;
+    let repair_bytes = repair_bytes.to_vec();
+    let input_bundle = candidate_native_input_bundle(
+        repair.submission(),
+        "meta/candidate-native-repair-revision.json",
+        &repair_bytes,
+    )?;
+    let material = prepare_build_material_from_input(job_id, input_bundle, image, profile)?;
+    Ok(PreparedCandidateNativeRepairBuildJob {
+        repair,
+        repair_bytes,
+        repair_id,
         input_bundle: material.input_bundle,
         input_bundle_bytes: material.input_bundle_bytes,
         input_bundle_id: material.input_bundle_id,
@@ -850,6 +1009,8 @@ pub enum CandidateBuildError {
     #[error(transparent)]
     NativeFollowup(#[from] CandidateNativeFollowupError),
     #[error(transparent)]
+    NativeRepair(#[from] CandidateNativeRepairError),
+    #[error(transparent)]
     Material(#[from] MaterialFormatError),
     #[error(transparent)]
     Docker(#[from] DockerEnvironmentError),
@@ -874,8 +1035,9 @@ mod tests {
     use super::*;
     use crate::{
         CollectionCandidateBuildDiagnosticArtifact,
-        CollectionCandidateNativeBuildDiagnosticArtifact, CollectionCandidateSearchInputArtifact,
-        SirResolvedRuntimeModelArtifact,
+        CollectionCandidateNativeBuildDiagnosticArtifact,
+        CollectionCandidateNativeRepairBuildDiagnosticArtifact,
+        CollectionCandidateSearchInputArtifact, SirResolvedRuntimeModelArtifact,
     };
 
     fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
@@ -941,6 +1103,29 @@ mod tests {
             }
         }))
         .expect("native follow-up bytes")
+    }
+
+    fn native_repair_bytes() -> Vec<u8> {
+        let root = id::<CollectionCandidateNativeFollowupRevisionArtifact>(b"root follow-up");
+        cairn_codec::to_vec(&json!({
+            "schema_version":1,
+            "search_input":id::<CollectionCandidateSearchInputArtifact>(b"search"),
+            "root_followup":root,
+            "parent":{"kind":"root-followup","identity":root},
+            "build_diagnostic":id::<CollectionCandidateNativeRepairBuildDiagnosticArtifact>(b"repair diagnostic"),
+            "episode_id":EpisodeId::new(),
+            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"repair model"),
+            "submission":{
+                "schema_version":1,
+                "files":[
+                    {"path":"CMakeLists.txt","source":"project(candidate_repair LANGUAGES ASC)\nadd_library(candidate_repair STATIC src/kernel.asc)\n"},
+                    {"path":"src/kernel.asc","source":"#include <kernel_operator.h>\nextern \"C\" __global__ __kernel__ void kernel(GM_ADDR input) { (void)input; }\n"}
+                ],
+                "primary_source":"src/kernel.asc",
+                "explanation":"Exact native repair build fixture."
+            }
+        }))
+        .expect("native repair bytes")
     }
 
     fn prepared(job_id: JobId, bytes: &[u8], image_suffix: char) -> PreparedCandidateBuildJob {
@@ -1430,6 +1615,139 @@ mod tests {
             CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
         )
         .expect("changed native follow-up build");
+        assert_eq!(prepared.environment_id(), changed_prepared.environment_id());
+        assert_ne!(
+            prepared.input_bundle_id(),
+            changed_prepared.input_bundle_id()
+        );
+        assert_ne!(prepared.contract_id(), changed_prepared.contract_id());
+    }
+
+    #[test]
+    fn native_repair_gate_preserves_exact_publication_tree_and_primary_bytes() {
+        let bytes = native_repair_bytes();
+        let repair_id = ContentId::derive(&bytes).expect("repair ID");
+        let prepared = prepare_candidate_native_repair_build_job(
+            JobId::new(),
+            &bytes,
+            repair_id,
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("native repair build");
+        assert_eq!(prepared.repair_bytes(), bytes);
+        assert_eq!(prepared.repair_id(), repair_id);
+        assert_eq!(
+            prepared.contract().input_bundle_id(),
+            prepared.input_bundle_id()
+        );
+        assert_eq!(
+            prepared.contract().environment_id(),
+            prepared.environment_id()
+        );
+
+        let files = prepared
+            .input_bundle()
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                InputBundleEntry::File { path, mode, bytes } => {
+                    Some((path.as_str(), *mode, bytes.as_slice()))
+                }
+                InputBundleEntry::Directory { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let primary = b"#include <kernel_operator.h>\nextern \"C\" __global__ __kernel__ void kernel(GM_ADDR input) { (void)input; }\n";
+        assert!(files.contains(&(
+            "meta/candidate-native-repair-revision.json",
+            InputFileMode::Data,
+            prepared.repair_bytes()
+        )));
+        assert!(files.contains(&(
+            "source/src/kernel.asc",
+            InputFileMode::Data,
+            primary.as_slice()
+        )));
+        assert!(files.contains(&(
+            "native/candidate_primary.asc",
+            InputFileMode::Data,
+            primary.as_slice()
+        )));
+        assert!(files.contains(&("native/CMakeLists.txt", InputFileMode::Data, NATIVE_CMAKE)));
+        assert!(!files.iter().any(|(path, _, _)| {
+            *path == "meta/candidate-native-followup-revision.json"
+                || *path == "meta/candidate-revision.json"
+        }));
+        assert_eq!(
+            files
+                .iter()
+                .find(|(path, _, _)| *path == "bin/run")
+                .expect("native runner")
+                .2,
+            NATIVE_BUILD_RUNNER
+        );
+    }
+
+    #[test]
+    fn native_repair_identity_schema_and_material_changes_fail_closed() {
+        let bytes = native_repair_bytes();
+        assert!(
+            prepare_candidate_native_repair_build_job(
+                JobId::new(),
+                &bytes,
+                id::<CollectionCandidateNativeRepairRevisionArtifact>(b"wrong repair"),
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            )
+            .is_err()
+        );
+        let noncanonical = [bytes.as_slice(), b"\n"].concat();
+        assert!(
+            prepare_candidate_native_repair_build_job(
+                JobId::new(),
+                &noncanonical,
+                ContentId::derive(&noncanonical).expect("noncanonical ID"),
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            )
+            .is_err()
+        );
+        let mut non_v1: serde_json::Value = cairn_codec::from_slice(&bytes).expect("repair JSON");
+        non_v1["schema_version"] = serde_json::json!(2);
+        let non_v1 = cairn_codec::to_vec(&non_v1).expect("non-V1 bytes");
+        assert!(
+            prepare_candidate_native_repair_build_job(
+                JobId::new(),
+                &non_v1,
+                ContentId::derive(&non_v1).expect("non-V1 ID"),
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            )
+            .is_err()
+        );
+
+        let mut changed: serde_json::Value = cairn_codec::from_slice(&bytes).expect("repair JSON");
+        changed["submission"]["files"][1]["source"] = serde_json::json!(
+            "#include <kernel_operator.h>\nextern \"C\" __global__ __kernel__ void kernel(GM_ADDR input) { (void)input; /* changed */ }\n"
+        );
+        let changed = cairn_codec::to_vec(&changed).expect("changed repair bytes");
+        let job_id = JobId::new();
+        let prepared = prepare_candidate_native_repair_build_job(
+            job_id,
+            &bytes,
+            ContentId::derive(&bytes).expect("repair ID"),
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("native repair build");
+        let changed_prepared = prepare_candidate_native_repair_build_job(
+            job_id,
+            &changed,
+            ContentId::derive(&changed).expect("changed repair ID"),
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("changed native repair build");
         assert_eq!(prepared.environment_id(), changed_prepared.environment_id());
         assert_ne!(
             prepared.input_bundle_id(),

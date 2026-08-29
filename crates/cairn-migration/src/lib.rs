@@ -66,9 +66,10 @@ pub use call_adapter::{
 };
 pub use candidate_build::{
     CandidateBuildEnvironmentProfileV1, CandidateBuildError, PreparedCandidateBuildJob,
-    PreparedCandidateNativeFollowupBuildJob, PreparedCandidateNativeRevisionBuildJob,
-    PreparedCandidateRevisionBuildJob, prepare_candidate_build_job,
-    prepare_candidate_native_followup_build_job, prepare_candidate_native_revision_build_job,
+    PreparedCandidateNativeFollowupBuildJob, PreparedCandidateNativeRepairBuildJob,
+    PreparedCandidateNativeRevisionBuildJob, PreparedCandidateRevisionBuildJob,
+    prepare_candidate_build_job, prepare_candidate_native_followup_build_job,
+    prepare_candidate_native_repair_build_job, prepare_candidate_native_revision_build_job,
     prepare_candidate_revision_build_job,
 };
 pub use candidate_episode::{
