@@ -16,9 +16,11 @@ use cairn_record::{ContentStore, ContentStoreError};
 use thiserror::Error;
 
 use crate::{
-    CandidateEpisodeError, CandidateRevisionError, CollectionCandidateProposalArtifact,
-    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
-    CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
+    CandidateEpisodeError, CandidateNativeFollowupError, CandidateRevisionError,
+    CollectionCandidateNativeFollowupRevisionArtifact, CollectionCandidateNativeFollowupRevisionV1,
+    CollectionCandidateProposalArtifact, CollectionCandidateProposalSubmissionV1,
+    CollectionCandidateProposalV1, CollectionCandidateRevisionArtifact,
+    CollectionCandidateRevisionV1, validate_archived_collection_candidate_native_followup_revision,
     validate_archived_collection_candidate_proposal,
     validate_archived_collection_candidate_revision,
 };
@@ -102,6 +104,23 @@ pub struct PreparedCandidateRevisionBuildJob {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedCandidateNativeRevisionBuildJob {
     prepared: PreparedCandidateRevisionBuildJob,
+}
+
+/// Native ASC build of one exact native-feedback follow-up publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateNativeFollowupBuildJob {
+    followup: CollectionCandidateNativeFollowupRevisionV1,
+    followup_bytes: Vec<u8>,
+    followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
+    input_bundle: InputBundleV1,
+    input_bundle_bytes: Vec<u8>,
+    input_bundle_id: ContentId<InputBundleArtifact>,
+    environment: DockerExecutionEnvironmentV1,
+    environment_bytes: Vec<u8>,
+    environment_id: ContentId<ExecutionEnvironmentArtifact>,
+    contract: JobContract,
+    contract_bytes: Vec<u8>,
+    contract_id: ContentId<JobContractArtifact>,
 }
 
 impl PreparedCandidateBuildJob {
@@ -348,6 +367,99 @@ impl PreparedCandidateNativeRevisionBuildJob {
     }
 }
 
+impl PreparedCandidateNativeFollowupBuildJob {
+    #[must_use]
+    pub const fn followup(&self) -> &CollectionCandidateNativeFollowupRevisionV1 {
+        &self.followup
+    }
+
+    #[must_use]
+    pub fn followup_bytes(&self) -> &[u8] {
+        &self.followup_bytes
+    }
+
+    #[must_use]
+    pub const fn followup_id(
+        &self,
+    ) -> ContentId<CollectionCandidateNativeFollowupRevisionArtifact> {
+        self.followup_id
+    }
+
+    #[must_use]
+    pub const fn input_bundle(&self) -> &InputBundleV1 {
+        &self.input_bundle
+    }
+
+    #[must_use]
+    pub fn input_bundle_bytes(&self) -> &[u8] {
+        &self.input_bundle_bytes
+    }
+
+    #[must_use]
+    pub const fn input_bundle_id(&self) -> ContentId<InputBundleArtifact> {
+        self.input_bundle_id
+    }
+
+    #[must_use]
+    pub const fn environment(&self) -> &DockerExecutionEnvironmentV1 {
+        &self.environment
+    }
+
+    #[must_use]
+    pub fn environment_bytes(&self) -> &[u8] {
+        &self.environment_bytes
+    }
+
+    #[must_use]
+    pub const fn environment_id(&self) -> ContentId<ExecutionEnvironmentArtifact> {
+        self.environment_id
+    }
+
+    #[must_use]
+    pub const fn contract(&self) -> &JobContract {
+        &self.contract
+    }
+
+    #[must_use]
+    pub fn contract_bytes(&self) -> &[u8] {
+        &self.contract_bytes
+    }
+
+    #[must_use]
+    pub const fn contract_id(&self) -> ContentId<JobContractArtifact> {
+        self.contract_id
+    }
+
+    /// Archives the exact follow-up and native-gate material roots into Controller content.
+    ///
+    /// # Errors
+    ///
+    /// Fails if storage changes any typed identity or cannot durably publish exact bytes.
+    pub fn archive_materials<C: ContentStore>(
+        &self,
+        content: &mut C,
+    ) -> Result<(), CandidateBuildError> {
+        let followup = content
+            .put::<CollectionCandidateNativeFollowupRevisionArtifact>(&mut Cursor::new(
+                &self.followup_bytes,
+            ))?
+            .content_id;
+        let input = content
+            .put::<InputBundleArtifact>(&mut Cursor::new(&self.input_bundle_bytes))?
+            .content_id;
+        let environment = content
+            .put::<ExecutionEnvironmentArtifact>(&mut Cursor::new(&self.environment_bytes))?
+            .content_id;
+        if followup != self.followup_id
+            || input != self.input_bundle_id
+            || environment != self.environment_id
+        {
+            return Err(CandidateBuildError::MaterialIdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Builds the exact immutable input and execution contract for one archived Candidate proposal.
 ///
 /// # Errors
@@ -468,7 +580,11 @@ pub fn prepare_candidate_native_revision_build_job(
 ) -> Result<PreparedCandidateNativeRevisionBuildJob, CandidateBuildError> {
     let revision = validate_archived_collection_candidate_revision(revision_bytes, revision_id)?;
     let revision_bytes = revision_bytes.to_vec();
-    let input_bundle = candidate_native_input_bundle(&revision, &revision_bytes)?;
+    let input_bundle = candidate_native_input_bundle(
+        revision.submission(),
+        "meta/candidate-revision.json",
+        &revision_bytes,
+    )?;
     let material = prepare_build_material_from_input(job_id, input_bundle, image, profile)?;
     Ok(PreparedCandidateNativeRevisionBuildJob {
         prepared: PreparedCandidateRevisionBuildJob {
@@ -485,6 +601,56 @@ pub fn prepare_candidate_native_revision_build_job(
             contract_bytes: material.contract_bytes,
             contract_id: material.contract_id,
         },
+    })
+}
+
+/// Forces one exact native-feedback follow-up primary source through the fixed native ASC gate.
+///
+/// The previous-revision native prepared job cannot substitute for this follow-up publication.
+///
+/// ```compile_fail
+/// use cairn_migration::{
+///     PreparedCandidateNativeFollowupBuildJob, PreparedCandidateNativeRevisionBuildJob,
+/// };
+/// fn require_followup(_: PreparedCandidateNativeFollowupBuildJob) {}
+/// fn invalid(previous: PreparedCandidateNativeRevisionBuildJob) { require_followup(previous); }
+/// ```
+///
+/// # Errors
+///
+/// Rejects an unbound follow-up, missing primary material, invalid image, or invalid native
+/// input/environment/contract material.
+pub fn prepare_candidate_native_followup_build_job(
+    job_id: JobId,
+    followup_bytes: &[u8],
+    followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
+    image: DockerImageId,
+    profile: CandidateBuildEnvironmentProfileV1,
+) -> Result<PreparedCandidateNativeFollowupBuildJob, CandidateBuildError> {
+    let followup = validate_archived_collection_candidate_native_followup_revision(
+        followup_bytes,
+        followup_id,
+    )?;
+    let followup_bytes = followup_bytes.to_vec();
+    let input_bundle = candidate_native_input_bundle(
+        followup.submission(),
+        "meta/candidate-native-followup-revision.json",
+        &followup_bytes,
+    )?;
+    let material = prepare_build_material_from_input(job_id, input_bundle, image, profile)?;
+    Ok(PreparedCandidateNativeFollowupBuildJob {
+        followup,
+        followup_bytes,
+        followup_id,
+        input_bundle: material.input_bundle,
+        input_bundle_bytes: material.input_bundle_bytes,
+        input_bundle_id: material.input_bundle_id,
+        environment: material.environment,
+        environment_bytes: material.environment_bytes,
+        environment_id: material.environment_id,
+        contract: material.contract,
+        contract_bytes: material.contract_bytes,
+        contract_id: material.contract_id,
     })
 }
 
@@ -562,10 +728,10 @@ fn prepare_build_material_from_input(
 }
 
 fn candidate_native_input_bundle(
-    revision: &CollectionCandidateRevisionV1,
-    revision_bytes: &[u8],
+    submission: &CollectionCandidateProposalSubmissionV1,
+    publication_path: &str,
+    publication_bytes: &[u8],
 ) -> Result<InputBundleV1, CandidateBuildError> {
-    let submission = revision.submission();
     let primary = submission
         .files()
         .iter()
@@ -599,9 +765,9 @@ fn candidate_native_input_bundle(
             bytes: NATIVE_BUILD_RUNNER.to_vec(),
         },
         InputBundleEntry::File {
-            path: path("meta/candidate-revision.json")?,
+            path: path(publication_path)?,
             mode: InputFileMode::Data,
-            bytes: revision_bytes.to_vec(),
+            bytes: publication_bytes.to_vec(),
         },
         InputBundleEntry::File {
             path: path("native/CMakeLists.txt")?,
@@ -682,6 +848,8 @@ pub enum CandidateBuildError {
     #[error(transparent)]
     Revision(#[from] CandidateRevisionError),
     #[error(transparent)]
+    NativeFollowup(#[from] CandidateNativeFollowupError),
+    #[error(transparent)]
     Material(#[from] MaterialFormatError),
     #[error(transparent)]
     Docker(#[from] DockerEnvironmentError),
@@ -705,7 +873,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        CollectionCandidateBuildDiagnosticArtifact, CollectionCandidateSearchInputArtifact,
+        CollectionCandidateBuildDiagnosticArtifact,
+        CollectionCandidateNativeBuildDiagnosticArtifact, CollectionCandidateSearchInputArtifact,
         SirResolvedRuntimeModelArtifact,
     };
 
@@ -751,6 +920,27 @@ mod tests {
             }
         }))
         .expect("revision bytes")
+    }
+
+    fn native_followup_bytes() -> Vec<u8> {
+        cairn_codec::to_vec(&json!({
+            "schema_version":1,
+            "search_input":id::<CollectionCandidateSearchInputArtifact>(b"search"),
+            "previous_revision":id::<CollectionCandidateRevisionArtifact>(b"previous revision"),
+            "build_diagnostic":id::<CollectionCandidateNativeBuildDiagnosticArtifact>(b"native diagnostic"),
+            "episode_id":EpisodeId::new(),
+            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"follow-up model"),
+            "submission":{
+                "schema_version":1,
+                "files":[
+                    {"path":"CMakeLists.txt","source":"project(candidate_followup LANGUAGES ASC)\nadd_library(candidate_followup STATIC src/kernel.asc)\n"},
+                    {"path":"src/kernel.asc","source":"#include <kernel_operator.h>\nextern \"C\" __global__ __aicore__ void kernel(GM_ADDR input) { (void)input; }\n"}
+                ],
+                "primary_source":"src/kernel.asc",
+                "explanation":"Exact native-feedback follow-up build fixture."
+            }
+        }))
+        .expect("native follow-up bytes")
     }
 
     fn prepared(job_id: JobId, bytes: &[u8], image_suffix: char) -> PreparedCandidateBuildJob {
@@ -1108,5 +1298,143 @@ mod tests {
         .expect("changed native build");
         assert_ne!(native.input_bundle_id(), changed_native.input_bundle_id());
         assert_ne!(native.contract_id(), changed_native.contract_id());
+    }
+
+    #[test]
+    fn native_followup_gate_preserves_its_distinct_publication_and_exact_primary_bytes() {
+        let bytes = native_followup_bytes();
+        let followup_id = ContentId::derive(&bytes).expect("follow-up ID");
+        let image = DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image");
+        let job_id = JobId::new();
+        let prepared = prepare_candidate_native_followup_build_job(
+            job_id,
+            &bytes,
+            followup_id,
+            image,
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("native follow-up build");
+        assert_eq!(prepared.followup_bytes(), bytes);
+        assert_eq!(prepared.followup_id(), followup_id);
+        assert_eq!(
+            prepared.contract().input_bundle_id(),
+            prepared.input_bundle_id()
+        );
+        assert_eq!(
+            prepared.contract().environment_id(),
+            prepared.environment_id()
+        );
+
+        let files = prepared
+            .input_bundle()
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                InputBundleEntry::File { path, mode, bytes } => {
+                    Some((path.as_str(), *mode, bytes.as_slice()))
+                }
+                InputBundleEntry::Directory { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let primary = b"#include <kernel_operator.h>\nextern \"C\" __global__ __aicore__ void kernel(GM_ADDR input) { (void)input; }\n";
+        assert!(files.contains(&(
+            "meta/candidate-native-followup-revision.json",
+            InputFileMode::Data,
+            prepared.followup_bytes()
+        )));
+        assert!(files.contains(&(
+            "source/src/kernel.asc",
+            InputFileMode::Data,
+            primary.as_slice()
+        )));
+        assert!(files.contains(&(
+            "native/candidate_primary.asc",
+            InputFileMode::Data,
+            primary.as_slice()
+        )));
+        assert!(files.contains(&("native/CMakeLists.txt", InputFileMode::Data, NATIVE_CMAKE)));
+        assert!(
+            !files
+                .iter()
+                .any(|(path, _, _)| *path == "meta/candidate-revision.json")
+        );
+        assert_eq!(
+            files
+                .iter()
+                .find(|(path, _, _)| *path == "bin/run")
+                .expect("native runner")
+                .2,
+            NATIVE_BUILD_RUNNER
+        );
+    }
+
+    #[test]
+    fn native_followup_identity_schema_and_material_changes_fail_closed() {
+        let bytes = native_followup_bytes();
+        assert!(
+            prepare_candidate_native_followup_build_job(
+                JobId::new(),
+                &bytes,
+                id::<CollectionCandidateNativeFollowupRevisionArtifact>(b"wrong follow-up"),
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            )
+            .is_err()
+        );
+        let noncanonical = [bytes.as_slice(), b"\n"].concat();
+        assert!(
+            prepare_candidate_native_followup_build_job(
+                JobId::new(),
+                &noncanonical,
+                ContentId::derive(&noncanonical).expect("noncanonical ID"),
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            )
+            .is_err()
+        );
+        let mut non_v1: serde_json::Value =
+            cairn_codec::from_slice(&bytes).expect("follow-up JSON");
+        non_v1["schema_version"] = serde_json::json!(2);
+        let non_v1 = cairn_codec::to_vec(&non_v1).expect("non-V1 bytes");
+        assert!(
+            prepare_candidate_native_followup_build_job(
+                JobId::new(),
+                &non_v1,
+                ContentId::derive(&non_v1).expect("non-V1 ID"),
+                DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+                CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+            )
+            .is_err()
+        );
+
+        let mut changed: serde_json::Value =
+            cairn_codec::from_slice(&bytes).expect("follow-up JSON");
+        changed["submission"]["files"][1]["source"] = serde_json::json!(
+            "#include <kernel_operator.h>\nextern \"C\" __global__ __aicore__ void kernel(GM_ADDR input) { (void)input; /* changed */ }\n"
+        );
+        let changed = cairn_codec::to_vec(&changed).expect("changed follow-up bytes");
+        let job_id = JobId::new();
+        let prepared = prepare_candidate_native_followup_build_job(
+            job_id,
+            &bytes,
+            ContentId::derive(&bytes).expect("follow-up ID"),
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("native follow-up build");
+        let changed_prepared = prepare_candidate_native_followup_build_job(
+            job_id,
+            &changed,
+            ContentId::derive(&changed).expect("changed follow-up ID"),
+            DockerImageId::new(format!("sha256:{}", "a".repeat(64))).expect("image"),
+            CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+        )
+        .expect("changed native follow-up build");
+        assert_eq!(prepared.environment_id(), changed_prepared.environment_id());
+        assert_ne!(
+            prepared.input_bundle_id(),
+            changed_prepared.input_bundle_id()
+        );
+        assert_ne!(prepared.contract_id(), changed_prepared.contract_id());
     }
 }

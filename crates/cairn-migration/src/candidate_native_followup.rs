@@ -437,6 +437,38 @@ pub fn prepare_collection_candidate_native_followup_revision(
     })
 }
 
+/// Revalidates one exact published native-feedback follow-up under its typed identity.
+///
+/// A previous Candidate revision identity cannot substitute for this follow-up publication.
+///
+/// ```compile_fail
+/// use cairn_migration::{
+///     CollectionCandidateRevisionArtifact,
+///     validate_archived_collection_candidate_native_followup_revision,
+/// };
+/// use cairn_protocol::ContentId;
+/// fn invalid(bytes: &[u8], wrong: ContentId<CollectionCandidateRevisionArtifact>) {
+///     let _ = validate_archived_collection_candidate_native_followup_revision(bytes, wrong);
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Rejects noncanonical, non-V1, structurally invalid, or identity-mismatched follow-up bytes.
+pub fn validate_archived_collection_candidate_native_followup_revision(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
+) -> Result<CollectionCandidateNativeFollowupRevisionV1, CandidateNativeFollowupError> {
+    let revision: CollectionCandidateNativeFollowupRevisionV1 =
+        cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = encode(&revision)?;
+    let identity = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || identity != expected {
+        return Err(CandidateNativeFollowupError::BindingMismatch);
+    }
+    Ok(revision)
+}
+
 /// Failure while deriving native feedback or its explicitly linked follow-up.
 #[derive(Debug, Error)]
 pub enum CandidateNativeFollowupError {

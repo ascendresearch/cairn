@@ -10,8 +10,9 @@ use cairn_execution::{
     ResourceRequest, SandboxPath, TrustedExecutionEvidence, WorkerPoolName, recover_execution_job,
 };
 use cairn_migration::{
-    CandidateBuildEnvironmentProfileV1, CollectionCandidateProposalArtifact,
-    CollectionCandidateRevisionArtifact, prepare_candidate_build_job,
+    CandidateBuildEnvironmentProfileV1, CollectionCandidateNativeFollowupRevisionArtifact,
+    CollectionCandidateProposalArtifact, CollectionCandidateRevisionArtifact,
+    prepare_candidate_build_job, prepare_candidate_native_followup_build_job,
     prepare_candidate_native_revision_build_job, prepare_candidate_revision_build_job,
 };
 use cairn_protocol::{
@@ -223,6 +224,64 @@ fn scheduled_exact_candidate_revision_reaches_product_owned_native_asc_gate() {
         ids,
         &CandidateBuildExpectation {
             publication: prepared.revision_id().to_string(),
+            input_id: prepared.input_bundle_id(),
+            environment_id: prepared.environment_id(),
+            contract_id: prepared.contract_id(),
+            expected_stdout: "PASS candidate-native-asc-build=complete architecture=dav-3510 device=none",
+        },
+    );
+}
+
+#[test]
+#[ignore = "requires the live no-device Ascend build worker and an exact archived Candidate native follow-up"]
+fn scheduled_exact_candidate_native_followup_reaches_product_owned_native_asc_gate() {
+    let config_path = env::var("CAIRN_REAL_CONTROLLER_CONFIG").expect("controller config path");
+    let followup_state = env::var("CAIRN_REAL_CANDIDATE_NATIVE_FOLLOWUP_STATE_DIR")
+        .expect("Candidate native follow-up episode state directory");
+    let followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact> =
+        env::var("CAIRN_REAL_CANDIDATE_NATIVE_FOLLOWUP_ID")
+            .expect("Candidate native follow-up ID")
+            .parse()
+            .expect("typed Candidate native follow-up ID");
+    let image = env::var("CAIRN_REAL_ASCEND_IMAGE_ID").expect("full Ascend image ID");
+    let followup_content = SqliteContentStore::open(
+        Path::new(&followup_state).join("content.db"),
+        Path::new(&followup_state).join("cas"),
+    )
+    .expect("Candidate native follow-up content store");
+    let followup_bytes = read_content(&followup_content, &followup_id);
+    let config = load_config(Path::new(&config_path));
+    let mut controller_content = SqliteContentStore::open(
+        &config.storage.content_database,
+        &config.storage.content_directory,
+    )
+    .expect("controller content store");
+    let job_id = JobId::new();
+    let prepared = prepare_candidate_native_followup_build_job(
+        job_id,
+        &followup_bytes,
+        followup_id,
+        DockerImageId::new(image).expect("full image ID"),
+        CandidateBuildEnvironmentProfileV1::AscendCann910Beta1Dav3510NoDevice,
+    )
+    .expect("prepare product-owned native Candidate follow-up gate");
+    prepared
+        .archive_materials(&mut controller_content)
+        .expect("archive native Candidate follow-up gate materials");
+    let ids = schedule_ids();
+    let scheduled = schedule_execution_contract(&config, prepared.contract(), ids)
+        .expect("schedule native Candidate follow-up gate");
+    assert!(matches!(
+        scheduled,
+        ControllerSchedulingOutcome::Scheduled { .. }
+    ));
+
+    await_candidate_build(
+        &config,
+        job_id,
+        ids,
+        &CandidateBuildExpectation {
+            publication: prepared.followup_id().to_string(),
             input_id: prepared.input_bundle_id(),
             environment_id: prepared.environment_id(),
             contract_id: prepared.contract_id(),
