@@ -63,9 +63,8 @@ cairn/
 Hardware、Knowledge、Feedback、Intent、Oracle、Candidate 首期都先放在产品 crate 的独立 module；出现
 第二种实现、无法接受的编译依赖或独立部署需求后再决定拆 crate。
 
-当前 workspace 中的 `cairn-sir` 是 DEV-008 one-shot typed ingress/capability proof。它不是目标树的一部分；
-通用 Proposal Host 接管 production SIR 后，当前 V1 直接删除该 crate/path，不保留 alias、dual launcher
-或 compatibility adapter。
+DEV-008的`cairn-sir`曾是one-shot typed ingress/capability proof，并非目标树的一部分；DEV-022的通用
+Proposal Host接管production SIR后已直接删除该crate/path，没有alias、dual launcher或compatibility adapter。
 
 ## 3. Crate 责任
 
@@ -263,12 +262,12 @@ crates/cairn-server/src/
 当前 `cairn-server/src/lib.rs` 的 composition/state 代码在相应实施 slice 中逐步移入上述模块。不要先做
 无行为变化的大爆炸重排；也不要继续把新的 product process manager 写入巨型 `lib.rs`。
 
-### 5.2 Proposal Host 与当前 SIR ingress
+### 5.2 Proposal Host 与历史 SIR ingress
 
-下列目录是已打通纵向路径后的 target organization，不是一次性重排清单。首个 DeepSeek-backed SIR
-proof 复用现有 `cairn-agent` 形成真实 episode；DEV-008 的最小 one-shot `cairn-sir` 只作为当前
-typed ingress/capability proof。现在 SIR、Oracle 和 Candidate 已有真实 consumer，目标是由一个通用
-`cairn-proposal-host` 承载它们的 role-scoped lifecycle，而不是把 one-shot SIR 扩展为第二套 Host。
+下列目录是target organization，不是一次性重排清单。首个DeepSeek-backed SIR proof复用现有
+`cairn-agent`形成真实episode；DEV-008的one-shot `cairn-sir`只是一项历史typed ingress/capability proof。
+DEV-022已创建最小`cairn-proposal-host`并承载现有SIR/Candidate role-scoped lifecycle；Oracle role仍须等待
+真实consumer，不能按目录草图预建空实现。
 
 ```text
 crates/cairn-proposal-host/src/

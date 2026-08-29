@@ -208,13 +208,13 @@ impl ContentType for IntentRecoveryInputArtifact {
     const DOMAIN: &'static str = "migration.intent-recovery-input.v1";
 }
 
-/// Exact agent-owned resolved runtime-model artifact cited by a SIR proposal.
+/// Exact agent-owned resolved runtime-model artifact cited by a migration proposal.
 ///
 /// The semantic content domain remains the agent domain; this local marker lets model-free
 /// consumers validate the typed reference without linking the agent runtime.
-pub enum SirResolvedRuntimeModelArtifact {}
+pub enum AgentResolvedRuntimeModelArtifact {}
 
-impl ContentType for SirResolvedRuntimeModelArtifact {
+impl ContentType for AgentResolvedRuntimeModelArtifact {
     const DOMAIN: &'static str = "agent.resolved-runtime-model.v1";
 }
 
@@ -1410,7 +1410,7 @@ pub struct IntentHypothesisSetProposalV1 {
     schema_version: u16,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: SirProposalSubmissionV1,
 }
 
@@ -1420,7 +1420,7 @@ struct IntentHypothesisSetProposalWire {
     schema_version: u16,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: SirProposalSubmissionV1,
 }
 
@@ -1429,7 +1429,7 @@ impl IntentHypothesisSetProposalV1 {
     pub(crate) fn new(
         recovery_input: ContentId<IntentRecoveryInputArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         submission: SirProposalSubmissionV1,
     ) -> Self {
         Self {

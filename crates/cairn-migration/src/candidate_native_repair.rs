@@ -13,11 +13,11 @@ use thiserror::Error;
 
 use crate::candidate_native_followup::validate_native_failed_receipt;
 use crate::{
-    CandidateBuildDiagnosticText, CandidateEpisodeError, CandidateNativeFollowupError,
-    CandidateRevisionError, CollectionCandidateNativeFollowupRevisionArtifact,
-    CollectionCandidateNativeFollowupRevisionV1, CollectionCandidateProposalSubmissionV1,
-    CollectionCandidateSearchInputArtifact, PreparedCandidateNativeFollowupBuildJob,
-    PreparedCandidateNativeRepairBuildJob, SirResolvedRuntimeModelArtifact,
+    AgentResolvedRuntimeModelArtifact, CandidateBuildDiagnosticText, CandidateEpisodeError,
+    CandidateNativeFollowupError, CandidateRevisionError,
+    CollectionCandidateNativeFollowupRevisionArtifact, CollectionCandidateNativeFollowupRevisionV1,
+    CollectionCandidateProposalSubmissionV1, CollectionCandidateSearchInputArtifact,
+    PreparedCandidateNativeFollowupBuildJob, PreparedCandidateNativeRepairBuildJob,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -202,6 +202,29 @@ impl PreparedCandidateNativeRepairBuildDiagnostic {
     }
 }
 
+/// Revalidates exact canonical repair-build diagnostic bytes under their typed identity.
+///
+/// # Errors
+///
+/// Rejects noncanonical, non-V1, invalid, or identity-mismatched diagnostic bytes.
+pub fn validate_archived_candidate_native_repair_build_diagnostic(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact>,
+) -> Result<PreparedCandidateNativeRepairBuildDiagnostic, CandidateNativeRepairError> {
+    let diagnostic: CollectionCandidateNativeRepairBuildDiagnosticV1 =
+        cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = encode(&diagnostic)?;
+    let id = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || id != expected {
+        return Err(CandidateNativeRepairError::BindingMismatch);
+    }
+    Ok(PreparedCandidateNativeRepairBuildDiagnostic {
+        diagnostic,
+        bytes: canonical,
+        id,
+    })
+}
+
 /// Derives the first repair-round diagnostic from the exact root-follow-up native build.
 ///
 /// A root-revision native build job cannot substitute for the follow-up build domain.
@@ -331,7 +354,7 @@ pub struct CollectionCandidateNativeRepairRevisionV1 {
     parent: CandidateNativeRepairParentV1,
     build_diagnostic: ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -344,7 +367,7 @@ struct CollectionCandidateNativeRepairRevisionWire {
     parent: CandidateNativeRepairParentV1,
     build_diagnostic: ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -391,7 +414,7 @@ impl CollectionCandidateNativeRepairRevisionV1 {
     }
 
     #[must_use]
-    pub const fn model_configuration(&self) -> ContentId<SirResolvedRuntimeModelArtifact> {
+    pub const fn model_configuration(&self) -> ContentId<AgentResolvedRuntimeModelArtifact> {
         self.model_configuration
     }
 
@@ -556,7 +579,7 @@ pub fn prepare_collection_candidate_native_repair_revision(
     previous: CandidateNativeRepairPrevious<'_>,
     diagnostic: &PreparedCandidateNativeRepairBuildDiagnostic,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 ) -> Result<PreparedCollectionCandidateNativeRepairRevision, CandidateNativeRepairError> {
     previous.validate()?;

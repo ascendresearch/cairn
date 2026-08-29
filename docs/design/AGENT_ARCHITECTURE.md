@@ -712,8 +712,8 @@ Planner 或 Candidate 业务分支。
 - Host 只实现 capability gateway，不拥有 admission policy；
 - 不同 capability class 使用不同 Host instance/config/principal。
 
-现有 `cairn-sir` 是 DEV-008 one-shot recorded-ingress/capability proof，不是目标长期 process crate。
-Proposal Host 接管 production SIR profile 时直接删除该路径。
+已删除的`cairn-sir`是DEV-008 one-shot recorded-ingress/capability历史proof，不是目标长期process crate。
+DEV-022的Proposal Host接管production SIR profile时已直接删除该路径。
 
 ### 20.4 Instructions 与 templates
 

@@ -1,22 +1,22 @@
 [package]
-name = "cairn-sir"
-description = "Isolated semantic-intent-recovery process boundary for Cairn"
+name = "cairn-proposal-host"
+description = "Generic role-scoped Proposal Host for Cairn"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cairn-agent.workspace = true
 cairn-codec.workspace = true
-cairn-migration.workspace = true
-
-[dev-dependencies]
-cairn-admission.workspace = true
-cairn-execution.workspace = true
+cairn-migration = { workspace = true, features = ["agent-runtime"] }
+cairn-observability.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 cairn-store-sqlite.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true
 

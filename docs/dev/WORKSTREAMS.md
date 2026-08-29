@@ -22,7 +22,7 @@ expected answer；只有适用的 independent Admission/Gate 才能形成正式 
 | `WS-QUALITY` | recorded/restart/invalid-transition、context absence 与适用 external lanes | 反向定义 prompt、Intent 或 Oracle policy |
 
 DEV-005 Go 和 DEV-008–020 已经为 workflow、Admission、Candidate 与 Execution 提供真实 consumer；这不
-意味着每个 workstream 都要并行启动或拥有独立进程。当前只启动 DEV-021 实际触及的 ownership，其他能力
+意味着每个 workstream 都要并行启动或拥有独立进程。当前只启动 Accepted DEV-022 实际触及的 ownership，其他能力
 仍由新 consumer 触发。
 
 ## 3. DEV-004 集成顺序（历史 CP0）
@@ -41,7 +41,7 @@ WS-PRODUCT: generic task projection + typed proposal shape
 - recorded response 必须经过同一 runtime decode/control flow，不能直接构造 domain output；
 - live run 有明确 model/deployment/token/tool/wall budget；
 - malformed output、missing citation、unknown/conflict 有 typed failure；
-- 不创建独立 SIR/Proposal Host/Admission 空 crate。
+- 不创建独立SIR或无consumer的Proposal Host/Admission空crate；DEV-022 Host只承载已有typed consumers。
 
 ## 4. DEV-005 协作（历史 CP0）
 

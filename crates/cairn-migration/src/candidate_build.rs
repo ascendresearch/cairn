@@ -1041,10 +1041,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        CollectionCandidateBuildDiagnosticArtifact,
+        AgentResolvedRuntimeModelArtifact, CollectionCandidateBuildDiagnosticArtifact,
         CollectionCandidateNativeBuildDiagnosticArtifact,
         CollectionCandidateNativeRepairBuildDiagnosticArtifact,
-        CollectionCandidateSearchInputArtifact, SirResolvedRuntimeModelArtifact,
+        CollectionCandidateSearchInputArtifact,
     };
 
     fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
@@ -1056,7 +1056,7 @@ mod tests {
             "schema_version":1,
             "search_input":id::<CollectionCandidateSearchInputArtifact>(b"search"),
             "episode_id":EpisodeId::new(),
-            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"model"),
+            "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"model"),
             "submission":{
                 "schema_version":1,
                 "files":[
@@ -1077,7 +1077,7 @@ mod tests {
             "parent_proposal":id::<CollectionCandidateProposalArtifact>(b"parent"),
             "build_diagnostic":id::<CollectionCandidateBuildDiagnosticArtifact>(b"diagnostic"),
             "episode_id":EpisodeId::new(),
-            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"revision model"),
+            "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"revision model"),
             "submission":{
                 "schema_version":1,
                 "files":[
@@ -1098,7 +1098,7 @@ mod tests {
             "previous_revision":id::<CollectionCandidateRevisionArtifact>(b"previous revision"),
             "build_diagnostic":id::<CollectionCandidateNativeBuildDiagnosticArtifact>(b"native diagnostic"),
             "episode_id":EpisodeId::new(),
-            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"follow-up model"),
+            "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"follow-up model"),
             "submission":{
                 "schema_version":1,
                 "files":[
@@ -1121,7 +1121,7 @@ mod tests {
             "parent":{"kind":"root-followup","identity":root},
             "build_diagnostic":id::<CollectionCandidateNativeRepairBuildDiagnosticArtifact>(b"repair diagnostic"),
             "episode_id":EpisodeId::new(),
-            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"repair model"),
+            "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"repair model"),
             "submission":{
                 "schema_version":1,
                 "files":[

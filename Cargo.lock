@@ -228,6 +228,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-proposal-host"
+version = "0.1.0"
+dependencies = [
+ "cairn-agent",
+ "cairn-codec",
+ "cairn-migration",
+ "cairn-observability",
+ "cairn-protocol",
+ "cairn-record",
+ "cairn-store-sqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cairn-protocol"
 version = "0.1.0"
 dependencies = [
@@ -253,6 +269,7 @@ dependencies = [
 name = "cairn-server"
 version = "0.1.0"
 dependencies = [
+ "cairn-agent",
  "cairn-codec",
  "cairn-control-transport",
  "cairn-execution",
@@ -276,22 +293,6 @@ dependencies = [
  "tokio",
  "tracing",
  "x509-parser",
-]
-
-[[package]]
-name = "cairn-sir"
-version = "0.1.0"
-dependencies = [
- "cairn-admission",
- "cairn-codec",
- "cairn-execution",
- "cairn-migration",
- "cairn-protocol",
- "cairn-record",
- "cairn-store-sqlite",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

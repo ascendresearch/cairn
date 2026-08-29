@@ -7,7 +7,7 @@ use cairn_record::ContentStoreError;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
-use crate::{CollectionCandidateSearchInputArtifact, SirResolvedRuntimeModelArtifact};
+use crate::{AgentResolvedRuntimeModelArtifact, CollectionCandidateSearchInputArtifact};
 
 const SCHEMA_V1: u16 = 1;
 const MAX_SOURCE_FILES: usize = 16;
@@ -272,7 +272,7 @@ pub struct CollectionCandidateProposalV1 {
     schema_version: u16,
     search_input: ContentId<CollectionCandidateSearchInputArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -282,7 +282,7 @@ struct CollectionCandidateProposalWire {
     schema_version: u16,
     search_input: ContentId<CollectionCandidateSearchInputArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -291,7 +291,7 @@ impl CollectionCandidateProposalV1 {
     const fn new(
         search_input: ContentId<CollectionCandidateSearchInputArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         submission: CollectionCandidateProposalSubmissionV1,
     ) -> Self {
         Self {
@@ -314,7 +314,7 @@ impl CollectionCandidateProposalV1 {
     }
 
     #[must_use]
-    pub const fn model_configuration(&self) -> ContentId<SirResolvedRuntimeModelArtifact> {
+    pub const fn model_configuration(&self) -> ContentId<AgentResolvedRuntimeModelArtifact> {
         self.model_configuration
     }
 
@@ -468,7 +468,8 @@ mod runtime {
         CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1, SCHEMA_V1, encode,
     };
     use crate::{
-        CandidateNativeRepairPrevious, CollectionCandidateBuildDiagnosticArtifact,
+        AgentResolvedRuntimeModelArtifact, CandidateNativeRepairPrevious,
+        CollectionCandidateBuildDiagnosticArtifact,
         CollectionCandidateNativeBuildDiagnosticArtifact,
         CollectionCandidateNativeFollowupRevisionArtifact,
         CollectionCandidateNativeFollowupRevisionV1,
@@ -480,9 +481,9 @@ mod runtime {
         PreparedCandidateNativeRepairBuildDiagnostic,
         PreparedCollectionCandidateNativeFollowupRevision,
         PreparedCollectionCandidateNativeRepairRevision, PreparedCollectionCandidateRevision,
-        PreparedCollectionCandidateSearchInput, SirReadLineLimit, SirResolvedRuntimeModelArtifact,
-        SirSourceLineNumber, SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskBundleArtifact,
-        SirTaskLimits, SirTaskWorkspace, prepare_collection_candidate_native_followup_revision,
+        PreparedCollectionCandidateSearchInput, SirReadLineLimit, SirSourceLineNumber,
+        SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskBundleArtifact, SirTaskLimits,
+        SirTaskWorkspace, prepare_collection_candidate_native_followup_revision,
         prepare_collection_candidate_native_repair_revision, prepare_collection_candidate_revision,
     };
 
@@ -533,7 +534,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         pub search_input: PreparedCollectionCandidateSearchInput,
         pub recovery_input: IntentRecoveryInputV1,
         pub episode_id: EpisodeId,
-        pub model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        pub model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         pub selection: ModelSelection,
         pub budget: EpisodeBudget,
         pub max_output_tokens: ModelOutputTokenLimit,
@@ -559,7 +560,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         pub parent_id: ContentId<CollectionCandidateProposalArtifact>,
         pub build_diagnostic: PreparedCandidateBuildDiagnostic,
         pub episode_id: EpisodeId,
-        pub model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        pub model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         pub selection: ModelSelection,
         pub budget: EpisodeBudget,
         pub max_output_tokens: ModelOutputTokenLimit,
@@ -586,7 +587,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         pub previous_revision_id: ContentId<CollectionCandidateRevisionArtifact>,
         pub build_diagnostic: PreparedCandidateNativeBuildDiagnostic,
         pub episode_id: EpisodeId,
-        pub model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        pub model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         pub selection: ModelSelection,
         pub budget: EpisodeBudget,
         pub max_output_tokens: ModelOutputTokenLimit,
@@ -601,7 +602,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         pub root_followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
         pub build_diagnostic: PreparedCandidateNativeRepairBuildDiagnostic,
         pub episode_id: EpisodeId,
-        pub model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        pub model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         pub selection: ModelSelection,
         pub budget: EpisodeBudget,
         pub max_output_tokens: ModelOutputTokenLimit,
@@ -1438,7 +1439,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
     struct CandidateSubmitGateway {
         search_input: ContentId<CollectionCandidateSearchInputArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         accepted: Option<(
             ContentId<CollectionCandidateProposalArtifact>,
             CollectionCandidateProposalV1,
@@ -1518,7 +1519,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         parent_id: ContentId<CollectionCandidateProposalArtifact>,
         diagnostic: PreparedCandidateBuildDiagnostic,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         accepted: Option<PreparedCollectionCandidateRevision>,
     }
 
@@ -1611,7 +1612,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         previous_id: ContentId<CollectionCandidateRevisionArtifact>,
         diagnostic: PreparedCandidateNativeBuildDiagnostic,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         accepted: Option<PreparedCollectionCandidateNativeFollowupRevision>,
     }
 
@@ -1706,7 +1707,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         root_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
         diagnostic: PreparedCandidateNativeRepairBuildDiagnostic,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         accepted: Option<PreparedCollectionCandidateNativeRepairRevision>,
     }
 
@@ -1844,7 +1845,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                 budget: input.budget,
                 max_output_tokens: input.max_output_tokens,
                 task_limits: input.task_limits,
-                role: "candidate-search",
+                role: CandidateEpisodeRoleV1::Initial,
             },
             submit_gateway,
         )
@@ -1899,7 +1900,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                 budget: input.budget,
                 max_output_tokens: input.max_output_tokens,
                 task_limits: input.task_limits,
-                role: "candidate-search-revision",
+                role: CandidateEpisodeRoleV1::BuildRevision,
             },
             submit_gateway,
         )
@@ -1954,7 +1955,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                 budget: input.budget,
                 max_output_tokens: input.max_output_tokens,
                 task_limits: input.task_limits,
-                role: "candidate-native-followup",
+                role: CandidateEpisodeRoleV1::NativeFollowup,
             },
             submit_gateway,
         )
@@ -2012,10 +2013,29 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
                 budget: input.budget,
                 max_output_tokens: input.max_output_tokens,
                 task_limits: input.task_limits,
-                role: "candidate-native-repair",
+                role: CandidateEpisodeRoleV1::NativeRepair,
             },
             submit_gateway,
         )
+    }
+
+    #[derive(Clone, Copy)]
+    enum CandidateEpisodeRoleV1 {
+        Initial,
+        BuildRevision,
+        NativeFollowup,
+        NativeRepair,
+    }
+
+    impl CandidateEpisodeRoleV1 {
+        const fn as_str(self) -> &'static str {
+            match self {
+                Self::Initial => "candidate-search",
+                Self::BuildRevision => "candidate-search-revision",
+                Self::NativeFollowup => "candidate-native-followup",
+                Self::NativeRepair => "candidate-native-repair",
+            }
+        }
     }
 
     struct CandidateRuntimeInput {
@@ -2024,7 +2044,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         budget: EpisodeBudget,
         max_output_tokens: ModelOutputTokenLimit,
         task_limits: SirTaskLimits,
-        role: &'static str,
+        role: CandidateEpisodeRoleV1,
     }
 
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -2051,7 +2071,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
             events,
             &episode,
             projection.task_id,
-            cairn_agent::AgentRoleName::new(input.role)
+            cairn_agent::AgentRoleName::new(input.role.as_str())
                 .map_err(|_| CandidateEpisodeError::Agent("invalid Candidate role".to_owned()))?,
             input.budget,
             StepId::new(),

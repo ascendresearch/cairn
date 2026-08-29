@@ -216,8 +216,8 @@ symbolic execution、公开知识/论文检索、多模型或形式化工具。�
 - 不能直接调度未授权设备；
 - 失败或替换不改变 Controller 的 durable task truth。
 
-当前 `cairn-sir` one-shot binary 是已完成的 typed ingress/capability proof，不是目标架构长期要求。
-通用 Proposal Host 接管 production SIR 后直接删除 superseded path。详细工作流见
+历史 `cairn-sir` one-shot binary只是一项typed ingress/capability proof；DEV-022的通用Proposal Host
+接管production SIR后已直接删除superseded path。详细工作流见
 [`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md)。
 
 ## 8. 为什么 Admission 必须是独立 authority
@@ -323,7 +323,7 @@ rebuild 串成一条窄链。
 以及 DEV-009–020 的窄 Oracle → remote build/repair consumers。以下仍是目标而非实现：
 
 - `cairn-migration` 尚未重命名并重组为明确的 CUDA → Ascend C 产品 crate；
-- 尚无通用 Proposal Host、Controller supervisor 和 Admission service lifecycle；当前只有
+- 已有最小通用 Proposal Host，尚无完整Controller supervisor和Admission service lifecycle；当前只有
   exact one-shot child protocol与不同UID capability proof；
 - 产品侧 Agent profile catalog、invocation policy 和 interaction validator 尚未实现；
 - public read-only/restricted write-only路径已在DEV-008窄slice闭合；secret storage、public event/outbox和

@@ -689,8 +689,8 @@ durable facts 必须可查询。Public protocol 与 internal schema 在 pre-rele
 | `cairn-verification` | generic claim/admission/comparator/mutation/verdict mechanics | 提案模型或 vendor source |
 | `cairn-cuda-ascend`（目标；直接替换当前 `cairn-migration`） | CUDA→Ascend C task、intent/Oracle/candidate workflow 与 domain artifacts | provider/worker implementations |
 | `cairn-server` | composition、API、provider/worker/storage adapters | 可复用 domain logic |
-| `cairn-proposal-host`（目标） | 隔离承载 SIR、Oracle、Planner、Candidate 等 role-scoped proposal episode | admitted constructor、restricted store |
-| `cairn-sir`（当前、待替换） | DEV-008 one-shot SIR typed ingress/capability proof | 不扩展为专用长期 service；Proposal Host 接管后删除 |
+| `cairn-proposal-host`（DEV-022最小实现） | 隔离承载已有SIR/Candidate role-scoped proposal episode | admitted constructor、restricted store、Worker credential |
+| `cairn-sir`（已删除） | DEV-008 one-shot SIR typed ingress/capability历史proof | DEV-022接管后无兼容路径；只在Git history保留 |
 | `cairn-admission`（目标） | restricted store、typed mechanical gates、公开 decision surface | model transport、applicant 修改 |
 | `cairn-worker` | opaque authorized execution | product adjudication |
 | `cairn-testkit`（目标） | fake/recorded providers、fault injection、fixtures | production shortcuts |

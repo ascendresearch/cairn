@@ -29,6 +29,10 @@ native gate 正确关闭该绕过；DEV-020 的最新 exact repair 仍为 `Subje
 consumer、mid-episode SQLite restart、exact replay/changed-input和typed domain controls均已闭合，旧one-shot
 examples、专用smoke scripts和三项手工native ignored tests已删除。DEV-021没有调用模型或远端Worker，因此当前
 仍无 native build success、NPU execution、semantic Candidate Admission、performance 或最终 verdict。
+DEV-022又以一个generic Proposal Host process接管SIR及Candidate initial/revision/native repair profiles；
+DEV-021的persisted episode request现在可由Controller从public CAS物化、经Host运行并把typed publication返回
+同一workflow。跨role、strict binding、child-process restart replay均用recorded transport闭合，旧`cairn-sir`
+及SIR/Candidate专用one-shot launcher已删除。DEV-022同样没有调用live model或Worker。
 
 ## 2. 可复用基础
 
@@ -37,7 +41,7 @@ examples、专用smoke scripts和三项手工native ignored tests已删除。DEV
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | task-owned Candidate native suffix aggregate、typed next action、exact command replay、reconcile-only in-doubt state | 目前只有recorded episode consumer；尚无generic Proposal Host或完整migration workflow |
+| Product workflow | task-owned Candidate native suffix aggregate、typed next action、generic Proposal Host request/publication consumer、exact replay | 尚无完整top-level Controller process manager、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -54,16 +58,15 @@ examples、专用smoke scripts和三项手工native ignored tests已删除。DEV
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–021 只覆盖一个窄
+- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–022 只覆盖一个窄
   host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build和
   recorded durable suffix；
 - native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
-目标设计中的通用 Proposal Host、十一位置 catalog、七类 Planner、完整 mechanism registry 和 future crate
-只是条件设计，
-不是当前待办或已实现事实。
+目标设计中的完整 Proposal Host pool/supervisor、十一位置 catalog、七类 Planner、完整 mechanism registry 和
+future crate只是条件设计，不是当前待办或已实现事实；DEV-022只实现已有SIR/Candidate消费者需要的最小Host。
 
 ## 5. 当前必须停止的外推
 
@@ -112,10 +115,12 @@ committed public local Oracle outcome
 → receipt-bound diagnostic → isolated DeepSeek revision/repair episode
 → product-owned native ASC rebuild
 → task-owned durable Candidate suffix state / exact next action
+→ generic Proposal Host request / typed publication round-trip
 ```
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
-或 verdict。最新local product output是DEV-021 recorded workflow terminal/restart evidence，不是新的live build。
+或 verdict。最新local product output是DEV-022 recorded generic-Host workflow round-trip与process terminal replay
+evidence，不是新的live build。
 DEV-020证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把compile
 failure外推为语义错误，也不能把recorded workflow或跨主机闭环误报为真实 NPU evidence。
 
@@ -144,5 +149,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-019 | Accepted | 建立显式、可重复但不自动续轮的 native repair lineage；DeepSeek 提交 exact repair |
 | DEV-020 | Accepted | exact repair 远端 native rebuild 为 `SubjectFailed`；`__kernel__` 在当前 toolchain 为 unknown type |
 | DEV-021 | Accepted | task-owned current-V1 workflow固化native suffix；recorded two-material consumer、restart/replay与旧手工入口删除闭合；无model/remote Worker调用 |
+| DEV-022 | Accepted | generic Proposal Host承载SIR/Candidate role profiles并消费persisted workflow request；child restart exact terminal replay与旧专用launcher删除闭合；无live model/Worker调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

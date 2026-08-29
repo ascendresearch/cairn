@@ -35,6 +35,24 @@ const CANDIDATE_EPISODE_REQUESTED: &str = "migration.candidate-episode-requested
 const CANDIDATE_PUBLICATION_RECORDED: &str = "migration.candidate-publication-recorded";
 const WORKFLOW_TERMINATED: &str = "migration.candidate-workflow-terminated";
 
+/// Exact Proposal Host runtime invocation snapshot archived before an episode is requested.
+///
+/// A resolved model identity alone cannot substitute for the full invocation snapshot.
+///
+/// ```compile_fail
+/// use cairn_migration::{AgentResolvedRuntimeModelArtifact, ProposalHostInvocationArtifact};
+/// use cairn_protocol::ContentId;
+/// fn require_invocation(_: ContentId<ProposalHostInvocationArtifact>) {}
+/// fn invalid(model: ContentId<AgentResolvedRuntimeModelArtifact>) {
+///     require_invocation(model);
+/// }
+/// ```
+pub enum ProposalHostInvocationArtifact {}
+
+impl ContentType for ProposalHostInvocationArtifact {
+    const DOMAIN: &'static str = "migration.proposal-host-invocation.v1";
+}
+
 /// Exact admitted authority frozen before Candidate workflow execution.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -278,6 +296,7 @@ pub struct CandidateEpisodeRequestV1 {
     parent: CandidateNativePublicationV1,
     diagnostic: CandidateNativeDiagnosticV1,
     revision_round: CandidateRevisionRoundCount,
+    invocation: ContentId<ProposalHostInvocationArtifact>,
 }
 
 impl CandidateEpisodeRequestV1 {
@@ -304,6 +323,10 @@ impl CandidateEpisodeRequestV1 {
     #[must_use]
     pub const fn revision_round(&self) -> CandidateRevisionRoundCount {
         self.revision_round
+    }
+    #[must_use]
+    pub const fn invocation(&self) -> ContentId<ProposalHostInvocationArtifact> {
+        self.invocation
     }
 }
 
@@ -832,6 +855,7 @@ pub fn request_candidate_episode<E: EventStore>(
     events: &mut E,
     workflow: &MigrationWorkflowV1,
     episode_id: EpisodeId,
+    invocation: ContentId<ProposalHostInvocationArtifact>,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<CandidateWorkflowStateV1, CandidateWorkflowError> {
@@ -842,7 +866,7 @@ pub fn request_candidate_episode<E: EventStore>(
             return Err(CandidateWorkflowError::CommandConflict);
         }
         let payload: EpisodeRequestedPayload = decode(&prior.payload)?;
-        if payload.request.episode_id != episode_id {
+        if payload.request.episode_id != episode_id || payload.request.invocation != invocation {
             return Err(CandidateWorkflowError::CommandConflict);
         }
         return Ok(projection.state);
@@ -865,6 +889,7 @@ pub fn request_candidate_episode<E: EventStore>(
         parent: *publication,
         diagnostic: *diagnostic,
         revision_round: revisions_used.increment()?,
+        invocation,
     };
     append_transition(
         events,
@@ -1600,12 +1625,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        CollectionCandidateBuildDiagnosticArtifact, CollectionCandidateExplanation,
-        CollectionCandidateProposalArtifact, CollectionCandidateProposalSubmissionV1,
-        CollectionCandidateSearchAuthorityInput, CollectionCandidateSourceFileV1,
-        CollectionCandidateSourcePath, CollectionCandidateSourceText,
-        CollectionOracleClaimDomainV1, CollectionOracleClaimStrengthV1, SirCallerClaimId,
-        SirResolvedRuntimeModelArtifact, prepare_collection_candidate_search_input,
+        AgentResolvedRuntimeModelArtifact, CollectionCandidateBuildDiagnosticArtifact,
+        CollectionCandidateExplanation, CollectionCandidateProposalArtifact,
+        CollectionCandidateProposalSubmissionV1, CollectionCandidateSearchAuthorityInput,
+        CollectionCandidateSourceFileV1, CollectionCandidateSourcePath,
+        CollectionCandidateSourceText, CollectionOracleClaimDomainV1,
+        CollectionOracleClaimStrengthV1, SirCallerClaimId,
+        prepare_collection_candidate_search_input,
     };
 
     #[derive(Serialize)]
@@ -1615,7 +1641,7 @@ mod tests {
         parent_proposal: ContentId<CollectionCandidateProposalArtifact>,
         build_diagnostic: ContentId<CollectionCandidateBuildDiagnosticArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         submission: CollectionCandidateProposalSubmissionV1,
     }
 
@@ -1626,7 +1652,7 @@ mod tests {
         previous_revision: ContentId<CollectionCandidateRevisionArtifact>,
         build_diagnostic: ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         submission: CollectionCandidateProposalSubmissionV1,
     }
 
@@ -1638,7 +1664,7 @@ mod tests {
         parent: CandidateNativeRepairParentV1,
         build_diagnostic: ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         submission: CollectionCandidateProposalSubmissionV1,
     }
 
@@ -1936,6 +1962,7 @@ mod tests {
             events,
             &workflow,
             EpisodeId::new(),
+            id(format!("{label}-followup-host-invocation")),
             &CommandId::new(),
             ObservedAtUnixMillis::new(14),
         )
@@ -1980,6 +2007,7 @@ mod tests {
             events,
             &workflow,
             EpisodeId::new(),
+            id(format!("{label}-repair-host-invocation")),
             &CommandId::new(),
             ObservedAtUnixMillis::new(18),
         )
@@ -2103,6 +2131,7 @@ mod tests {
                 &mut events,
                 &workflow,
                 EpisodeId::new(),
+                id(b"illegal-host-invocation"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(2),
             ),
@@ -2130,11 +2159,13 @@ mod tests {
         )
         .expect("subject failure");
         let episode_id = EpisodeId::new();
+        let invocation = id(b"restart-host-invocation");
         let episode_command = CommandId::new();
         let expected = request_candidate_episode(
             &mut events,
             &workflow,
             episode_id,
+            invocation,
             &episode_command,
             ObservedAtUnixMillis::new(4),
         )
@@ -2151,12 +2182,24 @@ mod tests {
                 &mut events,
                 &workflow,
                 episode_id,
+                invocation,
                 &episode_command,
                 ObservedAtUnixMillis::new(4),
             )
             .expect("episode exact replay"),
             expected
         );
+        assert!(matches!(
+            request_candidate_episode(
+                &mut events,
+                &workflow,
+                episode_id,
+                id(b"changed-host-invocation"),
+                &episode_command,
+                ObservedAtUnixMillis::new(4),
+            ),
+            Err(CandidateWorkflowError::CommandConflict)
+        ));
     }
 
     #[test]

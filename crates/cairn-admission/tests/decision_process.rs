@@ -7,11 +7,12 @@ use cairn_admission::{
     UserIntentDecisionResponseV1, UserIntentDecisionV1, derive_collection_output_oracle_decision,
 };
 use cairn_migration::{
-    CollectionOracleElementArtifact, CollectionOutputComparisonV1, CollectionOutputOraclePolicyV1,
-    CollectionReportedCount, ExpectedCollectionOracleOutputV1, IntentDecisionRequestBatchV1,
-    IntentHypothesisSetProposalV1, IntentRecoveryInputV1, IntentRecoveryRequestV1,
-    ObservedCollectionOracleOutputV1, SirCallerClaimId, SirCapabilityManifestV1, SirHypothesisId,
-    SirResolvedRuntimeModelArtifact, SirTaskBundleArtifact, SirTaskLimits,
+    AgentResolvedRuntimeModelArtifact, CollectionOracleElementArtifact,
+    CollectionOutputComparisonV1, CollectionOutputOraclePolicyV1, CollectionReportedCount,
+    ExpectedCollectionOracleOutputV1, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputV1, IntentRecoveryRequestV1, ObservedCollectionOracleOutputV1,
+    SirCallerClaimId, SirCapabilityManifestV1, SirHypothesisId, SirTaskBundleArtifact,
+    SirTaskLimits,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use cairn_record::ContentStore;
@@ -104,7 +105,7 @@ fn archive_input_and_proposal(
         "schema_version":1,
         "recovery_input":input_id,
         "episode_id":EpisodeId::new(),
-        "model_configuration":ContentId::<SirResolvedRuntimeModelArtifact>::derive(b"recorded model").expect("model"),
+        "model_configuration":ContentId::<AgentResolvedRuntimeModelArtifact>::derive(b"recorded model").expect("model"),
         "submission":submission()
     });
     let proposal_bytes = cairn_codec::to_vec(&proposal_value).expect("proposal bytes");

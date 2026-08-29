@@ -132,8 +132,8 @@ Candidate 一样由通用 `cairn-proposal-host` 承载；SIR 这个 role 本身�
 - 一个 run 失败不会破坏 task stream，可按 effect policy 重启或开新 run。
 
 SIR episode protocol 稳定于“冻结输入/typed proposal/terminal outcome”，内部分析图和模型组合可替换。
-DEV-008 的 `cairn-sir` one-shot process 只证明 typed ingress 与 OS-principal boundary；通用 Proposal Host
-接管 production SIR 后删除该 superseded 专用路径。
+DEV-008 的 `cairn-sir` one-shot process只证明typed ingress与OS-principal boundary；DEV-022的通用
+Proposal Host已接管production SIR并删除该superseded专用路径。
 
 ### 3.3 Proposal Host (`cairn-proposal-host`)
 

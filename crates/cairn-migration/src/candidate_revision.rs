@@ -13,9 +13,9 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
 use crate::{
-    CollectionCandidateProposalArtifact, CollectionCandidateProposalSubmissionV1,
-    CollectionCandidateProposalV1, CollectionCandidateSearchInputArtifact,
-    PreparedCandidateBuildJob, SirResolvedRuntimeModelArtifact,
+    AgentResolvedRuntimeModelArtifact, CollectionCandidateProposalArtifact,
+    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
+    CollectionCandidateSearchInputArtifact, PreparedCandidateBuildJob,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -216,6 +216,29 @@ impl PreparedCandidateBuildDiagnostic {
     }
 }
 
+/// Revalidates exact canonical generic-build diagnostic bytes under their typed identity.
+///
+/// # Errors
+///
+/// Rejects noncanonical, non-V1, invalid, or identity-mismatched diagnostic bytes.
+pub fn validate_archived_candidate_build_diagnostic(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateBuildDiagnosticArtifact>,
+) -> Result<PreparedCandidateBuildDiagnostic, CandidateRevisionError> {
+    let diagnostic: CollectionCandidateBuildDiagnosticV1 =
+        cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = encode(&diagnostic)?;
+    let id = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || id != expected {
+        return Err(CandidateRevisionError::BindingMismatch);
+    }
+    Ok(PreparedCandidateBuildDiagnostic {
+        diagnostic,
+        bytes: canonical,
+        id,
+    })
+}
+
 /// Verifies a generic failed execution and creates minimal Candidate-visible build feedback.
 ///
 /// # Errors
@@ -287,7 +310,7 @@ pub struct CollectionCandidateRevisionV1 {
     parent_proposal: ContentId<CollectionCandidateProposalArtifact>,
     build_diagnostic: ContentId<CollectionCandidateBuildDiagnosticArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -299,7 +322,7 @@ struct CollectionCandidateRevisionWire {
     parent_proposal: ContentId<CollectionCandidateProposalArtifact>,
     build_diagnostic: ContentId<CollectionCandidateBuildDiagnosticArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -309,7 +332,7 @@ impl CollectionCandidateRevisionV1 {
         parent_proposal: ContentId<CollectionCandidateProposalArtifact>,
         build_diagnostic: ContentId<CollectionCandidateBuildDiagnosticArtifact>,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         submission: CollectionCandidateProposalSubmissionV1,
     ) -> Self {
         Self {
@@ -351,7 +374,7 @@ impl CollectionCandidateRevisionV1 {
     }
 
     #[must_use]
-    pub const fn model_configuration(&self) -> ContentId<SirResolvedRuntimeModelArtifact> {
+    pub const fn model_configuration(&self) -> ContentId<AgentResolvedRuntimeModelArtifact> {
         self.model_configuration
     }
 
@@ -456,7 +479,7 @@ pub fn prepare_collection_candidate_revision(
     parent_id: ContentId<CollectionCandidateProposalArtifact>,
     diagnostic: &PreparedCandidateBuildDiagnostic,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 ) -> Result<PreparedCollectionCandidateRevision, CandidateRevisionError> {
     if parent
@@ -552,8 +575,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        CandidateBuildEnvironmentProfileV1, CollectionCandidateSearchInputArtifact,
-        SirResolvedRuntimeModelArtifact, prepare_candidate_build_job,
+        AgentResolvedRuntimeModelArtifact, CandidateBuildEnvironmentProfileV1,
+        CollectionCandidateSearchInputArtifact, prepare_candidate_build_job,
     };
 
     fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
@@ -565,7 +588,7 @@ mod tests {
             "schema_version":1,
             "search_input":id::<CollectionCandidateSearchInputArtifact>(b"search"),
             "episode_id":EpisodeId::new(),
-            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"initial model"),
+            "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"initial model"),
             "submission":{
                 "schema_version":1,
                 "files":[
@@ -744,7 +767,7 @@ mod tests {
             fixture.parent_id,
             &diagnostic,
             EpisodeId::new(),
-            id::<SirResolvedRuntimeModelArtifact>(b"revision model"),
+            id::<AgentResolvedRuntimeModelArtifact>(b"revision model"),
             changed,
         )
         .expect("revision");
@@ -764,7 +787,7 @@ mod tests {
                 fixture.parent_id,
                 &diagnostic,
                 EpisodeId::new(),
-                id::<SirResolvedRuntimeModelArtifact>(b"revision model"),
+                id::<AgentResolvedRuntimeModelArtifact>(b"revision model"),
                 fixture.parent.submission().clone(),
             )
             .is_err()

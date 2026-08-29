@@ -89,9 +89,8 @@ SIR、Oracle synthesis/adversarial、Candidate Search 和可选 Admission Planne
 可见性、外部凭据、工具或 OS sandbox 才要求不同 Host instance。每个 episode 的 continuation、context、
 budget、tool result、write namespace 和 capability grant 始终隔离。
 
-当前 `cairn-sir` one-shot process 是 DEV-008 为首个 authority consumer 建立的 typed ingress/capability
-proof，不是目标架构必须长期保留的专用 SIR service。通用 Proposal Host 接管 production SIR episode
-后，应直接删除被替代的专用运行路径，不保留双路径或兼容 adapter。
+DEV-008 的 `cairn-sir` one-shot process曾用于首个 authority consumer的typed ingress/capability proof。
+DEV-022已由通用 Proposal Host接管production SIR episode并直接删除该专用路径，没有双路径或兼容adapter。
 
 ## 5. SIR 的自主研究能力
 
@@ -205,10 +204,10 @@ Ascend native build → typed compiler diagnostic → DeepSeek repair → repair
 build 仍为 `SubjectFailed`，因此它证明了跨主机执行和反馈闭环，不证明 native build success、NPU runtime
 correctness、Oracle portfolio adequacy 或最终 MigrationVerdict。
 
-当前 workflow 仍由若干 slice/命令显式串接，`cairn-sir`/`cairn-admission` 主要是 one-shot process，通用
-Proposal Host 和 Controller product process manager 尚未实现。接下来的架构工作应把已经观察到的真实
-transition 固化进 Controller state machine，同时保留现有 V1 强类型和 receipts；不要为尚无 consumer 的
-Agent、reviewer、service 或 compatibility path 预建结构。
+DEV-021已把Candidate native suffix固化进Controller-owned state machine，DEV-022已实现最小generic
+Proposal Host并接通persisted Candidate episode request。完整Controller product process manager/supervisor
+仍未实现；后续应连接已有durable next action、Host与Worker scheduler，同时保留现有V1强类型和receipts，
+不得为尚无consumer的Agent、reviewer、service或compatibility path预建结构。
 
 ## 12. 被拒绝的方案
 

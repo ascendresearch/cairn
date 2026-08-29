@@ -13,20 +13,21 @@ use cairn_execution::{
     ExecutionStdoutArtifact, ResolvedProgramIdentity, TrustedExecutionEvidence,
 };
 use cairn_migration::{
-    AdmittedCollectionOracleClaimArtifact, CandidateBuildEnvironmentProfileV1,
-    CandidateEpisodeError, CandidateEpisodeRunInput, CandidateNativeFollowupEpisodeRunInput,
-    CandidateNativeRepairEpisodeRunInput, CandidateNativeRepairPrevious,
-    CandidateRevisionEpisodeRunInput, CollectionCandidateProposalSubmissionV1,
-    CollectionCandidateProposalV1, CollectionCandidateSearchAuthorityInput,
-    CollectionCandidateSourcePath, CollectionOracleAdmissionPublicOutcomeArtifact,
-    CollectionOracleClaimDomainV1, CollectionOracleClaimStrengthV1, IntentRecoveryInputArtifact,
-    IntentRecoveryInputV1, IntentRecoveryRequestV1, MigrationIntentContractArtifact,
-    PreparedCandidateBuildDiagnostic, PreparedCandidateNativeBuildDiagnostic,
-    PreparedCandidateNativeRepairBuildDiagnostic, PreparedCollectionCandidateSearchInput,
-    SirCallerClaimId, SirCapabilityManifestV1, SirResolvedRuntimeModelArtifact, SirTaskLimits,
-    SirTaskWorkspace, prepare_candidate_build_diagnostic, prepare_candidate_build_job,
-    prepare_candidate_native_build_diagnostic, prepare_candidate_native_followup_build_job,
-    prepare_candidate_native_repair_build_diagnostic, prepare_candidate_native_revision_build_job,
+    AdmittedCollectionOracleClaimArtifact, AgentResolvedRuntimeModelArtifact,
+    CandidateBuildEnvironmentProfileV1, CandidateEpisodeError, CandidateEpisodeRunInput,
+    CandidateNativeFollowupEpisodeRunInput, CandidateNativeRepairEpisodeRunInput,
+    CandidateNativeRepairPrevious, CandidateRevisionEpisodeRunInput,
+    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
+    CollectionCandidateSearchAuthorityInput, CollectionCandidateSourcePath,
+    CollectionOracleAdmissionPublicOutcomeArtifact, CollectionOracleClaimDomainV1,
+    CollectionOracleClaimStrengthV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
+    IntentRecoveryRequestV1, MigrationIntentContractArtifact, PreparedCandidateBuildDiagnostic,
+    PreparedCandidateNativeBuildDiagnostic, PreparedCandidateNativeRepairBuildDiagnostic,
+    PreparedCollectionCandidateSearchInput, SirCallerClaimId, SirCapabilityManifestV1,
+    SirTaskLimits, SirTaskWorkspace, prepare_candidate_build_diagnostic,
+    prepare_candidate_build_job, prepare_candidate_native_build_diagnostic,
+    prepare_candidate_native_followup_build_job, prepare_candidate_native_repair_build_diagnostic,
+    prepare_candidate_native_revision_build_job,
     prepare_collection_candidate_native_followup_revision,
     prepare_collection_candidate_native_repair_revision, prepare_collection_candidate_search_input,
     run_collection_candidate_episode, run_collection_candidate_native_followup_episode,
@@ -256,7 +257,7 @@ fn revision_fixture(
         "schema_version":1,
         "search_input":search_input,
         "episode_id":EpisodeId::new(),
-        "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"parent model"),
+        "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"parent model"),
         "submission":{
             "schema_version":1,
             "files":[
@@ -327,7 +328,7 @@ fn native_followup_fixture(
         "parent_proposal":id::<cairn_migration::CollectionCandidateProposalArtifact>(b"parent proposal"),
         "build_diagnostic":id::<cairn_migration::CollectionCandidateBuildDiagnosticArtifact>(b"generic diagnostic"),
         "episode_id":EpisodeId::new(),
-        "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"previous model"),
+        "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"previous model"),
         "submission":{
             "schema_version":1,
             "files":[
@@ -398,7 +399,7 @@ fn native_repair_fixture(
         base.previous_id,
         &base.diagnostic,
         EpisodeId::new(),
-        id::<SirResolvedRuntimeModelArtifact>(b"root follow-up model"),
+        id::<AgentResolvedRuntimeModelArtifact>(b"root follow-up model"),
         decode_submission(&native_followup_submission()).expect("root submission"),
     )
     .expect("root follow-up");
@@ -467,7 +468,7 @@ fn run_input(
         search_input,
         recovery_input,
         episode_id,
-        model_configuration: id::<SirResolvedRuntimeModelArtifact>(
+        model_configuration: id::<AgentResolvedRuntimeModelArtifact>(
             b"recorded Candidate model configuration",
         ),
         selection: ModelSelection {
@@ -751,7 +752,7 @@ fn receipt_bound_revision_is_isolated_restart_safe_and_replayable() {
     let revision_episode = EpisodeId::new();
     assert_ne!(revision_episode, parent_episode);
     let model_configuration =
-        id::<SirResolvedRuntimeModelArtifact>(b"recorded revision model configuration");
+        id::<AgentResolvedRuntimeModelArtifact>(b"recorded revision model configuration");
     let state = tempfile::tempdir().expect("state root");
     let mut content =
         SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
@@ -907,7 +908,7 @@ fn native_compiler_followup_is_isolated_restart_safe_and_replayable() {
     let followup_episode = EpisodeId::new();
     assert_ne!(followup_episode, previous_episode);
     let model_configuration =
-        id::<SirResolvedRuntimeModelArtifact>(b"recorded native follow-up model configuration");
+        id::<AgentResolvedRuntimeModelArtifact>(b"recorded native follow-up model configuration");
     let state = tempfile::tempdir().expect("state root");
     let mut content =
         SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
@@ -1074,7 +1075,7 @@ fn native_repair_is_explicit_restart_safe_replayable_and_nonautomatic() {
     let episode_id = EpisodeId::new();
     assert_ne!(episode_id, fixture.root.episode_id());
     let model_configuration =
-        id::<SirResolvedRuntimeModelArtifact>(b"recorded native repair model configuration");
+        id::<AgentResolvedRuntimeModelArtifact>(b"recorded native repair model configuration");
     let state = tempfile::tempdir().expect("state root");
     let mut content =
         SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))

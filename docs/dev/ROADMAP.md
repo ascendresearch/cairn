@@ -27,22 +27,25 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-013..015 remote generic build/revision loop + host-fallback discovery
 → DEV-016..018 product-owned native ASC gate + native-feedback follow-up
 → DEV-019..020 repeatable explicit repair lineage + native rebuild
-→ next: solidify the observed Controller workflow and generic Proposal Host; continue toward native success
+→ DEV-021 Controller-owned durable Candidate workflow spine
+→ DEV-022 generic Proposal Host + persisted workflow request consumer
+→ next: audit Controller supervision or the shortest native-success/NPU consumer
 ```
 
-DEV-004..020现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
+DEV-004..022现已accepted，CP0结论为Go：SIR保持proposal-only，并已有首个正式consumer。
 完整`IntentRecoveryInputV1`/`IntentHypothesisSetProposalV1` → claim-scoped user decision → independent
 Admission → `MigrationIntentContractV1` → collection comparator policy → actual observation/comparison已经
 闭合；DEV-010/011又完成局部qualification、commit-before-publish local claim和answer-free Candidate input，
 DEV-012则让configured DeepSeek通过durable agent runtime读取task-scoped source并提交首个typed Candidate
 proposal。DEV-013–020 已经把该 artifact 推进到远端 generic/native build、receipt-bound diagnostic、隔离
-DeepSeek revision/repair 和 rebuild；最新 native gate 仍为 `SubjectFailed`。下一阶段把这些真实 transition
-固化到 Controller state machine 和通用 Proposal Host，并继续寻找 native success/NPU correctness 的最短
-consumer；仍保持 expected observation、candidate output 与 Admission authority 分离。尚未完成 CP1、完整
+DeepSeek revision/repair 和 rebuild；DEV-021/022已把这些transition固化到Controller state machine并由通用
+Proposal Host消费persisted episode request。最新native gate仍为`SubjectFailed`。下一阶段继续寻找完整
+Controller supervision或native success/NPU correctness的最短consumer；仍保持expected observation、
+candidate output与Admission authority分离。尚未完成CP1、完整
 Candidate verdict 链或通用 governance。
 
-DEV-008 的最小 one-shot SIR ingress 只是首个真实 authority consumer 的 capability proof，不再作为目标专用
-SIR process；production SIR、Oracle 和 Candidate loops 由通用 Proposal Host 承载。DEV-010 的局部
+DEV-008 的最小 one-shot SIR ingress 只是首个真实 authority consumer 的历史capability proof，DEV-022已删除
+该专用process；当前production SIR/Candidate loops由通用Proposal Host承载，Oracle仍等待真实consumer。DEV-010 的局部
 qualification 也不授权完整 mechanism registry、七类 Planner、十一位置 Agent catalog 或面向未来 stage
 的兼容接口。
 

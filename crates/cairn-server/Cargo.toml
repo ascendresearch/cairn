@@ -6,7 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["proposal-host"]
+proposal-host = ["dep:cairn-agent", "cairn-migration/agent-runtime"]
+
 [dependencies]
+cairn-agent = { workspace = true, optional = true }
 cairn-control-transport.workspace = true
 cairn-codec.workspace = true
 cairn-execution.workspace = true

@@ -512,8 +512,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        IntentRecoveryRequestV1, SirCapabilityManifestV1, SirProposalSubmissionV1,
-        SirResolvedRuntimeModelArtifact, SirTaskBundleArtifact, SirTaskLimits,
+        AgentResolvedRuntimeModelArtifact, IntentRecoveryRequestV1, SirCapabilityManifestV1,
+        SirProposalSubmissionV1, SirTaskBundleArtifact, SirTaskLimits,
     };
 
     fn recovery_input() -> IntentRecoveryInputV1 {
@@ -601,7 +601,7 @@ mod tests {
         IntentHypothesisSetProposalV1::new(
             recovery_input.identity().expect("input identity"),
             EpisodeId::new(),
-            ContentId::<SirResolvedRuntimeModelArtifact>::derive(b"recorded model")
+            ContentId::<AgentResolvedRuntimeModelArtifact>::derive(b"recorded model")
                 .expect("model identity"),
             submission,
         )

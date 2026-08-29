@@ -13,10 +13,10 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
 use crate::{
-    CandidateBuildDiagnosticText, CandidateEpisodeError, CandidateRevisionError,
-    CollectionCandidateProposalSubmissionV1, CollectionCandidateRevisionArtifact,
-    CollectionCandidateRevisionV1, CollectionCandidateSearchInputArtifact,
-    PreparedCandidateNativeRevisionBuildJob, SirResolvedRuntimeModelArtifact,
+    AgentResolvedRuntimeModelArtifact, CandidateBuildDiagnosticText, CandidateEpisodeError,
+    CandidateRevisionError, CollectionCandidateProposalSubmissionV1,
+    CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
+    CollectionCandidateSearchInputArtifact, PreparedCandidateNativeRevisionBuildJob,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -182,6 +182,29 @@ impl PreparedCandidateNativeBuildDiagnostic {
     }
 }
 
+/// Revalidates exact canonical native-build diagnostic bytes under their typed identity.
+///
+/// # Errors
+///
+/// Rejects noncanonical, non-V1, invalid, or identity-mismatched diagnostic bytes.
+pub fn validate_archived_candidate_native_build_diagnostic(
+    bytes: &[u8],
+    expected: ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>,
+) -> Result<PreparedCandidateNativeBuildDiagnostic, CandidateNativeFollowupError> {
+    let diagnostic: CollectionCandidateNativeBuildDiagnosticV1 =
+        cairn_codec::from_slice(bytes).map_err(codec)?;
+    let canonical = encode(&diagnostic)?;
+    let id = ContentId::derive(&canonical).map_err(codec)?;
+    if canonical != bytes || id != expected {
+        return Err(CandidateNativeFollowupError::BindingMismatch);
+    }
+    Ok(PreparedCandidateNativeBuildDiagnostic {
+        diagnostic,
+        bytes: canonical,
+        id,
+    })
+}
+
 /// Verifies one failed native ASC execution and selects bounded applicant-visible feedback.
 ///
 /// # Errors
@@ -274,7 +297,7 @@ pub struct CollectionCandidateNativeFollowupRevisionV1 {
     previous_revision: ContentId<CollectionCandidateRevisionArtifact>,
     build_diagnostic: ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -286,7 +309,7 @@ struct CollectionCandidateNativeFollowupRevisionWire {
     previous_revision: ContentId<CollectionCandidateRevisionArtifact>,
     build_diagnostic: ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 }
 
@@ -321,7 +344,7 @@ impl CollectionCandidateNativeFollowupRevisionV1 {
     }
 
     #[must_use]
-    pub const fn model_configuration(&self) -> ContentId<SirResolvedRuntimeModelArtifact> {
+    pub const fn model_configuration(&self) -> ContentId<AgentResolvedRuntimeModelArtifact> {
         self.model_configuration
     }
 
@@ -431,7 +454,7 @@ pub fn prepare_collection_candidate_native_followup_revision(
     previous_id: ContentId<CollectionCandidateRevisionArtifact>,
     diagnostic: &PreparedCandidateNativeBuildDiagnostic,
     episode_id: EpisodeId,
-    model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     submission: CollectionCandidateProposalSubmissionV1,
 ) -> Result<PreparedCollectionCandidateNativeFollowupRevision, CandidateNativeFollowupError> {
     if previous.identity()? != previous_id
@@ -553,7 +576,7 @@ mod tests {
             "parent_proposal":id::<CollectionCandidateProposalArtifact>(b"parent"),
             "build_diagnostic":id::<CollectionCandidateBuildDiagnosticArtifact>(b"diagnostic"),
             "episode_id":EpisodeId::new(),
-            "model_configuration":id::<SirResolvedRuntimeModelArtifact>(b"previous model"),
+            "model_configuration":id::<AgentResolvedRuntimeModelArtifact>(b"previous model"),
             "submission":{
                 "schema_version":1,
                 "files":[
@@ -788,7 +811,7 @@ mod tests {
                 fixture.previous_id,
                 &diagnostic,
                 EpisodeId::new(),
-                id::<SirResolvedRuntimeModelArtifact>(b"follow-up model"),
+                id::<AgentResolvedRuntimeModelArtifact>(b"follow-up model"),
                 fixture.previous.submission().clone(),
             )
             .is_err()
@@ -811,7 +834,7 @@ mod tests {
                 id::<CollectionCandidateRevisionArtifact>(b"wrong previous"),
                 &diagnostic,
                 EpisodeId::new(),
-                id::<SirResolvedRuntimeModelArtifact>(b"follow-up model"),
+                id::<AgentResolvedRuntimeModelArtifact>(b"follow-up model"),
                 changed.clone(),
             )
             .is_err()
@@ -821,7 +844,7 @@ mod tests {
             fixture.previous_id,
             &diagnostic,
             EpisodeId::new(),
-            id::<SirResolvedRuntimeModelArtifact>(b"follow-up model"),
+            id::<AgentResolvedRuntimeModelArtifact>(b"follow-up model"),
             changed,
         )
         .expect("follow-up");

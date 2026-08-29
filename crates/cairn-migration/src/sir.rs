@@ -363,6 +363,64 @@ pub struct SirTaskWorkspace {
 
 #[cfg(feature = "agent-runtime")]
 impl SirTaskWorkspace {
+    /// Reconstructs one exact bounded task snapshot supplied by a Controller or Proposal Host.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, extra, reordered, identity-mismatched, or over-limit source material.
+    pub fn from_materialized(
+        bundle: SirTaskBundleV1,
+        sources: Vec<(SirTaskArtifactPath, String)>,
+        limits: SirTaskLimits,
+    ) -> Result<Self, SirError> {
+        let source_count = u32::try_from(sources.len())
+            .map_err(|_| SirError::TaskRoot("too many task files".to_owned()))?;
+        if source_count == 0
+            || source_count > limits.max_files.get()
+            || sources.len() != bundle.artifacts.len()
+        {
+            return Err(SirError::TaskRoot(
+                "materialized task file count violates its bundle or limits".to_owned(),
+            ));
+        }
+        let mut total_bytes = 0_u64;
+        let mut materialized = BTreeMap::new();
+        for ((path, source), artifact) in sources.into_iter().zip(bundle.artifacts.iter()) {
+            if path != artifact.path {
+                return Err(SirError::TaskRoot(
+                    "materialized task paths do not match the ordered bundle".to_owned(),
+                ));
+            }
+            let bytes = source.as_bytes();
+            total_bytes = total_bytes
+                .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                    SirError::TaskRoot("task artifact byte length overflow".to_owned())
+                })?)
+                .ok_or_else(|| SirError::TaskRoot("task byte total overflow".to_owned()))?;
+            if total_bytes > limits.max_task_bytes.get()
+                || ContentId::<SirTaskArtifactBytes>::derive(bytes)
+                    .map_err(|error| SirError::Codec(error.to_string()))?
+                    != artifact.identity
+                || u32::try_from(source.lines().count())
+                    .map_err(|_| SirError::TaskRoot("too many source lines".to_owned()))?
+                    != artifact.line_count.get()
+            {
+                return Err(SirError::TaskRoot(
+                    "materialized task bytes do not match their frozen bundle".to_owned(),
+                ));
+            }
+            if materialized.insert(path, source).is_some() {
+                return Err(SirError::TaskRoot(
+                    "materialized task paths must be unique".to_owned(),
+                ));
+            }
+        }
+        Ok(Self {
+            bundle,
+            sources: materialized,
+        })
+    }
+
     /// Loads a bounded UTF-8 task tree without following symlinks.
     ///
     /// # Errors
@@ -439,6 +497,14 @@ impl SirTaskWorkspace {
 
     pub(crate) fn source(&self, path: &SirTaskArtifactPath) -> Option<&str> {
         self.sources.get(path).map(String::as_str)
+    }
+
+    pub(crate) fn materialized_sources(&self) -> Vec<(SirTaskArtifactPath, String)> {
+        self.bundle
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.path.clone(), self.sources[&artifact.path].clone()))
+            .collect()
     }
 
     pub(crate) fn artifact(&self, path: &SirTaskArtifactPath) -> Option<&SirTaskArtifactV1> {
@@ -594,9 +660,9 @@ mod runtime {
         SirTaskWorkspace, encode,
     };
     use crate::sir_contract::{
-        IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-        IntentRecoveryRequestV1, SirCapabilityManifestV1, SirProposalSubmissionV1,
-        SirResolvedRuntimeModelArtifact,
+        AgentResolvedRuntimeModelArtifact, IntentHypothesisSetProposalV1,
+        IntentRecoveryInputArtifact, IntentRecoveryInputV1, IntentRecoveryRequestV1,
+        SirCapabilityManifestV1, SirProposalSubmissionV1,
     };
 
     const READ_TOOL: &str = "sir_read_task_artifact";
@@ -883,7 +949,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
         recovery_input: IntentRecoveryInputV1,
         episode_id: EpisodeId,
-        model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         accepted: Option<(
             ContentId<SirIntentHypothesisSetProposalArtifact>,
             IntentHypothesisSetProposalV1,
@@ -898,7 +964,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
             recovery_input: IntentRecoveryInputV1,
             episode_id: EpisodeId,
-            model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+            model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         ) -> Self {
             Self {
                 workspace,
@@ -966,7 +1032,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         /// Durable agent episode identity.
         pub episode_id: EpisodeId,
         /// Exact resolved runtime-model configuration identity.
-        pub model_configuration: ContentId<SirResolvedRuntimeModelArtifact>,
+        pub model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         /// Provider/model/deployment/adapter selection audited by `cairn-agent`.
         pub selection: ModelSelection,
         /// Durable agent budget.

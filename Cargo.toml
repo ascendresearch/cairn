@@ -8,9 +8,9 @@ members = [
     "crates/cairn-migration",
     "crates/cairn-observability",
     "crates/cairn-protocol",
+    "crates/cairn-proposal-host",
     "crates/cairn-record",
     "crates/cairn-server",
-    "crates/cairn-sir",
     "crates/cairn-store-sqlite",
     "crates/cairn-testkit",
     "crates/cairn-verification",
@@ -34,8 +34,8 @@ cairn-migration = { path = "crates/cairn-migration", default-features = false }
 cairn-observability = { path = "crates/cairn-observability" }
 cairn-control-transport = { path = "crates/cairn-control-transport" }
 cairn-protocol = { path = "crates/cairn-protocol" }
+cairn-proposal-host = { path = "crates/cairn-proposal-host" }
 cairn-record = { path = "crates/cairn-record" }
-cairn-sir = { path = "crates/cairn-sir" }
 cairn-store-sqlite = { path = "crates/cairn-store-sqlite" }
 cairn-testkit = { path = "crates/cairn-testkit" }
 cairn-verification = { path = "crates/cairn-verification" }

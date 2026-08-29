@@ -31,13 +31,14 @@ mod oracle_search;
 mod oracle_tools;
 #[cfg(feature = "agent-runtime")]
 mod oracle_workflow;
+#[cfg(feature = "agent-runtime")]
+mod proposal_host;
 mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
 mod reduction_mutation;
 mod sir;
 mod sir_contract;
-mod sir_process;
 mod variant_execution;
 
 pub use assemble::{
@@ -94,6 +95,7 @@ pub use candidate_native_followup::{
     CollectionCandidateNativeFollowupRevisionV1, PreparedCandidateNativeBuildDiagnostic,
     PreparedCollectionCandidateNativeFollowupRevision, prepare_candidate_native_build_diagnostic,
     prepare_collection_candidate_native_followup_revision,
+    validate_archived_candidate_native_build_diagnostic,
     validate_archived_collection_candidate_native_followup_revision,
 };
 pub use candidate_native_repair::{
@@ -105,6 +107,7 @@ pub use candidate_native_repair::{
     prepare_candidate_native_repair_build_diagnostic,
     prepare_candidate_native_repair_round_build_diagnostic,
     prepare_collection_candidate_native_repair_revision,
+    validate_archived_candidate_native_repair_build_diagnostic,
     validate_archived_collection_candidate_native_repair_revision,
 };
 pub use candidate_revision::{
@@ -113,7 +116,7 @@ pub use candidate_revision::{
     CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
     PreparedCandidateBuildDiagnostic, PreparedCollectionCandidateRevision,
     prepare_candidate_build_diagnostic, prepare_collection_candidate_revision,
-    validate_archived_collection_candidate_revision,
+    validate_archived_candidate_build_diagnostic, validate_archived_collection_candidate_revision,
 };
 pub use candidate_search::{
     CandidateSearchInputError, CollectionCandidateSearchAuthorityInput,
@@ -128,10 +131,10 @@ pub use candidate_workflow::{
     CandidateRevisionRoundCount, CandidateRevisionRoundLimit, CandidateSubjectFailureStopV1,
     CandidateWorkflowAuthorityV1, CandidateWorkflowError, CandidateWorkflowNextActionV1,
     CandidateWorkflowStateV1, CandidateWorkflowTerminalV1, MigrationWorkflowV1,
-    open_candidate_workflow, record_candidate_native_followup, record_candidate_native_repair,
-    record_candidate_native_subject_failure, record_candidate_native_terminal,
-    recover_candidate_workflow, request_candidate_episode, request_candidate_native_build,
-    require_candidate_native_build_reconciliation,
+    ProposalHostInvocationArtifact, open_candidate_workflow, record_candidate_native_followup,
+    record_candidate_native_repair, record_candidate_native_subject_failure,
+    record_candidate_native_terminal, recover_candidate_workflow, request_candidate_episode,
+    request_candidate_native_build, require_candidate_native_build_reconciliation,
 };
 pub use collection_oracle::{
     AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,
@@ -274,6 +277,13 @@ pub use oracle_workflow::{
     PreparedOracleAttack, PreparedOracleProposalRevision, prepare_oracle_admission_feedback,
     prepare_oracle_attack, prepare_oracle_proposal_revision,
 };
+#[cfg(feature = "agent-runtime")]
+pub use proposal_host::{
+    ProposalHostError, ProposalHostPublicationV1, ProposalHostRequestArtifact,
+    ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
+    ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1, ProposalHostTerminalArtifact,
+    ProposalHostTerminalV1, record_candidate_proposal_host_terminal, run_proposal_host_episode,
+};
 pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,
     compose_historical_reduction_admission,
@@ -320,30 +330,24 @@ pub use sir::{
     SirTaskByteLimit, SirTaskFileLimit, SirTaskLimits,
 };
 pub use sir_contract::{
-    IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-    IntentRecoveryRequestV1, SirArgumentName, SirAuthorizedEvidenceArtifact, SirCallerArgumentRole,
-    SirCallerArgumentV1, SirCallerClaimId, SirCallerClaimStatement, SirCallerClaimV1,
-    SirCallerDeclarationV1, SirCallerExclusionId, SirCallerExclusionV1, SirCallerReferenceArtifact,
-    SirCapability, SirCapabilityManifestV1, SirConflictId, SirConflictStatement,
-    SirDeclaredShapeV1, SirDeclaredUnknownId, SirDeclaredUnknownKind, SirDeclaredUnknownQuestion,
-    SirDeclaredUnknownV1, SirDisambiguationExperimentV1, SirDisambiguationTargetV1,
-    SirDispositionRationale, SirErrorBehaviorDeclaration, SirExclusionStatement, SirExperimentId,
-    SirExperimentPlan, SirExperimentPrediction, SirHypothesisClaim, SirHypothesisId,
-    SirIntentClaimRefV1, SirIntentConflictV1, SirIntentDomain, SirIntentEvidenceRefV1,
-    SirIntentHypothesisV1, SirIntentLayer, SirInvariantId, SirInvariantStatement, SirObservationId,
-    SirObservationStatement, SirObservedFactV1, SirOptimizationFreedomId,
-    SirOptimizationFreedomStatement, SirOptimizationFreedomV1, SirPriorFeedbackArtifact,
-    SirPriorFeedbackV1, SirProposalSubmissionV1, SirResolvedRuntimeModelArtifact,
-    SirSemanticInvariantV1, SirShapeExpression, SirSourceBehaviorDispositionKind,
-    SirSourceBehaviorDispositionV1, SirSourceDispositionId, SirTargetContextV1,
-    SirTargetEnvironmentSelectionV1, SirTargetSoc, SirTargetSocSelectionV1, SirTargetToolchain,
-    SirTargetToolchainSelectionV1, SirUnknownId, SirUnknownKind, SirUnknownQuestion, SirUnknownV1,
-    SirValueDomainDeclaration,
-};
-pub use sir_process::{
-    SirProcessError, SirProcessImplementationArtifact, SirProcessRequestArtifact,
-    SirProcessRequestV1, SirProcessTerminalArtifact, SirProcessTerminalV1,
-    process_recorded_sir_request, sir_recorded_ingress_implementation_id,
+    AgentResolvedRuntimeModelArtifact, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
+    IntentRecoveryInputV1, IntentRecoveryRequestV1, SirArgumentName, SirAuthorizedEvidenceArtifact,
+    SirCallerArgumentRole, SirCallerArgumentV1, SirCallerClaimId, SirCallerClaimStatement,
+    SirCallerClaimV1, SirCallerDeclarationV1, SirCallerExclusionId, SirCallerExclusionV1,
+    SirCallerReferenceArtifact, SirCapability, SirCapabilityManifestV1, SirConflictId,
+    SirConflictStatement, SirDeclaredShapeV1, SirDeclaredUnknownId, SirDeclaredUnknownKind,
+    SirDeclaredUnknownQuestion, SirDeclaredUnknownV1, SirDisambiguationExperimentV1,
+    SirDisambiguationTargetV1, SirDispositionRationale, SirErrorBehaviorDeclaration,
+    SirExclusionStatement, SirExperimentId, SirExperimentPlan, SirExperimentPrediction,
+    SirHypothesisClaim, SirHypothesisId, SirIntentClaimRefV1, SirIntentConflictV1, SirIntentDomain,
+    SirIntentEvidenceRefV1, SirIntentHypothesisV1, SirIntentLayer, SirInvariantId,
+    SirInvariantStatement, SirObservationId, SirObservationStatement, SirObservedFactV1,
+    SirOptimizationFreedomId, SirOptimizationFreedomStatement, SirOptimizationFreedomV1,
+    SirPriorFeedbackArtifact, SirPriorFeedbackV1, SirProposalSubmissionV1, SirSemanticInvariantV1,
+    SirShapeExpression, SirSourceBehaviorDispositionKind, SirSourceBehaviorDispositionV1,
+    SirSourceDispositionId, SirTargetContextV1, SirTargetEnvironmentSelectionV1, SirTargetSoc,
+    SirTargetSocSelectionV1, SirTargetToolchain, SirTargetToolchainSelectionV1, SirUnknownId,
+    SirUnknownKind, SirUnknownQuestion, SirUnknownV1, SirValueDomainDeclaration,
 };
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,

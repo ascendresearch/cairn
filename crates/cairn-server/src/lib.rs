@@ -4,6 +4,10 @@ mod candidate_workflow;
 mod enrollment;
 mod scheduling;
 
+#[cfg(feature = "proposal-host")]
+pub use candidate_workflow::{
+    archive_proposal_host_runtime, prepare_candidate_proposal_host_request,
+};
 pub use candidate_workflow::{
     prepare_candidate_native_build_dispatch, schedule_candidate_native_build,
 };
