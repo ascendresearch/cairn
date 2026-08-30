@@ -19,8 +19,7 @@ pub trait ControllerWorkflowStages: Send {
     type IntentDecisionRequests: Send + Sync;
     type UserIntentDecision: Send + Sync;
     type AdmittedIntent: Send + Sync;
-    type OracleBlueProposal: Send + Sync;
-    type OracleRedProposal: Send + Sync;
+    type OracleExplorationProposal: Send + Sync;
     type AdmittedOracle: Send + Sync;
     type CandidateProposal: Send + Sync;
     type WorkerObservations: Send + Sync;
@@ -58,25 +57,17 @@ pub trait ControllerWorkflowStages: Send {
         decision: Self::UserIntentDecision,
     ) -> impl Future<Output = Result<Self::AdmittedIntent, Self::Error>> + Send;
 
-    fn run_oracle_blue_proposal_loop(
+    fn run_oracle_exploration(
         &mut self,
         frozen: &Self::FrozenRequest,
         intent: &Self::AdmittedIntent,
-    ) -> impl Future<Output = Result<Self::OracleBlueProposal, Self::Error>> + Send;
-
-    fn run_oracle_red_proposal_loop(
-        &mut self,
-        frozen: &Self::FrozenRequest,
-        intent: &Self::AdmittedIntent,
-        blue: &Self::OracleBlueProposal,
-    ) -> impl Future<Output = Result<Self::OracleRedProposal, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::OracleExplorationProposal, Self::Error>> + Send;
 
     fn run_oracle_admission_gate(
         &mut self,
         frozen: &Self::FrozenRequest,
         intent: &Self::AdmittedIntent,
-        blue: Self::OracleBlueProposal,
-        red: Self::OracleRedProposal,
+        proposal: Self::OracleExplorationProposal,
     ) -> impl Future<Output = Result<Self::AdmittedOracle, Self::Error>> + Send;
 
     fn run_candidate_proposal_loop(
@@ -131,14 +122,9 @@ pub async fn run_controller_workflow<S: ControllerWorkflowStages>(
     let intent = stages
         .run_intent_admission_gate(&frozen, sir, decision_requests, user_decision)
         .await?;
-    let blue = stages
-        .run_oracle_blue_proposal_loop(&frozen, &intent)
-        .await?;
-    let red = stages
-        .run_oracle_red_proposal_loop(&frozen, &intent, &blue)
-        .await?;
+    let oracle_proposal = stages.run_oracle_exploration(&frozen, &intent).await?;
     let oracle = stages
-        .run_oracle_admission_gate(&frozen, &intent, blue, red)
+        .run_oracle_admission_gate(&frozen, &intent, oracle_proposal)
         .await?;
     let candidate = stages
         .run_candidate_proposal_loop(&frozen, &intent, &oracle)
@@ -167,8 +153,7 @@ mod tests {
         IntentDecisionRequests,
         UserIntentDecision,
         IntentAdmission,
-        OracleBlue,
-        OracleRed,
+        OracleExploration,
         OracleAdmission,
         Candidate,
         WorkerObservations,
@@ -182,8 +167,7 @@ mod tests {
     struct IntentDecisionRequests;
     struct UserIntentDecision;
     struct AdmittedIntent;
-    struct OracleBlueProposal;
-    struct OracleRedProposal;
+    struct OracleExplorationProposal;
     struct AdmittedOracle;
     struct CandidateProposal;
     struct WorkerObservations;
@@ -219,8 +203,7 @@ mod tests {
         type IntentDecisionRequests = IntentDecisionRequests;
         type UserIntentDecision = UserIntentDecision;
         type AdmittedIntent = AdmittedIntent;
-        type OracleBlueProposal = OracleBlueProposal;
-        type OracleRedProposal = OracleRedProposal;
+        type OracleExplorationProposal = OracleExplorationProposal;
         type AdmittedOracle = AdmittedOracle;
         type CandidateProposal = CandidateProposal;
         type WorkerObservations = WorkerObservations;
@@ -278,26 +261,15 @@ mod tests {
             )
         }
 
-        fn run_oracle_blue_proposal_loop(
+        fn run_oracle_exploration(
             &mut self,
             _frozen: &Self::FrozenRequest,
             _intent: &Self::AdmittedIntent,
-        ) -> impl Future<Output = Result<Self::OracleBlueProposal, Self::Error>> + Send {
+        ) -> impl Future<Output = Result<Self::OracleExplorationProposal, Self::Error>> + Send
+        {
             ready(
-                self.record(RecordedStage::OracleBlue)
-                    .map(|()| OracleBlueProposal),
-            )
-        }
-
-        fn run_oracle_red_proposal_loop(
-            &mut self,
-            _frozen: &Self::FrozenRequest,
-            _intent: &Self::AdmittedIntent,
-            _blue: &Self::OracleBlueProposal,
-        ) -> impl Future<Output = Result<Self::OracleRedProposal, Self::Error>> + Send {
-            ready(
-                self.record(RecordedStage::OracleRed)
-                    .map(|()| OracleRedProposal),
+                self.record(RecordedStage::OracleExploration)
+                    .map(|()| OracleExplorationProposal),
             )
         }
 
@@ -305,8 +277,7 @@ mod tests {
             &mut self,
             _frozen: &Self::FrozenRequest,
             _intent: &Self::AdmittedIntent,
-            _blue: Self::OracleBlueProposal,
-            _red: Self::OracleRedProposal,
+            _proposal: Self::OracleExplorationProposal,
         ) -> impl Future<Output = Result<Self::AdmittedOracle, Self::Error>> + Send {
             ready(
                 self.record(RecordedStage::OracleAdmission)
@@ -381,8 +352,7 @@ mod tests {
                 RecordedStage::IntentDecisionRequests,
                 RecordedStage::UserIntentDecision,
                 RecordedStage::IntentAdmission,
-                RecordedStage::OracleBlue,
-                RecordedStage::OracleRed,
+                RecordedStage::OracleExploration,
                 RecordedStage::OracleAdmission,
                 RecordedStage::Candidate,
                 RecordedStage::WorkerObservations,
@@ -395,15 +365,15 @@ mod tests {
     #[tokio::test]
     async fn unavailable_stage_stops_before_any_downstream_authority() {
         let mut stages = RecordedStages {
-            fail_at: Some(RecordedStage::OracleBlue),
+            fail_at: Some(RecordedStage::OracleExploration),
             ..RecordedStages::default()
         };
 
         let error = run_controller_workflow(&mut stages, Request)
             .await
-            .expect_err("unimplemented Oracle Blue stage must fail closed");
+            .expect_err("unimplemented Oracle Exploration stage must fail closed");
 
-        assert_eq!(error, StageFailure(RecordedStage::OracleBlue));
+        assert_eq!(error, StageFailure(RecordedStage::OracleExploration));
         assert_eq!(
             stages.trace,
             vec![
@@ -412,7 +382,7 @@ mod tests {
                 RecordedStage::IntentDecisionRequests,
                 RecordedStage::UserIntentDecision,
                 RecordedStage::IntentAdmission,
-                RecordedStage::OracleBlue,
+                RecordedStage::OracleExploration,
             ]
         );
     }

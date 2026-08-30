@@ -1,4 +1,4 @@
-//! Trusted model-visible tools for blue proposal and red attack submission.
+//! Trusted model-visible tools for optional synthesis and adversarial debate strategies.
 
 use cairn_agent::{
     CanonicalToolResult, NativeToolDefinition, PreparedToolOperation, ToolEffectClass, ToolGateway,
@@ -14,20 +14,21 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
-    ExternalTestSearchResultArtifact, OracleAgentRole, OracleAttackInput, OracleRoleTool,
-    OracleSearchPlanError, OracleSearchPlanV1, PreparedOracleAttack,
-    PreparedOracleProposalRevision, prepare_oracle_attack, prepare_oracle_proposal_revision,
+    ExternalTestSearchResultArtifact, OracleDebateAttackInput, OracleDebateStrategy,
+    OracleDebateTool, OracleModelDebatePlanError, OracleModelDebatePlanV1,
+    PreparedOracleDebateAttack, PreparedOracleDebateProposalRevision, prepare_oracle_debate_attack,
+    prepare_oracle_debate_proposal_revision,
 };
 
 const SCHEMA_V1: u16 = 1;
-const TOOL_VERSION: &str = "oracle-workflow-v1";
+const TOOL_VERSION: &str = "oracle-model-debate-v1";
 
-const SEARCH: &str = "oracle_search_external_tests";
-const SUBMIT_DOMAIN_REFINEMENT: &str = "oracle_submit_domain_refinement";
-const SUBMIT_PROPOSAL: &str = "oracle_submit_oracle_proposal";
-const SUBMIT_CORRECT: &str = "oracle_submit_correct_variant";
-const SUBMIT_WRONG: &str = "oracle_submit_wrong_variant";
-const SUBMIT_ADVERSARIAL: &str = "oracle_submit_adversarial_case";
+const SEARCH: &str = "oracle_model_debate_external_tests";
+const SUBMIT_DOMAIN_REFINEMENT: &str = "oracle_model_debate_submit_domain_refinement";
+const SUBMIT_PROPOSAL: &str = "oracle_model_debate_submit_oracle_proposal";
+const SUBMIT_CORRECT: &str = "oracle_model_debate_submit_correct_variant";
+const SUBMIT_WRONG: &str = "oracle_model_debate_submit_wrong_variant";
+const SUBMIT_ADVERSARIAL: &str = "oracle_model_debate_submit_adversarial_case";
 
 /// Canonical serializable model-visible contract from which both catalog identity and wire tools
 /// are derived.
@@ -41,9 +42,9 @@ pub(crate) struct OracleToolContractV1 {
 }
 
 impl OracleToolContractV1 {
-    fn native(&self) -> Result<NativeToolDefinition, OracleToolError> {
+    fn native(&self) -> Result<NativeToolDefinition, OracleDebateToolError> {
         Ok(NativeToolDefinition {
-            name: ToolName::new(self.name).map_err(|_| OracleToolError::BuiltInContract)?,
+            name: ToolName::new(self.name).map_err(|_| OracleDebateToolError::BuiltInContract)?,
             description: self.description.to_owned(),
             input_schema: self.input_schema.clone(),
             strict: self.strict,
@@ -51,31 +52,34 @@ impl OracleToolContractV1 {
     }
 }
 
-pub(crate) fn oracle_role_tool_contracts(
-    role: OracleAgentRole,
-) -> Result<Vec<OracleToolContractV1>, OracleSearchPlanError> {
-    role_tools(role).map_err(|error| OracleSearchPlanError::Encoding(error.to_string()))
+pub(crate) fn oracle_debate_tool_contracts(
+    strategy: OracleDebateStrategy,
+) -> Result<Vec<OracleToolContractV1>, OracleModelDebatePlanError> {
+    strategy_tools(strategy)
+        .map_err(|error| OracleModelDebatePlanError::Encoding(error.to_string()))
 }
 
-/// Returns exact deterministic protocol-native definitions for one role.
+/// Returns exact deterministic protocol-native definitions for one strategy.
 ///
 /// # Errors
 ///
 /// Returns an error only if a repository-owned name violates the generic tool-name contract.
-pub fn oracle_role_native_tools(
-    role: OracleAgentRole,
-) -> Result<Vec<NativeToolDefinition>, OracleToolError> {
-    role_tools(role)?
+pub fn oracle_debate_native_tools(
+    strategy: OracleDebateStrategy,
+) -> Result<Vec<NativeToolDefinition>, OracleDebateToolError> {
+    strategy_tools(strategy)?
         .iter()
         .map(OracleToolContractV1::native)
         .collect()
 }
 
-fn role_tools(role: OracleAgentRole) -> Result<Vec<OracleToolContractV1>, OracleToolError> {
-    let tools = match role {
-        OracleAgentRole::Blue => vec![
+fn strategy_tools(
+    strategy: OracleDebateStrategy,
+) -> Result<Vec<OracleToolContractV1>, OracleDebateToolError> {
+    let tools = match strategy {
+        OracleDebateStrategy::Synthesis => vec![
             contract(
-                OracleRoleTool::SearchExternalTests,
+                OracleDebateTool::SearchExternalTests,
                 "Search bounded operator-approved upstream repositories and fetch exact test bytes.",
                 json!({
                     "type": "object",
@@ -91,13 +95,13 @@ fn role_tools(role: OracleAgentRole) -> Result<Vec<OracleToolContractV1>, Oracle
                 true,
             ),
             contract(
-                OracleRoleTool::SubmitDomainRefinement,
+                OracleDebateTool::SubmitDomainRefinement,
                 "Submit one canonical domain-refinement JSON body; it remains a proposal delta.",
                 canonical_json_string_schema("refinement_json"),
                 true,
             ),
             contract(
-                OracleRoleTool::SubmitOracleProposal,
+                OracleDebateTool::SubmitOracleProposal,
                 "Submit a complete typed OracleProposalV1 plus cited external research identities.",
                 json!({
                     "type": "object",
@@ -112,21 +116,21 @@ fn role_tools(role: OracleAgentRole) -> Result<Vec<OracleToolContractV1>, Oracle
                 false,
             ),
         ],
-        OracleAgentRole::Red => vec![
+        OracleDebateStrategy::Adversarial => vec![
             contract(
-                OracleRoleTool::SubmitCorrectVariant,
+                OracleDebateTool::SubmitCorrectVariant,
                 "Submit one typed correct-by-construction implementation variant.",
                 canonical_json_string_schema("variant_json"),
                 true,
             ),
             contract(
-                OracleRoleTool::SubmitWrongVariant,
+                OracleDebateTool::SubmitWrongVariant,
                 "Submit one typed deliberately wrong implementation variant.",
                 canonical_json_string_schema("variant_json"),
                 true,
             ),
             contract(
-                OracleRoleTool::SubmitAdversarialCase,
+                OracleDebateTool::SubmitAdversarialCase,
                 "Submit one canonical adversarial corpus-case identity.",
                 canonical_json_string_schema("case_id"),
                 true,
@@ -140,7 +144,7 @@ fn role_tools(role: OracleAgentRole) -> Result<Vec<OracleToolContractV1>, Oracle
 }
 
 fn contract(
-    tool: OracleRoleTool,
+    tool: OracleDebateTool,
     description: &'static str,
     input_schema: Value,
     strict: bool,
@@ -153,14 +157,14 @@ fn contract(
     }
 }
 
-const fn tool_name(tool: OracleRoleTool) -> &'static str {
+const fn tool_name(tool: OracleDebateTool) -> &'static str {
     match tool {
-        OracleRoleTool::SearchExternalTests => SEARCH,
-        OracleRoleTool::SubmitDomainRefinement => SUBMIT_DOMAIN_REFINEMENT,
-        OracleRoleTool::SubmitOracleProposal => SUBMIT_PROPOSAL,
-        OracleRoleTool::SubmitCorrectVariant => SUBMIT_CORRECT,
-        OracleRoleTool::SubmitWrongVariant => SUBMIT_WRONG,
-        OracleRoleTool::SubmitAdversarialCase => SUBMIT_ADVERSARIAL,
+        OracleDebateTool::SearchExternalTests => SEARCH,
+        OracleDebateTool::SubmitDomainRefinement => SUBMIT_DOMAIN_REFINEMENT,
+        OracleDebateTool::SubmitOracleProposal => SUBMIT_PROPOSAL,
+        OracleDebateTool::SubmitCorrectVariant => SUBMIT_CORRECT,
+        OracleDebateTool::SubmitWrongVariant => SUBMIT_WRONG,
+        OracleDebateTool::SubmitAdversarialCase => SUBMIT_ADVERSARIAL,
     }
 }
 
@@ -176,10 +180,10 @@ fn canonical_json_string_schema(field: &'static str) -> Value {
     })
 }
 
-/// Exact blue aggregate-submission arguments.
+/// Exact synthesis aggregate-submission arguments.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct BlueProposalSubmissionV1 {
+pub struct SynthesisProposalSubmissionV1 {
     schema_version: u16,
     /// Complete ordinary proposal body validated at the product boundary.
     pub proposal: OracleProposalV1,
@@ -189,21 +193,21 @@ pub struct BlueProposalSubmissionV1 {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct BlueDomainRefinementSubmissionV1 {
+struct SynthesisDomainRefinementSubmissionV1 {
     schema_version: u16,
     refinement_json: String,
 }
 
-/// Pure collector for independently model-authored Blue domain refinements.
-pub struct BlueDomainRefinementGateway {
-    plan: OracleSearchPlanV1,
+/// Pure collector for independently model-authored Synthesis domain refinements.
+pub struct SynthesisDomainRefinementGateway {
+    plan: OracleModelDebatePlanV1,
     accepted: Vec<(ContentId<DomainRefinementArtifact>, DomainRefinementV1)>,
 }
 
-impl BlueDomainRefinementGateway {
-    /// Creates an empty collector bound to one exact Blue episode and declared domain.
+impl SynthesisDomainRefinementGateway {
+    /// Creates an empty collector bound to one exact Synthesis episode and declared domain.
     #[must_use]
-    pub const fn new(plan: OracleSearchPlanV1) -> Self {
+    pub const fn new(plan: OracleModelDebatePlanV1) -> Self {
         Self {
             plan,
             accepted: Vec::new(),
@@ -217,15 +221,16 @@ impl BlueDomainRefinementGateway {
     }
 }
 
-impl ToolGateway for BlueDomainRefinementGateway {
+impl ToolGateway for SynthesisDomainRefinementGateway {
     fn invoke(
         &mut self,
         operation: &PreparedToolOperation,
     ) -> Result<CanonicalToolResult, ToolGatewayError> {
         validate_operation(operation, SUBMIT_DOMAIN_REFINEMENT)?;
-        let input: BlueDomainRefinementSubmissionV1 = decode_canonical(operation.argument_bytes())?;
+        let input: SynthesisDomainRefinementSubmissionV1 =
+            decode_canonical(operation.argument_bytes())?;
         if input.schema_version != SCHEMA_V1 {
-            return rejected("unsupported Blue domain-refinement submission schema");
+            return rejected("unsupported Synthesis domain-refinement submission schema");
         }
         let refinement: DomainRefinementV1 =
             cairn_codec::from_slice(input.refinement_json.as_bytes())
@@ -233,26 +238,26 @@ impl ToolGateway for BlueDomainRefinementGateway {
         let canonical = cairn_codec::to_vec(&refinement)
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
         if canonical != input.refinement_json.as_bytes() {
-            return rejected("Blue domain-refinement JSON is not canonical");
+            return rejected("Synthesis domain-refinement JSON is not canonical");
         }
         if refinement.declared_domain() != self.plan.declared_domain()
             || refinement.authorship().origin() != AuthorshipOrigin::Model
-            || refinement.authorship().episode_id() != Some(self.plan.blue().episode_id())
+            || refinement.authorship().episode_id() != Some(self.plan.synthesis().episode_id())
             || refinement.authorship().model_configuration()
-                != Some(self.plan.blue().authorship_configuration())
+                != Some(self.plan.synthesis().authorship_configuration())
         {
-            return rejected("Blue refinement domain, role, or model is inconsistent");
+            return rejected("Synthesis refinement domain, strategy, or model is inconsistent");
         }
         let id = content_id::<DomainRefinementArtifact>(&refinement)?;
         if self.accepted.iter().any(|(accepted, _)| *accepted == id) {
-            return rejected("Blue domain refinement was already submitted");
+            return rejected("Synthesis domain refinement was already submitted");
         }
         self.accepted.push((id, refinement));
         accepted_identity(&id.to_wire())
     }
 }
 
-impl BlueProposalSubmissionV1 {
+impl SynthesisProposalSubmissionV1 {
     /// Creates one current-V1 submission.
     #[must_use]
     pub const fn new(
@@ -267,19 +272,19 @@ impl BlueProposalSubmissionV1 {
     }
 }
 
-/// Pure gateway that validates blue model output and emits an immutable proposal revision.
-pub struct BlueProposalGateway {
-    plan: OracleSearchPlanV1,
-    parent: Option<PreparedOracleProposalRevision>,
-    accepted: Option<PreparedOracleProposalRevision>,
+/// Pure gateway that validates synthesis model output and emits an immutable proposal revision.
+pub struct SynthesisProposalGateway {
+    plan: OracleModelDebatePlanV1,
+    parent: Option<PreparedOracleDebateProposalRevision>,
+    accepted: Option<PreparedOracleDebateProposalRevision>,
 }
 
-impl BlueProposalGateway {
-    /// Creates a gateway for the first or next immutable blue revision.
+impl SynthesisProposalGateway {
+    /// Creates a gateway for the first or next immutable synthesis revision.
     #[must_use]
     pub const fn new(
-        plan: OracleSearchPlanV1,
-        parent: Option<PreparedOracleProposalRevision>,
+        plan: OracleModelDebatePlanV1,
+        parent: Option<PreparedOracleDebateProposalRevision>,
     ) -> Self {
         Self {
             plan,
@@ -290,24 +295,24 @@ impl BlueProposalGateway {
 
     /// Returns the last accepted typed revision.
     #[must_use]
-    pub const fn accepted(&self) -> Option<&PreparedOracleProposalRevision> {
+    pub const fn accepted(&self) -> Option<&PreparedOracleDebateProposalRevision> {
         self.accepted.as_ref()
     }
 }
 
-impl ToolGateway for BlueProposalGateway {
+impl ToolGateway for SynthesisProposalGateway {
     fn invoke(
         &mut self,
         operation: &PreparedToolOperation,
     ) -> Result<CanonicalToolResult, ToolGatewayError> {
         validate_operation(operation, SUBMIT_PROPOSAL)?;
-        let input: BlueProposalSubmissionV1 = decode_canonical(operation.argument_bytes())?;
+        let input: SynthesisProposalSubmissionV1 = decode_canonical(operation.argument_bytes())?;
         if input.schema_version != SCHEMA_V1 {
             return Err(ToolGatewayError::Rejected(
-                "unsupported blue proposal submission schema".to_owned(),
+                "unsupported synthesis proposal submission schema".to_owned(),
             ));
         }
-        let prepared = prepare_oracle_proposal_revision(
+        let prepared = prepare_oracle_debate_proposal_revision(
             &self.plan,
             self.parent.as_ref(),
             input.proposal,
@@ -324,34 +329,37 @@ impl ToolGateway for BlueProposalGateway {
     }
 }
 
-/// Exact canonical-JSON wrapper used by one red variant submission tool.
+/// Exact canonical-JSON wrapper used by one adversarial variant submission tool.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct RedVariantSubmissionV1 {
+struct AdversarialVariantSubmissionV1 {
     schema_version: u16,
     variant_json: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct RedCaseSubmissionV1 {
+struct AdversarialCaseSubmissionV1 {
     schema_version: u16,
     case_id: String,
 }
 
-/// Pure collector gateway for the three exact model-visible Red tools.
-pub struct RedSubmissionGateway {
-    plan: OracleSearchPlanV1,
-    revision: PreparedOracleProposalRevision,
+/// Pure collector gateway for the three exact model-visible Adversarial tools.
+pub struct AdversarialSubmissionGateway {
+    plan: OracleModelDebatePlanV1,
+    revision: PreparedOracleDebateProposalRevision,
     correct_variants: Vec<ImplementationVariantV1>,
     wrong_variants: Vec<ImplementationVariantV1>,
     adversarial_cases: Vec<ContentId<CorpusCaseArtifact>>,
 }
 
-impl RedSubmissionGateway {
-    /// Creates an empty collector over one exact Blue revision.
+impl AdversarialSubmissionGateway {
+    /// Creates an empty collector over one exact Synthesis revision.
     #[must_use]
-    pub const fn new(plan: OracleSearchPlanV1, revision: PreparedOracleProposalRevision) -> Self {
+    pub const fn new(
+        plan: OracleModelDebatePlanV1,
+        revision: PreparedOracleDebateProposalRevision,
+    ) -> Self {
         Self {
             plan,
             revision,
@@ -361,16 +369,16 @@ impl RedSubmissionGateway {
         }
     }
 
-    /// Finalizes the collected Red submissions into one typed attack.
+    /// Finalizes the collected Adversarial submissions into one typed attack.
     ///
     /// # Errors
     ///
-    /// Rejects missing classes, duplicate identities, or any wrong role/model authorship.
-    pub fn finish(self) -> Result<PreparedOracleAttack, crate::OracleWorkflowError> {
-        prepare_oracle_attack(
+    /// Rejects missing classes, duplicate identities, or any wrong strategy/model authorship.
+    pub fn finish(self) -> Result<PreparedOracleDebateAttack, crate::OracleDebateWorkflowError> {
+        prepare_oracle_debate_attack(
             &self.plan,
             &self.revision,
-            OracleAttackInput {
+            OracleDebateAttackInput {
                 correct_variants: self.correct_variants,
                 wrong_variants: self.wrong_variants,
                 adversarial_cases: self.adversarial_cases,
@@ -379,7 +387,7 @@ impl RedSubmissionGateway {
     }
 }
 
-impl ToolGateway for RedSubmissionGateway {
+impl ToolGateway for AdversarialSubmissionGateway {
     fn invoke(
         &mut self,
         operation: &PreparedToolOperation,
@@ -387,25 +395,26 @@ impl ToolGateway for RedSubmissionGateway {
         match operation.tool().as_str() {
             SUBMIT_CORRECT => {
                 validate_operation(operation, SUBMIT_CORRECT)?;
-                let variant = decode_red_variant(operation.argument_bytes())?;
-                validate_red_variant(&self.plan, &variant, true)?;
+                let variant = decode_adversarial_variant(operation.argument_bytes())?;
+                validate_adversarial_variant(&self.plan, &variant, true)?;
                 let id = content_id::<ImplementationVariantArtifact>(&variant)?;
                 self.correct_variants.push(variant);
                 accepted_identity(&id.to_wire())
             }
             SUBMIT_WRONG => {
                 validate_operation(operation, SUBMIT_WRONG)?;
-                let variant = decode_red_variant(operation.argument_bytes())?;
-                validate_red_variant(&self.plan, &variant, false)?;
+                let variant = decode_adversarial_variant(operation.argument_bytes())?;
+                validate_adversarial_variant(&self.plan, &variant, false)?;
                 let id = content_id::<ImplementationVariantArtifact>(&variant)?;
                 self.wrong_variants.push(variant);
                 accepted_identity(&id.to_wire())
             }
             SUBMIT_ADVERSARIAL => {
                 validate_operation(operation, SUBMIT_ADVERSARIAL)?;
-                let input: RedCaseSubmissionV1 = decode_canonical(operation.argument_bytes())?;
+                let input: AdversarialCaseSubmissionV1 =
+                    decode_canonical(operation.argument_bytes())?;
                 if input.schema_version != SCHEMA_V1 {
-                    return rejected("unsupported Red case submission schema");
+                    return rejected("unsupported Adversarial case submission schema");
                 }
                 let case = serde_json::from_value::<ContentId<CorpusCaseArtifact>>(Value::String(
                     input.case_id,
@@ -415,46 +424,48 @@ impl ToolGateway for RedSubmissionGateway {
                 accepted_identity(&case.to_wire())
             }
             _ => Err(ToolGatewayError::NotStarted(
-                "operation is not a Red role submission".to_owned(),
+                "operation is not a Adversarial strategy submission".to_owned(),
             )),
         }
     }
 }
 
-/// Returns the trusted blue proposal registration.
+/// Returns the trusted synthesis proposal registration.
 ///
 /// # Errors
 ///
 /// Returns an error only for invalid built-in names.
-pub fn blue_proposal_registration() -> Result<ToolRegistration, OracleToolError> {
+pub fn synthesis_proposal_registration() -> Result<ToolRegistration, OracleDebateToolError> {
     registration(SUBMIT_PROPOSAL)
 }
 
-/// Returns the trusted Blue domain-refinement registration.
+/// Returns the trusted Synthesis domain-refinement registration.
 ///
 /// # Errors
 ///
 /// Returns an error only for an invalid built-in name.
-pub fn blue_domain_refinement_registration() -> Result<ToolRegistration, OracleToolError> {
+pub fn synthesis_domain_refinement_registration() -> Result<ToolRegistration, OracleDebateToolError>
+{
     registration(SUBMIT_DOMAIN_REFINEMENT)
 }
 
-/// Returns the trusted registrations for the exact three model-visible Red tools.
+/// Returns the trusted registrations for the exact three model-visible Adversarial tools.
 ///
 /// # Errors
 ///
 /// Returns an error only for invalid built-in names.
-pub fn red_submission_registrations() -> Result<Vec<ToolRegistration>, OracleToolError> {
+pub fn adversarial_submission_registrations() -> Result<Vec<ToolRegistration>, OracleDebateToolError>
+{
     [SUBMIT_CORRECT, SUBMIT_WRONG, SUBMIT_ADVERSARIAL]
         .into_iter()
         .map(registration)
         .collect()
 }
 
-fn decode_red_variant(bytes: &[u8]) -> Result<ImplementationVariantV1, ToolGatewayError> {
-    let input: RedVariantSubmissionV1 = decode_canonical(bytes)?;
+fn decode_adversarial_variant(bytes: &[u8]) -> Result<ImplementationVariantV1, ToolGatewayError> {
+    let input: AdversarialVariantSubmissionV1 = decode_canonical(bytes)?;
     if input.schema_version != SCHEMA_V1 {
-        return rejected("unsupported Red variant submission schema");
+        return rejected("unsupported Adversarial variant submission schema");
     }
     let variant: ImplementationVariantV1 =
         cairn_codec::from_slice(input.variant_json.as_bytes())
@@ -462,24 +473,25 @@ fn decode_red_variant(bytes: &[u8]) -> Result<ImplementationVariantV1, ToolGatew
     let canonical = cairn_codec::to_vec(&variant)
         .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
     if canonical != input.variant_json.as_bytes() {
-        return rejected("Red variant JSON is not canonical");
+        return rejected("Adversarial variant JSON is not canonical");
     }
     Ok(variant)
 }
 
-fn validate_red_variant(
-    plan: &OracleSearchPlanV1,
+fn validate_adversarial_variant(
+    plan: &OracleModelDebatePlanV1,
     variant: &ImplementationVariantV1,
     correct: bool,
 ) -> Result<(), ToolGatewayError> {
     let correct_expectation =
         matches!(variant.expectation(), VariantExpectation::MustAccept { .. });
     if variant.authorship().origin() != AuthorshipOrigin::Model
-        || variant.authorship().episode_id() != Some(plan.red().episode_id())
-        || variant.authorship().model_configuration() != Some(plan.red().authorship_configuration())
+        || variant.authorship().episode_id() != Some(plan.adversarial().episode_id())
+        || variant.authorship().model_configuration()
+            != Some(plan.adversarial().authorship_configuration())
         || correct_expectation != correct
     {
-        return rejected("Red variant role, model, or expectation is inconsistent");
+        return rejected("Adversarial variant strategy, model, or expectation is inconsistent");
     }
     Ok(())
 }
@@ -499,11 +511,11 @@ fn rejected<T>(message: &str) -> Result<T, ToolGatewayError> {
     Err(ToolGatewayError::Rejected(message.to_owned()))
 }
 
-fn registration(name: &'static str) -> Result<ToolRegistration, OracleToolError> {
+fn registration(name: &'static str) -> Result<ToolRegistration, OracleDebateToolError> {
     Ok(ToolRegistration::new(
-        ToolName::new(name).map_err(|_| OracleToolError::BuiltInContract)?,
+        ToolName::new(name).map_err(|_| OracleDebateToolError::BuiltInContract)?,
         ToolImplementationVersion::new(TOOL_VERSION)
-            .map_err(|_| OracleToolError::BuiltInContract)?,
+            .map_err(|_| OracleDebateToolError::BuiltInContract)?,
         ToolEffectClass::Pure,
     ))
 }
@@ -541,7 +553,7 @@ where
 
 /// Invalid trusted Oracle Agent tool construction.
 #[derive(Debug, Error)]
-pub enum OracleToolError {
+pub enum OracleDebateToolError {
     /// A repository-owned tool name or implementation label violates the generic boundary.
     #[error("invalid built-in Oracle Agent tool contract")]
     BuiltInContract,
@@ -561,56 +573,56 @@ mod tests {
         DomainRefinementV1, ModelConfigurationArtifact, OracleTaskInputArtifact,
     };
 
-    use super::{BlueDomainRefinementGateway, blue_domain_refinement_registration};
+    use super::{SynthesisDomainRefinementGateway, synthesis_domain_refinement_registration};
     use crate::{
-        OracleAgentRole, OracleRoleEpisodeInput, OracleSearchPlanInput, OracleSearchPlanV1,
-        prepare_oracle_role_episode,
+        OracleDebateEpisodeInput, OracleDebateStrategy, OracleModelDebatePlanInput,
+        OracleModelDebatePlanV1, prepare_oracle_debate_episode,
     };
 
     fn id<T: ContentType>(label: &str) -> ContentId<T> {
         ContentId::derive(label.as_bytes()).expect("content id")
     }
 
-    fn plan() -> OracleSearchPlanV1 {
-        let blue = prepare_oracle_role_episode(OracleRoleEpisodeInput {
-            role: OracleAgentRole::Blue,
+    fn plan() -> OracleModelDebatePlanV1 {
+        let synthesis = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+            strategy: OracleDebateStrategy::Synthesis,
             episode_id: EpisodeId::new(),
-            model_configuration: id::<ResolvedRuntimeModelArtifact>("blue runtime"),
-            authorship_configuration: id::<ModelConfigurationArtifact>("blue authorship"),
-            role_instruction: id::<InstructionBlock>("blue role"),
+            model_configuration: id::<ResolvedRuntimeModelArtifact>("synthesis runtime"),
+            authorship_configuration: id::<ModelConfigurationArtifact>("synthesis authorship"),
+            strategy_instruction: id::<InstructionBlock>("synthesis strategy"),
             private_context: Vec::new(),
             budget: EpisodeBudget::default(),
         })
-        .expect("blue role");
-        let red = prepare_oracle_role_episode(OracleRoleEpisodeInput {
-            role: OracleAgentRole::Red,
+        .expect("synthesis strategy");
+        let adversarial = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+            strategy: OracleDebateStrategy::Adversarial,
             episode_id: EpisodeId::new(),
-            model_configuration: id::<ResolvedRuntimeModelArtifact>("red runtime"),
-            authorship_configuration: id::<ModelConfigurationArtifact>("red authorship"),
-            role_instruction: id::<InstructionBlock>("red role"),
+            model_configuration: id::<ResolvedRuntimeModelArtifact>("adversarial runtime"),
+            authorship_configuration: id::<ModelConfigurationArtifact>("adversarial authorship"),
+            strategy_instruction: id::<InstructionBlock>("adversarial strategy"),
             private_context: Vec::new(),
             budget: EpisodeBudget::default(),
         })
-        .expect("red role");
-        OracleSearchPlanV1::new(OracleSearchPlanInput {
+        .expect("adversarial strategy");
+        OracleModelDebatePlanV1::new(OracleModelDebatePlanInput {
             task_id: TaskId::new(),
             task_inputs: id::<OracleTaskInputArtifact>("task inputs"),
             declared_domain: id::<DeclaredDomainArtifact>("declared domain"),
             admission_policy: id::<AdmissionPolicyArtifact>("admission policy"),
             common_instructions: vec![id::<InstructionBlock>("common")],
             shared_context: vec![id::<ContextBlock>("caller and source context")],
-            blue,
-            red,
+            synthesis,
+            adversarial,
         })
         .expect("plan")
     }
 
-    fn refinement(plan: &OracleSearchPlanV1) -> DomainRefinementV1 {
+    fn refinement(plan: &OracleModelDebatePlanV1) -> DomainRefinementV1 {
         let authorship = ArtifactAuthorshipV1::new(
             AuthorshipOrigin::Model,
-            ArtifactAuthorId::new("recorded-blue").expect("author"),
-            Some(plan.blue().episode_id()),
-            Some(plan.blue().authorship_configuration()),
+            ArtifactAuthorId::new("recorded-synthesis").expect("author"),
+            Some(plan.synthesis().episode_id()),
+            Some(plan.synthesis().authorship_configuration()),
         )
         .expect("authorship");
         DomainRefinementV1::new(
@@ -625,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn advertised_blue_refinement_tool_has_an_executable_typed_gateway() {
+    fn advertised_synthesis_refinement_tool_has_an_executable_typed_gateway() {
         let plan = plan();
         let refinement = refinement(&plan);
         let refinement_json =
@@ -641,7 +653,7 @@ mod tests {
             directory.path().join("cas"),
         )
         .expect("content");
-        let registration = blue_domain_refinement_registration().expect("registration");
+        let registration = synthesis_domain_refinement_registration().expect("registration");
         let operation = prepare_tool_operation(
             &mut content,
             OperationId::new(),
@@ -651,7 +663,7 @@ mod tests {
             &arguments,
         )
         .expect("operation");
-        let mut gateway = BlueDomainRefinementGateway::new(plan);
+        let mut gateway = SynthesisDomainRefinementGateway::new(plan);
         gateway.invoke(&operation).expect("accepted refinement");
         assert_eq!(gateway.accepted().len(), 1);
         assert!(gateway.invoke(&operation).is_err());

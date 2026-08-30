@@ -1,4 +1,4 @@
-//! Opt-in Blue Oracle dogfood: real model, recorded upstream research, durable restart.
+//! Opt-in model-backed Oracle debate dogfood with recorded research and durable restart.
 
 use std::{
     io::Cursor,
@@ -22,13 +22,13 @@ use cairn_migration::{
     ExternalResearchProviderError, ExternalTestCaseV1, ExternalTestResearchContextV1,
     ExternalTestSearchGateway, ExternalTestSearchRequestArtifact, ExternalTestSearchRequestV1,
     ExternalTestSearchResultV1, GitHubBlobIdentity, GitHubExternalResearchProvider,
-    GitHubRepository, OracleAgentRole, OracleRoleEpisodeInput, OracleRolePromptInput,
-    OracleSearchPlanInput, OracleSearchPlanV1, RecordedExternalResearchExchange,
+    GitHubRepository, OracleDebateEpisodeInput, OracleDebatePromptInput, OracleDebateStrategy,
+    OracleModelDebatePlanInput, OracleModelDebatePlanV1, RecordedExternalResearchExchange,
     RecordedExternalResearchProvider, SearchResultLimit, SourcePath, ZeroKMatmulF32OracleCaseV1,
-    archive_external_test_evidence, archive_oracle_role_tool_catalog,
-    archive_standard_oracle_instructions, assemble_zero_k_matmul_f32_oracle,
-    external_test_search_registration, materialize_oracle_prompt, prepare_oracle_role_episode,
-    prepare_oracle_role_prompt,
+    archive_external_test_evidence, archive_oracle_debate_tool_catalog,
+    archive_standard_oracle_debate_instructions, assemble_zero_k_matmul_f32_oracle,
+    external_test_search_registration, materialize_oracle_debate_prompt,
+    prepare_oracle_debate_episode, prepare_oracle_debate_prompt,
 };
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, EpisodeId,
@@ -42,21 +42,21 @@ use cairn_verification::{
 };
 use serde::{Deserialize, Serialize};
 
-enum BlueDogfoodDraftArtifact {}
+enum SynthesisDogfoodDraftArtifact {}
 
-impl ContentType for BlueDogfoodDraftArtifact {
-    const DOMAIN: &'static str = "migration.blue-dogfood-draft.v1";
+impl ContentType for SynthesisDogfoodDraftArtifact {
+    const DOMAIN: &'static str = "migration.synthesis-dogfood-draft.v1";
 }
 
-enum RedDogfoodReviewArtifact {}
+enum AdversarialDogfoodReviewArtifact {}
 
-impl ContentType for RedDogfoodReviewArtifact {
-    const DOMAIN: &'static str = "migration.red-dogfood-review.v1";
+impl ContentType for AdversarialDogfoodReviewArtifact {
+    const DOMAIN: &'static str = "migration.adversarial-dogfood-review.v1";
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct BlueDogfoodDraftV1 {
+struct SynthesisDogfoodDraftV1 {
     schema_version: u16,
     case_name: String,
     input: String,
@@ -95,38 +95,38 @@ enum DraftComparisonV1 {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct RedDogfoodReviewV1 {
+struct AdversarialDogfoodReviewV1 {
     schema_version: u16,
-    verdict: RedReviewVerdict,
+    verdict: AdversarialReviewVerdict,
     strengths: Vec<String>,
-    blocking_findings: Vec<RedReviewFindingV1>,
-    advisories: Vec<RedReviewFindingV1>,
+    blocking_findings: Vec<AdversarialReviewFindingV1>,
+    advisories: Vec<AdversarialReviewFindingV1>,
     recommended_revision: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum RedReviewVerdict {
+enum AdversarialReviewVerdict {
     Pass,
     Revise,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct RedReviewFindingV1 {
-    kind: RedReviewFindingKind,
+struct AdversarialReviewFindingV1 {
+    kind: AdversarialReviewFindingKind,
     detail: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum RedReviewFindingKind {
+enum AdversarialReviewFindingKind {
     FalseAccept,
     FalseReject,
     Underspecified,
 }
 
-impl RedDogfoodReviewV1 {
+impl AdversarialDogfoodReviewV1 {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 {
             return Err(format!(
@@ -161,7 +161,9 @@ impl RedDogfoodReviewV1 {
                 return Err(format!("{field}[{index}].detail must be nonempty"));
             }
         }
-        if matches!(self.verdict, RedReviewVerdict::Pass) != self.blocking_findings.is_empty() {
+        if matches!(self.verdict, AdversarialReviewVerdict::Pass)
+            != self.blocking_findings.is_empty()
+        {
             return Err(format!(
                 "verdict/blocker mismatch: verdict is {:?} but blocking_findings has {} entries; pass requires zero blockers and revise requires at least one",
                 self.verdict,
@@ -172,7 +174,7 @@ impl RedDogfoodReviewV1 {
     }
 }
 
-impl BlueDogfoodDraftV1 {
+impl SynthesisDogfoodDraftV1 {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 {
             return Err(format!(
@@ -321,8 +323,8 @@ struct DogfoodSample {
 #[serde(deny_unknown_fields)]
 struct LiveConfig {
     schema_version: u16,
-    blue: RoleLimits,
-    red: RoleLimits,
+    synthesis: StrategyLimits,
+    adversarial: StrategyLimits,
     workflow: WorkflowLimits,
     research: ResearchConfig,
 }
@@ -330,10 +332,10 @@ struct LiveConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkflowLimits {
-    #[serde(rename = "max_blue_submission_repairs")]
-    blue_submission_repairs: u32,
-    #[serde(rename = "max_red_submission_repairs")]
-    red_submission_repairs: u32,
+    #[serde(rename = "max_synthesis_submission_repairs")]
+    synthesis_submission_repairs: u32,
+    #[serde(rename = "max_adversarial_submission_repairs")]
+    adversarial_submission_repairs: u32,
     #[serde(rename = "max_adversarial_rounds")]
     adversarial_rounds: u32,
     #[serde(rename = "max_stability_rechecks")]
@@ -342,8 +344,8 @@ struct WorkflowLimits {
 
 impl WorkflowLimits {
     fn validate(&self) -> Result<(), &'static str> {
-        if self.blue_submission_repairs == 0
-            || self.red_submission_repairs == 0
+        if self.synthesis_submission_repairs == 0
+            || self.adversarial_submission_repairs == 0
             || self.adversarial_rounds == 0
             || self.stability_rechecks == 0
         {
@@ -355,7 +357,7 @@ impl WorkflowLimits {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RoleLimits {
+struct StrategyLimits {
     #[serde(rename = "max_turns")]
     turns: u32,
     #[serde(rename = "max_tool_operations")]
@@ -366,7 +368,7 @@ struct RoleLimits {
     output_tokens_per_turn: u64,
 }
 
-impl RoleLimits {
+impl StrategyLimits {
     fn budget(&self) -> Result<EpisodeBudget, Box<dyn std::error::Error>> {
         Ok(EpisodeBudget {
             step_limit: Some(EpisodeStepLimit::new(self.turns)?),
@@ -413,11 +415,11 @@ impl ExternalResearchProvider for ConfiguredResearchProvider {
 
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    cairn_observability::init("oracle-blue-research-live")?;
+    cairn_observability::init("oracle-synthesis-research-live")?;
     let root = std::env::current_dir()?;
     let config_path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "config/oracle-blue-dogfood.example.json".to_owned());
+        .unwrap_or_else(|| "config/oracle-synthesis-dogfood.example.json".to_owned());
     let sample_name = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "sum-empty-axis".to_owned());
@@ -456,7 +458,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?)?;
     let model = catalog.resolve(&templates, None)?;
     if model.protocol().kind() != ModelProtocolKind::OpenAiResponses {
-        return Err("Blue dogfood requires the Responses deployment".into());
+        return Err("Synthesis dogfood requires the Responses deployment".into());
     }
 
     let directory = tempfile::tempdir()?;
@@ -465,30 +467,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cas = directory.path().join("cas");
     let mut content = SqliteContentStore::open(&content_database, &cas)?;
     let mut events = SqliteEventStore::open(&event_database)?;
-    archive_oracle_role_tool_catalog(&mut content, OracleAgentRole::Blue)?;
-    archive_oracle_role_tool_catalog(&mut content, OracleAgentRole::Red)?;
+    archive_oracle_debate_tool_catalog(&mut content, OracleDebateStrategy::Synthesis)?;
+    archive_oracle_debate_tool_catalog(&mut content, OracleDebateStrategy::Adversarial)?;
 
-    let blue_instructions =
-        archive_standard_oracle_instructions(&mut content, OracleAgentRole::Blue)?;
-    let red_instructions =
-        archive_standard_oracle_instructions(&mut content, OracleAgentRole::Red)?;
-    let common = blue_instructions.common();
-    let blue_instruction = blue_instructions.role();
-    let red_instruction = red_instructions.role();
+    let synthesis_instructions =
+        archive_standard_oracle_debate_instructions(&mut content, OracleDebateStrategy::Synthesis)?;
+    let adversarial_instructions = archive_standard_oracle_debate_instructions(
+        &mut content,
+        OracleDebateStrategy::Adversarial,
+    )?;
+    let common = synthesis_instructions.common();
+    let synthesis_instruction = synthesis_instructions.strategy();
+    let adversarial_instruction = adversarial_instructions.strategy();
     let caller = put_json::<ContextBlock>(&mut content, &sample.caller)?;
     let source = put_json::<ContextBlock>(&mut content, &sample.source)?;
     let repository_request = serde_json::to_string(&live.research.repositories)?;
     let request = put_json::<HistoryItem>(
         &mut content,
         &serde_json::json!({
-            "role":"user",
+            "strategy":"user",
             "content": format!(
-                "For sample '{}', first call oracle_search_external_tests with schema_version 1, query '{}', repositories {repository_request}, and max_results {}. Then use the result only as research and independently produce this oracle draft: {}. This dogfood stage expects final JSON rather than a production submission tool. {}",
+                "For sample '{}', first call oracle_model_debate_external_tests with schema_version 1, query '{}', repositories {repository_request}, and max_results {}. Then use the result only as research and independently produce this oracle draft: {}. This dogfood stage expects final JSON rather than a production submission tool. {}",
                 sample.name,
                 sample.query,
                 live.research.max_results_per_search
                 ,sample.task,
-                blue_dogfood_contract()
+                synthesis_dogfood_contract()
             )
         }),
     )?;
@@ -498,58 +502,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let runtime_id =
         ContentId::<ResolvedRuntimeModelArtifact>::derive(&cairn_codec::to_vec(&model)?)?;
-    let blue = prepare_oracle_role_episode(OracleRoleEpisodeInput {
-        role: OracleAgentRole::Blue,
+    let synthesis = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+        strategy: OracleDebateStrategy::Synthesis,
         episode_id: EpisodeId::new(),
         model_configuration: runtime_id,
         authorship_configuration: ContentId::<ModelConfigurationArtifact>::derive(
-            b"live-blue-dogfood",
+            b"live-synthesis-dogfood",
         )?,
-        role_instruction: blue_instruction,
+        strategy_instruction: synthesis_instruction,
         private_context: Vec::new(),
-        budget: live.blue.budget()?,
+        budget: live.synthesis.budget()?,
     })?;
-    let red = prepare_oracle_role_episode(OracleRoleEpisodeInput {
-        role: OracleAgentRole::Red,
+    let adversarial = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+        strategy: OracleDebateStrategy::Adversarial,
         episode_id: EpisodeId::new(),
         model_configuration: runtime_id,
         authorship_configuration: ContentId::<ModelConfigurationArtifact>::derive(
-            b"unused-red-dogfood",
+            b"unused-adversarial-dogfood",
         )?,
-        role_instruction: red_instruction,
+        strategy_instruction: adversarial_instruction,
         private_context: Vec::new(),
-        budget: live.red.budget()?,
+        budget: live.adversarial.budget()?,
     })?;
-    let plan = OracleSearchPlanV1::new(OracleSearchPlanInput {
+    let plan = OracleModelDebatePlanV1::new(OracleModelDebatePlanInput {
         task_id: TaskId::new(),
         task_inputs: ContentId::<OracleTaskInputArtifact>::derive(sample.name.as_bytes())?,
         declared_domain: ContentId::<DeclaredDomainArtifact>::derive(sample.operator.as_bytes())?,
-        admission_policy: ContentId::<AdmissionPolicyArtifact>::derive(b"blue dogfood policy v1")?,
+        admission_policy: ContentId::<AdmissionPolicyArtifact>::derive(
+            b"synthesis dogfood policy v1",
+        )?,
         common_instructions: vec![common],
         shared_context: vec![caller, source],
-        blue,
-        red,
+        synthesis,
+        adversarial,
     })?;
-    let projection = prepare_oracle_role_prompt(
+    let projection = prepare_oracle_debate_prompt(
         &plan,
-        OracleRolePromptInput {
-            role: OracleAgentRole::Blue,
+        OracleDebatePromptInput {
+            strategy: OracleDebateStrategy::Synthesis,
             append_only_context: Vec::new(),
             diagnostic_context: Vec::new(),
             current_request: request,
             policy: policy_document,
         },
     )?;
-    let prompt = materialize_oracle_prompt(&content, &projection)?;
-    let output_limit = ModelOutputTokenLimit::new(live.blue.output_tokens_per_turn)?;
+    let prompt = materialize_oracle_debate_prompt(&content, &projection)?;
+    let output_limit = ModelOutputTokenLimit::new(live.synthesis.output_tokens_per_turn)?;
     if output_limit > model.capabilities().max_output_tokens()
-        || ModelOutputTokenLimit::new(live.red.output_tokens_per_turn)?
+        || ModelOutputTokenLimit::new(live.adversarial.output_tokens_per_turn)?
             > model.capabilities().max_output_tokens()
     {
-        return Err("role output limit exceeds the model template".into());
+        return Err("strategy output limit exceeds the model template".into());
     }
     let spec = prompt.native_spec(
-        OracleAgentRole::Blue,
+        OracleDebateStrategy::Synthesis,
         ModelName::new(model.wire_model().as_str())?,
         output_limit,
     )?;
@@ -577,9 +583,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         now()?,
     )?;
     if decoded.semantic().proposals().len() != 1
-        || decoded.semantic().proposals()[0].tool().as_str() != "oracle_search_external_tests"
+        || decoded.semantic().proposals()[0].tool().as_str() != "oracle_model_debate_external_tests"
     {
-        return Err("Blue did not issue exactly one bounded external-test search".into());
+        return Err("Synthesis did not issue exactly one bounded external-test search".into());
     }
     let proposal = &decoded.semantic().proposals()[0];
     let mut argument_bytes = Vec::new();
@@ -646,15 +652,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         now()?,
     )?;
     let cairn_agent::ToolOperationCompletion::Completed { result_id, .. } = completion else {
-        return Err("recorded Blue research did not complete".into());
+        return Err("recorded Synthesis research did not complete".into());
     };
     tracing::info!(
         target: "cairn.oracle.dogfood",
-        event = "blue_research_completed",
+        event = "synthesis_research_completed",
         sample = sample.name,
         research_request_id = %search_request_id,
         operation_result_id = %result_id,
-        "Blue external research completed"
+        "Synthesis external research completed"
     );
     let exact_research = gateway
         .result()
@@ -669,7 +675,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .continuation()
         .pending_call_ids()
         .first()
-        .ok_or("Blue continuation lost the research call")?
+        .ok_or("Synthesis continuation lost the research call")?
         .clone();
     let settled = codec.append_tool_results(
         decoded.continuation(),
@@ -689,16 +695,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recovered = codec.recover(&content, &continuation_id)?;
     let after_restart = codec.prepare_continuation(&spec, &recovered)?;
     if before_restart.request_bytes() != after_restart.request_bytes() {
-        return Err("restart changed the Blue continuation request".into());
+        return Err("restart changed the Synthesis continuation request".into());
     }
     let second_decision = decision_after_research(
         &mut content,
         &model,
         result_id,
         policy_document,
-        plan.blue().tool_catalog(),
+        plan.synthesis().tool_catalog(),
     )?;
-    let blue_turn = JsonTurnRuntime {
+    let synthesis_turn = JsonTurnRuntime {
         events: &mut events,
         content: &mut content,
         transport: &mut transport,
@@ -708,105 +714,107 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .run(
         after_restart,
-        live.workflow.blue_submission_repairs,
-        "Blue draft",
-        blue_dogfood_contract(),
-        |candidate: &BlueDogfoodDraftV1| candidate.validate_for_sample(&sample),
+        live.workflow.synthesis_submission_repairs,
+        "Synthesis draft",
+        synthesis_dogfood_contract(),
+        |candidate: &SynthesisDogfoodDraftV1| candidate.validate_for_sample(&sample),
     )?;
-    let mut blue_usage = blue_turn.usage;
-    let mut blue_repairs = blue_turn.repairs;
-    let mut blue_continuation = blue_turn.continuation;
-    let mut draft = blue_turn.value;
+    let mut synthesis_usage = synthesis_turn.usage;
+    let mut synthesis_repairs = synthesis_turn.repairs;
+    let mut synthesis_continuation = synthesis_turn.continuation;
+    let mut draft = synthesis_turn.value;
     let draft_bytes = cairn_codec::to_vec(&draft)?;
     let draft_descriptor =
-        content.put::<BlueDogfoodDraftArtifact>(&mut Cursor::new(draft_bytes))?;
+        content.put::<SynthesisDogfoodDraftArtifact>(&mut Cursor::new(draft_bytes))?;
     let mut draft_ids = vec![draft_descriptor.content_id];
-    let red_request = put_json::<HistoryItem>(
+    let adversarial_request = put_json::<HistoryItem>(
         &mut content,
         &serde_json::json!({
-            "role":"user",
+            "strategy":"user",
             "content": format!(
-                "Review this frozen Blue oracle draft against the shared contracts and its cited bounded research evidence. Draft: {}. Research evidence: {}. This dogfood stage expects final JSON rather than a production submission tool. {}",
+                "Review this frozen Synthesis oracle draft against the shared contracts and its cited bounded research evidence. Draft: {}. Research evidence: {}. This dogfood stage expects final JSON rather than a production submission tool. {}",
                 serde_json::to_string(&draft)?,
                 serde_json::to_string(&research_context)?,
-                red_dogfood_contract()
+                adversarial_dogfood_contract()
             )
         }),
     )?;
-    let red_projection = prepare_oracle_role_prompt(
+    let adversarial_projection = prepare_oracle_debate_prompt(
         &plan,
-        OracleRolePromptInput {
-            role: OracleAgentRole::Red,
+        OracleDebatePromptInput {
+            strategy: OracleDebateStrategy::Adversarial,
             append_only_context: Vec::new(),
             diagnostic_context: Vec::new(),
-            current_request: red_request,
+            current_request: adversarial_request,
             policy: policy_document,
         },
     )?;
-    let red_prompt = materialize_oracle_prompt(&content, &red_projection)?;
-    let red_spec = red_prompt.native_spec(
-        OracleAgentRole::Red,
+    let adversarial_prompt = materialize_oracle_debate_prompt(&content, &adversarial_projection)?;
+    let adversarial_spec = adversarial_prompt.native_spec(
+        OracleDebateStrategy::Adversarial,
         ModelName::new(model.wire_model().as_str())?,
-        ModelOutputTokenLimit::new(live.red.output_tokens_per_turn)?,
+        ModelOutputTokenLimit::new(live.adversarial.output_tokens_per_turn)?,
     )?;
-    let red_initial = codec.prepare_initial(&red_spec, red_prompt.user_text())?;
-    let red_decision = red_projection.turn_input_decision(selection(&model)?);
-    let red_turn = JsonTurnRuntime {
+    let adversarial_initial =
+        codec.prepare_initial(&adversarial_spec, adversarial_prompt.user_text())?;
+    let adversarial_decision = adversarial_projection.turn_input_decision(selection(&model)?);
+    let adversarial_turn = JsonTurnRuntime {
         events: &mut events,
         content: &mut content,
         transport: &mut transport,
         codec,
-        spec: &red_spec,
-        decision: &red_decision,
+        spec: &adversarial_spec,
+        decision: &adversarial_decision,
     }
     .run(
-        red_initial,
-        live.workflow.red_submission_repairs,
-        "Red review",
-        red_dogfood_contract(),
-        RedDogfoodReviewV1::validate,
+        adversarial_initial,
+        live.workflow.adversarial_submission_repairs,
+        "Adversarial review",
+        adversarial_dogfood_contract(),
+        AdversarialDogfoodReviewV1::validate,
     )?;
-    let mut red_usage = red_turn.usage;
-    let mut red_repairs = red_turn.repairs;
-    let mut red_continuation = red_turn.continuation;
-    let mut review = red_turn.value;
-    let review_descriptor =
-        content.put::<RedDogfoodReviewArtifact>(&mut Cursor::new(cairn_codec::to_vec(&review)?))?;
+    let mut adversarial_usage = adversarial_turn.usage;
+    let mut adversarial_repairs = adversarial_turn.repairs;
+    let mut adversarial_continuation = adversarial_turn.continuation;
+    let mut review = adversarial_turn.value;
+    let review_descriptor = content
+        .put::<AdversarialDogfoodReviewArtifact>(&mut Cursor::new(cairn_codec::to_vec(&review)?))?;
     let mut review_ids = vec![review_descriptor.content_id];
     let mut adversarial_rounds = 0_u32;
     let mut stability_rechecks = 0_u32;
     let (debate_converged, debate_terminal_reason) = loop {
         match review.verdict {
-            RedReviewVerdict::Revise => {
+            AdversarialReviewVerdict::Revise => {
                 let frozen_draft_id = draft_ids.last().map(ToString::to_string);
                 tracing::warn!(
                     target: "cairn.oracle.debate",
-                    event = "red_blockers_reported",
+                    event = "adversarial_blockers_reported",
                     sample = sample.name,
                     frozen_draft_id,
                     blocker_count = review.blocking_findings.len(),
                     completed_revision_rounds = adversarial_rounds,
-                    "Red requested a Blue revision"
+                    "Adversarial requested a Synthesis revision"
                 );
                 if adversarial_rounds == live.workflow.adversarial_rounds {
                     break (
                         false,
                         format!(
-                            "Red still reported {} blocker(s) after the configured {} Blue revision round(s)",
+                            "Adversarial still reported {} blocker(s) after the configured {} Synthesis revision round(s)",
                             review.blocking_findings.len(),
                             live.workflow.adversarial_rounds
                         ),
                     );
                 }
-                let prior_draft_id = *draft_ids.last().ok_or("missing Blue draft identity")?;
+                let prior_draft_id = *draft_ids.last().ok_or("missing Synthesis draft identity")?;
                 let revision_request = format!(
-                    "Trusted Red review rejected frozen Blue draft {prior_draft_id}. Review: {}. Submit a changed complete replacement that addresses every blocking finding. Preserve valid content, state what changed in rationale/unverified fields, and follow this contract: {}",
+                    "Trusted Adversarial review rejected frozen Synthesis draft {prior_draft_id}. Review: {}. Submit a changed complete replacement that addresses every blocking finding. Preserve valid content, state what changed in rationale/unverified fields, and follow this contract: {}",
                     serde_json::to_string(&review)?,
-                    blue_dogfood_contract()
+                    synthesis_dogfood_contract()
                 );
-                let next_blue = codec.append_user_text(&blue_continuation, &revision_request)?;
-                let next_blue_native = codec.prepare_continuation(&spec, &next_blue)?;
-                let blue_revision = JsonTurnRuntime {
+                let next_synthesis =
+                    codec.append_user_text(&synthesis_continuation, &revision_request)?;
+                let next_synthesis_native = codec.prepare_continuation(&spec, &next_synthesis)?;
+                let synthesis_revision = JsonTurnRuntime {
                     events: &mut events,
                     content: &mut content,
                     transport: &mut transport,
@@ -815,15 +823,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     decision: &second_decision,
                 }
                 .run(
-                    next_blue_native,
-                    live.workflow.blue_submission_repairs,
-                    "Blue revision",
-                    blue_dogfood_contract(),
-                    |candidate: &BlueDogfoodDraftV1| {
+                    next_synthesis_native,
+                    live.workflow.synthesis_submission_repairs,
+                    "Synthesis revision",
+                    synthesis_dogfood_contract(),
+                    |candidate: &SynthesisDogfoodDraftV1| {
                         candidate.validate_for_sample(&sample)?;
                         let bytes = cairn_codec::to_vec(candidate)
                             .map_err(|error| format!("cannot encode candidate revision: {error}"))?;
-                        let candidate_id = ContentId::<BlueDogfoodDraftArtifact>::derive(&bytes)
+                        let candidate_id = ContentId::<SynthesisDogfoodDraftArtifact>::derive(&bytes)
                             .map_err(|error| {
                                 format!("cannot derive candidate revision identity: {error}")
                             })?;
@@ -835,11 +843,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(())
                     },
                 )?;
-                blue_usage.extend(blue_revision.usage);
-                blue_repairs = blue_repairs.saturating_add(blue_revision.repairs);
-                blue_continuation = blue_revision.continuation;
-                draft = blue_revision.value;
-                let descriptor = content.put::<BlueDogfoodDraftArtifact>(&mut Cursor::new(
+                synthesis_usage.extend(synthesis_revision.usage);
+                synthesis_repairs = synthesis_repairs.saturating_add(synthesis_revision.repairs);
+                synthesis_continuation = synthesis_revision.continuation;
+                draft = synthesis_revision.value;
+                let descriptor = content.put::<SynthesisDogfoodDraftArtifact>(&mut Cursor::new(
                     cairn_codec::to_vec(&draft)?,
                 ))?;
                 draft_ids.push(descriptor.content_id);
@@ -847,101 +855,108 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 stability_rechecks = 0;
                 tracing::info!(
                     target: "cairn.oracle.debate",
-                    event = "blue_revision_accepted",
+                    event = "synthesis_revision_accepted",
                     sample = sample.name,
                     prior_draft_id = %prior_draft_id,
                     revised_draft_id = %descriptor.content_id,
                     adversarial_round = adversarial_rounds,
-                    "changed Blue revision accepted by dogfood validation"
+                    "changed Synthesis revision accepted by dogfood validation"
                 );
 
-                let red_revision_request = format!(
-                    "Blue submitted changed revision {} after your prior blockers. Re-evaluate the complete frozen revision, verify every prior blocker, and search for regressions. Draft: {}. Cited bounded research: {}. {}",
+                let adversarial_revision_request = format!(
+                    "Synthesis submitted changed revision {} after your prior blockers. Re-evaluate the complete frozen revision, verify every prior blocker, and search for regressions. Draft: {}. Cited bounded research: {}. {}",
                     descriptor.content_id,
                     serde_json::to_string(&draft)?,
                     serde_json::to_string(&research_context)?,
-                    red_dogfood_contract()
+                    adversarial_dogfood_contract()
                 );
-                let next_red = codec.append_user_text(&red_continuation, &red_revision_request)?;
-                let next_red_native = codec.prepare_continuation(&red_spec, &next_red)?;
-                let red_revision = JsonTurnRuntime {
+                let next_adversarial = codec
+                    .append_user_text(&adversarial_continuation, &adversarial_revision_request)?;
+                let next_adversarial_native =
+                    codec.prepare_continuation(&adversarial_spec, &next_adversarial)?;
+                let adversarial_revision = JsonTurnRuntime {
                     events: &mut events,
                     content: &mut content,
                     transport: &mut transport,
                     codec,
-                    spec: &red_spec,
-                    decision: &red_decision,
+                    spec: &adversarial_spec,
+                    decision: &adversarial_decision,
                 }
                 .run(
-                    next_red_native,
-                    live.workflow.red_submission_repairs,
-                    "Red revision review",
-                    red_dogfood_contract(),
-                    RedDogfoodReviewV1::validate,
+                    next_adversarial_native,
+                    live.workflow.adversarial_submission_repairs,
+                    "Adversarial revision review",
+                    adversarial_dogfood_contract(),
+                    AdversarialDogfoodReviewV1::validate,
                 )?;
-                red_usage.extend(red_revision.usage);
-                red_repairs = red_repairs.saturating_add(red_revision.repairs);
-                red_continuation = red_revision.continuation;
-                review = red_revision.value;
-                let descriptor = content.put::<RedDogfoodReviewArtifact>(&mut Cursor::new(
-                    cairn_codec::to_vec(&review)?,
-                ))?;
+                adversarial_usage.extend(adversarial_revision.usage);
+                adversarial_repairs =
+                    adversarial_repairs.saturating_add(adversarial_revision.repairs);
+                adversarial_continuation = adversarial_revision.continuation;
+                review = adversarial_revision.value;
+                let descriptor = content.put::<AdversarialDogfoodReviewArtifact>(
+                    &mut Cursor::new(cairn_codec::to_vec(&review)?),
+                )?;
                 review_ids.push(descriptor.content_id);
             }
-            RedReviewVerdict::Pass => {
+            AdversarialReviewVerdict::Pass => {
                 if stability_rechecks == live.workflow.stability_rechecks {
                     break (
                         true,
                         format!(
-                            "Red reported no blockers and completed {stability_rechecks} configured stability recheck(s)"
+                            "Adversarial reported no blockers and completed {stability_rechecks} configured stability recheck(s)"
                         ),
                     );
                 }
                 let focus = stability_focus(stability_rechecks);
-                let frozen_draft_id = *draft_ids.last().ok_or("missing Blue draft identity")?;
+                let frozen_draft_id =
+                    *draft_ids.last().ok_or("missing Synthesis draft identity")?;
                 tracing::info!(
                     target: "cairn.oracle.debate",
-                    event = "red_stability_recheck_started",
+                    event = "adversarial_stability_recheck_started",
                     sample = sample.name,
                     frozen_draft_id = %frozen_draft_id,
                     recheck = stability_rechecks + 1,
                     configured_rechecks = live.workflow.stability_rechecks,
                     focus,
-                    "Red stability recheck started"
+                    "Adversarial stability recheck started"
                 );
                 let stability_request = format!(
-                    "Perform stability recheck {} of {} over the same frozen Blue draft {}. Independently focus on {focus}. A prior pass is not authority: return revise if you find a concrete blocker, otherwise pass with only genuine advisories. Draft: {}. Cited bounded research: {}. {}",
+                    "Perform stability recheck {} of {} over the same frozen Synthesis draft {}. Independently focus on {focus}. A prior pass is not authority: return revise if you find a concrete blocker, otherwise pass with only genuine advisories. Draft: {}. Cited bounded research: {}. {}",
                     stability_rechecks + 1,
                     live.workflow.stability_rechecks,
                     frozen_draft_id,
                     serde_json::to_string(&draft)?,
                     serde_json::to_string(&research_context)?,
-                    red_dogfood_contract()
+                    adversarial_dogfood_contract()
                 );
-                let next_red = codec.append_user_text(&red_continuation, &stability_request)?;
-                let next_red_native = codec.prepare_continuation(&red_spec, &next_red)?;
-                let red_recheck = JsonTurnRuntime {
+                let next_adversarial =
+                    codec.append_user_text(&adversarial_continuation, &stability_request)?;
+                let next_adversarial_native =
+                    codec.prepare_continuation(&adversarial_spec, &next_adversarial)?;
+                let adversarial_recheck = JsonTurnRuntime {
                     events: &mut events,
                     content: &mut content,
                     transport: &mut transport,
                     codec,
-                    spec: &red_spec,
-                    decision: &red_decision,
+                    spec: &adversarial_spec,
+                    decision: &adversarial_decision,
                 }
                 .run(
-                    next_red_native,
-                    live.workflow.red_submission_repairs,
-                    "Red stability review",
-                    red_dogfood_contract(),
-                    RedDogfoodReviewV1::validate,
+                    next_adversarial_native,
+                    live.workflow.adversarial_submission_repairs,
+                    "Adversarial stability review",
+                    adversarial_dogfood_contract(),
+                    AdversarialDogfoodReviewV1::validate,
                 )?;
-                red_usage.extend(red_recheck.usage);
-                red_repairs = red_repairs.saturating_add(red_recheck.repairs);
-                red_continuation = red_recheck.continuation;
-                review = red_recheck.value;
-                let descriptor = content.put::<RedDogfoodReviewArtifact>(&mut Cursor::new(
-                    cairn_codec::to_vec(&review)?,
-                ))?;
+                adversarial_usage.extend(adversarial_recheck.usage);
+                adversarial_repairs =
+                    adversarial_repairs.saturating_add(adversarial_recheck.repairs);
+                adversarial_continuation = adversarial_recheck.continuation;
+                review = adversarial_recheck.value;
+                let descriptor = content.put::<AdversarialDogfoodReviewArtifact>(
+                    &mut Cursor::new(cairn_codec::to_vec(&review)?),
+                )?;
                 review_ids.push(descriptor.content_id);
                 stability_rechecks = stability_rechecks.saturating_add(1);
             }
@@ -954,8 +969,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         converged = debate_converged,
         adversarial_rounds,
         stability_rechecks,
-        blue_submission_repairs = blue_repairs,
-        red_submission_repairs = red_repairs,
+        synthesis_submission_repairs = synthesis_repairs,
+        adversarial_submission_repairs = adversarial_repairs,
         terminal_reason = %debate_terminal_reason,
         "oracle debate completed"
     );
@@ -966,7 +981,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?;
     let mut ascend_c_test_blockers = Vec::new();
     if !debate_converged {
-        ascend_c_test_blockers.push("Red/Blue semantic debate did not converge");
+        ascend_c_test_blockers.push("Adversarial/Synthesis semantic debate did not converge");
     }
     if materialized_oracle.is_none() {
         ascend_c_test_blockers
@@ -1011,21 +1026,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_string_pretty(&serde_json::json!({
             "model": model.wire_model().as_str(),
             "sample": sample.name,
-            "blue_episode_id": plan.blue().episode_id(),
-            "red_episode_is_distinct": plan.blue().episode_id() != plan.red().episode_id(),
+            "synthesis_episode_id": plan.synthesis().episode_id(),
+            "adversarial_episode_is_distinct": plan.synthesis().episode_id() != plan.adversarial().episode_id(),
             "research_request_id": search_request_id,
             "research_operation_result_id": result_id,
             "research_result_id": research_context.search_result(),
             "research_snippet_count": research_context.snippets().len(),
             "first_usage": first_usage,
-            "blue_usage": blue_usage,
-            "blue_submission_repairs": blue_repairs,
-            "red_usage": red_usage,
-            "red_submission_repairs": red_repairs,
-            "blue_draft_ids": draft_ids,
-            "blue_draft": draft,
-            "red_review_ids": review_ids,
-            "red_review": review,
+            "synthesis_usage": synthesis_usage,
+            "synthesis_submission_repairs": synthesis_repairs,
+            "adversarial_usage": adversarial_usage,
+            "adversarial_submission_repairs": adversarial_repairs,
+            "synthesis_draft_ids": draft_ids,
+            "synthesis_draft": draft,
+            "adversarial_review_ids": review_ids,
+            "adversarial_review": review,
             "adversarial_rounds": adversarial_rounds,
             "stability_rechecks": stability_rechecks,
             "debate_converged": debate_converged,
@@ -1052,7 +1067,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn blue_dogfood_contract() -> &'static str {
+fn synthesis_dogfood_contract() -> &'static str {
     "Return only one JSON object with exactly: schema_version=1; nonempty strings case_name, input, invocation, rationale, evidence_assessment; expectation as {kind:exact,output:string}, {kind:property,predicate:string}, or {kind:reject,error_behavior:string}; comparison as {kind:exact}, {kind:exact-bits}, {kind:numeric,absolute_tolerance:string,relative_tolerance:string,ulp_tolerance:integer,nan_equal:boolean}, {kind:property}, or {kind:not-applicable}; assumptions and unverified as string arrays; executable_case. Exact expectations require exact/exact-bits/numeric comparison, property requires property, and reject requires not-applicable. For matmul-zero-k, executable_case is required with exactly these fields: schema_version=1; case_name string; lhs_argument=0, rhs_argument=1, and output_argument=2 as JSON integers, never names or strings; lhs_shape, rhs_shape, and output_shape as {rows:unsigned integer,columns:unsigned integer}; lhs_bits, rhs_bits, and expected_output_bits as arrays of raw IEEE-754 f32 u32 integers; and comparison. Derive every shape and value from the caller contract; this output-format instruction is not semantic evidence. The caller contract leaves signed zero unspecified, so the trusted claim-strength policy requires top-level numeric with absolute_tolerance=0, relative_tolerance=0, ulp_tolerance=0, nan_equal=false and executable comparison f32-numeric-exact; exact-bits would falsely reject a legal negative zero. Facts directly entailed by the caller contract or executable shape belong in rationale, not assumptions. For every other sample executable_case must be null because this dogfood implementation does not yet materialize it. No markdown."
 }
 
@@ -1062,7 +1077,7 @@ fn decimal_is_zero(value: &str) -> bool {
         .is_ok_and(|parsed| parsed == 0.0 && !parsed.is_sign_negative())
 }
 
-fn red_dogfood_contract() -> &'static str {
+fn adversarial_dogfood_contract() -> &'static str {
     "Return only one JSON object with exactly: schema_version=1; verdict pass or revise; strengths as a string array; blocking_findings and advisories as arrays of {kind:false-accept|false-reject|underspecified,detail:nonempty string}; recommended_revision as a nonempty string. Pass is valid exactly when blocking_findings is empty; otherwise revise. Never use placeholder findings. No markdown and no tool call."
 }
 
@@ -1105,7 +1120,7 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
         &mut self,
         mut native: PreparedNativeRequest,
         max_repairs: u32,
-        role: &str,
+        strategy: &str,
         contract: &str,
         validate: impl Fn(&T) -> Result<(), String>,
     ) -> Result<ValidatedJsonTurn<T>, Box<dyn std::error::Error>>
@@ -1117,8 +1132,8 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
             let attempt = ModelAttemptId::new();
             tracing::info!(
                 target: "cairn.oracle.submission",
-                event = "structured_submission_attempt_started",
-                role,
+                event = "structuadversarial_submission_attempt_started",
+                strategy,
                 model_attempt_id = %attempt,
                 attempt = repair + 1,
                 maximum_attempts = max_repairs + 1,
@@ -1173,8 +1188,8 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
                         Ok(()) => {
                             tracing::info!(
                                 target: "cairn.oracle.submission",
-                                event = "structured_submission_accepted",
-                                role,
+                                event = "structuadversarial_submission_accepted",
+                                strategy,
                                 model_attempt_id = %attempt,
                                 repairs = repair,
                                 "structured model submission accepted"
@@ -1196,8 +1211,8 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
             };
             tracing::warn!(
                 target: "cairn.oracle.submission",
-                event = "structured_submission_rejected",
-                role,
+                event = "structuadversarial_submission_rejected",
+                strategy,
                 model_attempt_id = %attempt,
                 attempt = repair + 1,
                 maximum_attempts = max_repairs + 1,
@@ -1206,7 +1221,7 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
             );
             if repair == max_repairs {
                 return Err(format!(
-                    "{role} exhausted {max_repairs} submission repair(s); last diagnostic: {diagnostic}"
+                    "{strategy} exhausted {max_repairs} submission repair(s); last diagnostic: {diagnostic}"
                 )
                 .into());
             }
@@ -1232,7 +1247,7 @@ impl<P: ModelTransport> JsonTurnRuntime<'_, P> {
                     .append_tool_results(decoded.continuation(), &results)?
             };
             let feedback = format!(
-                "Trusted {role} submission validation rejected attempt {} of {}. Nothing from that submission was accepted. Diagnostic: {diagnostic}. Required contract: {contract} Correct every reported defect and return one complete replacement; do not repeat the rejected bytes or merely explain the error.",
+                "Trusted {strategy} submission validation rejected attempt {} of {}. Nothing from that submission was accepted. Diagnostic: {diagnostic}. Required contract: {contract} Correct every reported defect and return one complete replacement; do not repeat the rejected bytes or merely explain the error.",
                 repair + 1,
                 max_repairs + 1
             );
@@ -1366,7 +1381,7 @@ fn decision_after_research(
         tool_catalog,
         history: vec![put_json::<HistoryItem>(
             content,
-            &serde_json::json!({"native_continuation":"recorded Blue research result"}),
+            &serde_json::json!({"native_continuation":"recorded Synthesis research result"}),
         )?],
         context: Vec::new(),
         pending_results: vec![result],
@@ -1419,7 +1434,7 @@ fn put_json<T: ContentType>(
 
 fn stream(attempt_id: ModelAttemptId) -> Result<StreamId, Box<dyn std::error::Error>> {
     Ok(StreamId {
-        kind: AggregateKind::new("oracle-blue-live-dogfood")?,
+        kind: AggregateKind::new("oracle-synthesis-live-dogfood")?,
         id: AggregateId::new(attempt_id.to_string())?,
     })
 }
@@ -1463,7 +1478,7 @@ mod tests {
             .expect("catalog");
         let history = put_json::<HistoryItem>(
             &mut content,
-            &serde_json::json!({"role":"user","content":"submit"}),
+            &serde_json::json!({"strategy":"user","content":"submit"}),
         )
         .expect("history");
         let context =
@@ -1517,7 +1532,7 @@ mod tests {
                             "type":"message",
                             "id":format!("msg-{calls}"),
                             "phase":"final_answer",
-                            "role":"assistant",
+                            "strategy":"assistant",
                             "status":"completed",
                             "content":[{"type":"output_text","text":text}]
                         }]
@@ -1537,7 +1552,7 @@ mod tests {
         .run(
             initial,
             1,
-            "Blue fixture",
+            "Synthesis fixture",
             "schema_version=1 and value=fixed",
             |value: &RepairFixtureV1| {
                 if value.schema_version == 1 && value.value == "fixed" {
@@ -1564,7 +1579,7 @@ mod tests {
             .is_err(),
             "surrounding prose must not be silently stripped from a structured submission"
         );
-        let draft = BlueDogfoodDraftV1 {
+        let draft = SynthesisDogfoodDraftV1 {
             schema_version: 1,
             case_name: "case".to_owned(),
             input: "input".to_owned(),
@@ -1585,12 +1600,12 @@ mod tests {
                 .expect_err("mismatch")
                 .contains("expectation/comparison mismatch")
         );
-        let review = RedDogfoodReviewV1 {
+        let review = AdversarialDogfoodReviewV1 {
             schema_version: 1,
-            verdict: RedReviewVerdict::Pass,
+            verdict: AdversarialReviewVerdict::Pass,
             strengths: Vec::new(),
-            blocking_findings: vec![RedReviewFindingV1 {
-                kind: RedReviewFindingKind::FalseAccept,
+            blocking_findings: vec![AdversarialReviewFindingV1 {
+                kind: AdversarialReviewFindingKind::FalseAccept,
                 detail: "wrong implementation passes".to_owned(),
             }],
             advisories: Vec::new(),
@@ -1605,9 +1620,9 @@ mod tests {
     }
 
     #[test]
-    fn matmul_sample_requires_an_execution_materializable_blue_case() {
+    fn matmul_sample_requires_an_execution_materializable_synthesis_case() {
         let sample = dogfood_sample("matmul-zero-k").expect("sample");
-        let draft: BlueDogfoodDraftV1 = serde_json::from_value(serde_json::json!({
+        let draft: SynthesisDogfoodDraftV1 = serde_json::from_value(serde_json::json!({
             "schema_version": 1,
             "case_name": "matmul-zero-k",
             "input": "lhs f32 [2,0], rhs f32 [0,3]",
@@ -1628,7 +1643,7 @@ mod tests {
                 .contains("executable_case is required")
         );
 
-        let fixed: BlueDogfoodDraftV1 = serde_json::from_value(serde_json::json!({
+        let fixed: SynthesisDogfoodDraftV1 = serde_json::from_value(serde_json::json!({
             "schema_version": 1,
             "case_name": "matmul-zero-k",
             "input": "lhs f32 [2,0], rhs f32 [0,3]",

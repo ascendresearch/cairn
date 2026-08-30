@@ -45,8 +45,9 @@ validated capability grant，tool result先归档为`OperationResult`再进入co
 可在同一budget内修复。Host只执行pure/read-only capability，外部effect typed fail closed并保留给Controller。
 `run_proposal_loop`顶层只保留open/dispatch/settle/admit/authorized-execute/project/advance步骤，各步骤之间使用
 distinct internal typestate。本片没有调用live model、Worker、Docker或NPU。
-DEV-025又让Controller的完整十阶段产品顺序成为可读typed composition skeleton。每一阶段只有独立port且没有
-default成功实现；recorded control证明顺序，unavailable Oracle Blue control证明不会运行任何下游stage。现有真实
+DEV-025又让Controller的完整产品顺序成为可读typed composition skeleton。每一阶段只有独立port且没有
+default成功实现；DEV-028纠正了其中把具体Blue/Red策略误写成必经stage的漂移。当前recorded control证明
+`Oracle Exploration → Oracle Admission`顺序，unavailable Oracle Exploration control证明不会运行任何下游stage。现有真实
 Candidate manager turn同时收敛为recover/select/execute三步，原有effect authority与receipt folding不变。完整
 Controller aggregate仍未接通，本片也没有调用live model、Worker、Docker或NPU。
 DEV-026现已接入第一个真实Controller prefix：exact SIR Host request和recovery input先归档并冻结，durable start
@@ -66,16 +67,16 @@ compatibility path。本片只运行本地model-free process control，没有调
 | 基础 | 已有事实 | 当前限制 |
 | --- | --- | --- |
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
-| Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
+| Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；model-backed synthesis/adversarial debate只是Oracle Exploration的可选策略组合 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | readable twelve-stage Controller composition skeleton、durable SIR-to-admitted-intent prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | prefix明确停在Oracle边界；Oracle与Candidate suffix尚未并入一个连续aggregate；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
+| Product workflow | readable Controller composition skeleton、durable SIR-to-admitted-intent prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | prefix明确停在Oracle边界；Oracle Exploration与Candidate suffix尚未并入一个连续aggregate；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
 ## 3. 历史证据的边界
 
-- Blue/Red dogfood 证明 durable model/tool loop 和 artifact-mediated revision 的一部分，不证明 debate 是
-  Admission 或固定 Agent topology。
+- 可选model-backed synthesis/adversarial debate dogfood证明durable model/tool loop和artifact-mediated revision的
+  一部分，不证明debate是Admission、完整Oracle Exploration或固定Agent topology。
 - `matmul-zero-k` 证明一条狭窄 materialization/call-adapter 路径，不代表一般 Oracle coverage。
 - historical reduction 证明若干 comparison/mutation blind spot，只作为 control；旧 domain shape 不定义新
   Intent/Oracle schema。
@@ -160,7 +161,7 @@ exact SIR Host request + recovery input
 → AwaitOracleWorkflow
 ```
 
-它尚未接入Oracle Blue/Red、Oracle Admission或后续Candidate suffix。
+它尚未接入Oracle Exploration、Oracle Admission或后续Candidate suffix。
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
 或 verdict。最新local product output是DEV-024 common-loop lifecycle controls；DEV-023 recorded/local manager、
@@ -199,5 +200,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-025 | Accepted | 完整Controller顺序固化为typed stage-port骨架；unavailable stage fail closed；真实Candidate turn收敛为recover/select/execute；无live effect调用 |
 | DEV-026 | Accepted | durable Controller接通exact SIR→decision requests并停在用户决策边界；shared Host supervision、restart/replay/cross-task/model-drift controls闭合；无live effect调用 |
 | DEV-027 | Accepted | actual user decision与independent Intent Admission接入同一durable aggregate并停在Oracle边界；executable/restricted-store authority、real local child、restart/replay/cross-task/drift controls闭合；无live model/Worker调用 |
+| DEV-028 | Accepted | Controller主骨架纠正为Oracle Exploration→Admission；旧Blue/Red公开路径删除并收窄为可选model-backed debate strategy；文档、示例、配置、tests与静态漂移controls闭合；无live effect调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

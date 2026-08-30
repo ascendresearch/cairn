@@ -486,7 +486,7 @@ uses total input, uncached input, output, latency, and task quality rather than 
 - Decision: accepted
 
 The current model-backed synthesis (Blue) profile receives a read-only
-`oracle_search_external_tests` product tool. The model supplies a
+`oracle_model_debate_external_tests` product tool. The model supplies a
 bounded query and operator-approved repository scopes; trusted adapters own endpoints, credentials,
 redirect policy, response bounds, and repository allowlists. Results retain exact query, source,
 immutable upstream revision/blob identity where available, exact fetched bytes, retrieval
@@ -508,7 +508,7 @@ providers.
 - Decision: accepted
 
 When policy selects the current model-backed synthesis/adversarial revision strategy, Blue and Red
-retain separate durable episodes across an OracleSearch attempt. Red reviews exactly
+retain separate durable episodes across an optional model-debate attempt. Red reviews exactly
 one frozen Blue revision. A Red `revise` with blocking findings is returned as trusted structured
 feedback to Blue's existing episode; Blue must submit a complete changed replacement, which creates
 a new immutable identity before Red can review it. Neither private continuation crosses the role
@@ -959,10 +959,12 @@ consumer requires the next capability.
 - Decision: accepted
 
 The first narrow workflow has reached remote native build, diagnostic, model repair, and rebuild, so
-Cairn now freezes the observed stages as one Controller-owned durable state machine. SIR, Oracle Blue,
-Oracle Red, Candidate Search, and optional typed Admission planning are distinct logical Agent Loops.
-They have different typed inputs, feedback routes, stop conditions, and proposal outputs, but none
-requires a role-specific OS process. Capability-equivalent loops use the generic Proposal Host;
+Cairn now freezes the observed stages as one Controller-owned durable state machine. SIR, Oracle
+Exploration, Candidate Search, and optional typed Admission planning are distinct logical Agent Loops.
+Within Oracle Exploration, synthesis, adversarial, analyzer, mutation, property, and counterexample
+strategies are policy-selected implementations rather than mandatory global stages. The loops have
+different typed inputs, feedback routes, stop conditions, and proposal outputs, but none requires a
+role-specific OS process. Capability-equivalent loops use the generic Proposal Host;
 instances split only for data visibility, credentials, tool access, OS sandbox, or authority.
 
 SIR may use task-scoped source/caller context, frozen knowledge, allowlisted public web and paper

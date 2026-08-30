@@ -6,6 +6,9 @@
 - 架构：D-043、[`Workflow Architecture`](../../design/WORKFLOW_ARCHITECTURE.md)
 - 外部执行：无；本片未调用模型、远端 Worker、Docker 或 NPU
 
+> Current correction：DEV-028已supersede本record中的固定`Oracle Blue → Oracle Red`stage形状；当前
+> Controller骨架是`Oracle Exploration → Oracle Admission`。本record其余内容保留为当时实现事实。
+
 ## 1. Objective
 
 让Controller业务流程本身成为可读的架构骨架。先冻结完整CUDA→Ascend C产品顺序，再逐个把已有实现接到明确

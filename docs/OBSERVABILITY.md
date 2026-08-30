@@ -42,7 +42,7 @@ Implemented coverage now is:
 | model provider | dispatch started/completed/failed, token/cache usage, elapsed time | attempt, request, decision, response IDs |
 | tool gateway | operation started/completed/failed, effect and elapsed time | operation, attempt, argument/result IDs |
 | agent episode | opened/completed and typed budget terminal reason | task, episode, step, model-attempt IDs |
-| Oracle dogfood | research, submission repair, Red blocker, Blue revision, recheck, convergence | sample and frozen draft/review IDs |
+| Optional model debate dogfood | research, submission repair, adversarial blocker, synthesis revision, recheck, convergence | sample and frozen draft/review IDs |
 | scheduler | start, optimistic retry, no candidate, placement completion | attempt, placement, snapshot, reservation, assignment, worker IDs |
 | worker session | connect/register/disconnect/error | worker, incarnation, connection, pool |
 | assignment/execution | offer/admission/start/result and local/controller terminal receipt | job, assignment, attempt, contract, receipt IDs |
@@ -72,7 +72,7 @@ CAIRN_LOG_FORMAT=json
 ```bash
 CAIRN_LOG=debug CAIRN_LOG_FORMAT=compact target/debug/cairn-worker config.json
 CAIRN_LOG='info,cairn.agent.model=debug,cairn.oracle.debate=debug' \
-  cargo run -p cairn-migration --example oracle_blue_research_live -- CONFIG SAMPLE
+  cargo run -p cairn-migration --example oracle_model_debate_live -- CONFIG SAMPLE
 ```
 
 The default is JSON at INFO. `compact` is intended for an interactive terminal. ANSI is disabled

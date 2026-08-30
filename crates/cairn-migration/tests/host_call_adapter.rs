@@ -80,7 +80,7 @@ fn model_authored_zero_k_oracle_runs_through_the_real_adapter_protocol() {
         "expected_output_bits": [0, 0, 0, 0, 0, 0],
         "comparison": "f32-numeric-exact"
     }))
-    .expect("typed Blue proposal");
+    .expect("typed Oracle synthesis proposal");
     proposal
         .validate_matmul_zero_k_sample()
         .expect("sample contract");

@@ -75,8 +75,8 @@ another source or target requires an explicit future product decision and is out
 | Upstream caller | supplies task, declared domain, constraints, and budget | authoritative only for its declared intent |
 | Semantic-intent recovery | proposes high-order algorithm, numerical, deployment, and contract hypotheses | untrusted proposal |
 | Intent admission | promotes supported claim-scoped intent and preserves conflicts/unknowns | trusted only for its exact policy and evidence |
-| Oracle author (blue) | operationalizes admitted intent into claim domains, references, properties, cases, and valid variants | untrusted proposal |
-| Oracle breaker (red) | produces correct-by-construction and deliberately wrong variants | conditionally trusted per claim |
+| Oracle synthesis strategy | operationalizes admitted intent into claim domains, references, properties, cases, and valid variants | untrusted proposal |
+| Oracle adversarial strategy | produces correct-by-construction and deliberately wrong variants | untrusted attack proposal; never admission authority |
 | Candidate author | searches for the target implementation | untrusted |
 | Model provider | produces model responses | untrusted and nondeterministic external service |
 | Source implementation | executable artifact being migrated | behavioral evidence, not infallible semantics |
@@ -507,7 +507,7 @@ These milestones order evidence; they are not a promise of dates.
 - feature parity with general-purpose coding agents;
 - a dynamic in-process plugin marketplace;
 - a general durable-workflow engine unrelated to agent and migration semantics;
-- multi-agent teams before red/blue/candidate role isolation and record branching are proven;
+- multi-agent teams before Oracle-strategy/Candidate isolation and record branching are proven;
 - migration from source platforms other than CUDA or to targets other than Ascend C;
 - automatic trust of LLM-generated tests, crawled corpora, or upstream labels;
 - silent context compaction before compacted inputs can be recorded and audited;

@@ -6,6 +6,9 @@
 - 架构：D-043、[`Workflow Architecture`](../../design/WORKFLOW_ARCHITECTURE.md)
 - 外部执行：仅运行本地model-free Admission process control；未调用模型、远端 Worker、Docker、NPU 或互联网
 
+> Current correction：DEV-028已supersede本record中的固定Blue/Red composition占位；durable aggregate仍停在
+> 同一个`AwaitOracleWorkflow`边界，当前上层骨架是`Oracle Exploration → Oracle Admission`。
+
 ## 1. Objective
 
 把DEV-026停住的真实用户authority输入和已有独立Intent Admission接入同一个task-owned durable Controller

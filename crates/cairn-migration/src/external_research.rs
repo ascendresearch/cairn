@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_V1: u16 = 1;
-const SEARCH_TOOL_NAME: &str = "oracle_search_external_tests";
+const SEARCH_TOOL_NAME: &str = "oracle_model_debate_external_tests";
 const SEARCH_TOOL_VERSION: &str = "github-v1";
 const MAX_QUERY_BYTES: usize = 256;
 const MAX_REPOSITORIES: usize = 8;
@@ -302,7 +302,7 @@ impl From<ExternalTestSearchRequestV1> for ExternalTestSearchRequestWire {
     }
 }
 
-/// One exact fetched upstream test used only as Blue research context.
+/// One exact fetched upstream test used only as model-backed synthesis research context.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "ExternalTestCaseWire", into = "ExternalTestCaseWire")]
 pub struct ExternalTestCaseV1 {
@@ -441,7 +441,7 @@ pub struct ExternalTestSearchResultV1 {
     omitted_results: u64,
 }
 
-/// Bounded excerpt of one exact upstream blob returned to Blue as model context.
+/// Bounded excerpt of one exact upstream blob returned to model-backed synthesis as context.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalTestResearchSnippetV1 {
@@ -765,7 +765,7 @@ struct ExternalTestProvenanceV1 {
     source_bytes: ContentId<ExternalTestSourceBytesArtifact>,
 }
 
-/// Archived external source and provenance identities available only as Blue research context.
+/// Archived external source and provenance identities available only as synthesis research context.
 ///
 /// This value deliberately contains no `CorpusCaseArtifact`: research evidence cannot promote
 /// itself into an executable case.
@@ -789,7 +789,7 @@ impl ArchivedExternalTestEvidence {
         self.source_bytes
     }
 
-    /// Returns provenance for the research context that informed a later Blue proposal.
+    /// Returns provenance for the research context that informed a later synthesis proposal.
     #[must_use]
     pub const fn provenance(&self) -> ContentId<CorpusCaseProvenanceArtifact> {
         self.provenance

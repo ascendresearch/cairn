@@ -1,4 +1,4 @@
-//! Product-owned blue/red `OracleSearch` plan and cache-stable role projections.
+//! Optional model-backed Oracle debate plan and cache-stable strategy projections.
 
 use std::{collections::HashSet, io::Cursor};
 
@@ -16,27 +16,27 @@ use thiserror::Error;
 
 const SCHEMA_V1: u16 = 1;
 
-/// Durable semantic domain for one complete `OracleSearch` plan.
-pub enum OracleSearchPlanArtifact {}
+/// Durable semantic domain for one complete `OracleModelDebate` plan.
+pub enum OracleModelDebatePlanArtifact {}
 
-impl ContentType for OracleSearchPlanArtifact {
-    const DOMAIN: &'static str = "migration.oracle-search-plan.v1";
+impl ContentType for OracleModelDebatePlanArtifact {
+    const DOMAIN: &'static str = "migration.oracle-model-debate-plan.v1";
 }
 
-/// Closed product role used to bind generic agent episodes to `OracleSearch` authority.
+/// Closed strategy profile used only inside the optional model-backed debate implementation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum OracleAgentRole {
+pub enum OracleDebateStrategy {
     /// Domain/reference/property/corpus author.
-    Blue,
+    Synthesis,
     /// False-accept and false-reject breaker.
-    Red,
+    Adversarial,
 }
 
-/// Product tool capability offered to one `OracleSearch` role.
+/// Product tool capability offered to one model-backed debate strategy.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum OracleRoleTool {
+pub enum OracleDebateTool {
     /// Search and fetch bounded external/upstream test evidence.
     SearchExternalTests,
     /// Submit an evidence-citing domain refinement.
@@ -51,94 +51,94 @@ pub enum OracleRoleTool {
     SubmitAdversarialCase,
 }
 
-impl OracleAgentRole {
-    const fn required_tools(self) -> &'static [OracleRoleTool] {
+impl OracleDebateStrategy {
+    const fn required_tools(self) -> &'static [OracleDebateTool] {
         match self {
-            Self::Blue => &[
-                OracleRoleTool::SearchExternalTests,
-                OracleRoleTool::SubmitDomainRefinement,
-                OracleRoleTool::SubmitOracleProposal,
+            Self::Synthesis => &[
+                OracleDebateTool::SearchExternalTests,
+                OracleDebateTool::SubmitDomainRefinement,
+                OracleDebateTool::SubmitOracleProposal,
             ],
-            Self::Red => &[
-                OracleRoleTool::SubmitCorrectVariant,
-                OracleRoleTool::SubmitWrongVariant,
-                OracleRoleTool::SubmitAdversarialCase,
+            Self::Adversarial => &[
+                OracleDebateTool::SubmitCorrectVariant,
+                OracleDebateTool::SubmitWrongVariant,
+                OracleDebateTool::SubmitAdversarialCase,
             ],
         }
     }
 }
 
-/// Constructor input for one role-bound generic agent episode.
-pub struct OracleRoleEpisodeInput {
-    /// Closed `OracleSearch` role.
-    pub role: OracleAgentRole,
+/// Constructor input for one strategy-bound generic agent episode.
+pub struct OracleDebateEpisodeInput {
+    /// Closed model-backed debate strategy.
+    pub strategy: OracleDebateStrategy,
     /// Distinct durable generic agent episode.
     pub episode_id: EpisodeId,
     /// Frozen resolved model configuration used by the episode.
     pub model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
     /// Verification-domain identity of the same frozen model configuration for authorship edges.
     pub authorship_configuration: ContentId<ModelConfigurationArtifact>,
-    /// One stable role-specific instruction block after common instructions.
-    pub role_instruction: ContentId<InstructionBlock>,
-    /// Optional role-private submitted context roots in append order.
+    /// One stable strategy-specific instruction block after common instructions.
+    pub strategy_instruction: ContentId<InstructionBlock>,
+    /// Optional strategy-private submitted context roots in append order.
     pub private_context: Vec<ContentId<ContextBlock>>,
-    /// Independently enforced durable budget for this role episode.
+    /// Independently enforced durable budget for this strategy episode.
     pub budget: EpisodeBudget,
 }
 
-/// Exact role, model, prompt, tool, and private-context binding for one episode.
+/// Exact strategy, model, prompt, tool, and private-context binding for one episode.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(try_from = "OracleRoleEpisodeWire", into = "OracleRoleEpisodeWire")]
-pub struct OracleRoleEpisodeV1 {
+#[serde(try_from = "OracleDebateEpisodeWire", into = "OracleDebateEpisodeWire")]
+pub struct OracleDebateEpisodeV1 {
     schema_version: u16,
-    role: OracleAgentRole,
+    strategy: OracleDebateStrategy,
     episode_id: EpisodeId,
     model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
     authorship_configuration: ContentId<ModelConfigurationArtifact>,
-    role_instruction: ContentId<InstructionBlock>,
+    strategy_instruction: ContentId<InstructionBlock>,
     tool_catalog: ContentId<ToolCatalog>,
-    tools: Vec<OracleRoleTool>,
+    tools: Vec<OracleDebateTool>,
     private_context: Vec<ContentId<ContextBlock>>,
     budget: EpisodeBudget,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct OracleRoleEpisodeWire {
+struct OracleDebateEpisodeWire {
     schema_version: u16,
-    role: OracleAgentRole,
+    strategy: OracleDebateStrategy,
     episode_id: EpisodeId,
     model_configuration: ContentId<ResolvedRuntimeModelArtifact>,
     authorship_configuration: ContentId<ModelConfigurationArtifact>,
-    role_instruction: ContentId<InstructionBlock>,
+    strategy_instruction: ContentId<InstructionBlock>,
     tool_catalog: ContentId<ToolCatalog>,
-    tools: Vec<OracleRoleTool>,
+    tools: Vec<OracleDebateTool>,
     private_context: Vec<ContentId<ContextBlock>>,
     budget: EpisodeBudget,
 }
 
-impl OracleRoleEpisodeV1 {
-    fn new(input: OracleRoleEpisodeInput) -> Result<Self, OracleSearchPlanError> {
-        validate_unique(&input.private_context, "role private context")?;
-        let tools = input.role.required_tools().to_vec();
+impl OracleDebateEpisodeV1 {
+    fn new(input: OracleDebateEpisodeInput) -> Result<Self, OracleModelDebatePlanError> {
+        validate_unique(&input.private_context, "strategy private context")?;
+        let tools = input.strategy.required_tools().to_vec();
         Ok(Self {
             schema_version: SCHEMA_V1,
-            role: input.role,
+            strategy: input.strategy,
             episode_id: input.episode_id,
             model_configuration: input.model_configuration,
             authorship_configuration: input.authorship_configuration,
-            role_instruction: input.role_instruction,
-            tool_catalog: oracle_role_tool_catalog_id(input.role)?,
+            strategy_instruction: input.strategy_instruction,
+            tool_catalog: oracle_debate_tool_catalog_id(input.strategy)?,
             tools,
             private_context: input.private_context,
             budget: input.budget,
         })
     }
 
-    /// Returns the product role assigned to this generic episode.
+    /// Returns the debate strategy assigned to this generic episode.
     #[must_use]
-    pub const fn role(&self) -> OracleAgentRole {
-        self.role
+    pub const fn strategy(&self) -> OracleDebateStrategy {
+        self.strategy
     }
 
     /// Returns the distinct durable episode identity.
@@ -159,10 +159,10 @@ impl OracleRoleEpisodeV1 {
         self.authorship_configuration
     }
 
-    /// Returns the role-specific instruction block appended after common instructions.
+    /// Returns the strategy-specific instruction block appended after common instructions.
     #[must_use]
-    pub const fn role_instruction(&self) -> ContentId<InstructionBlock> {
-        self.role_instruction
+    pub const fn strategy_instruction(&self) -> ContentId<InstructionBlock> {
+        self.strategy_instruction
     }
 
     /// Returns the exact canonical tool catalog identity.
@@ -173,48 +173,48 @@ impl OracleRoleEpisodeV1 {
 
     /// Returns the server-enforced product capabilities in canonical order.
     #[must_use]
-    pub fn tools(&self) -> &[OracleRoleTool] {
+    pub fn tools(&self) -> &[OracleDebateTool] {
         &self.tools
     }
 
-    /// Returns role-private submitted context roots in append order.
+    /// Returns strategy-private submitted context roots in append order.
     #[must_use]
     pub fn private_context(&self) -> &[ContentId<ContextBlock>] {
         &self.private_context
     }
 
-    /// Returns the independently enforced role budget.
+    /// Returns the independently enforced strategy budget.
     #[must_use]
     pub const fn budget(&self) -> &EpisodeBudget {
         &self.budget
     }
 
-    fn validate(&self) -> Result<(), OracleSearchPlanError> {
+    fn validate(&self) -> Result<(), OracleModelDebatePlanError> {
         if self.schema_version != SCHEMA_V1 {
-            return Err(OracleSearchPlanError::UnsupportedSchema(
+            return Err(OracleModelDebatePlanError::UnsupportedSchema(
                 self.schema_version,
             ));
         }
-        if self.tools != self.role.required_tools()
-            || self.tool_catalog != oracle_role_tool_catalog_id(self.role)?
+        if self.tools != self.strategy.required_tools()
+            || self.tool_catalog != oracle_debate_tool_catalog_id(self.strategy)?
         {
-            return Err(OracleSearchPlanError::RoleCapabilityMismatch);
+            return Err(OracleModelDebatePlanError::StrategyCapabilityMismatch);
         }
-        validate_unique(&self.private_context, "role private context")
+        validate_unique(&self.private_context, "strategy private context")
     }
 }
 
-impl TryFrom<OracleRoleEpisodeWire> for OracleRoleEpisodeV1 {
-    type Error = OracleSearchPlanError;
+impl TryFrom<OracleDebateEpisodeWire> for OracleDebateEpisodeV1 {
+    type Error = OracleModelDebatePlanError;
 
-    fn try_from(wire: OracleRoleEpisodeWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: OracleDebateEpisodeWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
-            role: wire.role,
+            strategy: wire.strategy,
             episode_id: wire.episode_id,
             model_configuration: wire.model_configuration,
             authorship_configuration: wire.authorship_configuration,
-            role_instruction: wire.role_instruction,
+            strategy_instruction: wire.strategy_instruction,
             tool_catalog: wire.tool_catalog,
             tools: wire.tools,
             private_context: wire.private_context,
@@ -225,15 +225,15 @@ impl TryFrom<OracleRoleEpisodeWire> for OracleRoleEpisodeV1 {
     }
 }
 
-impl From<OracleRoleEpisodeV1> for OracleRoleEpisodeWire {
-    fn from(value: OracleRoleEpisodeV1) -> Self {
+impl From<OracleDebateEpisodeV1> for OracleDebateEpisodeWire {
+    fn from(value: OracleDebateEpisodeV1) -> Self {
         Self {
             schema_version: value.schema_version,
-            role: value.role,
+            strategy: value.strategy,
             episode_id: value.episode_id,
             model_configuration: value.model_configuration,
             authorship_configuration: value.authorship_configuration,
-            role_instruction: value.role_instruction,
+            strategy_instruction: value.strategy_instruction,
             tool_catalog: value.tool_catalog,
             tools: value.tools,
             private_context: value.private_context,
@@ -242,19 +242,19 @@ impl From<OracleRoleEpisodeV1> for OracleRoleEpisodeWire {
     }
 }
 
-/// Creates a role binding whose tool identity is derived from trusted product definitions.
+/// Creates a strategy binding whose tool identity is derived from trusted product definitions.
 ///
 /// # Errors
 ///
-/// Rejects duplicate role-private context or an unrepresentable tool-catalog identity.
-pub fn prepare_oracle_role_episode(
-    input: OracleRoleEpisodeInput,
-) -> Result<OracleRoleEpisodeV1, OracleSearchPlanError> {
-    OracleRoleEpisodeV1::new(input)
+/// Rejects duplicate strategy-private context or an unrepresentable tool-catalog identity.
+pub fn prepare_oracle_debate_episode(
+    input: OracleDebateEpisodeInput,
+) -> Result<OracleDebateEpisodeV1, OracleModelDebatePlanError> {
+    OracleDebateEpisodeV1::new(input)
 }
 
-/// Constructor input for a complete two-episode `OracleSearch`.
-pub struct OracleSearchPlanInput {
+/// Constructor input for a complete two-episode `OracleModelDebate`.
+pub struct OracleModelDebatePlanInput {
     /// Owning migration task.
     pub task_id: TaskId,
     /// Exact resolved task/source input artifact.
@@ -267,16 +267,19 @@ pub struct OracleSearchPlanInput {
     pub common_instructions: Vec<ContentId<InstructionBlock>>,
     /// Stable caller/source/policy context in deterministic order.
     pub shared_context: Vec<ContentId<ContextBlock>>,
-    /// Blue episode binding.
-    pub blue: OracleRoleEpisodeV1,
-    /// Red episode binding.
-    pub red: OracleRoleEpisodeV1,
+    /// Synthesis episode binding.
+    pub synthesis: OracleDebateEpisodeV1,
+    /// Adversarial episode binding.
+    pub adversarial: OracleDebateEpisodeV1,
 }
 
-/// Immutable plan binding one task to isolated blue and red Oracle Agent episodes.
+/// Immutable plan binding one task to isolated synthesis and adversarial Oracle Agent episodes.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(try_from = "OracleSearchPlanWire", into = "OracleSearchPlanWire")]
-pub struct OracleSearchPlanV1 {
+#[serde(
+    try_from = "OracleModelDebatePlanWire",
+    into = "OracleModelDebatePlanWire"
+)]
+pub struct OracleModelDebatePlanV1 {
     schema_version: u16,
     task_id: TaskId,
     task_inputs: ContentId<OracleTaskInputArtifact>,
@@ -284,13 +287,13 @@ pub struct OracleSearchPlanV1 {
     admission_policy: ContentId<AdmissionPolicyArtifact>,
     common_instructions: Vec<ContentId<InstructionBlock>>,
     shared_context: Vec<ContentId<ContextBlock>>,
-    blue: OracleRoleEpisodeV1,
-    red: OracleRoleEpisodeV1,
+    synthesis: OracleDebateEpisodeV1,
+    adversarial: OracleDebateEpisodeV1,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct OracleSearchPlanWire {
+struct OracleModelDebatePlanWire {
     schema_version: u16,
     task_id: TaskId,
     task_inputs: ContentId<OracleTaskInputArtifact>,
@@ -298,18 +301,18 @@ struct OracleSearchPlanWire {
     admission_policy: ContentId<AdmissionPolicyArtifact>,
     common_instructions: Vec<ContentId<InstructionBlock>>,
     shared_context: Vec<ContentId<ContextBlock>>,
-    blue: OracleRoleEpisodeV1,
-    red: OracleRoleEpisodeV1,
+    synthesis: OracleDebateEpisodeV1,
+    adversarial: OracleDebateEpisodeV1,
 }
 
-impl OracleSearchPlanV1 {
-    /// Creates one immutable two-role `OracleSearch` plan.
+impl OracleModelDebatePlanV1 {
+    /// Creates one immutable two-strategy `OracleModelDebate` plan.
     ///
     /// # Errors
     ///
-    /// Rejects empty/duplicated stable-prefix material, swapped roles, reused episode identities,
-    /// role-private context leaked into the shared prefix, or inconsistent role capabilities.
-    pub fn new(input: OracleSearchPlanInput) -> Result<Self, OracleSearchPlanError> {
+    /// Rejects empty/duplicated stable-prefix material, swapped strategies, reused episode identities,
+    /// strategy-private context leaked into the shared prefix, or inconsistent strategy capabilities.
+    pub fn new(input: OracleModelDebatePlanInput) -> Result<Self, OracleModelDebatePlanError> {
         let value = Self {
             schema_version: SCHEMA_V1,
             task_id: input.task_id,
@@ -318,8 +321,8 @@ impl OracleSearchPlanV1 {
             admission_policy: input.admission_policy,
             common_instructions: input.common_instructions,
             shared_context: input.shared_context,
-            blue: input.blue,
-            red: input.red,
+            synthesis: input.synthesis,
+            adversarial: input.adversarial,
         };
         value.validate()?;
         Ok(value)
@@ -331,7 +334,7 @@ impl OracleSearchPlanV1 {
         self.task_id
     }
 
-    /// Returns the exact task/source inputs shared by both roles.
+    /// Returns the exact task/source inputs shared by both strategies.
     #[must_use]
     pub const fn task_inputs(&self) -> ContentId<OracleTaskInputArtifact> {
         self.task_inputs
@@ -361,36 +364,38 @@ impl OracleSearchPlanV1 {
         &self.shared_context
     }
 
-    /// Returns the isolated blue episode binding.
+    /// Returns the isolated synthesis episode binding.
     #[must_use]
-    pub const fn blue(&self) -> &OracleRoleEpisodeV1 {
-        &self.blue
+    pub const fn synthesis(&self) -> &OracleDebateEpisodeV1 {
+        &self.synthesis
     }
 
-    /// Returns the isolated red episode binding.
+    /// Returns the isolated adversarial episode binding.
     #[must_use]
-    pub const fn red(&self) -> &OracleRoleEpisodeV1 {
-        &self.red
+    pub const fn adversarial(&self) -> &OracleDebateEpisodeV1 {
+        &self.adversarial
     }
 
-    fn validate(&self) -> Result<(), OracleSearchPlanError> {
+    fn validate(&self) -> Result<(), OracleModelDebatePlanError> {
         if self.schema_version != SCHEMA_V1 {
-            return Err(OracleSearchPlanError::UnsupportedSchema(
+            return Err(OracleModelDebatePlanError::UnsupportedSchema(
                 self.schema_version,
             ));
         }
         if self.common_instructions.is_empty() || self.shared_context.is_empty() {
-            return Err(OracleSearchPlanError::EmptyStablePrefix);
+            return Err(OracleModelDebatePlanError::EmptyStablePrefix);
         }
         validate_unique(&self.common_instructions, "common instructions")?;
         validate_unique(&self.shared_context, "shared context")?;
-        self.blue.validate()?;
-        self.red.validate()?;
-        if self.blue.role != OracleAgentRole::Blue || self.red.role != OracleAgentRole::Red {
-            return Err(OracleSearchPlanError::RoleBindingMismatch);
+        self.synthesis.validate()?;
+        self.adversarial.validate()?;
+        if self.synthesis.strategy != OracleDebateStrategy::Synthesis
+            || self.adversarial.strategy != OracleDebateStrategy::Adversarial
+        {
+            return Err(OracleModelDebatePlanError::StrategyBindingMismatch);
         }
-        if self.blue.episode_id == self.red.episode_id {
-            return Err(OracleSearchPlanError::SharedEpisode);
+        if self.synthesis.episode_id == self.adversarial.episode_id {
+            return Err(OracleModelDebatePlanError::SharedEpisode);
         }
         let shared = self
             .shared_context
@@ -398,22 +403,22 @@ impl OracleSearchPlanV1 {
             .map(ContentId::to_wire)
             .collect::<HashSet<_>>();
         if self
-            .blue
+            .synthesis
             .private_context
             .iter()
-            .chain(&self.red.private_context)
+            .chain(&self.adversarial.private_context)
             .any(|context| shared.contains(&context.to_wire()))
         {
-            return Err(OracleSearchPlanError::PrivateContextLeak);
+            return Err(OracleModelDebatePlanError::PrivateContextLeak);
         }
         Ok(())
     }
 }
 
-impl TryFrom<OracleSearchPlanWire> for OracleSearchPlanV1 {
-    type Error = OracleSearchPlanError;
+impl TryFrom<OracleModelDebatePlanWire> for OracleModelDebatePlanV1 {
+    type Error = OracleModelDebatePlanError;
 
-    fn try_from(wire: OracleSearchPlanWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: OracleModelDebatePlanWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
             task_id: wire.task_id,
@@ -422,16 +427,16 @@ impl TryFrom<OracleSearchPlanWire> for OracleSearchPlanV1 {
             admission_policy: wire.admission_policy,
             common_instructions: wire.common_instructions,
             shared_context: wire.shared_context,
-            blue: wire.blue,
-            red: wire.red,
+            synthesis: wire.synthesis,
+            adversarial: wire.adversarial,
         };
         value.validate()?;
         Ok(value)
     }
 }
 
-impl From<OracleSearchPlanV1> for OracleSearchPlanWire {
-    fn from(value: OracleSearchPlanV1) -> Self {
+impl From<OracleModelDebatePlanV1> for OracleModelDebatePlanWire {
+    fn from(value: OracleModelDebatePlanV1) -> Self {
         Self {
             schema_version: value.schema_version,
             task_id: value.task_id,
@@ -440,56 +445,56 @@ impl From<OracleSearchPlanV1> for OracleSearchPlanWire {
             admission_policy: value.admission_policy,
             common_instructions: value.common_instructions,
             shared_context: value.shared_context,
-            blue: value.blue,
-            red: value.red,
+            synthesis: value.synthesis,
+            adversarial: value.adversarial,
         }
     }
 }
 
-/// Canonical strict tool-catalog bytes for one `OracleSearch` role.
+/// Canonical strict tool-catalog bytes for one `OracleModelDebate` strategy.
 ///
 /// # Errors
 ///
 /// Returns an error only if canonical encoding fails.
-pub fn oracle_role_tool_catalog_bytes(
-    role: OracleAgentRole,
-) -> Result<Vec<u8>, OracleSearchPlanError> {
-    let tools = crate::oracle_tools::oracle_role_tool_contracts(role)?;
+pub fn oracle_debate_tool_catalog_bytes(
+    strategy: OracleDebateStrategy,
+) -> Result<Vec<u8>, OracleModelDebatePlanError> {
+    let tools = crate::oracle_debate_tools::oracle_debate_tool_contracts(strategy)?;
     cairn_codec::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_V1,
-        "role": role,
+        "strategy": strategy,
         "tools": tools,
     }))
-    .map_err(|error| OracleSearchPlanError::Encoding(error.to_string()))
+    .map_err(|error| OracleModelDebatePlanError::Encoding(error.to_string()))
 }
 
-/// Derives the exact role tool-catalog identity from trusted product definitions.
+/// Derives the exact strategy tool-catalog identity from trusted product definitions.
 ///
 /// # Errors
 ///
 /// Returns an error when canonical encoding or identity derivation fails.
-pub fn oracle_role_tool_catalog_id(
-    role: OracleAgentRole,
-) -> Result<ContentId<ToolCatalog>, OracleSearchPlanError> {
-    let bytes = oracle_role_tool_catalog_bytes(role)?;
+pub fn oracle_debate_tool_catalog_id(
+    strategy: OracleDebateStrategy,
+) -> Result<ContentId<ToolCatalog>, OracleModelDebatePlanError> {
+    let bytes = oracle_debate_tool_catalog_bytes(strategy)?;
     ContentId::<ToolCatalog>::derive(&bytes)
-        .map_err(|error| OracleSearchPlanError::Encoding(error.to_string()))
+        .map_err(|error| OracleModelDebatePlanError::Encoding(error.to_string()))
 }
 
-/// Archives the trusted role tool catalog and verifies that storage preserved its frozen identity.
+/// Archives the trusted strategy tool catalog and verifies that storage preserved its frozen identity.
 ///
 /// # Errors
 ///
 /// Returns an error when canonical encoding or content storage fails.
-pub fn archive_oracle_role_tool_catalog<S: ContentStore>(
+pub fn archive_oracle_debate_tool_catalog<S: ContentStore>(
     store: &mut S,
-    role: OracleAgentRole,
-) -> Result<ContentId<ToolCatalog>, OracleSearchPlanError> {
-    let bytes = oracle_role_tool_catalog_bytes(role)?;
-    let expected = oracle_role_tool_catalog_id(role)?;
+    strategy: OracleDebateStrategy,
+) -> Result<ContentId<ToolCatalog>, OracleModelDebatePlanError> {
+    let bytes = oracle_debate_tool_catalog_bytes(strategy)?;
+    let expected = oracle_debate_tool_catalog_id(strategy)?;
     let descriptor = store.put::<ToolCatalog>(&mut Cursor::new(bytes))?;
     if descriptor.content_id != expected {
-        return Err(OracleSearchPlanError::RoleCapabilityMismatch);
+        return Err(OracleModelDebatePlanError::StrategyCapabilityMismatch);
     }
     Ok(descriptor.content_id)
 }
@@ -497,51 +502,52 @@ pub fn archive_oracle_role_tool_catalog<S: ContentStore>(
 fn validate_unique<T: ContentType>(
     values: &[ContentId<T>],
     field: &'static str,
-) -> Result<(), OracleSearchPlanError> {
+) -> Result<(), OracleModelDebatePlanError> {
     let mut seen = HashSet::new();
     if values.iter().any(|value| !seen.insert(value.to_wire())) {
-        return Err(OracleSearchPlanError::DuplicatePrefixEntry { field });
+        return Err(OracleModelDebatePlanError::DuplicatePrefixEntry { field });
     }
     Ok(())
 }
 
-/// Invalid `OracleSearch` composition or strict V1 input.
+/// Invalid `OracleModelDebate` composition or strict V1 input.
 #[derive(Debug, Error)]
-pub enum OracleSearchPlanError {
-    /// Trusted role catalog archival failed.
+pub enum OracleModelDebatePlanError {
+    /// Trusted strategy catalog archival failed.
     #[error(transparent)]
     Storage(#[from] ContentStoreError),
     /// A schema other than the single current V1 was supplied.
-    #[error("unsupported OracleSearch schema version {0}")]
+    #[error("unsupported OracleModelDebate schema version {0}")]
     UnsupportedSchema(u16),
-    /// Common role input must have both instruction and context material.
-    #[error("OracleSearch stable prefix cannot be empty")]
+    /// Common strategy input must have both instruction and context material.
+    #[error("OracleModelDebate stable prefix cannot be empty")]
     EmptyStablePrefix,
     /// One stable-prefix identity appeared twice.
-    #[error("OracleSearch {field} contains a duplicate identity")]
+    #[error("OracleModelDebate {field} contains a duplicate identity")]
     DuplicatePrefixEntry { field: &'static str },
-    /// Persisted role capabilities or their catalog identity differ from trusted definitions.
-    #[error("OracleSearch role capabilities do not match trusted product policy")]
-    RoleCapabilityMismatch,
-    /// Blue and red were placed in the wrong slots.
-    #[error("OracleSearch blue/red role binding is inconsistent")]
-    RoleBindingMismatch,
-    /// Blue and red reused one logical episode.
-    #[error("OracleSearch blue and red must use distinct episodes")]
+    /// Persisted strategy capabilities or their catalog identity differ from trusted definitions.
+    #[error("OracleModelDebate strategy capabilities do not match trusted product policy")]
+    StrategyCapabilityMismatch,
+    /// Synthesis and adversarial were placed in the wrong slots.
+    #[error("OracleModelDebate synthesis/adversarial strategy binding is inconsistent")]
+    StrategyBindingMismatch,
+    /// Synthesis and adversarial reused one logical episode.
+    #[error("OracleModelDebate synthesis and adversarial must use distinct episodes")]
     SharedEpisode,
-    /// A role-private context identity was also placed in the shared prefix.
-    #[error("OracleSearch role-private context leaked into shared context")]
+    /// A strategy-private context identity was also placed in the shared prefix.
+    #[error("OracleModelDebate strategy-private context leaked into shared context")]
     PrivateContextLeak,
     /// Canonical encoding or semantic identity derivation failed.
-    #[error("OracleSearch encoding failed: {0}")]
+    #[error("OracleModelDebate encoding failed: {0}")]
     Encoding(String),
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        OracleAgentRole, OracleRoleEpisodeInput, OracleRoleTool, OracleSearchPlanArtifact,
-        OracleSearchPlanInput, OracleSearchPlanV1, prepare_oracle_role_episode,
+        OracleDebateEpisodeInput, OracleDebateStrategy, OracleDebateTool,
+        OracleModelDebatePlanArtifact, OracleModelDebatePlanInput, OracleModelDebatePlanV1,
+        prepare_oracle_debate_episode,
     };
     use cairn_agent::{
         ContextBlock, EpisodeBudget, InstructionBlock, ResolvedRuntimeModelArtifact,
@@ -556,21 +562,21 @@ mod tests {
         ContentId::<T>::derive(label.as_bytes()).expect("identity")
     }
 
-    fn role(role: OracleAgentRole, private: &[&str]) -> super::OracleRoleEpisodeV1 {
-        prepare_oracle_role_episode(OracleRoleEpisodeInput {
-            role,
+    fn strategy(strategy: OracleDebateStrategy, private: &[&str]) -> super::OracleDebateEpisodeV1 {
+        prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+            strategy,
             episode_id: EpisodeId::new(),
-            model_configuration: id::<ResolvedRuntimeModelArtifact>(match role {
-                OracleAgentRole::Blue => "blue-model",
-                OracleAgentRole::Red => "red-model",
+            model_configuration: id::<ResolvedRuntimeModelArtifact>(match strategy {
+                OracleDebateStrategy::Synthesis => "synthesis-model",
+                OracleDebateStrategy::Adversarial => "adversarial-model",
             }),
-            authorship_configuration: id::<ModelConfigurationArtifact>(match role {
-                OracleAgentRole::Blue => "blue-model",
-                OracleAgentRole::Red => "red-model",
+            authorship_configuration: id::<ModelConfigurationArtifact>(match strategy {
+                OracleDebateStrategy::Synthesis => "synthesis-model",
+                OracleDebateStrategy::Adversarial => "adversarial-model",
             }),
-            role_instruction: id::<InstructionBlock>(match role {
-                OracleAgentRole::Blue => "blue-instruction",
-                OracleAgentRole::Red => "red-instruction",
+            strategy_instruction: id::<InstructionBlock>(match strategy {
+                OracleDebateStrategy::Synthesis => "synthesis-instruction",
+                OracleDebateStrategy::Adversarial => "adversarial-instruction",
             }),
             private_context: private
                 .iter()
@@ -578,76 +584,82 @@ mod tests {
                 .collect(),
             budget: EpisodeBudget::default(),
         })
-        .expect("role")
+        .expect("strategy")
     }
 
-    fn plan() -> OracleSearchPlanV1 {
-        OracleSearchPlanV1::new(OracleSearchPlanInput {
+    fn plan() -> OracleModelDebatePlanV1 {
+        OracleModelDebatePlanV1::new(OracleModelDebatePlanInput {
             task_id: TaskId::new(),
             task_inputs: id::<OracleTaskInputArtifact>("task-inputs"),
             declared_domain: id::<DeclaredDomainArtifact>("declared-domain"),
             admission_policy: id::<AdmissionPolicyArtifact>("policy"),
             common_instructions: vec![id::<InstructionBlock>("common")],
             shared_context: vec![id::<ContextBlock>("caller"), id::<ContextBlock>("source")],
-            blue: role(OracleAgentRole::Blue, &["blue-private"]),
-            red: role(OracleAgentRole::Red, &["red-private"]),
+            synthesis: strategy(OracleDebateStrategy::Synthesis, &["synthesis-private"]),
+            adversarial: strategy(OracleDebateStrategy::Adversarial, &["adversarial-private"]),
         })
         .expect("plan")
     }
 
     #[test]
-    fn plan_keeps_roles_sessions_and_tools_isolated() {
+    fn plan_keeps_strategies_sessions_and_tools_isolated() {
         let plan = plan();
-        assert_ne!(plan.blue().episode_id(), plan.red().episode_id());
+        assert_ne!(
+            plan.synthesis().episode_id(),
+            plan.adversarial().episode_id()
+        );
         assert!(
-            plan.blue()
+            plan.synthesis()
                 .tools()
-                .contains(&OracleRoleTool::SearchExternalTests)
+                .contains(&OracleDebateTool::SearchExternalTests)
         );
         assert!(
             !plan
-                .red()
+                .adversarial()
                 .tools()
-                .contains(&OracleRoleTool::SearchExternalTests)
+                .contains(&OracleDebateTool::SearchExternalTests)
         );
-        assert_ne!(plan.blue().tool_catalog(), plan.red().tool_catalog());
+        assert_ne!(
+            plan.synthesis().tool_catalog(),
+            plan.adversarial().tool_catalog()
+        );
     }
 
     #[test]
-    fn strict_plan_round_trip_and_identity_bind_every_role_edge() {
+    fn strict_plan_round_trip_and_identity_bind_every_strategy_edge() {
         let plan = plan();
         let bytes = cairn_codec::to_vec(&plan).expect("encode");
-        let decoded: OracleSearchPlanV1 = cairn_codec::from_slice(&bytes).expect("decode");
+        let decoded: OracleModelDebatePlanV1 = cairn_codec::from_slice(&bytes).expect("decode");
         assert_eq!(decoded, plan);
-        let original = ContentId::<OracleSearchPlanArtifact>::derive(&bytes).expect("plan id");
+        let original = ContentId::<OracleModelDebatePlanArtifact>::derive(&bytes).expect("plan id");
 
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
-        value["blue"]["episode_id"] = value["red"]["episode_id"].clone();
-        assert!(serde_json::from_value::<OracleSearchPlanV1>(value).is_err());
+        value["synthesis"]["episode_id"] = value["adversarial"]["episode_id"].clone();
+        assert!(serde_json::from_value::<OracleModelDebatePlanV1>(value).is_err());
 
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
-        value["blue"]["model_configuration"] =
+        value["synthesis"]["model_configuration"] =
             serde_json::to_value(id::<ResolvedRuntimeModelArtifact>("changed-model"))
                 .expect("model id");
-        let changed: OracleSearchPlanV1 = serde_json::from_value(value).expect("changed plan");
+        let changed: OracleModelDebatePlanV1 = serde_json::from_value(value).expect("changed plan");
         let changed_bytes = cairn_codec::to_vec(&changed).expect("changed bytes");
         let changed_id =
-            ContentId::<OracleSearchPlanArtifact>::derive(&changed_bytes).expect("changed id");
+            ContentId::<OracleModelDebatePlanArtifact>::derive(&changed_bytes).expect("changed id");
         assert_ne!(changed_id, original);
     }
 
     #[test]
     fn private_context_cannot_be_reclassified_as_shared() {
         let leaked = id::<ContextBlock>("leaked");
-        let error = OracleSearchPlanV1::new(OracleSearchPlanInput {
+        let error = OracleModelDebatePlanV1::new(OracleModelDebatePlanInput {
             task_id: TaskId::new(),
             task_inputs: id::<OracleTaskInputArtifact>("task-inputs"),
             declared_domain: id::<DeclaredDomainArtifact>("declared-domain"),
             admission_policy: id::<AdmissionPolicyArtifact>("policy"),
             common_instructions: vec![id::<InstructionBlock>("common")],
             shared_context: vec![leaked],
-            blue: role(OracleAgentRole::Blue, &["leaked"]),
-            red: role(OracleAgentRole::Red, &["red-private"]),
+            synthesis: strategy(OracleDebateStrategy::Synthesis, &["leaked"]),
+            adversarial: strategy(OracleDebateStrategy::Adversarial, &["adversarial-private"]),
         })
         .expect_err("private context leak");
         assert!(error.to_string().contains("leaked"));
@@ -658,10 +670,10 @@ mod tests {
         let bytes = cairn_codec::to_vec(&plan()).expect("encode");
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
         value["schema_version"] = serde_json::json!(2);
-        assert!(serde_json::from_value::<OracleSearchPlanV1>(value).is_err());
+        assert!(serde_json::from_value::<OracleModelDebatePlanV1>(value).is_err());
 
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
         value["legacy_session"] = serde_json::json!("forbidden");
-        assert!(serde_json::from_value::<OracleSearchPlanV1>(value).is_err());
+        assert!(serde_json::from_value::<OracleModelDebatePlanV1>(value).is_err());
     }
 }

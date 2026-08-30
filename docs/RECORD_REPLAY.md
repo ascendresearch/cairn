@@ -208,7 +208,7 @@ Examples:
 
 - `TaskCreated`
 - `TaskInputsResolved`
-- `OracleSearchStarted`
+- `OracleExplorationStarted`
 - `OracleAdmitted`
 - `CandidateSearchStarted`
 - `VerdictAttached`

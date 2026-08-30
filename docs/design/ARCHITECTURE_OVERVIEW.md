@@ -56,8 +56,7 @@ flowchart TB
 
     subgraph proposals["Proposal plane — untrusted"]
       sir["SIR Agent Loop"]
-      blue["Oracle synthesis episodes/strategies"]
-      red["Adversarial exploration episodes/strategies"]
+      oracle["Oracle Exploration\npolicy-selected strategies"]
       planner["Typed Admission Planner episodes"]
       candidate["Candidate Search episode"]
     end
@@ -81,10 +80,8 @@ flowchart TB
     client <--> controller
     controller -->|"frozen episode input"| sir
     sir -->|"typed proposal"| controller
-    controller -->|"frozen episode input"| blue
-    blue -->|"typed proposal"| controller
-    controller -->|"frozen episode input"| red
-    red -->|"typed attack"| controller
+    controller -->|"frozen exploration input"| oracle
+    oracle -->|"typed portfolio proposal / attack"| controller
     controller -->|"frozen episode input"| planner
     planner -->|"typed plan"| controller
     controller -->|"frozen episode input"| candidate

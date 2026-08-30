@@ -39,8 +39,7 @@ flowchart TB
 
     subgraph phost["Proposal / planning zone"]
       sir["Proposal Host\nSIR episodes"]
-      blue["Proposal Host\nOracle synthesis episodes"]
-      red["Proposal Host\nAdversarial episodes"]
+      oracle["Proposal Host\nOracle Exploration strategies"]
       planner["Proposal Host\nTyped Planner episodes"]
       cand["Proposal Host\nCandidate Search"]
     end
@@ -64,8 +63,7 @@ flowchart TB
 
     client <--> controller
     controller <--> sir
-    controller <--> blue
-    controller <--> red
+    controller <--> oracle
     controller <--> planner
     controller <--> cand
     controller <--> admission
@@ -74,8 +72,7 @@ flowchart TB
     npu -->|"direct outbound mTLS/WSS"| controller
     integ -->|"direct outbound mTLS/WSS"| controller
     sir --> provider
-    blue --> provider
-    red --> provider
+    oracle --> provider
     planner --> provider
     cand --> provider
     admission -. "one-time restricted capability" .-> cuda
@@ -84,8 +81,7 @@ flowchart TB
     admission -. "one-time restricted capability" .-> integ
     controller -. "typed secret refs" .-> secrets
     sir -. "exact role secret refs" .-> secrets
-    blue -. "exact role secret refs" .-> secrets
-    red -. "exact role secret refs" .-> secrets
+    oracle -. "exact strategy secret refs" .-> secrets
     planner -. "exact role secret refs" .-> secrets
     cand -. "exact role secret refs" .-> secrets
 ```

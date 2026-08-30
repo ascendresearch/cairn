@@ -31,8 +31,7 @@ flowchart LR
     need_user{"Needs user\ndecision?"}
     user["Scoped user decision"]
     ia["Intent Admission"]
-    blue["Oracle Blue Loop"]
-    red["Oracle Red Loop"]
+    oracle["Oracle Exploration\nstrategy portfolio"]
     oa["Oracle Admission"]
     cand["Candidate Loop\ngenerate / build / repair"]
     ca["Candidate Admission\ncorrectness / safety / performance"]
@@ -42,8 +41,8 @@ flowchart LR
     need_user -->|yes| user --> ia
     need_user -->|no| ia
     ia -->|revision / unknown| sir
-    ia -->|admitted intent| blue --> red --> oa
-    oa -->|Oracle diagnostic| blue
+    ia -->|admitted intent| oracle --> oa
+    oa -->|Oracle diagnostic| oracle
     oa -->|admitted Oracle| cand --> ca
     ca -->|candidate diagnostic| cand
     ca -->|admitted outcomes| verdict
@@ -63,8 +62,7 @@ Admission 也不靠模型 summary 决定结果。
 | Intake | source、caller、tests、target、policy、预算 | 冻结任务与 mandatory facts | 不猜用户语义，不生成 verdict |
 | SIR Loop | 任务事实、用户声明、公开知识/研究、实验 observation | 竞争 intent hypotheses、证据、unknown、用户问题 | 不产生 admitted intent |
 | Intent Admission | exact proposal、用户决定、trusted evidence/policy | claim-scoped intent contract 或 conflict/unknown | 不调用模型补齐语义 |
-| Oracle Blue | admitted intent、公开证据、qualification feedback | claim/domain/reference/case/comparator proposal | 不授权自己的 Oracle |
-| Oracle Red | 冻结 Blue proposal、fault model、公开 controls | attack、counterexample、coverage gap | 不发布 pass/fail |
+| Oracle Exploration | admitted intent、公开证据、qualification feedback、policy obligations | claim/domain/reference/case/comparator portfolio、attack、counterexample、coverage gap | 不授权自己的 Oracle，不固定为模型或两个角色 |
 | Oracle Admission | exact portfolio、required controls、Worker receipts | admitted/partial/rejected Oracle claims | 不按 candidate 表现调宽 judge |
 | Candidate Loop | admitted intent/Oracle、target environment、公开 diagnostic | immutable Ascend C revisions | 不读取 hidden corpus，不改 gate |
 | Candidate Admission | frozen candidate、admitted Oracle、trusted receipts | 多平面 candidate outcomes | 不修 candidate，不隐式改 intent/Oracle |
@@ -87,7 +85,7 @@ SIR、Oracle synthesis/adversarial、Candidate Search 和可选 Admission Planne
 
 DEV-025把上述跨角色顺序直接固化为`cairn-server::controller_workflow::run_controller_workflow`的可读业务
 骨架；DEV-026又把用户authority边界显式展开为：freeze → SIR → derive intent decision requests → await user
-intent decision → Intent Admission → Oracle Blue → Oracle Red → Oracle Admission → Candidate → Worker observations
+intent decision → Intent Admission → Oracle Exploration → Oracle Admission → Candidate → Worker observations
 → Candidate Admission → terminal。各环节通过`ControllerWorkflowStages`的distinct associated artifact type连接。
 尚未实现的环节只有port签名、没有default/no-op成功实现；因此composition skeleton不会把空stage冒充为已运行。
 DEV-027现已把actual typed user decision、Admission durable start authority、independent model-free child与public
@@ -127,15 +125,19 @@ Docker、不登录设备、不持 Worker credential；需要实验时提交 type
 
 Oracle 不是 Candidate Loop 的几个公开样例，而是被独立准入的 claim portfolio。首期完整闭环至少包含：
 
-1. Blue 从 admitted intent 分解 claim/domain，提出 reference、property/metamorphic relation、case、
-   comparator、execution/safety 与 coverage obligations；
-2. Red 独立寻找 correct-variant false reject、fault/mutant false accept、domain gap、common-mode、
-   no-launch/fallback/constant-output 和 tolerance bypass；
+1. synthesis strategy 从 admitted intent 分解 claim/domain，提出 reference、property/metamorphic relation、
+   case、comparator、execution/safety 与 coverage obligations；
+2. adversarial strategy 独立寻找 correct-variant false reject、fault/mutant false accept、domain gap、
+   common-mode、no-launch/fallback/constant-output 和 tolerance bypass；
 3. trusted policy 在任何可选 Planner 之前机械派生 required evidence；
 4. Controller 把 public/hidden qualification experiment 交给适配的 Worker；
 5. Oracle Admission 验证 exact binding，并从 honest controls、定向错误实现/mutants、wrong-binding、
    domain/conflict/unknown、hidden disjoint corpus 和执行真实性 receipt 重算；
 6. 只有闭合的局部 claim 进入 `AdmittedOraclePortfolio`；其余保持 rejected、unknown 或 partial。
+
+前两项是逻辑义务，不是固定拓扑。Controller可以按policy选择模型驱动的synthesis/adversarial episode、
+确定性analyzer/generator、mutation、property/metamorphic、fuzz或counterexample strategy；一次exploration可以使用
+其中一个或多个。现有model-backed debate只是可选策略组合，不能成为Controller主工作流的强制阶段。
 
 Agent 可以提出 mechanism、case 和下一步实验，但不能生成自己的 qualification receipt 或把另一个模型的
 赞同当作资格。qualification 要与 exact implementation、scope、环境和风险绑定；不预建与真实 consumer
@@ -149,7 +151,7 @@ Agent 可以提出 mechanism、case 和下一步实验，但不能生成自己�
 | --- | --- | --- |
 | 用户语义/政策决定 | 新 SIR/Intent Admission run | 直接改写已准入 artifact |
 | SIR evidence gap | SIR Loop | 让 Candidate 猜用户意图 |
-| Oracle qualification counterexample | Oracle Blue/Red revision | 修改 admitted intent |
+| Oracle qualification counterexample | Oracle Exploration portfolio revision | 修改 admitted intent |
 | Candidate build/source diagnostic | Candidate revision | 调整 Oracle expected semantics |
 | Candidate correctness counterexample | Candidate revision；若证明 Oracle 缺陷则开独立 Oracle revalidation | 在同一 lineage 内调宽 comparator |
 | 设备/网络/toolchain failure | execution recovery/reconcile | 记为 candidate violation |
@@ -233,7 +235,9 @@ DEV-026将exact SIR Host request/recovery input、durable episode start authorit
 Controller composition的`cairn-server`，继续接入actual typed user decision、独立Intent Admission executable/
 restricted-store start authority和public outcome observation。active driver仍只表达recover/select/execute并停在
 `AwaitOracleWorkflow`。通用Host supervision继续由SIR/Candidate共享，Admission仍是独立model-free process；
-Oracle Blue/Red、后续Admission和Candidate suffix尚未并入这个连续aggregate。
+Oracle Exploration、后续Admission和Candidate suffix尚未并入这个连续aggregate。DEV-028已把composition skeleton
+纠正为`Oracle Exploration → Oracle Admission`，并把原Blue/Red代码、示例和配置收窄命名为可选
+model-backed debate strategy；没有为尚无consumer的exploration portfolio预建persisted artifact。
 
 ## 12. 被拒绝的方案
 

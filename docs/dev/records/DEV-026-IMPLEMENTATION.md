@@ -6,6 +6,9 @@
 - 架构：D-043、[`Workflow Architecture`](../../design/WORKFLOW_ARCHITECTURE.md)
 - 外部执行：无；本片未调用模型、远端 Worker、Docker、NPU 或互联网
 
+> Current correction：DEV-028已supersede本record中的固定Blue/Red composition形状；当前Controller骨架使用
+> policy-selected `Oracle Exploration → Oracle Admission`。本record其余内容保留为当时实现事实。
+
 ## 1. Objective
 
 把DEV-025的第一个真实空接缝接入task-owned durable Controller aggregate，同时保持业务流程本身就是可读的

@@ -2,8 +2,8 @@
 
 - 状态：当前会话交接入口
 - 日期：2026-08-29
-- 架构基线提交：`c49e16a`（`docs: freeze agent-loop workflow architecture`）
-- 当前实现基线：DEV-001–027 已记录；DEV-027 为 `Accepted`
+- 架构基线：D-043 与 DEV-028 的 strategy-driven Oracle correction
+- 当前实现基线：DEV-001–028 已记录；DEV-028 为 `Accepted`
 
 ## 1. 下一会话先建立的共同认识
 
@@ -32,13 +32,16 @@ single-task manager消费durable action并连接Host supervision、Worker schedu
 DEV-025把完整Controller顺序固化为typed composition skeleton；DEV-026进一步接通task-owned durable
 SIR→decision-request prefix，并把真实user decision显式放在Intent Admission之前。DEV-027现已接入actual typed
 user decision与independent Intent Admission，冻结executable/restricted-store authority并只接收restricted commit
-后的canonical public outcome。当前prefix停在`AwaitOracleWorkflow`，Candidate suffix仍是另一个已实现的durable
-segment。
+后的canonical public outcome。DEV-028进一步把完整业务骨架纠正为`Oracle Exploration → Oracle Admission`，
+删除旧Blue/Red公开代码路径，并将已有dogfood明确收窄为可选model-backed synthesis/adversarial debate strategy。
+当前prefix仍停在`AwaitOracleWorkflow`，Candidate suffix仍是另一个已实现的durable segment。
 
 架构已经由 D-043 冻结：
 
 - Controller 拥有一个 durable workflow state machine；
-- SIR、Oracle Blue/Red、Candidate 和可选 Planner 是不同 Agent Loop；
+- SIR、Oracle Exploration、Candidate 和可选 Planner 是不同 Agent Loop；
+- Oracle Exploration按policy选择synthesis、adversarial、analyzer、mutation、property或counterexample strategy，
+  model-backed synthesis/adversarial debate不是必经拓扑；
 - capability-equivalent loop 由通用 Proposal Host 承载，不为 SIR 保留专用长期 service；
 - Admission 是独立、model-free authority；
 - 所有代码/toolchain/Docker/device 实验经 Controller 调度到 managed Worker；
@@ -54,7 +57,7 @@ segment。
 1. 根目录 [`AGENTS.md`](../../AGENTS.md)；
 2. [`WORKFLOW_ARCHITECTURE.md`](../design/WORKFLOW_ARCHITECTURE.md)；
 3. [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md)；
-4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-027及其implementation record；
+4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-027–028及其implementation records；
 5. [`ARCHITECTURE_OVERVIEW.md`](../design/ARCHITECTURE_OVERVIEW.md) 和
    [`RUNTIME_ARCHITECTURE.md`](../design/RUNTIME_ARCHITECTURE.md)；
 6. 只有准备修改对应边界时，再读
@@ -73,7 +76,7 @@ segment。
 ```bash
 git status --short
 git log -5 --oneline --decorate
-rg -n "DEV-027|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
+rg -n "DEV-028|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
 rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitOracleWorkflow" \
   crates/cairn-migration crates/cairn-server crates/cairn-proposal-host
 ```
@@ -83,10 +86,10 @@ rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitOracleWorkflo
 不要在启动审计中连接 DeepSeek、远端 Worker、Docker、NPU 或互联网。外部 effect 只有在一个已确认 slice
 明确要求时才运行。
 
-## 4. DEV-027 已闭合的事实
+## 4. DEV-027–028 已闭合的事实
 
 - `run_controller_workflow`显式表达freeze、SIR、derive decision requests、await user decision、Intent Admission、
-  Oracle Blue/Red、Oracle Admission、Candidate、Worker observations、Candidate Admission和terminal；
+  Oracle Exploration、Oracle Admission、Candidate、Worker observations、Candidate Admission和terminal；
 - `ControllerWorkflowStages`为每一环定义distinct associated artifact type及async port，无default/no-op成功实现；
 - `ControllerWorkflowV1`已durably接通exact SIR Host request→start authority→terminal/proposal observation→
   decision requests→actual user decision→independent Intent Admission，并明确停在`AwaitOracleWorkflow`；
@@ -96,17 +99,24 @@ rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitOracleWorkflo
 - SIR/Candidate共享同一个Host supervisor，没有SIR独立进程或Candidate专属监督复制；
 - `drive_candidate_workflow_once`只表达recover durable turn、select exact action、execute one action；
 - cross-task、restart、exact replay/changed-input、model/store/outcome drift、no-auto-decision/no-auto-Oracle controls闭合；
+- Controller接口和stage order不再出现`OracleBlueProposal`/`OracleRedProposal`；旧`oracle_search`、role API、
+  Blue/Red example/config路径已删除，current V1只保留显式`oracle_model_debate`可选策略实现；
+- model debate的synthesis/adversarial episode继续保持distinct durable identity、model、budget、private context和tool
+  catalog；它提交proposal/attack，不拥有Admission authority；
 - 只运行本地model-free Admission process control；没有调用live model、remote Worker、Docker或NPU，没有新的
   live receipt或verdict claim。
 
 详细authority、current-V1 contract、tests、删除项与非目标见
-[`DEV-027-IMPLEMENTATION.md`](records/DEV-027-IMPLEMENTATION.md)。
+[`DEV-027-IMPLEMENTATION.md`](records/DEV-027-IMPLEMENTATION.md)和
+[`DEV-028-IMPLEMENTATION.md`](records/DEV-028-IMPLEMENTATION.md)。
 
 ## 5. 下一决策点
 
-DEV-027已经到达Oracle workflow边界。下一片应在“接入独立Oracle Blue proposal loop”与“先实现
-Controller↔Host typed experiment request、durable yield、Worker observation provenance与same-episode resume”之间
-选择一个最小真实接缝。不要自动生成Oracle authority，不要同时填满Blue/Red/Oracle Admission或Candidate port。
+DEV-027已经到达Oracle workflow边界，DEV-028已纠正其上层形状但没有伪造Oracle实现。推荐下一片先实现
+Controller↔Host typed experiment request、durable yield、Worker observation provenance与same-episode resume；这是
+SIR、Oracle Exploration和Candidate都需要的真实能力，也能让后续Oracle strategy基于observation工作。若先接
+Oracle，则只能接一个policy-selected、真实consumer驱动的`Oracle Exploration` action，不得恢复固定Blue→Red
+顺序、自动生成Oracle authority，或一次性预建完整portfolio/Admission/Candidate suffix。
 
 ## 6. 网络与部署启动规则
 
@@ -140,7 +150,7 @@ git diff --check
 请先读取 AGENTS.md、docs/dev/NEXT_SESSION.md、
 docs/design/WORKFLOW_ARCHITECTURE.md、docs/dev/CURRENT_BASELINE.md 和
 docs/dev/SLICE_CATALOG.md，并用 Git/代码核对交接事实。先不要调用模型、远端 Worker 或修改代码。
-请核对 Accepted DEV-027 的durable SIR→user decision→independent Intent Admission prefix、`AwaitOracleWorkflow`边界、distinct executable/restricted-store authority、shared Host supervision、完整Controller typed skeleton与CI事实，并选择Oracle Blue proposal loop或external experiment round-trip中的下一个真实接缝。
+请核对 Accepted DEV-027–028 的durable SIR→user decision→independent Intent Admission prefix、`AwaitOracleWorkflow`边界、distinct executable/restricted-store authority、shared Host supervision、strategy-driven Oracle Exploration骨架与CI事实，并优先审计external experiment round-trip这个下一个真实接缝。
 先给出最小slice/DCR、consumer、将替代的旧路径、测试与明确非目标；确认没有fixture-specific或generic-ID
 漂移后停下来让我确认。先不要调用模型、远端Worker或修改代码。
 ```

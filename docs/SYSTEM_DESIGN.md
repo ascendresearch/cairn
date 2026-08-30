@@ -273,7 +273,7 @@ V1 并同步更新代码、测试、fixture 和文档；不增加兼容 reader�
 
 ## 7. 端到端工作流
 
-本节由 Controller 的一个 durable state machine 编排；SIR、Oracle Blue/Red、Candidate 和可选 Planner
+本节由 Controller 的一个 durable state machine 编排；SIR、Oracle Exploration、Candidate 和可选 Planner
 是不同的 Agent Loop，不是固定 Agent 数量或 role-specific process。完整 transition、反馈路由、实验路径
 和停止语义见 [WORKFLOW_ARCHITECTURE.md](design/WORKFLOW_ARCHITECTURE.md)。
 

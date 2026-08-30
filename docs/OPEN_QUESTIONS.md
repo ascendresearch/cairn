@@ -193,7 +193,7 @@ or tool fields before the real environment is selected and probed.
 
 Which claim kinds may be admitted from official documentation alone, which require execution
 receipts, and which can only guide exploration? Which reviewed-but-unvalidated skills are allowed for
-SIR and Blue, what sandbox capabilities may they request, and what exact evidence promotes each skill
+SIR and model-backed Oracle synthesis, what sandbox capabilities may they request, and what exact evidence promotes each skill
 claim to validated?
 
 The T0–T3 and skill lifecycle are fixed; the per-claim/per-role minimum profiles remain policy work.
@@ -211,7 +211,7 @@ Oracle; the unresolved question is the first concrete acquisition and attributio
 
 ## OQ-024 — Hidden corpus exposure and replenishment policy
 
-- Priority: P1 before adaptive Blue/Candidate admission
+- Priority: P1 before adaptive Oracle Exploration/Candidate admission
 - Affects: diagnostic utility, hidden strength, corpus cost, anti-overfitting
 
 Define what diagnostic detail burns a case, whether exposure is tracked per proposal, model episode,

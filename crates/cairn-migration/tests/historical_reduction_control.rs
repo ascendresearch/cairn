@@ -27,9 +27,10 @@ use cairn_migration::{
     HistoricalReductionWrongVariantEvidence, HistoricalReproductionArtifact,
     HistoricalValidationStage, InputValueDomainV1, MemoryConditionDisposition,
     MigrationDomainContractInput, MigrationDomainContractV1, MigrationDomainFamilyName,
-    MigrationExecutionNeed, MigrationValidationTier, OracleAgentRole, OracleAttackInput,
-    OracleFailureMechanismName, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleSearchPlanInput,
-    OracleSearchPlanV1, PointerAlignmentContractV1, PreparedHistoricalReductionJob,
+    MigrationExecutionNeed, MigrationValidationTier, OracleDebateAttackInput,
+    OracleDebateEpisodeInput, OracleDebateEpisodeV1, OracleDebateStrategy,
+    OracleFailureMechanismName, OracleModelDebatePlanInput, OracleModelDebatePlanV1,
+    PointerAlignmentContractV1, PreparedHistoricalReductionJob,
     PreparedHistoricalReductionMutationGrid, RequestedSemanticsArtifact, SemanticClaimKind,
     ValidatedHistoricalReductionRun, ValidatedVariantBuild, VariantBuildCaptureLimits,
     VariantBuildDriverByteLimit, VariantImplementationByteLimit,
@@ -37,9 +38,10 @@ use cairn_migration::{
     compose_historical_reduction_control, compose_historical_reduction_mutation_grid,
     prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
     prepare_historical_reduction_mutant_set, prepare_historical_reduction_reference_job,
-    prepare_historical_reduction_variant_job, prepare_oracle_attack,
-    prepare_oracle_proposal_revision, prepare_oracle_role_episode, prepare_variant_build_job,
-    validate_historical_reduction_receipt, validate_variant_build_receipt,
+    prepare_historical_reduction_variant_job, prepare_oracle_debate_attack,
+    prepare_oracle_debate_episode, prepare_oracle_debate_proposal_revision,
+    prepare_variant_build_job, validate_historical_reduction_receipt,
+    validate_variant_build_receipt,
 };
 use cairn_protocol::{
     AttemptId, CommandId, ContentId, ContentType, EpisodeId, JobId, ObservedAtUnixMillis, TaskId,
@@ -91,8 +93,8 @@ struct WrongControl {
 }
 
 struct OracleActors {
-    blue: OracleRoleEpisodeV1,
-    red: OracleRoleEpisodeV1,
+    synthesis: OracleDebateEpisodeV1,
+    adversarial: OracleDebateEpisodeV1,
 }
 
 #[test]
@@ -122,7 +124,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         HistoricalReductionAlgorithm::Sequential,
         env!("CARGO_BIN_EXE_cairn-reduction-sequential-fixture"),
         &corpus,
-        &model_authorship(&actors.red),
+        &model_authorship(&actors.adversarial),
     );
     let tree = execute_correct(
         "tree-order",
@@ -130,28 +132,28 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         HistoricalReductionAlgorithm::BalancedTree,
         env!("CARGO_BIN_EXE_cairn-reduction-tree-fixture"),
         &corpus,
-        &model_authorship(&actors.red),
+        &model_authorship(&actors.adversarial),
     );
     let zero = execute_wrong(
         "zero-output",
         HistoricalReductionAlgorithm::ZeroOutput,
         env!("CARGO_BIN_EXE_cairn-reduction-zero-fixture"),
         &corpus,
-        &model_authorship(&actors.red),
+        &model_authorship(&actors.adversarial),
     );
     let dropped = execute_wrong(
         "drop-last",
         HistoricalReductionAlgorithm::DropLast,
         env!("CARGO_BIN_EXE_cairn-reduction-drop-last-fixture"),
         &corpus,
-        &model_authorship(&actors.red),
+        &model_authorship(&actors.adversarial),
     );
     let offset = execute_wrong(
         "unit-offset",
         HistoricalReductionAlgorithm::UnitOffset,
         env!("CARGO_BIN_EXE_cairn-reduction-offset-fixture"),
         &corpus,
-        &model_authorship(&actors.red),
+        &model_authorship(&actors.adversarial),
     );
 
     let allowance = measured_allowance(&corpus);
@@ -267,20 +269,20 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             run: &offset.completed.run,
         },
     ];
-    let search_plan = oracle_search_plan(&declared, &policy_mutation.policy, actors);
+    let debate_plan = oracle_model_debate_plan(&declared, &policy_mutation.policy, actors);
     let proposal = oracle_proposal(
         &declared,
         &corpus_proposal,
         reference_id,
-        model_authorship(search_plan.blue()),
+        model_authorship(debate_plan.synthesis()),
     );
     let proposal_revision =
-        prepare_oracle_proposal_revision(&search_plan, None, proposal.clone(), Vec::new())
-            .expect("model-authored blue proposal revision");
-    let attack = prepare_oracle_attack(
-        &search_plan,
+        prepare_oracle_debate_proposal_revision(&debate_plan, None, proposal.clone(), Vec::new())
+            .expect("model-authored synthesis proposal revision");
+    let attack = prepare_oracle_debate_attack(
+        &debate_plan,
         &proposal_revision,
-        OracleAttackInput {
+        OracleDebateAttackInput {
             correct_variants: vec![sequential.variant.clone(), tree.variant.clone()],
             wrong_variants: vec![
                 zero.variant.clone(),
@@ -290,7 +292,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             adversarial_cases: Vec::new(),
         },
     )
-    .expect("model-authored red attack");
+    .expect("model-authored adversarial attack");
     assert_eq!(proposal_revision.proposal(), &proposal);
     assert_eq!(attack.body().correct_variants().len(), 2);
     assert_eq!(attack.body().wrong_variants().len(), 3);
@@ -1405,37 +1407,44 @@ fn assert_asserted_allowance_and_passed_tampering_fail(
 }
 
 fn oracle_actors() -> OracleActors {
-    let blue = prepare_oracle_role_episode(OracleRoleEpisodeInput {
-        role: OracleAgentRole::Blue,
+    let synthesis = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+        strategy: OracleDebateStrategy::Synthesis,
         episode_id: EpisodeId::new(),
-        model_configuration: id::<ResolvedRuntimeModelArtifact>(b"recorded blue runtime model"),
-        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded blue model"),
-        role_instruction: id::<InstructionBlock>(b"blue historical reduction role"),
+        model_configuration: id::<ResolvedRuntimeModelArtifact>(
+            b"recorded synthesis runtime model",
+        ),
+        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded synthesis model"),
+        strategy_instruction: id::<InstructionBlock>(b"synthesis historical reduction strategy"),
         private_context: Vec::new(),
         budget: EpisodeBudget::default(),
     })
-    .expect("blue actor");
-    let red = prepare_oracle_role_episode(OracleRoleEpisodeInput {
-        role: OracleAgentRole::Red,
+    .expect("synthesis actor");
+    let adversarial = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
+        strategy: OracleDebateStrategy::Adversarial,
         episode_id: EpisodeId::new(),
-        model_configuration: id::<ResolvedRuntimeModelArtifact>(b"recorded red runtime model"),
-        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded red model"),
-        role_instruction: id::<InstructionBlock>(b"red historical reduction role"),
+        model_configuration: id::<ResolvedRuntimeModelArtifact>(
+            b"recorded adversarial runtime model",
+        ),
+        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded adversarial model"),
+        strategy_instruction: id::<InstructionBlock>(b"adversarial historical reduction strategy"),
         private_context: Vec::new(),
         budget: EpisodeBudget::default(),
     })
-    .expect("red actor");
-    OracleActors { blue, red }
+    .expect("adversarial actor");
+    OracleActors {
+        synthesis,
+        adversarial,
+    }
 }
 
-fn oracle_search_plan(
+fn oracle_model_debate_plan(
     declared: &DeclaredDomainV1,
     policy: &AdmissionPolicyV1,
     actors: OracleActors,
-) -> OracleSearchPlanV1 {
+) -> OracleModelDebatePlanV1 {
     let declared_bytes = cairn_codec::to_vec(declared).expect("declared bytes");
     let policy_bytes = cairn_codec::to_vec(policy).expect("policy bytes");
-    OracleSearchPlanV1::new(OracleSearchPlanInput {
+    OracleModelDebatePlanV1::new(OracleModelDebatePlanInput {
         task_id: declared.task_id(),
         task_inputs: id::<OracleTaskInputArtifact>(b"historical reduction task inputs"),
         declared_domain: ContentId::derive(&declared_bytes).expect("declared identity"),
@@ -1445,22 +1454,22 @@ fn oracle_search_plan(
             id::<ContextBlock>(b"historical reduction caller contract"),
             id::<ContextBlock>(b"historical reduction source snapshot"),
         ],
-        blue: actors.blue,
-        red: actors.red,
+        synthesis: actors.synthesis,
+        adversarial: actors.adversarial,
     })
     .expect("oracle search plan")
 }
 
-fn model_authorship(role: &OracleRoleEpisodeV1) -> ArtifactAuthorshipV1 {
+fn model_authorship(strategy: &OracleDebateEpisodeV1) -> ArtifactAuthorshipV1 {
     ArtifactAuthorshipV1::new(
         AuthorshipOrigin::Model,
-        ArtifactAuthorId::new(match role.role() {
-            OracleAgentRole::Blue => "recorded-blue-oracle-agent",
-            OracleAgentRole::Red => "recorded-red-oracle-agent",
+        ArtifactAuthorId::new(match strategy.strategy() {
+            OracleDebateStrategy::Synthesis => "recorded-synthesis-oracle-agent",
+            OracleDebateStrategy::Adversarial => "recorded-adversarial-oracle-agent",
         })
         .expect("author"),
-        Some(role.episode_id()),
-        Some(role.authorship_configuration()),
+        Some(strategy.episode_id()),
+        Some(strategy.authorship_configuration()),
     )
     .expect("authorship")
 }

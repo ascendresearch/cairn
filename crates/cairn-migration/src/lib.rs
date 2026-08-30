@@ -24,13 +24,13 @@ mod intent_admission;
 mod materialize;
 mod memory_surface;
 #[cfg(feature = "agent-runtime")]
-mod oracle_prompt;
+mod oracle_debate_prompt;
 #[cfg(feature = "agent-runtime")]
-mod oracle_search;
+mod oracle_debate_tools;
 #[cfg(feature = "agent-runtime")]
-mod oracle_tools;
+mod oracle_debate_workflow;
 #[cfg(feature = "agent-runtime")]
-mod oracle_workflow;
+mod oracle_model_debate;
 #[cfg(feature = "agent-runtime")]
 mod proposal_host;
 #[cfg(feature = "agent-runtime")]
@@ -249,33 +249,37 @@ pub use memory_surface::{
     derive_mandatory_memory_surface_cases,
 };
 #[cfg(feature = "agent-runtime")]
-pub use oracle_prompt::{
-    MaterializedOraclePrompt, OracleInstructionSetV1, OraclePromptError, OracleRolePromptArtifact,
-    OracleRolePromptInput, OracleRolePromptV1, archive_oracle_role_prompt,
-    archive_standard_oracle_instructions, materialize_oracle_prompt,
-    oracle_common_instruction_text, oracle_role_instruction_text, prepare_oracle_role_prompt,
+pub use oracle_debate_prompt::{
+    MaterializedOracleDebatePrompt, OracleDebateInstructionSetV1, OracleDebatePromptArtifact,
+    OracleDebatePromptError, OracleDebatePromptInput, OracleDebatePromptV1,
+    archive_oracle_debate_prompt, archive_standard_oracle_debate_instructions,
+    materialize_oracle_debate_prompt, oracle_debate_common_instruction_text,
+    oracle_debate_instruction_text, prepare_oracle_debate_prompt,
 };
 #[cfg(feature = "agent-runtime")]
-pub use oracle_search::{
-    OracleAgentRole, OracleRoleEpisodeInput, OracleRoleEpisodeV1, OracleRoleTool,
-    OracleSearchPlanArtifact, OracleSearchPlanError, OracleSearchPlanInput, OracleSearchPlanV1,
-    archive_oracle_role_tool_catalog, oracle_role_tool_catalog_bytes, oracle_role_tool_catalog_id,
-    prepare_oracle_role_episode,
+pub use oracle_debate_tools::{
+    AdversarialSubmissionGateway, OracleDebateToolError, SynthesisDomainRefinementGateway,
+    SynthesisProposalGateway, SynthesisProposalSubmissionV1, adversarial_submission_registrations,
+    oracle_debate_native_tools, synthesis_domain_refinement_registration,
+    synthesis_proposal_registration,
 };
 #[cfg(feature = "agent-runtime")]
-pub use oracle_tools::{
-    BlueDomainRefinementGateway, BlueProposalGateway, BlueProposalSubmissionV1, OracleToolError,
-    RedSubmissionGateway, blue_domain_refinement_registration, blue_proposal_registration,
-    oracle_role_native_tools, red_submission_registrations,
+pub use oracle_debate_workflow::{
+    OracleDebateAdmissionAttemptArtifact, OracleDebateAdmissionFeedbackArtifact,
+    OracleDebateAdmissionFeedbackV1, OracleDebateAttackArtifact, OracleDebateAttackInput,
+    OracleDebateAttackV1, OracleDebateDiagnosticEvidenceArtifact, OracleDebateDiagnosticKind,
+    OracleDebateDiagnosticV1, OracleDebateFeedbackTarget, OracleDebateProposalRevisionArtifact,
+    OracleDebateProposalRevisionV1, OracleDebateWorkflowError,
+    PreparedOracleDebateAdmissionFeedback, PreparedOracleDebateAttack,
+    PreparedOracleDebateProposalRevision, prepare_oracle_debate_admission_feedback,
+    prepare_oracle_debate_attack, prepare_oracle_debate_proposal_revision,
 };
 #[cfg(feature = "agent-runtime")]
-pub use oracle_workflow::{
-    OracleAdmissionAttemptArtifact, OracleAdmissionFeedbackArtifact, OracleAdmissionFeedbackV1,
-    OracleAttackArtifact, OracleAttackInput, OracleAttackV1, OracleDiagnosticEvidenceArtifact,
-    OracleDiagnosticKind, OracleDiagnosticV1, OracleFeedbackTarget, OracleProposalRevisionArtifact,
-    OracleProposalRevisionV1, OracleWorkflowError, PreparedOracleAdmissionFeedback,
-    PreparedOracleAttack, PreparedOracleProposalRevision, prepare_oracle_admission_feedback,
-    prepare_oracle_attack, prepare_oracle_proposal_revision,
+pub use oracle_model_debate::{
+    OracleDebateEpisodeInput, OracleDebateEpisodeV1, OracleDebateStrategy, OracleDebateTool,
+    OracleModelDebatePlanArtifact, OracleModelDebatePlanError, OracleModelDebatePlanInput,
+    OracleModelDebatePlanV1, archive_oracle_debate_tool_catalog, oracle_debate_tool_catalog_bytes,
+    oracle_debate_tool_catalog_id, prepare_oracle_debate_episode,
 };
 #[cfg(feature = "agent-runtime")]
 pub use proposal_host::{

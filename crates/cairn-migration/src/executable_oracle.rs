@@ -17,7 +17,7 @@ const ABI_DIRECTORY: &str = "cairn/abi";
 const INVOCATION_PATH: &str = "cairn/invocation.json";
 const REQUIRED_CASE_NAME: &str = "matmul-zero-k";
 
-/// Exact IEEE-754 binary32 representation supplied by Blue without JSON floating-point ambiguity.
+/// Exact IEEE-754 binary32 representation supplied by an Oracle synthesis strategy without JSON floating-point ambiguity.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct OracleF32Bits(u32);
