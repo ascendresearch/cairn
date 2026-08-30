@@ -25,13 +25,15 @@ pub use candidate_manager::{
 #[cfg(feature = "proposal-host")]
 pub use controller_manager::{
     ControllerWorkflowManagerStatusV1, drive_controller_workflow_once,
-    freeze_sir_controller_request, record_controller_user_intent_decision,
+    freeze_sir_controller_request, initialize_controller_oracle_exploration,
+    record_controller_user_intent_decision,
 };
 #[cfg(feature = "proposal-host")]
 pub use controller_state::{
     ControllerWorkflowError, ControllerWorkflowNextActionV1, ControllerWorkflowStateV1,
-    ControllerWorkflowV1, FrozenSirAuthorityV1, authorize_intent_admission, authorize_sir_episode,
-    freeze_controller_workflow, record_admitted_intent, record_intent_decision_requests,
+    ControllerWorkflowV1, FrozenOracleExplorationAuthorityV1, FrozenSirAuthorityV1,
+    authorize_intent_admission, authorize_sir_episode, freeze_controller_workflow,
+    open_oracle_exploration, record_admitted_intent, record_intent_decision_requests,
     record_sir_proposal, record_user_intent_decision, recover_controller_workflow,
 };
 #[cfg(feature = "proposal-host")]

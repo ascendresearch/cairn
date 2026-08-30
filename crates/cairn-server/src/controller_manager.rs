@@ -9,10 +9,16 @@ use cairn_admission::{
 };
 use cairn_migration::{
     IntentDecisionRequestBatchArtifact, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
-    IntentRecoveryInputV1, MigrationIntentContractArtifact, ProposalHostPublicationV1,
+    IntentRecoveryInputV1, MigrationIntentContractArtifact, OracleBuildTestSnapshotArtifact,
+    OracleClaimArtifact, OracleClaimV1, OracleCoveragePolicyArtifact, OracleCoveragePolicyV1,
+    OracleDocumentationSnapshotArtifact, OracleExperimentToolCatalogArtifact,
+    OracleExplorationCapabilityGrantArtifact, OracleExplorationLedgerArtifact,
+    OracleExplorationLedgerV1, OracleKnowledgeSnapshotArtifact, OracleResearchToolCatalogArtifact,
+    OracleSourceSnapshotArtifact, OracleStrategyCatalogArtifact, OracleStrategyCatalogV1,
+    OracleWorkspaceArtifact, OracleWorkspaceV1, ProposalHostPublicationV1,
     ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostTerminalArtifact,
     ProposalHostTerminalV1, SirIntentHypothesisSetProposalArtifact,
-    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
+    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, derive_oracle_work_items,
     derive_user_intent_decision_requests,
 };
 use cairn_protocol::{CommandId, ContentId, ContentType, EpisodeId};
@@ -21,10 +27,11 @@ use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::controller_state::{
-    ControllerWorkflowNextActionV1, ControllerWorkflowV1, FrozenSirAuthorityV1,
-    authorize_intent_admission, authorize_sir_episode, freeze_controller_workflow,
-    record_admitted_intent, record_intent_decision_requests, record_sir_proposal,
-    record_user_intent_decision, recover_controller_workflow,
+    ControllerWorkflowNextActionV1, ControllerWorkflowV1, FrozenOracleExplorationAuthorityV1,
+    FrozenSirAuthorityV1, authorize_intent_admission, authorize_sir_episode,
+    freeze_controller_workflow, open_oracle_exploration, record_admitted_intent,
+    record_intent_decision_requests, record_sir_proposal, record_user_intent_decision,
+    recover_controller_workflow,
 };
 use crate::intent_admission_supervisor::{
     IntentAdmissionProcessBlockedV1, IntentAdmissionProcessConfigV1, run_intent_admission_process,
@@ -55,9 +62,12 @@ pub enum ControllerWorkflowManagerStatusV1 {
         decision: ContentId<UserIntentDecisionArtifact>,
         reason: IntentAdmissionProcessBlockedV1,
     },
-    AwaitingOracleWorkflow {
+    AwaitingOracleExplorationWorkspace {
         outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
         contract: ContentId<MigrationIntentContractArtifact>,
+    },
+    OracleExplorationReady {
+        authority: FrozenOracleExplorationAuthorityV1,
     },
 }
 
@@ -124,6 +134,67 @@ pub fn record_controller_user_intent_decision(
         grant,
         decision_id,
         decision,
+        &CommandId::new(),
+        observed_now()?,
+    )
+    .map_err(manager_error)?;
+    Ok(ControllerWorkflowManagerStatusV1::Advanced)
+}
+
+/// Archives and opens the exact initial Oracle Exploration workspace and obligation ledger.
+///
+/// All workspace edges must already name immutable content in the Controller store. This function
+/// derives the ledger itself; callers cannot supply a reduced set of planes or concerns.
+///
+/// # Errors
+///
+/// Rejects a non-admitted task, missing referenced material, policy/catalog/workspace/claim drift,
+/// an uncovered obligation, or a durable transition failure.
+pub fn initialize_controller_oracle_exploration(
+    server: &ServerConfig,
+    workflow: &ControllerWorkflowV1,
+    workspace: &OracleWorkspaceV1,
+    policy: &OracleCoveragePolicyV1,
+    catalog: &OracleStrategyCatalogV1,
+    claims: &[OracleClaimV1],
+) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
+    let state = recover_controller_turn(server, workflow)?;
+    let ControllerWorkflowStateV1::AdmittedIntent { authority, .. } = state else {
+        return Err(ServerError::MigrationWorkflow(
+            "Controller has no admitted intent ready for Oracle Exploration".into(),
+        ));
+    };
+    let mut content = open_content(server)?;
+    let recovery_input: IntentRecoveryInputV1 =
+        load_canonical(&content, authority.recovery_input())?;
+    verify_oracle_workspace_material(&content, workspace)?;
+    let policy_id = archive::<OracleCoveragePolicyArtifact, _>(&mut content, policy)?;
+    let catalog_id = archive::<OracleStrategyCatalogArtifact, _>(&mut content, catalog)?;
+    if workspace.coverage_policy() != policy_id || workspace.strategy_catalog() != catalog_id {
+        return Err(ServerError::MigrationWorkflow(
+            "Oracle workspace policy or strategy catalog identity changed".into(),
+        ));
+    }
+    let workspace_id = archive::<OracleWorkspaceArtifact, _>(&mut content, workspace)?;
+    let mut claim_ids = claims
+        .iter()
+        .map(|claim| archive::<OracleClaimArtifact, _>(&mut content, claim))
+        .collect::<Result<Vec<_>, _>>()?;
+    claim_ids.sort_by_key(ContentId::to_wire);
+    let work_items = derive_oracle_work_items(&claim_ids, policy).map_err(manager_error)?;
+    let ledger = OracleExplorationLedgerV1::open(workspace_id, work_items, catalog)
+        .map_err(manager_error)?;
+    let _ = archive::<OracleExplorationLedgerArtifact, _>(&mut content, &ledger)?;
+    let mut events = open_events(server)?;
+    open_oracle_exploration(
+        &mut events,
+        workflow,
+        &recovery_input,
+        workspace,
+        policy,
+        catalog,
+        claims,
+        &ledger,
         &CommandId::new(),
         observed_now()?,
     )
@@ -205,8 +276,16 @@ async fn execute_controller_action(
             )
             .await
         }
-        ControllerWorkflowNextActionV1::AwaitOracleWorkflow { outcome, contract } => {
-            Ok(ControllerWorkflowManagerStatusV1::AwaitingOracleWorkflow { outcome, contract })
+        ControllerWorkflowNextActionV1::AwaitOracleExplorationWorkspace { outcome, contract } => {
+            Ok(
+                ControllerWorkflowManagerStatusV1::AwaitingOracleExplorationWorkspace {
+                    outcome,
+                    contract,
+                },
+            )
+        }
+        ControllerWorkflowNextActionV1::RunOracleExploration(authority) => {
+            Ok(ControllerWorkflowManagerStatusV1::OracleExplorationReady { authority })
         }
     }
 }
@@ -399,6 +478,32 @@ async fn run_authorized_intent_admission(
 fn open_events(server: &ServerConfig) -> Result<SqliteEventStore, ServerError> {
     server.validate_schema()?;
     SqliteEventStore::open(&server.storage.event_database).map_err(manager_error)
+}
+
+fn verify_oracle_workspace_material(
+    content: &SqliteContentStore,
+    workspace: &OracleWorkspaceV1,
+) -> Result<(), ServerError> {
+    verify_content::<OracleSourceSnapshotArtifact>(content, workspace.source())?;
+    verify_content::<OracleDocumentationSnapshotArtifact>(content, workspace.documentation())?;
+    verify_content::<OracleBuildTestSnapshotArtifact>(content, workspace.build_and_tests())?;
+    verify_content::<OracleKnowledgeSnapshotArtifact>(content, workspace.knowledge())?;
+    verify_content::<OracleResearchToolCatalogArtifact>(content, workspace.research_tools())?;
+    verify_content::<OracleExperimentToolCatalogArtifact>(content, workspace.experiment_tools())?;
+    verify_content::<OracleExplorationCapabilityGrantArtifact>(
+        content,
+        workspace.capability_grant(),
+    )
+}
+
+fn verify_content<T: ContentType>(
+    content: &SqliteContentStore,
+    id: ContentId<T>,
+) -> Result<(), ServerError> {
+    content
+        .write_to(&id, &mut std::io::sink())
+        .map_err(manager_error)?;
+    Ok(())
 }
 
 fn open_content(server: &ServerConfig) -> Result<SqliteContentStore, ServerError> {

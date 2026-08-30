@@ -29,6 +29,7 @@ mod oracle_debate_prompt;
 mod oracle_debate_tools;
 #[cfg(feature = "agent-runtime")]
 mod oracle_debate_workflow;
+mod oracle_exploration;
 #[cfg(feature = "agent-runtime")]
 mod oracle_model_debate;
 #[cfg(feature = "agent-runtime")]
@@ -275,6 +276,37 @@ pub use oracle_debate_workflow::{
     PreparedOracleDebateAdmissionFeedback, PreparedOracleDebateAttack,
     PreparedOracleDebateProposalRevision, prepare_oracle_debate_admission_feedback,
     prepare_oracle_debate_attack, prepare_oracle_debate_proposal_revision,
+};
+pub use oracle_exploration::{
+    IndependentOracleAdmissionStages, OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1,
+    OracleAdmissionPolicyArtifact, OracleAdmissionPolicyV1, OracleAdversarialPolicyV1,
+    OracleBuildTestSnapshotArtifact, OracleClaimAdmissionStatusV1, OracleClaimAdmissionV1,
+    OracleClaimArtifact, OracleClaimName, OracleClaimV1, OracleComparatorProposalArtifact,
+    OracleConcernV1, OracleControlFamilyV1, OracleControlReceiptV1, OracleControlResultV1,
+    OracleCoverageGapArtifact, OracleCoveragePolicyArtifact, OracleCoveragePolicyV1,
+    OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact,
+    OracleExecutionSafetyProposalArtifact, OracleExperimentArgumentsArtifact,
+    OracleExperimentLimit, OracleExperimentOperationName, OracleExperimentRequestArtifact,
+    OracleExperimentRequestV1, OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
+    OracleExplorationCapabilityGrantArtifact, OracleExplorationDirectiveV1,
+    OracleExplorationLedgerArtifact, OracleExplorationLedgerV1, OracleExplorationNextActionV1,
+    OracleExplorationObservationArtifact, OracleExplorationObservationV1,
+    OracleExplorationRevision, OracleExplorationRunOutcomeV1, OracleExplorationStages,
+    OracleFrameworkError, OracleKnowledgeSnapshotArtifact, OracleObligationEntryV1,
+    OracleObligationResolutionV1, OracleObservationPayloadArtifact, OracleObservationProvenanceV1,
+    OraclePlaneV1, OraclePortfolioElementArtifact, OraclePortfolioElementKindV1,
+    OraclePortfolioElementV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
+    OracleQualifiedMechanismArtifact, OracleResearchExchangeArtifact,
+    OracleResearchToolCatalogArtifact, OracleSourceSnapshotArtifact, OracleStrategyCatalogArtifact,
+    OracleStrategyCatalogV1, OracleStrategyExecutorV1, OracleStrategyImplementationArtifact,
+    OracleStrategyKindV1, OracleStrategyName, OracleStrategyRegistrationV1, OracleStrategyRoleV1,
+    OracleStrategyRunArtifact, OracleStrategyRunLimit, OracleStrategyRunV1,
+    OracleStrategyToolCatalogArtifact, OracleUnknownEvidenceArtifact,
+    OracleWaiverAuthorityArtifact, OracleWorkItemArtifact, OracleWorkItemV1,
+    OracleWorkspaceArtifact, OracleWorkspaceInput, OracleWorkspaceV1,
+    TrustedOracleControlReceiptArtifact, TrustedOracleWorkerReceiptArtifact,
+    TrustedOracleWorkerReceiptV1, archive_oracle_framework_artifact, derive_oracle_work_items,
+    recompute_oracle_admission, run_independent_oracle_admission, run_oracle_exploration,
 };
 #[cfg(feature = "agent-runtime")]
 pub use oracle_model_debate::{

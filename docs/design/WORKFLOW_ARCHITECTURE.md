@@ -89,7 +89,7 @@ intent decision → Intent Admission → Oracle Exploration → Oracle Admission
 → Candidate Admission → terminal。各环节通过`ControllerWorkflowStages`的distinct associated artifact type连接。
 尚未实现的环节只有port签名、没有default/no-op成功实现；因此composition skeleton不会把空stage冒充为已运行。
 DEV-027现已把actual typed user decision、Admission durable start authority、independent model-free child与public
-outcome observation接入同一task-owned aggregate，并明确停在`AwaitOracleWorkflow`。Controller不会替用户决定、
+outcome observation接入同一task-owned aggregate，并明确停在`AwaitOracleExplorationWorkspace`。Controller不会替用户决定、
 读取restricted artifacts或自动越过Oracle边界。
 
 逻辑 role 不映射为专用 binary。通用 `cairn-proposal-host` 承载 capability-equivalent episode；不同数据
@@ -141,6 +141,23 @@ Oracle 不是 Candidate Loop 的几个公开样例，而是被独立准入的 cl
 前两项是逻辑义务，不是固定拓扑。Controller可以按policy选择模型驱动的synthesis/adversarial episode、
 确定性analyzer/generator、mutation、property/metamorphic、fuzz或counterexample strategy；一次exploration可以使用
 其中一个或多个。现有model-backed debate只是可选策略组合，不能成为Controller主工作流的强制阶段。
+
+DEV-030已经把“多平面”变成生产约束，而不是prompt建议。`OracleCoveragePolicyV1`对每个admitted claim机械展开
+observable semantics、input domain、numerical、interface structure、state/memory/effects、failure、determinism及
+cross-plane/discovery concerns；performance profile再增加resource/performance concerns。每个concern分别生成
+synthesis work item，并按policy分别生成adversarial work item。缺少eligible strategy时exploration不能打开；
+pending/running/experiment/observation/contributed/unknown均由parent-linked ledger revision表达。
+每个strategy run必须保存workspace、work item、catalog-resolved executor；每个experiment request必须保存run、tool
+catalog、operation与exact arguments，Worker qualification再保存generic job contract和execution receipt。ledger API不接受
+可以脱离这些值单独制造的run/request/receipt digest。
+
+`OracleWorkspaceV1`必须同时冻结exact SIR/task/source、documentation、build/tests、knowledge、research catalog、
+experiment catalog、capability、policy、strategy catalog和budget。portfolio element继续保留domain/reference/property/
+case/comparator/execution-safety/coverage-gap的typed区别；外部研究和Worker observation保留不同provenance。独立
+Admission固定从mechanism qualification、honest、mutant、hidden和bypass receipts重算claim outcome，不能读取模型
+共识作为control。当前Controller durable prefix会验证workspace引用的source/docs/build-tests/knowledge/tools/
+capability均真实存在，归档exact policy、catalog、workspace和claims，并机械重算initial ledger后推进到
+`RunOracleExploration`。它尚未接入逐cell strategy revision consumer。
 
 Agent 可以提出 mechanism、case 和下一步实验，但不能生成自己的 qualification receipt 或把另一个模型的
 赞同当作资格。qualification 要与 exact implementation、scope、环境和风险绑定；不预建与真实 consumer
@@ -235,9 +252,10 @@ DEV-025进一步冻结完整Controller业务骨架，并把现有Candidate manag
 DEV-026将exact SIR Host request/recovery input、durable episode start authority、SIR terminal/proposal observation
 和model-free user decision requests接入新的task-owned `ControllerWorkflowV1`；DEV-027把该aggregate移动到拥有
 Controller composition的`cairn-server`，继续接入actual typed user decision、独立Intent Admission executable/
-restricted-store start authority和public outcome observation。active driver仍只表达recover/select/execute并停在
-`AwaitOracleWorkflow`。通用Host supervision继续由SIR/Candidate共享，Admission仍是独立model-free process。
-Oracle Exploration、后续Admission和Candidate suffix尚未并入这个连续aggregate。DEV-028已把composition skeleton
+restricted-store start authority和public outcome observation。active driver仍只表达recover/select/execute；
+DEV-030又让它从`AwaitOracleExplorationWorkspace`接收并归档exact Oracle authority，Controller重算initial ledger
+后停在`RunOracleExploration`。通用Host supervision继续由SIR/Candidate共享，Admission仍是独立model-free process。
+Oracle strategy revisions、后续Admission和Candidate suffix尚未并入这个连续aggregate。DEV-028已把composition skeleton
 纠正为`Oracle Exploration → Oracle Admission`，并把原Blue/Red代码、示例和配置收窄命名为可选
 model-backed debate strategy；没有为尚无consumer的exploration portfolio预建persisted artifact。
 DEV-029又把原external-effect硬错误替换为request-bound durable yield、Controller start authority、Worker receipt

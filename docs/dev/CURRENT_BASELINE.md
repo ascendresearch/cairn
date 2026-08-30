@@ -58,14 +58,21 @@ authority提交后才允许统一Proposal Host运行；terminal/proposal成为ty
 DEV-027继续把actual typed authority grant/decision和independent Intent Admission接入同一个task-owned aggregate：
 individual request先进入public CAS，Admission executable与restricted-store target先获得durable start authority，
 child使用immutable public store并先提交restricted contract/decision，Controller只接受canonical public outcome并
-完整验证task/input/proposal/request/grant/decision binding。aggregate现明确停在`AwaitOracleWorkflow`，不会自动运行
-Oracle。Controller aggregate已从migration领域crate移到server composition root，旧模块/re-export直接删除；没有
+完整验证task/input/proposal/request/grant/decision binding。aggregate通过`AwaitOracleExplorationWorkspace`接收
+Oracle输入，但不会自动运行strategy。Controller aggregate已从migration领域crate移到server composition root，旧模块/re-export直接删除；没有
 compatibility path。本片只运行本地model-free process control，没有调用live model、remote Worker、Docker或NPU。
 DEV-029补齐了generic Proposal Host的external experiment round trip：current-V1 Host outcome现在可以是terminal或
 request/episode/step/model-attempt/operation/exact-arguments绑定的durable yield；Controller重新核对Host journal并在
 Worker adapter调用前提交operation authorization/start，job/attempt/contract一致的execution receipt与observation
 成为canonical `OperationResult`后，同一episode从原native continuation继续。recorded control证明Host零external
 effect、yielding model turn不重发及terminal child restart；本片没有新增具体experiment tool，也未调用live Worker。
+DEV-030把Oracle完备性直接固化为current-V1生产类型：Controller按claim×concern×role机械展开mandatory
+work item，冻结source/docs/build/tests/knowledge/research/experiment capability的workspace，以parent-linked ledger
+保存strategy、Controller-authorized experiment、provenance observation和typed portfolio element，并由独立Admission
+从qualified mechanism与honest/mutant/hidden/bypass receipts重算claim outcome。当前尚未从admitted intent构造第一个
+production claim解释器或strategy consumer，也没有运行model或Worker。Controller Manager现在会验证workspace引用的
+source/docs/build-tests/knowledge/tool catalogs/capability均已归档，再归档exact policy、catalog、workspace、claims及
+机械重算的initial ledger，并把task aggregate推进到`RunOracleExploration` ready authority。
 
 ## 2. 可复用基础
 
@@ -74,7 +81,7 @@ effect、yielding model turn不重发及terminal child restart；本片没有新
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；model-backed synthesis/adversarial debate只是Oracle Exploration的可选策略组合 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | readable Controller composition skeleton、durable SIR-to-admitted-intent prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、external experiment durable yield/Controller authority/receipt provenance/same-episode resume、scheduler/reconcile/receipt折回、exact replay | prefix明确停在Oracle边界；Oracle Exploration与Candidate suffix尚未并入一个连续aggregate；尚无具体in-loop experiment adapter、task intake/catalog、native success或最终migration workflow |
+| Product workflow | readable Controller composition skeleton、durable SIR-to-initial-Oracle-ledger prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、external experiment durable yield/Controller authority/receipt provenance/same-episode resume、scheduler/reconcile/receipt折回、exact replay | Oracle strategy revisions、Admission与Candidate suffix尚未并入一个连续aggregate；尚无具体strategy/in-loop experiment adapter、task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -163,10 +170,13 @@ exact SIR Host request + recovery input
 → model-free intent decision requests
 → actual typed user decision
 → independent Intent Admission
-→ AwaitOracleWorkflow
+→ AwaitOracleExplorationWorkspace
+→ verify and archive exact Oracle workspace/policy/catalog/claims
+→ Controller-derived initial claim × concern × role ledger
+→ RunOracleExploration ready authority
 ```
 
-它尚未接入Oracle Exploration、Oracle Admission或后续Candidate suffix。
+它尚未接入逐cell strategy consumer、Oracle Admission或后续Candidate suffix。
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
 或 verdict。最新local product output是DEV-024 common-loop lifecycle controls；DEV-023 recorded/local manager、
@@ -207,5 +217,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-027 | Accepted | actual user decision与independent Intent Admission接入同一durable aggregate并停在Oracle边界；executable/restricted-store authority、real local child、restart/replay/cross-task/drift controls闭合；无live model/Worker调用 |
 | DEV-028 | Accepted | Controller主骨架纠正为Oracle Exploration→Admission；旧Blue/Red公开路径删除并收窄为可选model-backed debate strategy；文档、示例、配置、tests与静态漂移controls闭合；无live effect调用 |
 | DEV-029 | Accepted | Proposal Host external effect改为typed durable yield；Controller start-before-Worker、receipt provenance和same-episode/no-redispatch resume闭合；无live effect或具体experiment adapter |
+| DEV-030 | Accepted | claim-scoped多平面obligation、durable exploration ledger、typed portfolio、independent admission内核与task-owned initial-ledger opening闭合；停在strategy consumer，无live model/Worker |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

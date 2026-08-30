@@ -498,10 +498,10 @@ pub enum CorpusCaseSource {
     Caller,
     /// Mandatory case derived by trusted code from the declared contract.
     TrustedBaseDerivation,
-    /// Blue/oracle-author proposal.
-    Blue,
-    /// Red/oracle-breaker proposal.
-    Red,
+    /// Proposal contributed by any synthesis-capable strategy.
+    SynthesisStrategy,
+    /// Proposal contributed by any adversarial-capable strategy.
+    AdversarialStrategy,
     /// Upstream test or framework definition.
     Upstream,
     /// External corpus source.
@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn model_authorship_requires_exact_episode_and_configuration_provenance() {
-        let author = ArtifactAuthorId::new("blue-model").expect("author");
+        let author = ArtifactAuthorId::new("synthesis-model").expect("author");
         assert!(matches!(
             ArtifactAuthorshipV1::new(AuthorshipOrigin::Model, author.clone(), None, None),
             Err(VerificationContractError::InvalidArtifactCombination { .. })

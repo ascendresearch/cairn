@@ -27,6 +27,7 @@ thiserror.workspace = true
 cairn-observability.workspace = true
 cairn-store-sqlite.workspace = true
 tempfile.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 
 [lints]

@@ -19,7 +19,7 @@ pub trait ControllerWorkflowStages: Send {
     type IntentDecisionRequests: Send + Sync;
     type UserIntentDecision: Send + Sync;
     type AdmittedIntent: Send + Sync;
-    type OracleExplorationProposal: Send + Sync;
+    type OraclePortfolioProposal: Send + Sync;
     type AdmittedOracle: Send + Sync;
     type CandidateProposal: Send + Sync;
     type WorkerObservations: Send + Sync;
@@ -61,13 +61,13 @@ pub trait ControllerWorkflowStages: Send {
         &mut self,
         frozen: &Self::FrozenRequest,
         intent: &Self::AdmittedIntent,
-    ) -> impl Future<Output = Result<Self::OracleExplorationProposal, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::OraclePortfolioProposal, Self::Error>> + Send;
 
-    fn run_oracle_admission_gate(
+    fn run_independent_oracle_admission(
         &mut self,
         frozen: &Self::FrozenRequest,
         intent: &Self::AdmittedIntent,
-        proposal: Self::OracleExplorationProposal,
+        proposal: Self::OraclePortfolioProposal,
     ) -> impl Future<Output = Result<Self::AdmittedOracle, Self::Error>> + Send;
 
     fn run_candidate_proposal_loop(
@@ -122,9 +122,9 @@ pub async fn run_controller_workflow<S: ControllerWorkflowStages>(
     let intent = stages
         .run_intent_admission_gate(&frozen, sir, decision_requests, user_decision)
         .await?;
-    let oracle_proposal = stages.run_oracle_exploration(&frozen, &intent).await?;
+    let oracle_portfolio = stages.run_oracle_exploration(&frozen, &intent).await?;
     let oracle = stages
-        .run_oracle_admission_gate(&frozen, &intent, oracle_proposal)
+        .run_independent_oracle_admission(&frozen, &intent, oracle_portfolio)
         .await?;
     let candidate = stages
         .run_candidate_proposal_loop(&frozen, &intent, &oracle)
@@ -167,7 +167,7 @@ mod tests {
     struct IntentDecisionRequests;
     struct UserIntentDecision;
     struct AdmittedIntent;
-    struct OracleExplorationProposal;
+    struct OraclePortfolioProposal;
     struct AdmittedOracle;
     struct CandidateProposal;
     struct WorkerObservations;
@@ -203,7 +203,7 @@ mod tests {
         type IntentDecisionRequests = IntentDecisionRequests;
         type UserIntentDecision = UserIntentDecision;
         type AdmittedIntent = AdmittedIntent;
-        type OracleExplorationProposal = OracleExplorationProposal;
+        type OraclePortfolioProposal = OraclePortfolioProposal;
         type AdmittedOracle = AdmittedOracle;
         type CandidateProposal = CandidateProposal;
         type WorkerObservations = WorkerObservations;
@@ -265,19 +265,19 @@ mod tests {
             &mut self,
             _frozen: &Self::FrozenRequest,
             _intent: &Self::AdmittedIntent,
-        ) -> impl Future<Output = Result<Self::OracleExplorationProposal, Self::Error>> + Send
+        ) -> impl Future<Output = Result<Self::OraclePortfolioProposal, Self::Error>> + Send
         {
             ready(
                 self.record(RecordedStage::OracleExploration)
-                    .map(|()| OracleExplorationProposal),
+                    .map(|()| OraclePortfolioProposal),
             )
         }
 
-        fn run_oracle_admission_gate(
+        fn run_independent_oracle_admission(
             &mut self,
             _frozen: &Self::FrozenRequest,
             _intent: &Self::AdmittedIntent,
-            _proposal: Self::OracleExplorationProposal,
+            _proposal: Self::OraclePortfolioProposal,
         ) -> impl Future<Output = Result<Self::AdmittedOracle, Self::Error>> + Send {
             ready(
                 self.record(RecordedStage::OracleAdmission)

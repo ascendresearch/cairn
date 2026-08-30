@@ -7,7 +7,7 @@ use cairn_protocol::{
 use cairn_record::{
     EventEnvelope, EventStore, EventStoreError, ExpectedRevision, NewEvent, StreamId,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use thiserror::Error;
 
 use cairn_admission::{
@@ -18,10 +18,13 @@ use cairn_admission::{
 };
 use cairn_migration::{
     IntentDecisionRequestBatchArtifact, IntentDecisionRequestBatchV1, IntentRecoveryInputArtifact,
-    IntentRecoveryInputV1, MigrationIntentContractArtifact, ProposalHostPublicationV1,
+    IntentRecoveryInputV1, MigrationIntentContractArtifact, OracleClaimArtifact, OracleClaimV1,
+    OracleCoveragePolicyArtifact, OracleCoveragePolicyV1, OracleExplorationLedgerArtifact,
+    OracleExplorationLedgerV1, OracleStrategyCatalogArtifact, OracleStrategyCatalogV1,
+    OracleWorkspaceArtifact, OracleWorkspaceV1, ProposalHostPublicationV1,
     ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostTerminalArtifact,
     ProposalHostTerminalV1, SirIntentHypothesisSetProposalArtifact,
-    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
+    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, derive_oracle_work_items,
 };
 
 const WORKFLOW_FROZEN: &str = "migration.controller-workflow-frozen";
@@ -32,6 +35,7 @@ const INTENT_DECISION_REQUESTS_RECORDED: &str =
 const USER_INTENT_DECISION_RECORDED: &str = "migration.controller-user-intent-decision-recorded";
 const INTENT_ADMISSION_AUTHORIZED: &str = "migration.controller-intent-admission-authorized";
 const ADMITTED_INTENT_RECORDED: &str = "migration.controller-admitted-intent-recorded";
+const ORACLE_EXPLORATION_OPENED: &str = "migration.controller-oracle-exploration-opened";
 
 /// Exact SIR authority frozen before the Controller may start the Proposal Host effect.
 ///
@@ -74,6 +78,104 @@ impl FrozenSirAuthorityV1 {
     #[must_use]
     pub const fn episode_id(&self) -> cairn_protocol::EpisodeId {
         self.episode_id
+    }
+}
+
+/// Exact archived authority for the initial, task-owned Oracle Exploration ledger.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenOracleExplorationAuthorityV1 {
+    task_id: TaskId,
+    admitted_intent_outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+    admitted_intent: ContentId<MigrationIntentContractArtifact>,
+    recovery_input: ContentId<IntentRecoveryInputArtifact>,
+    workspace: ContentId<OracleWorkspaceArtifact>,
+    coverage_policy: ContentId<OracleCoveragePolicyArtifact>,
+    strategy_catalog: ContentId<OracleStrategyCatalogArtifact>,
+    claims: Vec<ContentId<OracleClaimArtifact>>,
+    ledger: ContentId<OracleExplorationLedgerArtifact>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenOracleExplorationAuthorityWire {
+    task_id: TaskId,
+    admitted_intent_outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+    admitted_intent: ContentId<MigrationIntentContractArtifact>,
+    recovery_input: ContentId<IntentRecoveryInputArtifact>,
+    workspace: ContentId<OracleWorkspaceArtifact>,
+    coverage_policy: ContentId<OracleCoveragePolicyArtifact>,
+    strategy_catalog: ContentId<OracleStrategyCatalogArtifact>,
+    claims: Vec<ContentId<OracleClaimArtifact>>,
+    ledger: ContentId<OracleExplorationLedgerArtifact>,
+}
+
+impl<'de> Deserialize<'de> for FrozenOracleExplorationAuthorityV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = FrozenOracleExplorationAuthorityWire::deserialize(deserializer)?;
+        if wire.claims.is_empty()
+            || wire
+                .claims
+                .windows(2)
+                .any(|pair| pair[0].to_wire() >= pair[1].to_wire())
+        {
+            return Err(de::Error::custom(
+                "Oracle Exploration claims must be nonempty and strictly canonical",
+            ));
+        }
+        Ok(Self {
+            task_id: wire.task_id,
+            admitted_intent_outcome: wire.admitted_intent_outcome,
+            admitted_intent: wire.admitted_intent,
+            recovery_input: wire.recovery_input,
+            workspace: wire.workspace,
+            coverage_policy: wire.coverage_policy,
+            strategy_catalog: wire.strategy_catalog,
+            claims: wire.claims,
+            ledger: wire.ledger,
+        })
+    }
+}
+
+impl FrozenOracleExplorationAuthorityV1 {
+    #[must_use]
+    pub const fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+    #[must_use]
+    pub const fn admitted_intent_outcome(&self) -> ContentId<IntentAdmissionPublicOutcomeArtifact> {
+        self.admitted_intent_outcome
+    }
+    #[must_use]
+    pub const fn admitted_intent(&self) -> ContentId<MigrationIntentContractArtifact> {
+        self.admitted_intent
+    }
+    #[must_use]
+    pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
+        self.recovery_input
+    }
+    #[must_use]
+    pub const fn workspace(&self) -> ContentId<OracleWorkspaceArtifact> {
+        self.workspace
+    }
+    #[must_use]
+    pub const fn coverage_policy(&self) -> ContentId<OracleCoveragePolicyArtifact> {
+        self.coverage_policy
+    }
+    #[must_use]
+    pub const fn strategy_catalog(&self) -> ContentId<OracleStrategyCatalogArtifact> {
+        self.strategy_catalog
+    }
+    #[must_use]
+    pub fn claims(&self) -> &[ContentId<OracleClaimArtifact>] {
+        &self.claims
+    }
+    #[must_use]
+    pub const fn ledger(&self) -> ContentId<OracleExplorationLedgerArtifact> {
+        self.ledger
     }
 }
 
@@ -127,6 +229,7 @@ pub enum ControllerWorkflowStateV1 {
         outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
         contract: ContentId<MigrationIntentContractArtifact>,
     },
+    OracleExplorationOpened(FrozenOracleExplorationAuthorityV1),
 }
 
 /// One business action selected from recovered durable Controller state.
@@ -152,10 +255,11 @@ pub enum ControllerWorkflowNextActionV1 {
         executable: ContentId<IntentAdmissionExecutableArtifact>,
         restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
     },
-    AwaitOracleWorkflow {
+    AwaitOracleExplorationWorkspace {
         outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
         contract: ContentId<MigrationIntentContractArtifact>,
     },
+    RunOracleExploration(FrozenOracleExplorationAuthorityV1),
 }
 
 impl ControllerWorkflowStateV1 {
@@ -202,10 +306,13 @@ impl ControllerWorkflowStateV1 {
             },
             Self::AdmittedIntent {
                 outcome, contract, ..
-            } => ControllerWorkflowNextActionV1::AwaitOracleWorkflow {
+            } => ControllerWorkflowNextActionV1::AwaitOracleExplorationWorkspace {
                 outcome: *outcome,
                 contract: *contract,
             },
+            Self::OracleExplorationOpened(authority) => {
+                ControllerWorkflowNextActionV1::RunOracleExploration(authority.clone())
+            }
         }
     }
 }
@@ -287,6 +394,12 @@ struct IntentAdmissionAuthorizedPayload {
 struct AdmittedIntentRecordedPayload {
     outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
     contract: ContentId<MigrationIntentContractArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleExplorationOpenedPayload {
+    authority: FrozenOracleExplorationAuthorityV1,
 }
 
 struct Projection {
@@ -701,6 +814,119 @@ pub fn record_admitted_intent<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
+/// Opens the exact task-owned Oracle Exploration workspace and initial obligation ledger.
+///
+/// This transition derives every claim × concern × required-role work item again at the
+/// Controller boundary. Strategies may consume the resulting ledger only after this event is
+/// durable.
+///
+/// # Errors
+///
+/// Rejects cross-task, admitted-intent, SIR-input, policy/catalog, claim, initial-ledger, replay,
+/// or persistence drift.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "all authority-bearing Oracle artifacts and durable command metadata remain explicit"
+)]
+pub fn open_oracle_exploration<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    recovery_input: &IntentRecoveryInputV1,
+    workspace: &OracleWorkspaceV1,
+    policy: &OracleCoveragePolicyV1,
+    catalog: &OracleStrategyCatalogV1,
+    claims: &[OracleClaimV1],
+    ledger: &OracleExplorationLedgerV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let projection = project(events, workflow)?;
+    let (admitted_intent_outcome, admitted_intent, authorized_recovery_input) =
+        match &projection.state {
+            ControllerWorkflowStateV1::AdmittedIntent {
+                authority,
+                outcome,
+                contract,
+                ..
+            } => (*outcome, *contract, authority.recovery_input),
+            ControllerWorkflowStateV1::OracleExplorationOpened(authority) => (
+                authority.admitted_intent_outcome,
+                authority.admitted_intent,
+                authority.recovery_input,
+            ),
+            _ => return Err(ControllerWorkflowError::InvalidTransition),
+        };
+    let recovery_input_id = recovery_input.identity().map_err(binding_error)?;
+    let workspace_id = workspace.identity().map_err(binding_error)?;
+    let policy_id = policy.identity().map_err(binding_error)?;
+    let catalog_id = catalog.identity().map_err(binding_error)?;
+    let mut claim_ids = claims
+        .iter()
+        .map(|claim| claim.identity().map_err(binding_error))
+        .collect::<Result<Vec<_>, _>>()?;
+    claim_ids.sort_by_key(ContentId::to_wire);
+    if claims.is_empty()
+        || claim_ids.windows(2).any(|pair| pair[0] == pair[1])
+        || recovery_input_id != authorized_recovery_input
+        || recovery_input.task_id() != workflow.task_id
+        || workspace.task_id() != workflow.task_id
+        || workspace.admitted_intent() != admitted_intent
+        || workspace.sir_input() != recovery_input_id
+        || workspace.sir_task_bundle() != recovery_input.task_bundle()
+        || workspace.coverage_policy() != policy_id
+        || workspace.strategy_catalog() != catalog_id
+        || claims.iter().any(|claim| {
+            claim.task_id() != workflow.task_id || claim.admitted_intent() != admitted_intent
+        })
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let work_items = derive_oracle_work_items(&claim_ids, policy).map_err(binding_error)?;
+    let expected_ledger = OracleExplorationLedgerV1::open(workspace_id, work_items, catalog)
+        .map_err(binding_error)?;
+    if *ledger != expected_ledger {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = OracleExplorationOpenedPayload {
+        authority: FrozenOracleExplorationAuthorityV1 {
+            task_id: workflow.task_id,
+            admitted_intent_outcome,
+            admitted_intent,
+            recovery_input: recovery_input_id,
+            workspace: workspace_id,
+            coverage_policy: policy_id,
+            strategy_catalog: catalog_id,
+            claims: claim_ids,
+            ledger: ledger.identity().map_err(binding_error)?,
+        },
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_EXPLORATION_OPENED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    if !matches!(
+        projection.state,
+        ControllerWorkflowStateV1::AdmittedIntent { .. }
+    ) {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_EXPLORATION_OPENED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
 /// Recovers the exact current Controller state and rejects illegal/non-V1 history.
 ///
 /// # Errors
@@ -919,6 +1145,33 @@ fn apply(
                 contract: payload.contract,
             })
         }
+        (
+            ControllerWorkflowStateV1::AdmittedIntent {
+                authority,
+                outcome,
+                contract,
+                ..
+            },
+            ORACLE_EXPLORATION_OPENED,
+        ) => {
+            let payload: OracleExplorationOpenedPayload = decode(bytes)?;
+            let oracle = payload.authority;
+            if oracle.task_id != task_id
+                || oracle.admitted_intent_outcome != outcome
+                || oracle.admitted_intent != contract
+                || oracle.recovery_input != authority.recovery_input
+                || oracle.claims.is_empty()
+                || oracle
+                    .claims
+                    .windows(2)
+                    .any(|pair| pair[0].to_wire() >= pair[1].to_wire())
+            {
+                return Err(invalid_history(
+                    "Oracle Exploration authority changed or is noncanonical",
+                ));
+            }
+            Ok(ControllerWorkflowStateV1::OracleExplorationOpened(oracle))
+        }
         (_, _) => Err(invalid_history(
             "illegal Controller workflow event transition",
         )),
@@ -1065,10 +1318,18 @@ mod tests {
     };
     use cairn_migration::{
         AgentResolvedRuntimeModelArtifact, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
-        ProposalHostBinaryIdentity, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
-        ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1, SirCallerClaimId, SirHypothesisId,
-        SirSourceLineCount, SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskArtifactV1,
-        SirTaskBundleV1, SirTaskLimits, derive_user_intent_decision_requests,
+        OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact, OracleClaimName,
+        OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
+        OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
+        OracleExplorationCapabilityGrantArtifact, OracleKnowledgeSnapshotArtifact,
+        OracleResearchToolCatalogArtifact, OracleSourceSnapshotArtifact, OracleStrategyExecutorV1,
+        OracleStrategyImplementationArtifact, OracleStrategyKindV1, OracleStrategyName,
+        OracleStrategyRegistrationV1, OracleStrategyRoleV1, OracleStrategyRunLimit,
+        OracleWorkspaceInput, ProposalHostBinaryIdentity, ProposalHostRoleRequestV1,
+        ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
+        SirCallerClaimId, SirHypothesisId, SirSourceLineCount, SirTaskArtifactBytes,
+        SirTaskArtifactPath, SirTaskArtifactV1, SirTaskBundleV1, SirTaskLimits,
+        derive_user_intent_decision_requests,
     };
 
     fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
@@ -1205,7 +1466,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "one linear control keeps the complete durable prefix and its fail-closed probes visible"
     )]
-    fn durable_intent_path_stops_at_oracle_and_rejects_authority_drift() {
+    fn durable_intent_path_opens_oracle_and_rejects_authority_drift() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let mut events =
             SqliteEventStore::open(temporary.path().join("events.db")).expect("event store");
@@ -1551,13 +1812,131 @@ mod tests {
         .expect("record admitted intent");
         assert_eq!(
             state.next_action(),
-            ControllerWorkflowNextActionV1::AwaitOracleWorkflow {
+            ControllerWorkflowNextActionV1::AwaitOracleExplorationWorkspace {
                 outcome: outcome_id,
                 contract: outcome.contract().identity().expect("contract id"),
             }
         );
         assert_eq!(
             recover_controller_workflow(&events, &workflow).expect("admission restart recovery"),
+            state
+        );
+
+        let policy = OracleCoveragePolicyV1::new(
+            OracleCoverageProfileV1::Correctness,
+            OracleAdversarialPolicyV1::NotRequired,
+        );
+        let catalog = OracleStrategyCatalogV1::new(vec![
+            OracleStrategyRegistrationV1::new(
+                OracleStrategyName::new("deterministic-synthesis").expect("strategy name"),
+                OracleStrategyKindV1::DeterministicAnalyzer,
+                OracleStrategyExecutorV1::Deterministic {
+                    implementation: id::<OracleStrategyImplementationArtifact>(
+                        b"deterministic implementation",
+                    ),
+                },
+                vec![OracleStrategyRoleV1::Synthesis],
+                policy.concerns().to_vec(),
+            )
+            .expect("strategy registration"),
+        ])
+        .expect("strategy catalog");
+        let contract_id = outcome.contract().identity().expect("contract id");
+        let claim = OracleClaimV1::new(
+            task_id,
+            contract_id,
+            OracleClaimName::new("admitted-contract").expect("claim name"),
+        );
+        let workspace = OracleWorkspaceV1::new(&OracleWorkspaceInput {
+            task_id,
+            admitted_intent: contract_id,
+            sir_input: recovery_input_id,
+            sir_task_bundle: recovery_input.task_bundle(),
+            source: id::<OracleSourceSnapshotArtifact>(b"source snapshot"),
+            documentation: id::<OracleDocumentationSnapshotArtifact>(b"documentation snapshot"),
+            build_and_tests: id::<OracleBuildTestSnapshotArtifact>(b"build and tests snapshot"),
+            knowledge: id::<OracleKnowledgeSnapshotArtifact>(b"knowledge snapshot"),
+            research_tools: id::<OracleResearchToolCatalogArtifact>(b"research tools"),
+            experiment_tools: id::<OracleExperimentToolCatalogArtifact>(b"experiment tools"),
+            capability_grant: id::<OracleExplorationCapabilityGrantArtifact>(b"capability grant"),
+            coverage_policy: policy.identity().expect("policy id"),
+            strategy_catalog: catalog.identity().expect("catalog id"),
+            budget: OracleExplorationBudgetV1 {
+                strategy_runs: OracleStrategyRunLimit::new(64).expect("strategy budget"),
+                experiments: OracleExperimentLimit::new(32).expect("experiment budget"),
+            },
+        });
+        let claim_id = claim.identity().expect("claim id");
+        let work_items = derive_oracle_work_items(&[claim_id], &policy).expect("work items");
+        let ledger = OracleExplorationLedgerV1::open(
+            workspace.identity().expect("workspace id"),
+            work_items,
+            &catalog,
+        )
+        .expect("initial ledger");
+        let drifted_claim = OracleClaimV1::new(
+            task_id,
+            contract_id,
+            OracleClaimName::new("drifted-claim").expect("claim name"),
+        );
+        assert!(matches!(
+            open_oracle_exploration(
+                &mut events,
+                &workflow,
+                &recovery_input,
+                &workspace,
+                &policy,
+                &catalog,
+                std::slice::from_ref(&drifted_claim),
+                &ledger,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(8),
+            ),
+            Err(ControllerWorkflowError::BindingMismatch)
+        ));
+        let open_command = CommandId::new();
+        let state = open_oracle_exploration(
+            &mut events,
+            &workflow,
+            &recovery_input,
+            &workspace,
+            &policy,
+            &catalog,
+            std::slice::from_ref(&claim),
+            &ledger,
+            &open_command,
+            ObservedAtUnixMillis::new(8),
+        )
+        .expect("open Oracle Exploration");
+        let ControllerWorkflowNextActionV1::RunOracleExploration(oracle) = state.next_action()
+        else {
+            panic!("expected Oracle Exploration strategy consumer");
+        };
+        assert_eq!(oracle.task_id(), task_id);
+        assert_eq!(
+            oracle.workspace(),
+            workspace.identity().expect("workspace id")
+        );
+        assert_eq!(oracle.ledger(), ledger.identity().expect("ledger id"));
+        assert_eq!(oracle.claims(), &[claim_id]);
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("Oracle restart recovery"),
+            state
+        );
+        assert_eq!(
+            open_oracle_exploration(
+                &mut events,
+                &workflow,
+                &recovery_input,
+                &workspace,
+                &policy,
+                &catalog,
+                std::slice::from_ref(&claim),
+                &ledger,
+                &open_command,
+                ObservedAtUnixMillis::new(8),
+            )
+            .expect("exact Oracle opening replay"),
             state
         );
     }

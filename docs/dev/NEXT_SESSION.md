@@ -2,8 +2,8 @@
 
 - 状态：当前会话交接入口
 - 日期：2026-08-29
-- 架构基线：D-043、DEV-028 strategy-driven Oracle correction与DEV-029 experiment round trip
-- 当前实现基线：DEV-001–029 已记录；DEV-029 为 `Accepted`
+- 架构基线：D-043、DEV-030 claim-scoped multi-plane Oracle framework
+- 当前实现基线：DEV-001–030 已记录；DEV-030 为 `Accepted`
 
 ## 1. 下一会话先建立的共同认识
 
@@ -34,9 +34,14 @@ SIR→decision-request prefix，并把真实user decision显式放在Intent Admi
 user decision与independent Intent Admission，冻结executable/restricted-store authority并只接收restricted commit
 后的canonical public outcome。DEV-028进一步把完整业务骨架纠正为`Oracle Exploration → Oracle Admission`，
 删除旧Blue/Red公开代码路径，并将已有dogfood明确收窄为可选model-backed synthesis/adversarial debate strategy。
-当前prefix仍停在`AwaitOracleWorkflow`，Candidate suffix仍是另一个已实现的durable segment。
+当前prefix已经跨过`AwaitOracleExplorationWorkspace`并持有Controller重算的initial ledger，但仍停在
+`RunOracleExploration` strategy consumer；Candidate suffix仍是另一个已实现的durable segment。
 DEV-029又补齐了所有Proposal Loop可复用的external-effect接缝：Host durable yield、Controller
 start-before-Worker、receipt provenance与same-episode/no-redispatch resume。它仍未新增具体领域experiment adapter。
+DEV-030已把Oracle多平面完备性编码为current-V1 production contract：Controller按claim×concern×role机械展开，
+workspace冻结source/docs/build/tests/knowledge/research/experiment capability，ledger逐项保存strategy/experiment/
+observation/proposal lineage，Independent Admission从qualified mechanisms与honest/mutant/hidden/bypass receipts重算。
+它没有把第一个production workspace接入task aggregate，也没有运行model或Worker。
 
 架构已经由 D-043 冻结：
 
@@ -59,7 +64,7 @@ start-before-Worker、receipt provenance与same-episode/no-redispatch resume。�
 1. 根目录 [`AGENTS.md`](../../AGENTS.md)；
 2. [`WORKFLOW_ARCHITECTURE.md`](../design/WORKFLOW_ARCHITECTURE.md)；
 3. [`CURRENT_BASELINE.md`](CURRENT_BASELINE.md)；
-4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-027–029及其implementation records；
+4. [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 中 DEV-027–030及其implementation records；
 5. [`ARCHITECTURE_OVERVIEW.md`](../design/ARCHITECTURE_OVERVIEW.md) 和
    [`RUNTIME_ARCHITECTURE.md`](../design/RUNTIME_ARCHITECTURE.md)；
 6. 只有准备修改对应边界时，再读
@@ -78,8 +83,8 @@ start-before-Worker、receipt provenance与same-episode/no-redispatch resume。�
 ```bash
 git status --short
 git log -5 --oneline --decorate
-rg -n "DEV-029|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
-rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitOracleWorkflow" \
+rg -n "DEV-030|D-043" docs/dev/SLICE_CATALOG.md docs/DECISIONS.md
+rg -n "run_controller_workflow|run_oracle_exploration|AwaitOracleExplorationWorkspace" \
   crates/cairn-migration crates/cairn-server crates/cairn-proposal-host
 ```
 
@@ -88,13 +93,13 @@ rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitOracleWorkflo
 不要在启动审计中连接 DeepSeek、远端 Worker、Docker、NPU 或互联网。外部 effect 只有在一个已确认 slice
 明确要求时才运行。
 
-## 4. DEV-027–029 已闭合的事实
+## 4. DEV-027–030 已闭合的事实
 
 - `run_controller_workflow`显式表达freeze、SIR、derive decision requests、await user decision、Intent Admission、
   Oracle Exploration、Oracle Admission、Candidate、Worker observations、Candidate Admission和terminal；
 - `ControllerWorkflowStages`为每一环定义distinct associated artifact type及async port，无default/no-op成功实现；
 - `ControllerWorkflowV1`已durably接通exact SIR Host request→start authority→terminal/proposal observation→
-  decision requests→actual user decision→independent Intent Admission，并明确停在`AwaitOracleWorkflow`；
+  decision requests→actual user decision→independent Intent Admission，并明确停在`AwaitOracleExplorationWorkspace`；
 - Admission executable和restricted-store target必须先获得distinct typed durable authority；Controller只接收
   restricted commit之后的canonical public outcome，不读取restricted artifacts；
 - active prefix和Candidate suffix都以recover/select/execute表达，但尚未连成一个完整aggregate；
@@ -110,18 +115,26 @@ rg -n "run_controller_workflow|drive_controller_workflow_once|AwaitOracleWorkflo
 - external-effect tool call现在返回strict request-bound durable yield；Controller supervisor重新打开Host journal，
   先提交operation authorization/start，再允许Worker adapter执行；receipt-bound observation恢复同一episode，
   yielding model turn不重发；当前没有具体in-loop experiment tool/adapter或live Worker事实。
+- Oracle policy机械包含observable/domain/numerical/interface/memory-effect/failure/determinism/cross-plane/discovery
+  concerns；performance profile显式增加resource/performance。每个cell独立要求synthesis并按policy要求adversarial，
+  missing strategy不能打开exploration；
+- exact code、docs、build/tests、knowledge、research/experiment tools、capability、policy/catalog/budget均由distinct
+  workspace edge冻结；portfolio material保留typed kind，不退化为generic ID bag；
+- independent admission只从exact qualified mechanism与honest/mutant/hidden/bypass receipts重算
+  admitted/partial/rejected；missing receipt保持partial，模型共识没有入口。
 
 详细authority、current-V1 contract、tests、删除项与非目标见
 [`DEV-027-IMPLEMENTATION.md`](records/DEV-027-IMPLEMENTATION.md)和
 [`DEV-028-IMPLEMENTATION.md`](records/DEV-028-IMPLEMENTATION.md)、
-[`DEV-029-IMPLEMENTATION.md`](records/DEV-029-IMPLEMENTATION.md)。
+[`DEV-029-IMPLEMENTATION.md`](records/DEV-029-IMPLEMENTATION.md)和
+[`DEV-030-IMPLEMENTATION.md`](records/DEV-030-IMPLEMENTATION.md)。
 
 ## 5. 下一决策点
 
-DEV-029已完成通用experiment round trip。推荐下一片为一个policy-selected、真实consumer驱动的
-`Oracle Exploration` action建立最小durable aggregate，并在确有需要时提供第一个具体experiment tool→Worker
-`JobContract` adapter；不得恢复固定Blue→Red顺序、自动生成Oracle authority，或一次性预建完整portfolio/
-Admission/Candidate suffix。若首个strategy不需要外部实验，应保持DEV-029 seam空闲而不是制造虚假Worker调用。
+DEV-030已完成Oracle framework kernel及task-owned initial-ledger opening。下一片必须选择一个真实、task-generic
+strategy consumer，按ledger的单个claim × concern × role cell推进并持久化revision；不能让一个Agent一次性声称覆盖
+全部平面。只有该consumer确实提出实验时才接具体tool→Worker
+`JobContract` adapter；不得恢复固定Blue→Red顺序、自动生成Oracle authority或制造虚假Worker调用。
 
 ## 6. 网络与部署启动规则
 
@@ -155,10 +168,10 @@ git diff --check
 请先读取 AGENTS.md、docs/dev/NEXT_SESSION.md、
 docs/design/WORKFLOW_ARCHITECTURE.md、docs/dev/CURRENT_BASELINE.md 和
 docs/dev/SLICE_CATALOG.md，并用 Git/代码核对交接事实。先不要调用模型、远端 Worker 或修改代码。
-请核对 Accepted DEV-027–029 的durable SIR→user decision→independent Intent Admission prefix、
-`AwaitOracleWorkflow`边界、strategy-driven Oracle骨架，以及Proposal Host external experiment durable yield、
+请核对 Accepted DEV-027–030 的durable SIR→user decision→independent Intent Admission→initial Oracle ledger prefix、
+`RunOracleExploration`边界、claim×concern×role Oracle framework，以及Proposal Host external experiment durable yield、
 Controller start-before-Worker、receipt provenance与same-episode resume事实。优先审计第一个真实consumer驱动的
-Oracle Exploration action；只有该consumer确实需要实验时才设计具体tool→Worker adapter。
+逐cell Oracle strategy revision；只有该consumer确实需要实验时才设计具体tool→Worker adapter。
 先给出最小slice/DCR、将替代的旧路径、测试与明确非目标；确认没有fixture-specific或generic-ID漂移后停下来
 让我确认。先不要调用模型、远端Worker或修改代码。
 ```
