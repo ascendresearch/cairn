@@ -13,7 +13,7 @@ use cairn_agent::{
     ResolvedRuntimeModelArtifact, TransportError, recover_agent_episode,
 };
 use cairn_migration::{
-    ProposalHostBinaryIdentity, ProposalHostRequestV1, ProposalHostTerminalV1,
+    ProposalHostBinaryIdentity, ProposalHostOutcomeV1, ProposalHostRequestV1,
     run_proposal_host_episode,
 };
 use cairn_protocol::ContentId;
@@ -123,14 +123,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if terminal_path.exists() {
         let terminal_bytes = std::fs::read(&terminal_path)?;
-        let terminal: ProposalHostTerminalV1 = cairn_codec::from_slice(&terminal_bytes)?;
-        if cairn_codec::to_vec(&terminal)? != terminal_bytes {
+        let outcome: ProposalHostOutcomeV1 = cairn_codec::from_slice(&terminal_bytes)?;
+        if cairn_codec::to_vec(&outcome)? != terminal_bytes {
             return Err(
                 "persisted Proposal Host terminal is not canonical current-V1 bytes".into(),
             );
         }
-        terminal.validate_against(&request)?;
-        validate_durable_episode(&events, &mut content, &request, &terminal)?;
+        outcome.validate_against(&request)?;
+        validate_durable_episode(&events, &mut content, &request, &outcome)?;
         std::io::stdout().write_all(&terminal_bytes)?;
         return Ok(());
     }
@@ -154,25 +154,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         HostTransport::Http(HttpModelTransport::new(&model, &root)?)
     };
-    let terminal = run_proposal_host_episode(
+    let outcome = run_proposal_host_episode(
         &mut events,
         &mut content,
         &mut transport,
         codec,
         request.clone(),
     )?;
-    terminal.validate_against(&request)?;
+    outcome.validate_against(&request)?;
 
     drop(transport);
     drop(events);
     drop(content);
     let mut reopened_content = SqliteContentStore::open(&content_database, &cas)?;
     let reopened_events = SqliteEventStore::open(&event_database)?;
-    validate_durable_episode(&reopened_events, &mut reopened_content, &request, &terminal)?;
-    let terminal_bytes = cairn_codec::to_vec(&terminal)?;
-    persist_terminal_checkpoint(&terminal_path, &terminal_bytes)?;
+    validate_durable_episode(&reopened_events, &mut reopened_content, &request, &outcome)?;
+    let outcome_bytes = cairn_codec::to_vec(&outcome)?;
+    if matches!(outcome, ProposalHostOutcomeV1::Terminal { .. }) {
+        persist_terminal_checkpoint(&terminal_path, &outcome_bytes)?;
+    }
 
-    std::io::stdout().write_all(&terminal_bytes)?;
+    std::io::stdout().write_all(&outcome_bytes)?;
     Ok(())
 }
 
@@ -198,24 +200,54 @@ fn validate_durable_episode(
     events: &SqliteEventStore,
     content: &mut SqliteContentStore,
     request: &ProposalHostRequestV1,
-    terminal: &ProposalHostTerminalV1,
+    outcome: &ProposalHostOutcomeV1,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let recovered = recover_agent_episode(
         events,
         content,
         &AgentEpisode::new(request.runtime().episode_id())?,
     )?;
-    let AgentEpisodeState::Completed {
-        reason,
-        steps_started,
-    } = recovered
-    else {
-        return Err("reopened Proposal Host episode was not durably completed".into());
-    };
-    if reason != terminal.completion_reason() || steps_started != terminal.steps_started() {
-        return Err("reopened Proposal Host terminal projection changed".into());
+    match (outcome, recovered) {
+        (
+            ProposalHostOutcomeV1::Terminal { terminal },
+            AgentEpisodeState::Completed {
+                reason,
+                steps_started,
+            },
+        ) if reason == terminal.completion_reason()
+            && steps_started == terminal.steps_started() =>
+        {
+            Ok(())
+        }
+        (
+            ProposalHostOutcomeV1::AwaitingController { experiment },
+            AgentEpisodeState::Active {
+                step,
+                model_attempt_id,
+                step_state: cairn_agent::AgentStepState::OperationsBound(bound),
+            },
+        ) if step.step_id() == experiment.step_id()
+            && model_attempt_id == experiment.model_attempt_id()
+            && bound.operations().len() >= experiment.operations().len()
+            && experiment.operations().iter().all(|yielded| {
+                bound.operations().iter().any(|durable| {
+                    durable.operation_id() == yielded.operation_id()
+                        && durable.tool() == yielded.tool()
+                        && durable.implementation_version() == yielded.implementation_version()
+                        && durable.effect() == yielded.effect()
+                        && durable.arguments_id() == yielded.arguments_id()
+                })
+            }) =>
+        {
+            Ok(())
+        }
+        (ProposalHostOutcomeV1::Terminal { .. }, _) => {
+            Err("reopened Proposal Host episode was not durably completed".into())
+        }
+        (ProposalHostOutcomeV1::AwaitingController { .. }, _) => {
+            Err("reopened Proposal Host experiment yield changed its durable safe point".into())
+        }
     }
-    Ok(())
 }
 
 fn persist_terminal_checkpoint(

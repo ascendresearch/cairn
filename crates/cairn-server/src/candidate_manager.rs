@@ -141,6 +141,9 @@ pub enum CandidateWorkflowBlockedV1 {
         episode_id: EpisodeId,
         reason: ProposalHostProcessBlockedV1,
     },
+    ProposalHostExperiment {
+        experiment: cairn_migration::ProposalHostExperimentRequestV1,
+    },
 }
 
 /// Result of consuming at most one action selected by the durable Candidate workflow.
@@ -357,7 +360,7 @@ async fn run_candidate_proposal_episode(
 ) -> Result<CandidateWorkflowManagerStatusV1, ServerError> {
     let request = prepare_candidate_proposal_host_request(server, workflow_request)?;
     match run_proposal_host_process(&manager.proposal_host, &request).await {
-        Ok(terminal) => transition_or_recover(
+        Ok(cairn_migration::ProposalHostOutcomeV1::Terminal { terminal }) => transition_or_recover(
             record_candidate_proposal_host_terminal(
                 events,
                 workflow,
@@ -370,6 +373,11 @@ async fn run_candidate_proposal_episode(
             workflow,
             state,
         ),
+        Ok(cairn_migration::ProposalHostOutcomeV1::AwaitingController { experiment }) => {
+            Ok(CandidateWorkflowManagerStatusV1::Blocked(
+                CandidateWorkflowBlockedV1::ProposalHostExperiment { experiment },
+            ))
+        }
         Err(failure) => {
             tracing::warn!(
                 target: "cairn.server.candidate-workflow",

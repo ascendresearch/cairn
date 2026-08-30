@@ -61,6 +61,11 @@ child使用immutable public store并先提交restricted contract/decision，Cont
 完整验证task/input/proposal/request/grant/decision binding。aggregate现明确停在`AwaitOracleWorkflow`，不会自动运行
 Oracle。Controller aggregate已从migration领域crate移到server composition root，旧模块/re-export直接删除；没有
 compatibility path。本片只运行本地model-free process control，没有调用live model、remote Worker、Docker或NPU。
+DEV-029补齐了generic Proposal Host的external experiment round trip：current-V1 Host outcome现在可以是terminal或
+request/episode/step/model-attempt/operation/exact-arguments绑定的durable yield；Controller重新核对Host journal并在
+Worker adapter调用前提交operation authorization/start，job/attempt/contract一致的execution receipt与observation
+成为canonical `OperationResult`后，同一episode从原native continuation继续。recorded control证明Host零external
+effect、yielding model turn不重发及terminal child restart；本片没有新增具体experiment tool，也未调用live Worker。
 
 ## 2. 可复用基础
 
@@ -69,7 +74,7 @@ compatibility path。本片只运行本地model-free process control，没有调
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；model-backed synthesis/adversarial debate只是Oracle Exploration的可选策略组合 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | readable Controller composition skeleton、durable SIR-to-admitted-intent prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | prefix明确停在Oracle边界；Oracle Exploration与Candidate suffix尚未并入一个连续aggregate；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
+| Product workflow | readable Controller composition skeleton、durable SIR-to-admitted-intent prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、external experiment durable yield/Controller authority/receipt provenance/same-episode resume、scheduler/reconcile/receipt折回、exact replay | prefix明确停在Oracle边界；Oracle Exploration与Candidate suffix尚未并入一个连续aggregate；尚无具体in-loop experiment adapter、task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -201,5 +206,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-026 | Accepted | durable Controller接通exact SIR→decision requests并停在用户决策边界；shared Host supervision、restart/replay/cross-task/model-drift controls闭合；无live effect调用 |
 | DEV-027 | Accepted | actual user decision与independent Intent Admission接入同一durable aggregate并停在Oracle边界；executable/restricted-store authority、real local child、restart/replay/cross-task/drift controls闭合；无live model/Worker调用 |
 | DEV-028 | Accepted | Controller主骨架纠正为Oracle Exploration→Admission；旧Blue/Red公开路径删除并收窄为可选model-backed debate strategy；文档、示例、配置、tests与静态漂移controls闭合；无live effect调用 |
+| DEV-029 | Accepted | Proposal Host external effect改为typed durable yield；Controller start-before-Worker、receipt provenance和same-episode/no-redispatch resume闭合；无live effect或具体experiment adapter |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

@@ -13,9 +13,8 @@ use cairn_agent::{
 };
 use cairn_migration::{
     AgentResolvedRuntimeModelArtifact, IntentRecoveryRequestV1, ProposalHostBinaryIdentity,
-    ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
-    ProposalHostTaskSnapshotV1, ProposalHostTerminalV1, SirTaskLimits, SirTaskWorkspace,
-    run_proposal_host_episode,
+    ProposalHostOutcomeV1, ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
+    ProposalHostTaskSnapshotV1, SirTaskLimits, SirTaskWorkspace, run_proposal_host_episode,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
@@ -288,8 +287,11 @@ fn child_process_consumes_canonical_recorded_sir_request_and_recovers_terminal()
         "Proposal Host failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let terminal: ProposalHostTerminalV1 =
-        cairn_codec::from_slice(&output.stdout).expect("terminal");
+    let outcome: ProposalHostOutcomeV1 =
+        cairn_codec::from_slice(&output.stdout).expect("Host outcome");
+    let ProposalHostOutcomeV1::Terminal { terminal } = outcome else {
+        panic!("recorded SIR profile unexpectedly requested a Controller experiment")
+    };
     terminal
         .validate_against(&request)
         .expect("terminal binding");

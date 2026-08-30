@@ -1079,7 +1079,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
         input: SirProfileInput,
-    ) -> Result<SirProfileOutcome, SirProfileError>
+    ) -> Result<crate::proposal_loop::ProposalProfileOutcomeV1<SirProfileOutcome>, SirProfileError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1127,7 +1127,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             ),
         };
 
-        let completion = crate::proposal_loop::run_proposal_loop(
+        let outcome = crate::proposal_loop::run_proposal_loop(
             events,
             content,
             transport,
@@ -1141,12 +1141,20 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             }
             error => SirProfileError::Agent(error.to_string()),
         })?;
-        finish_sir_episode(
-            content,
-            &gateway.submit,
-            completion.reason,
-            completion.steps_started,
-        )
+        match outcome {
+            crate::proposal_loop::ProposalLoopOutcomeV1::Complete(completion) => {
+                finish_sir_episode(
+                    content,
+                    &gateway.submit,
+                    completion.reason,
+                    completion.steps_started,
+                )
+                .map(crate::proposal_loop::ProposalProfileOutcomeV1::Complete)
+            }
+            crate::proposal_loop::ProposalLoopOutcomeV1::AwaitingController(request) => {
+                Ok(crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(request))
+            }
+        }
     }
 
     fn finish_sir_episode<C: ContentStore>(

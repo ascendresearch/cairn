@@ -2,10 +2,11 @@
 
 use cairn_agent::{
     EpisodeBudget, EpisodeCompletionReason, ModelOutputTokenLimit, ModelSelection, ModelTransport,
-    NativeProtocolCodec,
+    NativeProtocolCodec, ToolArguments, ToolEffectClass, ToolImplementationVersion, ToolName,
 };
 use cairn_protocol::{
-    CommandId, ContentId, ContentType, EpisodeId, ObservedAtUnixMillis, SchemaVersion, TaskId,
+    CommandId, ContentId, ContentType, EpisodeId, ModelAttemptId, ObservedAtUnixMillis,
+    OperationId, SchemaVersion, StepId, TaskId,
 };
 use cairn_record::{ContentStore, EventStore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -50,6 +51,22 @@ pub enum ProposalHostTerminalArtifact {}
 
 impl ContentType for ProposalHostTerminalArtifact {
     const DOMAIN: &'static str = "migration.proposal-host-terminal.v1";
+}
+
+/// Canonical durable-yield identity returned before Controller-owned experiment execution.
+///
+/// ```compile_fail
+/// use cairn_migration::{ProposalHostExperimentRequestArtifact, ProposalHostTerminalArtifact};
+/// use cairn_protocol::ContentId;
+/// fn require_experiment(_: ContentId<ProposalHostExperimentRequestArtifact>) {}
+/// fn invalid(terminal: ContentId<ProposalHostTerminalArtifact>) {
+///     require_experiment(terminal);
+/// }
+/// ```
+pub enum ProposalHostExperimentRequestArtifact {}
+
+impl ContentType for ProposalHostExperimentRequestArtifact {
+    const DOMAIN: &'static str = "migration.proposal-host-experiment-request.v1";
 }
 
 /// Exact digest of the generic Proposal Host executable authorized for an invocation.
@@ -517,6 +534,250 @@ impl<'de> Deserialize<'de> for ProposalHostRequestV1 {
     }
 }
 
+/// Exact external operation proposed by an Agent and durably bound by the Proposal Host.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProposalHostExperimentOperationV1 {
+    operation_id: OperationId,
+    tool: ToolName,
+    implementation_version: ToolImplementationVersion,
+    effect: ToolEffectClass,
+    arguments_id: ContentId<ToolArguments>,
+    arguments: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalHostExperimentOperationWire {
+    operation_id: OperationId,
+    tool: ToolName,
+    implementation_version: ToolImplementationVersion,
+    effect: ToolEffectClass,
+    arguments_id: ContentId<ToolArguments>,
+    arguments: serde_json::Value,
+}
+
+impl ProposalHostExperimentOperationV1 {
+    #[must_use]
+    pub const fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+
+    #[must_use]
+    pub fn tool(&self) -> &ToolName {
+        &self.tool
+    }
+
+    #[must_use]
+    pub fn implementation_version(&self) -> &ToolImplementationVersion {
+        &self.implementation_version
+    }
+
+    #[must_use]
+    pub const fn effect(&self) -> ToolEffectClass {
+        self.effect
+    }
+
+    #[must_use]
+    pub const fn arguments_id(&self) -> ContentId<ToolArguments> {
+        self.arguments_id
+    }
+
+    #[must_use]
+    pub const fn arguments(&self) -> &serde_json::Value {
+        &self.arguments
+    }
+
+    fn validate(&self) -> Result<(), ProposalHostError> {
+        if matches!(
+            self.effect,
+            ToolEffectClass::Pure | ToolEffectClass::ReadOnly
+        ) {
+            return invalid("Proposal Host experiment request contains a Host-local operation");
+        }
+        let bytes = cairn_codec::to_vec(&self.arguments).map_err(codec)?;
+        if ContentId::<ToolArguments>::derive(&bytes).map_err(codec)? != self.arguments_id {
+            return invalid("Proposal Host experiment arguments changed their content identity");
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<ProposalHostExperimentOperationWire> for ProposalHostExperimentOperationV1 {
+    type Error = ProposalHostError;
+
+    fn try_from(wire: ProposalHostExperimentOperationWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            operation_id: wire.operation_id,
+            tool: wire.tool,
+            implementation_version: wire.implementation_version,
+            effect: wire.effect,
+            arguments_id: wire.arguments_id,
+            arguments: wire.arguments,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProposalHostExperimentOperationV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        ProposalHostExperimentOperationWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Request-bound durable safe point at which only the Controller may grant experiment authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProposalHostExperimentRequestV1 {
+    schema_version: SchemaVersion,
+    request: ContentId<ProposalHostRequestArtifact>,
+    episode_id: EpisodeId,
+    step_id: StepId,
+    model_attempt_id: ModelAttemptId,
+    operations: Vec<ProposalHostExperimentOperationV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalHostExperimentRequestWire {
+    schema_version: SchemaVersion,
+    request: ContentId<ProposalHostRequestArtifact>,
+    episode_id: EpisodeId,
+    step_id: StepId,
+    model_attempt_id: ModelAttemptId,
+    operations: Vec<ProposalHostExperimentOperationV1>,
+}
+
+impl ProposalHostExperimentRequestV1 {
+    #[must_use]
+    pub const fn request(&self) -> ContentId<ProposalHostRequestArtifact> {
+        self.request
+    }
+
+    #[must_use]
+    pub const fn episode_id(&self) -> EpisodeId {
+        self.episode_id
+    }
+
+    #[must_use]
+    pub const fn step_id(&self) -> StepId {
+        self.step_id
+    }
+
+    #[must_use]
+    pub const fn model_attempt_id(&self) -> ModelAttemptId {
+        self.model_attempt_id
+    }
+
+    #[must_use]
+    pub fn operations(&self) -> &[ProposalHostExperimentOperationV1] {
+        &self.operations
+    }
+
+    /// Derives the exact durable-yield identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid structure or canonical codec/content identity failure.
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<ProposalHostExperimentRequestArtifact>, ProposalHostError> {
+        self.validate_structure()?;
+        ContentId::derive(&cairn_codec::to_vec(self).map_err(codec)?).map_err(codec)
+    }
+
+    /// Revalidates this yield against the exact Host request that opened the episode.
+    ///
+    /// # Errors
+    ///
+    /// Rejects structure, request identity, or episode identity drift.
+    pub fn validate_against(
+        &self,
+        request: &ProposalHostRequestV1,
+    ) -> Result<(), ProposalHostError> {
+        self.validate_structure()?;
+        if self.request != request.identity()? || self.episode_id != request.runtime.episode_id {
+            return invalid("Proposal Host experiment changed its request or episode identity");
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self) -> Result<(), ProposalHostError> {
+        if self.schema_version != schema_v1() || self.operations.is_empty() {
+            return invalid("Proposal Host experiment request structure is invalid");
+        }
+        let mut ids = std::collections::HashSet::new();
+        for operation in &self.operations {
+            operation.validate()?;
+            if !ids.insert(operation.operation_id) {
+                return invalid("Proposal Host experiment repeats an operation identity");
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<ProposalHostExperimentRequestWire> for ProposalHostExperimentRequestV1 {
+    type Error = ProposalHostError;
+
+    fn try_from(wire: ProposalHostExperimentRequestWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            request: wire.request,
+            episode_id: wire.episode_id,
+            step_id: wire.step_id,
+            model_attempt_id: wire.model_attempt_id,
+            operations: wire.operations,
+        };
+        value.validate_structure()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProposalHostExperimentRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        ProposalHostExperimentRequestWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Process result: either a terminal proposal or a durable Controller experiment safe point.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "outcome")]
+pub enum ProposalHostOutcomeV1 {
+    Terminal {
+        terminal: Box<ProposalHostTerminalV1>,
+    },
+    AwaitingController {
+        experiment: ProposalHostExperimentRequestV1,
+    },
+}
+
+impl ProposalHostOutcomeV1 {
+    /// Revalidates either current outcome against the exact Host request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects terminal or experiment request/episode/role/binding drift.
+    pub fn validate_against(
+        &self,
+        request: &ProposalHostRequestV1,
+    ) -> Result<(), ProposalHostError> {
+        match self {
+            Self::Terminal { terminal } => terminal.validate_against(request),
+            Self::AwaitingController { experiment } => experiment.validate_against(request),
+        }
+    }
+}
+
 /// Typed proposal publication produced by a role-scoped Host episode.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "role")]
@@ -738,6 +999,17 @@ struct CompletedProposalHostRequestV1 {
     steps_started: u32,
 }
 
+enum DrivenProposalHostRequestV1 {
+    Complete(Box<CompletedProposalHostRequestV1>),
+    AwaitingController(Box<AwaitingControllerProposalHostRequestV1>),
+}
+
+struct AwaitingControllerProposalHostRequestV1 {
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: ProposalHostRequestV1,
+    experiment: crate::proposal_loop::ProposalLoopExperimentRequestV1,
+}
+
 /// Processes any supported request through the single frozen-input Proposal Host lifecycle.
 ///
 /// # Errors
@@ -750,16 +1022,16 @@ pub fn run_proposal_host_episode<E, C, T>(
     transport: &mut T,
     protocol_codec: NativeProtocolCodec,
     request: ProposalHostRequestV1,
-) -> Result<ProposalHostTerminalV1, ProposalHostError>
+) -> Result<ProposalHostOutcomeV1, ProposalHostError>
 where
     E: EventStore,
     C: ContentStore,
     T: ModelTransport,
 {
     let frozen = freeze_proposal_host_request(request)?;
-    let completed =
+    let driven =
         drive_frozen_proposal_host_request(events, content, transport, protocol_codec, frozen)?;
-    freeze_proposal_host_terminal(completed)
+    freeze_proposal_host_outcome(driven)
 }
 
 fn freeze_proposal_host_request(
@@ -792,7 +1064,7 @@ fn drive_frozen_proposal_host_request<E, C, T>(
     transport: &mut T,
     protocol_codec: NativeProtocolCodec,
     frozen: FrozenProposalHostRequestV1,
-) -> Result<CompletedProposalHostRequestV1, ProposalHostError>
+) -> Result<DrivenProposalHostRequestV1, ProposalHostError>
 where
     E: EventStore,
     C: ContentStore,
@@ -805,7 +1077,7 @@ where
         workspace,
     } = frozen;
     let terminal_request = request.clone();
-    let (publication, completion_reason, steps_started) = match request.role {
+    let completed = match request.role {
         ProposalHostRoleRequestV1::Sir {
             task_id,
             recovery_request,
@@ -829,6 +1101,9 @@ where
                 },
             )
             .map_err(role_error)?;
+            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+                return awaiting_controller(request_id, terminal_request, outcome);
+            };
             (
                 ProposalHostPublicationV1::Sir {
                     proposal_id: outcome.proposal_id(),
@@ -862,6 +1137,9 @@ where
                 },
             )
             .map_err(role_error)?;
+            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+                return awaiting_controller(request_id, terminal_request, outcome);
+            };
             (
                 ProposalHostPublicationV1::CandidateInitial {
                     proposal_id: outcome.proposal_id(),
@@ -905,6 +1183,9 @@ where
                 },
             )
             .map_err(role_error)?;
+            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+                return awaiting_controller(request_id, terminal_request, outcome);
+            };
             (
                 ProposalHostPublicationV1::CandidateRevision {
                     revision_id: outcome.revision_id(),
@@ -948,6 +1229,9 @@ where
                 },
             )
             .map_err(role_error)?;
+            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+                return awaiting_controller(request_id, terminal_request, outcome);
+            };
             (
                 ProposalHostPublicationV1::CandidateNativeFollowup {
                     followup_id: outcome.followup_id(),
@@ -992,6 +1276,9 @@ where
                 },
             )
             .map_err(role_error)?;
+            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+                return awaiting_controller(request_id, terminal_request, outcome);
+            };
             (
                 ProposalHostPublicationV1::CandidateNativeRepair {
                     repair_id: outcome.repair_id(),
@@ -1002,19 +1289,72 @@ where
             )
         }
     };
-    Ok(CompletedProposalHostRequestV1 {
-        request_id,
-        request: terminal_request,
-        episode_id: runtime.episode_id,
-        publication,
-        completion_reason,
-        steps_started,
-    })
+    let (publication, completion_reason, steps_started) = completed;
+    Ok(DrivenProposalHostRequestV1::Complete(Box::new(
+        CompletedProposalHostRequestV1 {
+            request_id,
+            request: terminal_request,
+            episode_id: runtime.episode_id,
+            publication,
+            completion_reason,
+            steps_started,
+        },
+    )))
 }
 
-fn freeze_proposal_host_terminal(
-    completed: CompletedProposalHostRequestV1,
-) -> Result<ProposalHostTerminalV1, ProposalHostError> {
+fn awaiting_controller(
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: ProposalHostRequestV1,
+    outcome: crate::proposal_loop::ProposalProfileOutcomeV1<impl Sized>,
+) -> Result<DrivenProposalHostRequestV1, ProposalHostError> {
+    let crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(experiment) = outcome
+    else {
+        return invalid("completed Proposal Host profile lost its publication");
+    };
+    Ok(DrivenProposalHostRequestV1::AwaitingController(Box::new(
+        AwaitingControllerProposalHostRequestV1 {
+            request_id,
+            request,
+            experiment,
+        },
+    )))
+}
+
+fn freeze_proposal_host_outcome(
+    driven: DrivenProposalHostRequestV1,
+) -> Result<ProposalHostOutcomeV1, ProposalHostError> {
+    let DrivenProposalHostRequestV1::Complete(completed) = driven else {
+        let DrivenProposalHostRequestV1::AwaitingController(awaiting) = driven else {
+            unreachable!()
+        };
+        let AwaitingControllerProposalHostRequestV1 {
+            request_id,
+            request,
+            experiment,
+        } = *awaiting;
+        let operations = experiment
+            .operations
+            .into_iter()
+            .map(|operation| ProposalHostExperimentOperationV1 {
+                operation_id: operation.operation_id,
+                tool: operation.tool,
+                implementation_version: operation.implementation_version,
+                effect: operation.effect,
+                arguments_id: operation.arguments_id,
+                arguments: operation.arguments,
+            })
+            .collect();
+        let experiment = ProposalHostExperimentRequestV1 {
+            schema_version: schema_v1(),
+            request: request_id,
+            episode_id: experiment.episode_id,
+            step_id: experiment.step_id,
+            model_attempt_id: experiment.model_attempt_id,
+            operations,
+        };
+        experiment.validate_against(&request)?;
+        return Ok(ProposalHostOutcomeV1::AwaitingController { experiment });
+    };
     let terminal = ProposalHostTerminalV1 {
         schema_version: schema_v1(),
         request: completed.request_id,
@@ -1024,7 +1364,9 @@ fn freeze_proposal_host_terminal(
         steps_started: completed.steps_started,
     };
     terminal.validate_against(&completed.request)?;
-    Ok(terminal)
+    Ok(ProposalHostOutcomeV1::Terminal {
+        terminal: Box::new(terminal),
+    })
 }
 
 /// Records one validated Candidate Host publication into the exact task-owned workflow.
@@ -1164,7 +1506,10 @@ pub enum ProposalHostError {
 
 #[cfg(test)]
 mod tests {
-    use super::ProposalHostBinaryIdentity;
+    use cairn_agent::{ToolArguments, ToolEffectClass, ToolImplementationVersion, ToolName};
+    use cairn_protocol::{ContentId, OperationId};
+
+    use super::{ProposalHostBinaryIdentity, ProposalHostExperimentOperationV1};
 
     #[test]
     fn host_binary_identity_is_exact_lowercase_sha256_and_revalidated_on_decode() {
@@ -1175,6 +1520,44 @@ mod tests {
         assert!(ProposalHostBinaryIdentity::new("sha256:short").is_err());
         assert!(
             serde_json::from_str::<ProposalHostBinaryIdentity>("\"sha256:not-a-digest\"").is_err()
+        );
+    }
+
+    #[test]
+    fn experiment_operation_revalidates_external_effect_and_exact_arguments() {
+        let arguments = serde_json::json!({"probe":"bounded"});
+        let arguments_id = ContentId::<ToolArguments>::derive(
+            &cairn_codec::to_vec(&arguments).expect("arguments bytes"),
+        )
+        .expect("arguments identity");
+        let operation = ProposalHostExperimentOperationV1 {
+            operation_id: OperationId::new(),
+            tool: ToolName::new("request_bounded_probe").expect("tool"),
+            implementation_version: ToolImplementationVersion::new("bounded-probe-v1")
+                .expect("version"),
+            effect: ToolEffectClass::Idempotent,
+            arguments_id,
+            arguments,
+        };
+        let bytes = cairn_codec::to_vec(&operation).expect("operation bytes");
+        let _: ProposalHostExperimentOperationV1 =
+            cairn_codec::from_slice(&bytes).expect("strict operation");
+
+        let mut value = serde_json::to_value(&operation).expect("operation value");
+        value["effect"] = serde_json::json!("read-only");
+        assert!(
+            cairn_codec::from_slice::<ProposalHostExperimentOperationV1>(
+                &cairn_codec::to_vec(&value).expect("changed bytes")
+            )
+            .is_err()
+        );
+        let mut value = serde_json::to_value(&operation).expect("operation value");
+        value["arguments"]["probe"] = serde_json::json!("changed");
+        assert!(
+            cairn_codec::from_slice::<ProposalHostExperimentOperationV1>(
+                &cairn_codec::to_vec(&value).expect("changed bytes")
+            )
+            .is_err()
         );
     }
 }

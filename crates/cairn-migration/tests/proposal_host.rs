@@ -216,8 +216,14 @@ fn run_with_responses(
             Ok(ModelTransportResponse::without_usage(response))
         },
     );
-    run_proposal_host_episode(&mut events, &mut content, &mut transport, codec(), request)
+    match run_proposal_host_episode(&mut events, &mut content, &mut transport, codec(), request)
         .expect("Host episode")
+    {
+        cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } => *terminal,
+        cairn_migration::ProposalHostOutcomeV1::AwaitingController { .. } => {
+            panic!("recorded local-tool profile unexpectedly requested a Controller experiment")
+        }
+    }
 }
 
 #[test]

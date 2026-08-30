@@ -1665,7 +1665,10 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
         input: CandidateInitialProfileInput,
-    ) -> Result<CandidateInitialProfileOutcome, CandidateEpisodeError>
+    ) -> Result<
+        crate::proposal_loop::ProposalProfileOutcomeV1<CandidateInitialProfileOutcome>,
+        CandidateEpisodeError,
+    >
     where
         E: EventStore,
         C: ContentStore,
@@ -1715,7 +1718,10 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
         input: CandidateRevisionProfileInput,
-    ) -> Result<CandidateRevisionProfileOutcome, CandidateEpisodeError>
+    ) -> Result<
+        crate::proposal_loop::ProposalProfileOutcomeV1<CandidateRevisionProfileOutcome>,
+        CandidateEpisodeError,
+    >
     where
         E: EventStore,
         C: ContentStore,
@@ -1770,7 +1776,10 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
         input: CandidateNativeFollowupProfileInput,
-    ) -> Result<CandidateNativeFollowupProfileOutcome, CandidateEpisodeError>
+    ) -> Result<
+        crate::proposal_loop::ProposalProfileOutcomeV1<CandidateNativeFollowupProfileOutcome>,
+        CandidateEpisodeError,
+    >
     where
         E: EventStore,
         C: ContentStore,
@@ -1828,7 +1837,10 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
         input: CandidateNativeRepairProfileInput,
-    ) -> Result<CandidateNativeRepairProfileOutcome, CandidateEpisodeError>
+    ) -> Result<
+        crate::proposal_loop::ProposalProfileOutcomeV1<CandidateNativeRepairProfileOutcome>,
+        CandidateEpisodeError,
+    >
     where
         E: EventStore,
         C: ContentStore,
@@ -1926,7 +1938,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
         projection: &CandidatePromptProjectionV1,
         input: CandidateRuntimeInput,
         submit_gateway: S,
-    ) -> Result<S::Outcome, CandidateEpisodeError>
+    ) -> Result<crate::proposal_loop::ProposalProfileOutcomeV1<S::Outcome>, CandidateEpisodeError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1961,7 +1973,7 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
             submit: submit_gateway,
         };
 
-        let completion = crate::proposal_loop::run_proposal_loop(
+        let outcome = crate::proposal_loop::run_proposal_loop(
             events,
             content,
             transport,
@@ -1975,12 +1987,20 @@ Do not submit parent or receipt IDs, content identities, task or Oracle IDs, out
             }
             error => CandidateEpisodeError::Agent(error.to_string()),
         })?;
-        gateway.submit.finish(
-            content,
-            projection,
-            completion.reason,
-            completion.steps_started,
-        )
+        match outcome {
+            crate::proposal_loop::ProposalLoopOutcomeV1::Complete(completion) => gateway
+                .submit
+                .finish(
+                    content,
+                    projection,
+                    completion.reason,
+                    completion.steps_started,
+                )
+                .map(crate::proposal_loop::ProposalProfileOutcomeV1::Complete),
+            crate::proposal_loop::ProposalLoopOutcomeV1::AwaitingController(request) => {
+                Ok(crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(request))
+            }
+        }
     }
 
     fn finish_candidate<C: ContentStore>(

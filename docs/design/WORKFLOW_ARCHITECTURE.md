@@ -99,10 +99,13 @@ budget、tool result、write namespace 和 capability grant 始终隔离。
 DEV-008 的 `cairn-sir` one-shot process曾用于首个 authority consumer的typed ingress/capability proof。
 DEV-022已由通用 Proposal Host接管production SIR episode并直接删除该专用路径，没有双路径或兼容adapter。
 DEV-024又删除了遗留的`run_sir_episode`及Candidate同类role-specific runner与旁路测试。当前
-`run_proposal_host_episode`只编排freeze request、drive frozen episode、freeze terminal；所有现有role profile
+`run_proposal_host_episode`只编排freeze request、drive frozen episode、freeze outcome；所有现有role profile
 都进入同一个durable Proposal Loop。`run_proposal_loop`自身只表达open、dispatch、settle、admit、authorized
 execute、observation projection和advance步骤；每一步由独立函数和不可互换的内部typestate实现。共同loop只执行
-获准的pure/read-only Host tool，先归档observation再投影continuation；外部effect必须回到Controller，本片尚未
+获准的pure/read-only Host tool，先归档observation再投影continuation。DEV-029已将external effect改为exact
+durable yield：Controller验证request/episode/step/operation和capability binding，提交start fact后才调用Worker
+adapter，receipt-bound observation进入原operation stream，Proposal Host随后恢复同一episode/native continuation。
+它没有新增某个领域experiment tool或声称recorded adapter等于真实远端Worker运行。
 实现其异步yield/resume协议。
 
 ## 5. SIR 的自主研究能力
@@ -227,17 +230,19 @@ manager，把durable next action连接到exact Host binary/start marker、existi
 receipt折回。它只监管配置中一个已存在Task，不代表task intake、global catalog或Host pool已经实现；后续仍须保留
 现有V1强类型和receipts，不得为尚无consumer的Agent、reviewer、service或compatibility path预建结构。
 DEV-024把现有SIR/Candidate profile的duplicated runner收敛为一个request-bound durable Proposal Loop，并删除旧入口
-与测试。Controller↔Host的external experiment request/observation resume仍是明确缺口，不能把Host的fail-closed
-control误报成该协议已经实现。
+与测试。
 DEV-025进一步冻结完整Controller业务骨架，并把现有Candidate manager turn改为recover/select/execute子骨架。
 DEV-026将exact SIR Host request/recovery input、durable episode start authority、SIR terminal/proposal observation
 和model-free user decision requests接入新的task-owned `ControllerWorkflowV1`；DEV-027把该aggregate移动到拥有
 Controller composition的`cairn-server`，继续接入actual typed user decision、独立Intent Admission executable/
 restricted-store start authority和public outcome observation。active driver仍只表达recover/select/execute并停在
-`AwaitOracleWorkflow`。通用Host supervision继续由SIR/Candidate共享，Admission仍是独立model-free process；
+`AwaitOracleWorkflow`。通用Host supervision继续由SIR/Candidate共享，Admission仍是独立model-free process。
 Oracle Exploration、后续Admission和Candidate suffix尚未并入这个连续aggregate。DEV-028已把composition skeleton
 纠正为`Oracle Exploration → Oracle Admission`，并把原Blue/Red代码、示例和配置收窄命名为可选
 model-backed debate strategy；没有为尚无consumer的exploration portfolio预建persisted artifact。
+DEV-029又把原external-effect硬错误替换为request-bound durable yield、Controller start authority、Worker receipt
+provenance与same-episode resume；没有具体adapter时仍停在typed waiting boundary，不会由Host执行。该seam可由
+后续SIR/Oracle/Candidate consumer复用，但没有把任何strategy或experiment设为产品必经路径。
 
 ## 12. 被拒绝的方案
 

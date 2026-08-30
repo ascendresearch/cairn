@@ -44,6 +44,7 @@ pub use intent_admission_supervisor::{
 pub use proposal_host_supervisor::{
     ProposalHostProcessBlockedV1, ProposalHostProcessConfigV1, ProposalHostProcessTimeoutMillis,
     ProposalHostStderrByteLimit, ProposalHostStdoutByteLimit,
+    execute_proposal_host_controller_experiments,
 };
 
 #[cfg(feature = "proposal-host")]

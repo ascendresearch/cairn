@@ -48,6 +48,9 @@ pub enum ControllerWorkflowManagerStatusV1 {
         episode_id: EpisodeId,
         reason: ProposalHostProcessBlockedV1,
     },
+    AwaitingControllerExperiment {
+        experiment: cairn_migration::ProposalHostExperimentRequestV1,
+    },
     IntentAdmissionBlocked {
         decision: ContentId<UserIntentDecisionArtifact>,
         reason: IntentAdmissionProcessBlockedV1,
@@ -234,8 +237,8 @@ async fn run_authorized_sir_episode(
     let mut content = open_content(server)?;
     let request: ProposalHostRequestV1 = load_canonical(&content, authority.request())?;
     initialize_proposal_host_operation(proposal_host, request.runtime())?;
-    let terminal = match run_proposal_host_process(proposal_host, &request).await {
-        Ok(terminal) => terminal,
+    let outcome = match run_proposal_host_process(proposal_host, &request).await {
+        Ok(outcome) => outcome,
         Err(failure) => {
             tracing::warn!(
                 target: "cairn.server.controller-workflow",
@@ -251,6 +254,13 @@ async fn run_authorized_sir_episode(
                 reason: failure.reason,
             });
         }
+    };
+    let cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } = outcome else {
+        let cairn_migration::ProposalHostOutcomeV1::AwaitingController { experiment } = outcome
+        else {
+            unreachable!()
+        };
+        return Ok(ControllerWorkflowManagerStatusV1::AwaitingControllerExperiment { experiment });
     };
     let ProposalHostPublicationV1::Sir { proposal, .. } = terminal.publication() else {
         return Err(ServerError::MigrationWorkflow(

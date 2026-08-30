@@ -11,10 +11,12 @@ use cairn_agent::{
     AdapterVersion, EpisodeBudget, ModelOutputTokenLimit, ModelSelection, ResolvedRuntimeModel,
 };
 use cairn_migration::{
-    AgentResolvedRuntimeModelArtifact, ProposalHostBinaryIdentity, ProposalHostRequestV1,
-    ProposalHostRuntimeV1, ProposalHostTerminalV1, SirTaskLimits,
+    AgentResolvedRuntimeModelArtifact, ProposalHostBinaryIdentity, ProposalHostExperimentRequestV1,
+    ProposalHostExperimentWorker, ProposalHostOutcomeV1, ProposalHostRequestV1,
+    ProposalHostRuntimeV1, SirTaskLimits, execute_proposal_host_experiments,
 };
 use cairn_protocol::{ContentId, EpisodeId};
+use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -178,7 +180,7 @@ pub(crate) struct HostProcessFailure {
 pub(crate) async fn run_proposal_host_process(
     config: &ProposalHostProcessConfigV1,
     request: &ProposalHostRequestV1,
-) -> Result<ProposalHostTerminalV1, HostProcessFailure> {
+) -> Result<ProposalHostOutcomeV1, HostProcessFailure> {
     validate_proposal_host_operation(config, request)?;
     let request_bytes = cairn_codec::to_vec(request).map_err(|error| HostProcessFailure {
         reason: ProposalHostProcessBlockedV1::InvalidTerminal,
@@ -284,20 +286,20 @@ pub(crate) async fn run_proposal_host_process(
             diagnostic: String::from_utf8_lossy(&stderr).into_owned(),
         });
     }
-    let terminal: ProposalHostTerminalV1 =
+    let outcome: ProposalHostOutcomeV1 =
         cairn_codec::from_slice(&stdout).map_err(|error| HostProcessFailure {
             reason: ProposalHostProcessBlockedV1::InvalidTerminal,
             diagnostic: error.to_string(),
         })?;
-    if cairn_codec::to_vec(&terminal).ok().as_deref() != Some(stdout.as_slice())
-        || terminal.validate_against(request).is_err()
+    if cairn_codec::to_vec(&outcome).ok().as_deref() != Some(stdout.as_slice())
+        || outcome.validate_against(request).is_err()
     {
         return Err(HostProcessFailure {
             reason: ProposalHostProcessBlockedV1::InvalidTerminal,
             diagnostic: "Proposal Host returned a noncanonical or cross-bound terminal".into(),
         });
     }
-    Ok(terminal)
+    Ok(outcome)
 }
 
 pub(crate) fn initialize_proposal_host_operation(
@@ -317,6 +319,34 @@ pub(crate) fn initialize_proposal_host_operation(
         .map_err(|error| ServerError::MigrationWorkflow(error.to_string()))?;
     file.write_all(&bytes).map_err(supervisor_error)?;
     file.sync_all().map_err(supervisor_error)
+}
+
+/// Executes Controller-authorized Worker experiments against one exact yielded Host episode.
+///
+/// The Host-owned `SQLite` journals remain the authority source: this function reopens them,
+/// validates the stdout yield against their bound operations, and commits each operation start
+/// before invoking the selected Worker adapter.
+///
+/// # Errors
+///
+/// Rejects invocation drift, missing/corrupt Host state, yield/binding/receipt drift, Worker
+/// failure, or any durable operation publication failure.
+pub fn execute_proposal_host_controller_experiments<W: ProposalHostExperimentWorker>(
+    config: &ProposalHostProcessConfigV1,
+    request: &ProposalHostRequestV1,
+    experiment: &ProposalHostExperimentRequestV1,
+    worker: &mut W,
+) -> Result<(), ServerError> {
+    validate_proposal_host_operation(config, request)
+        .map_err(|failure| ServerError::MigrationWorkflow(failure.diagnostic))?;
+    let state = config
+        .state_root
+        .join(request.runtime().episode_id().to_string());
+    let mut content = SqliteContentStore::open(state.join("content.db"), state.join("cas"))
+        .map_err(supervisor_error)?;
+    let mut events = SqliteEventStore::open(state.join("events.db")).map_err(supervisor_error)?;
+    execute_proposal_host_experiments(&mut events, &mut content, request, experiment, worker)
+        .map_err(supervisor_error)
 }
 
 fn validate_proposal_host_operation(
