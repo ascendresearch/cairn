@@ -1,4 +1,4 @@
-//! Durable Controller workflow prefix from exact request freeze to user intent authority.
+//! Durable Controller workflow state from exact request freeze through admitted intent.
 
 use cairn_protocol::{
     AggregateId, AggregateKind, CommandId, ContentId, EventId, ObservedAtUnixMillis, SchemaName,
@@ -10,11 +10,18 @@ use cairn_record::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
+use cairn_admission::{
+    IntentAdmissionExecutableArtifact, IntentAdmissionPublicOutcomeArtifact,
+    IntentAdmissionPublicOutcomeV1, IntentAdmissionRestrictedStoreArtifact,
+    UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1, UserIntentDecisionArtifact,
+    UserIntentDecisionV1,
+};
+use cairn_migration::{
     IntentDecisionRequestBatchArtifact, IntentDecisionRequestBatchV1, IntentRecoveryInputArtifact,
-    IntentRecoveryInputV1, ProposalHostPublicationV1, ProposalHostRequestArtifact,
-    ProposalHostRequestV1, ProposalHostTerminalArtifact, ProposalHostTerminalV1,
-    SirIntentHypothesisSetProposalArtifact,
+    IntentRecoveryInputV1, MigrationIntentContractArtifact, ProposalHostPublicationV1,
+    ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostTerminalArtifact,
+    ProposalHostTerminalV1, SirIntentHypothesisSetProposalArtifact,
+    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
 };
 
 const WORKFLOW_FROZEN: &str = "migration.controller-workflow-frozen";
@@ -22,13 +29,17 @@ const SIR_EPISODE_AUTHORIZED: &str = "migration.controller-sir-episode-authorize
 const SIR_PROPOSAL_RECORDED: &str = "migration.controller-sir-proposal-recorded";
 const INTENT_DECISION_REQUESTS_RECORDED: &str =
     "migration.controller-intent-decision-requests-recorded";
+const USER_INTENT_DECISION_RECORDED: &str = "migration.controller-user-intent-decision-recorded";
+const INTENT_ADMISSION_AUTHORIZED: &str = "migration.controller-intent-admission-authorized";
+const ADMITTED_INTENT_RECORDED: &str = "migration.controller-admitted-intent-recorded";
 
 /// Exact SIR authority frozen before the Controller may start the Proposal Host effect.
 ///
 /// A SIR proposal identity cannot be substituted for the exact Host request authority.
 ///
 /// ```compile_fail
-/// use cairn_migration::{FrozenSirAuthorityV1, SirIntentHypothesisSetProposalArtifact};
+/// use cairn_migration::SirIntentHypothesisSetProposalArtifact;
+/// use cairn_server::FrozenSirAuthorityV1;
 /// use cairn_protocol::ContentId;
 /// fn require_request(authority: &FrozenSirAuthorityV1, proposal: ContentId<SirIntentHypothesisSetProposalArtifact>) {
 ///     let _: cairn_protocol::ContentId<cairn_migration::ProposalHostRequestArtifact> = proposal;
@@ -83,6 +94,39 @@ pub enum ControllerWorkflowStateV1 {
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
     },
+    UserIntentDecisionRecorded {
+        authority: FrozenSirAuthorityV1,
+        terminal: ContentId<ProposalHostTerminalArtifact>,
+        proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
+        requests: ContentId<IntentDecisionRequestBatchArtifact>,
+        request: ContentId<UserIntentDecisionRequestArtifact>,
+        authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
+        decision: ContentId<UserIntentDecisionArtifact>,
+    },
+    IntentAdmissionAuthorized {
+        authority: FrozenSirAuthorityV1,
+        terminal: ContentId<ProposalHostTerminalArtifact>,
+        proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
+        requests: ContentId<IntentDecisionRequestBatchArtifact>,
+        request: ContentId<UserIntentDecisionRequestArtifact>,
+        authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
+        decision: ContentId<UserIntentDecisionArtifact>,
+        executable: ContentId<IntentAdmissionExecutableArtifact>,
+        restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+    },
+    AdmittedIntent {
+        authority: FrozenSirAuthorityV1,
+        terminal: ContentId<ProposalHostTerminalArtifact>,
+        proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
+        requests: ContentId<IntentDecisionRequestBatchArtifact>,
+        request: ContentId<UserIntentDecisionRequestArtifact>,
+        authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
+        decision: ContentId<UserIntentDecisionArtifact>,
+        executable: ContentId<IntentAdmissionExecutableArtifact>,
+        restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+        outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+        contract: ContentId<MigrationIntentContractArtifact>,
+    },
 }
 
 /// One business action selected from recovered durable Controller state.
@@ -99,6 +143,18 @@ pub enum ControllerWorkflowNextActionV1 {
     AwaitUserIntentDecision {
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
+    },
+    AuthorizeIntentAdmission {
+        decision: ContentId<UserIntentDecisionArtifact>,
+    },
+    RunIntentAdmission {
+        decision: ContentId<UserIntentDecisionArtifact>,
+        executable: ContentId<IntentAdmissionExecutableArtifact>,
+        restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+    },
+    AwaitOracleWorkflow {
+        outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+        contract: ContentId<MigrationIntentContractArtifact>,
     },
 }
 
@@ -128,6 +184,27 @@ impl ControllerWorkflowStateV1 {
             } => ControllerWorkflowNextActionV1::AwaitUserIntentDecision {
                 proposal: *proposal,
                 requests: *requests,
+            },
+            Self::UserIntentDecisionRecorded { decision, .. } => {
+                ControllerWorkflowNextActionV1::AuthorizeIntentAdmission {
+                    decision: *decision,
+                }
+            }
+            Self::IntentAdmissionAuthorized {
+                decision,
+                executable,
+                restricted_store,
+                ..
+            } => ControllerWorkflowNextActionV1::RunIntentAdmission {
+                decision: *decision,
+                executable: *executable,
+                restricted_store: *restricted_store,
+            },
+            Self::AdmittedIntent {
+                outcome, contract, ..
+            } => ControllerWorkflowNextActionV1::AwaitOracleWorkflow {
+                outcome: *outcome,
+                contract: *contract,
             },
         }
     }
@@ -187,6 +264,29 @@ struct SirProposalRecordedPayload {
 #[serde(deny_unknown_fields)]
 struct IntentDecisionRequestsRecordedPayload {
     requests: ContentId<IntentDecisionRequestBatchArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UserIntentDecisionRecordedPayload {
+    request: ContentId<UserIntentDecisionRequestArtifact>,
+    authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
+    decision: ContentId<UserIntentDecisionArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IntentAdmissionAuthorizedPayload {
+    decision: ContentId<UserIntentDecisionArtifact>,
+    executable: ContentId<IntentAdmissionExecutableArtifact>,
+    restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AdmittedIntentRecordedPayload {
+    outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+    contract: ContentId<MigrationIntentContractArtifact>,
 }
 
 struct Projection {
@@ -404,6 +504,203 @@ pub fn record_intent_decision_requests<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
+/// Records an authenticated task-authority decision without interpreting it as admitted intent.
+///
+/// # Errors
+///
+/// Rejects cross-task, request/batch/grant/decision identity drift, illegal transitions, replay
+/// conflicts, or persistence failures.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "batch, request, grant, decision, command, and observation authorities remain explicit"
+)]
+pub fn record_user_intent_decision<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    batch: &IntentDecisionRequestBatchV1,
+    request_id: ContentId<UserIntentDecisionRequestArtifact>,
+    request: &UserIntentDecisionRequestV1,
+    grant_id: ContentId<UserIntentAuthorityGrantArtifact>,
+    grant: &UserIntentAuthorityGrantV1,
+    decision_id: ContentId<UserIntentDecisionArtifact>,
+    decision: &UserIntentDecisionV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if request.identity().map_err(binding_error)? != request_id
+        || grant.identity().map_err(binding_error)? != grant_id
+        || decision.identity().map_err(binding_error)? != decision_id
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let projection = project(events, workflow)?;
+    let payload = UserIntentDecisionRecordedPayload {
+        request: request_id,
+        authority_grant: grant_id,
+        decision: decision_id,
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        USER_INTENT_DECISION_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::AwaitingUserIntentDecision {
+        authority,
+        proposal,
+        requests,
+        ..
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if batch.identity().map_err(binding_error)? != *requests
+        || batch.proposal() != *proposal
+        || batch.recovery_input() != authority.recovery_input
+        || !batch.requests().iter().any(|candidate| {
+            candidate == request
+                && candidate
+                    .identity()
+                    .is_ok_and(|candidate_id| candidate_id == request_id)
+        })
+        || request.proposal() != *proposal
+        || request.recovery_input() != authority.recovery_input
+        || grant.task_id() != authority.task_id
+        || decision.request() != request_id
+        || decision.authority_grant() != grant_id
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        USER_INTENT_DECISION_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Commits the exact independent Admission executable before the restricted effect may start.
+///
+/// # Errors
+///
+/// Rejects decision drift, illegal transitions, replay conflicts, or persistence failures.
+pub fn authorize_intent_admission<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    decision: ContentId<UserIntentDecisionArtifact>,
+    executable: ContentId<IntentAdmissionExecutableArtifact>,
+    restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let projection = project(events, workflow)?;
+    let payload = IntentAdmissionAuthorizedPayload {
+        decision,
+        executable,
+        restricted_store,
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        INTENT_ADMISSION_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::UserIntentDecisionRecorded {
+        decision: recorded, ..
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if *recorded != decision {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        INTENT_ADMISSION_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Records the public outcome returned after the independent Admission restricted commit.
+///
+/// # Errors
+///
+/// Rejects executable/decision/contract/outcome binding drift, illegal transitions, replay
+/// conflicts, or persistence failures.
+pub fn record_admitted_intent<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    outcome_id: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+    outcome: &IntentAdmissionPublicOutcomeV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if outcome.identity().map_err(binding_error)? != outcome_id {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let contract = outcome.contract();
+    let contract_id = contract.identity().map_err(binding_error)?;
+    let projection = project(events, workflow)?;
+    let payload = AdmittedIntentRecordedPayload {
+        outcome: outcome_id,
+        contract: contract_id,
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ADMITTED_INTENT_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::IntentAdmissionAuthorized {
+        authority,
+        proposal,
+        request,
+        authority_grant,
+        decision,
+        ..
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if contract.task_id() != authority.task_id
+        || contract.recovery_input() != authority.recovery_input
+        || contract.proposal() != *proposal
+        || contract.request() != *request
+        || contract.authority_grant() != *authority_grant
+        || contract.user_decision() != *decision
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ADMITTED_INTENT_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
 /// Recovers the exact current Controller state and rejects illegal/non-V1 history.
 ///
 /// # Errors
@@ -499,6 +796,10 @@ fn project<E: EventStore>(
     })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the aggregate reducer intentionally keeps the legal Controller stage sequence visible"
+)]
 fn apply(
     task_id: TaskId,
     state: ControllerWorkflowStateV1,
@@ -541,6 +842,83 @@ fn apply(
             proposal,
             requests: decode::<IntentDecisionRequestsRecordedPayload>(bytes)?.requests,
         }),
+        (
+            ControllerWorkflowStateV1::AwaitingUserIntentDecision {
+                authority,
+                terminal,
+                proposal,
+                requests,
+            },
+            USER_INTENT_DECISION_RECORDED,
+        ) => {
+            let payload: UserIntentDecisionRecordedPayload = decode(bytes)?;
+            Ok(ControllerWorkflowStateV1::UserIntentDecisionRecorded {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request: payload.request,
+                authority_grant: payload.authority_grant,
+                decision: payload.decision,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::UserIntentDecisionRecorded {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+            },
+            INTENT_ADMISSION_AUTHORIZED,
+        ) => {
+            let payload: IntentAdmissionAuthorizedPayload = decode(bytes)?;
+            if payload.decision != decision {
+                return Err(invalid_history("Intent Admission decision changed"));
+            }
+            Ok(ControllerWorkflowStateV1::IntentAdmissionAuthorized {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                executable: payload.executable,
+                restricted_store: payload.restricted_store,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::IntentAdmissionAuthorized {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                executable,
+                restricted_store,
+            },
+            ADMITTED_INTENT_RECORDED,
+        ) => {
+            let payload: AdmittedIntentRecordedPayload = decode(bytes)?;
+            Ok(ControllerWorkflowStateV1::AdmittedIntent {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                executable,
+                restricted_store,
+                outcome: payload.outcome,
+                contract: payload.contract,
+            })
+        }
         (_, _) => Err(invalid_history(
             "illegal Controller workflow event transition",
         )),
@@ -679,10 +1057,16 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::{
+    use cairn_admission::{
+        AuthoritativeIntentClaimV1, CollectionOutputIntentV1, CollectionOutputOrderContractV1,
+        IntentAdmissionRestrictedStoreArtifact, TaskIntentAuthoritySubject,
+        UserIntentAuthorityGrantV1, UserIntentAuthorityScopeV1, UserIntentDecisionResponseV1,
+        UserIntentDecisionV1, promote_user_intent,
+    };
+    use cairn_migration::{
         AgentResolvedRuntimeModelArtifact, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
         ProposalHostBinaryIdentity, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
-        ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1, SirProposalSubmissionV1,
+        ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1, SirCallerClaimId, SirHypothesisId,
         SirSourceLineCount, SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskArtifactV1,
         SirTaskBundleV1, SirTaskLimits, derive_user_intent_decision_requests,
     };
@@ -745,8 +1129,19 @@ mod tests {
         (request, recovery_input)
     }
 
-    fn submission() -> SirProposalSubmissionV1 {
-        serde_json::from_value::<SirProposalSubmissionV1>(submission_value()).expect("submission")
+    fn proposal(
+        recovery_input: ContentId<IntentRecoveryInputArtifact>,
+        episode_id: EpisodeId,
+        model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
+    ) -> IntentHypothesisSetProposalV1 {
+        serde_json::from_value(json!({
+            "schema_version":1,
+            "recovery_input":recovery_input,
+            "episode_id":episode_id,
+            "model_configuration":model_configuration,
+            "submission":submission_value()
+        }))
+        .expect("proposal")
     }
 
     fn submission_value() -> Value {
@@ -810,7 +1205,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "one linear control keeps the complete durable prefix and its fail-closed probes visible"
     )]
-    fn durable_prefix_stops_at_user_authority_and_rejects_cross_task_input() {
+    fn durable_intent_path_stops_at_oracle_and_rejects_authority_drift() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let mut events =
             SqliteEventStore::open(temporary.path().join("events.db")).expect("event store");
@@ -865,11 +1260,10 @@ mod tests {
             ControllerWorkflowNextActionV1::RunSirEpisode(_)
         ));
 
-        let drifted_proposal = IntentHypothesisSetProposalV1::new(
+        let drifted_proposal = proposal(
             recovery_input_id,
             request.runtime().episode_id(),
             id::<AgentResolvedRuntimeModelArtifact>(b"drifted model"),
-            submission(),
         );
         let drifted_proposal_id = drifted_proposal.identity().expect("proposal id");
         let drifted_terminal: ProposalHostTerminalV1 = serde_json::from_value(json!({
@@ -898,11 +1292,10 @@ mod tests {
             Err(ControllerWorkflowError::BindingMismatch)
         ));
 
-        let proposal = IntentHypothesisSetProposalV1::new(
+        let proposal = proposal(
             recovery_input_id,
             request.runtime().episode_id(),
             request.runtime().model_configuration(),
-            submission(),
         );
         let proposal_id = proposal.identity().expect("proposal id");
         let terminal: ProposalHostTerminalV1 = serde_json::from_value(json!({
@@ -990,5 +1383,182 @@ mod tests {
             ),
             Err(ControllerWorkflowError::CommandConflict)
         ));
+
+        let user_request = batch.requests()[0].clone();
+        let user_request_id = user_request.identity().expect("user request id");
+        let selection_claim =
+            SirCallerClaimId::new("copies-strictly-above").expect("selection claim");
+        let cross_task_grant = UserIntentAuthorityGrantV1::new(
+            TaskId::new(),
+            TaskIntentAuthoritySubject::new("task-authority:cross-task").expect("subject"),
+            UserIntentAuthorityScopeV1::CollectionOutput {
+                selection_claim: selection_claim.clone(),
+            },
+        );
+        let cross_task_grant_id = cross_task_grant.identity().expect("cross-task grant id");
+        let cross_task_decision = UserIntentDecisionV1::new(
+            user_request_id,
+            cross_task_grant_id,
+            UserIntentDecisionResponseV1::SelectHypothesis {
+                hypothesis: SirHypothesisId::new("order-unspecified").expect("hypothesis"),
+                authoritative_claim: AuthoritativeIntentClaimV1::CollectionOutput(
+                    CollectionOutputIntentV1::exact_selected_occurrences(
+                        selection_claim.clone(),
+                        CollectionOutputOrderContractV1::UnspecifiedPermutation,
+                    ),
+                ),
+            },
+        );
+        assert!(matches!(
+            record_user_intent_decision(
+                &mut events,
+                &workflow,
+                &batch,
+                user_request_id,
+                &user_request,
+                cross_task_grant_id,
+                &cross_task_grant,
+                cross_task_decision
+                    .identity()
+                    .expect("cross-task decision id"),
+                &cross_task_decision,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(5),
+            ),
+            Err(ControllerWorkflowError::BindingMismatch)
+        ));
+
+        let grant = UserIntentAuthorityGrantV1::new(
+            task_id,
+            TaskIntentAuthoritySubject::new("task-authority:user").expect("subject"),
+            UserIntentAuthorityScopeV1::CollectionOutput {
+                selection_claim: selection_claim.clone(),
+            },
+        );
+        let grant_id = grant.identity().expect("grant id");
+        let decision = UserIntentDecisionV1::new(
+            user_request_id,
+            grant_id,
+            UserIntentDecisionResponseV1::SelectHypothesis {
+                hypothesis: SirHypothesisId::new("order-unspecified").expect("hypothesis"),
+                authoritative_claim: AuthoritativeIntentClaimV1::CollectionOutput(
+                    CollectionOutputIntentV1::exact_selected_occurrences(
+                        selection_claim,
+                        CollectionOutputOrderContractV1::UnspecifiedPermutation,
+                    ),
+                ),
+            },
+        );
+        let decision_id = decision.identity().expect("decision id");
+        let decision_command = CommandId::new();
+        let state = record_user_intent_decision(
+            &mut events,
+            &workflow,
+            &batch,
+            user_request_id,
+            &user_request,
+            grant_id,
+            &grant,
+            decision_id,
+            &decision,
+            &decision_command,
+            ObservedAtUnixMillis::new(5),
+        )
+        .expect("record user decision");
+        assert_eq!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::AuthorizeIntentAdmission {
+                decision: decision_id
+            }
+        );
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("decision restart recovery"),
+            state
+        );
+
+        let executable = id::<IntentAdmissionExecutableArtifact>(b"admission executable");
+        let restricted_store = id::<IntentAdmissionRestrictedStoreArtifact>(b"restricted store");
+        let admission_command = CommandId::new();
+        let state = authorize_intent_admission(
+            &mut events,
+            &workflow,
+            decision_id,
+            executable,
+            restricted_store,
+            &admission_command,
+            ObservedAtUnixMillis::new(6),
+        )
+        .expect("authorize Admission");
+        assert_eq!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::RunIntentAdmission {
+                decision: decision_id,
+                executable,
+                restricted_store,
+            }
+        );
+        assert_eq!(
+            authorize_intent_admission(
+                &mut events,
+                &workflow,
+                decision_id,
+                executable,
+                restricted_store,
+                &admission_command,
+                ObservedAtUnixMillis::new(6),
+            )
+            .expect("exact Admission authority replay"),
+            state
+        );
+
+        let admitted = promote_user_intent(
+            proposal_id,
+            match terminal.publication() {
+                ProposalHostPublicationV1::Sir { proposal, .. } => proposal,
+                _ => unreachable!(),
+            },
+            recovery_input_id,
+            &recovery_input,
+            user_request_id,
+            &user_request,
+            grant_id,
+            &grant,
+            decision_id,
+            &decision,
+        )
+        .expect("prepare admitted intent");
+        let outcome = admitted.public_outcome();
+        let outcome_id = outcome.identity().expect("outcome id");
+        assert!(matches!(
+            record_admitted_intent(
+                &mut events,
+                &workflow,
+                id::<IntentAdmissionPublicOutcomeArtifact>(b"drifted outcome"),
+                outcome,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(7),
+            ),
+            Err(ControllerWorkflowError::BindingMismatch)
+        ));
+        let state = record_admitted_intent(
+            &mut events,
+            &workflow,
+            outcome_id,
+            outcome,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(7),
+        )
+        .expect("record admitted intent");
+        assert_eq!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::AwaitOracleWorkflow {
+                outcome: outcome_id,
+                contract: outcome.contract().identity().expect("contract id"),
+            }
+        );
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("admission restart recovery"),
+            state
+        );
     }
 }

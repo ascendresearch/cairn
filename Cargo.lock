@@ -270,6 +270,7 @@ dependencies = [
 name = "cairn-server"
 version = "0.1.0"
 dependencies = [
+ "cairn-admission",
  "cairn-agent",
  "cairn-codec",
  "cairn-control-transport",

@@ -8,7 +8,11 @@ mod candidate_manager;
 mod candidate_workflow;
 #[cfg(feature = "proposal-host")]
 mod controller_manager;
+#[cfg(feature = "proposal-host")]
+mod controller_state;
 mod enrollment;
+#[cfg(feature = "proposal-host")]
+mod intent_admission_supervisor;
 #[cfg(feature = "proposal-host")]
 mod proposal_host_supervisor;
 mod scheduling;
@@ -21,7 +25,20 @@ pub use candidate_manager::{
 #[cfg(feature = "proposal-host")]
 pub use controller_manager::{
     ControllerWorkflowManagerStatusV1, drive_controller_workflow_once,
-    freeze_sir_controller_request,
+    freeze_sir_controller_request, record_controller_user_intent_decision,
+};
+#[cfg(feature = "proposal-host")]
+pub use controller_state::{
+    ControllerWorkflowError, ControllerWorkflowNextActionV1, ControllerWorkflowStateV1,
+    ControllerWorkflowV1, FrozenSirAuthorityV1, authorize_intent_admission, authorize_sir_episode,
+    freeze_controller_workflow, record_admitted_intent, record_intent_decision_requests,
+    record_sir_proposal, record_user_intent_decision, recover_controller_workflow,
+};
+#[cfg(feature = "proposal-host")]
+pub use intent_admission_supervisor::{
+    IntentAdmissionProcessBlockedV1, IntentAdmissionProcessConfigV1,
+    IntentAdmissionProcessTimeoutMillis, IntentAdmissionStderrByteLimit,
+    IntentAdmissionStdoutByteLimit,
 };
 #[cfg(feature = "proposal-host")]
 pub use proposal_host_supervisor::{

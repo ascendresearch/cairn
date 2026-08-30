@@ -64,6 +64,37 @@ impl ContentType for RestrictedIntentAdmissionDecisionArtifact {
     const DOMAIN: &'static str = "admission.intent-decision-restricted.v1";
 }
 
+/// Exact independent Admission executable authorized for one Controller operation.
+pub enum IntentAdmissionExecutableArtifact {}
+
+impl ContentType for IntentAdmissionExecutableArtifact {
+    const DOMAIN: &'static str = "admission.intent-admission-executable.v1";
+}
+
+/// Exact restricted-store target authorized for one independent Admission operation.
+///
+/// ```compile_fail
+/// use cairn_admission::{
+///     IntentAdmissionExecutableArtifact, IntentAdmissionRestrictedStoreArtifact,
+/// };
+/// use cairn_protocol::ContentId;
+/// fn require_store(_: ContentId<IntentAdmissionRestrictedStoreArtifact>) {}
+/// let executable = ContentId::<IntentAdmissionExecutableArtifact>::derive(b"binary").unwrap();
+/// require_store(executable);
+/// ```
+pub enum IntentAdmissionRestrictedStoreArtifact {}
+
+impl ContentType for IntentAdmissionRestrictedStoreArtifact {
+    const DOMAIN: &'static str = "admission.intent-admission-restricted-store.v1";
+}
+
+/// Public outcome returned only after the independent Admission process commits restricted state.
+pub enum IntentAdmissionPublicOutcomeArtifact {}
+
+impl ContentType for IntentAdmissionPublicOutcomeArtifact {
+    const DOMAIN: &'static str = "migration.intent-admission-public-outcome.v1";
+}
+
 /// Authenticated application subject selected by a Controller authority grant.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TaskIntentAuthoritySubject(String);
@@ -176,6 +207,16 @@ impl UserIntentAuthorityGrantV1 {
         &self,
     ) -> Result<ContentId<UserIntentAuthorityGrantArtifact>, IntentPromotionError> {
         derive_id(self)
+    }
+
+    #[must_use]
+    pub const fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+
+    #[must_use]
+    pub const fn scope(&self) -> &UserIntentAuthorityScopeV1 {
+        &self.scope
     }
 }
 
@@ -406,6 +447,26 @@ impl MigrationIntentContractV1 {
     pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
         self.recovery_input
     }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<SirIntentHypothesisSetProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn request(&self) -> ContentId<UserIntentDecisionRequestArtifact> {
+        self.request
+    }
+
+    #[must_use]
+    pub const fn authority_grant(&self) -> ContentId<UserIntentAuthorityGrantArtifact> {
+        self.authority_grant
+    }
+
+    #[must_use]
+    pub const fn user_decision(&self) -> ContentId<UserIntentDecisionArtifact> {
+        self.user_decision
+    }
 }
 
 impl TryFrom<MigrationIntentContractWire> for MigrationIntentContractV1 {
@@ -537,6 +598,18 @@ impl IntentAdmissionPublicOutcomeV1 {
         &self,
     ) -> ContentId<RestrictedIntentAdmissionDecisionArtifact> {
         self.restricted_decision
+    }
+
+    /// Derives the exact public outcome identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid current-V1 structure or typed identity encoding failure.
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<IntentAdmissionPublicOutcomeArtifact>, IntentPromotionError> {
+        self.validate()?;
+        derive_id(self)
     }
 }
 

@@ -8,9 +8,10 @@ license.workspace = true
 
 [features]
 default = ["proposal-host"]
-proposal-host = ["dep:cairn-agent", "cairn-migration/agent-runtime"]
+proposal-host = ["dep:cairn-admission", "dep:cairn-agent", "cairn-migration/agent-runtime"]
 
 [dependencies]
+cairn-admission = { workspace = true, optional = true }
 cairn-agent = { workspace = true, optional = true }
 cairn-control-transport.workspace = true
 cairn-codec.workspace = true

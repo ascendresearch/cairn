@@ -54,6 +54,12 @@ authority提交后才允许统一Proposal Host运行；terminal/proposal成为ty
 归档后状态明确停在`AwaitingUserIntentDecision`。完整骨架也加入derive decision requests与await user decision两个
 独立stage，Intent Admission不能替用户选择。通用Host supervision已从Candidate模块抽出供SIR/Candidate共享；本片
 没有运行live model、Intent Admission、Worker、Docker或NPU。
+DEV-027继续把actual typed authority grant/decision和independent Intent Admission接入同一个task-owned aggregate：
+individual request先进入public CAS，Admission executable与restricted-store target先获得durable start authority，
+child使用immutable public store并先提交restricted contract/decision，Controller只接受canonical public outcome并
+完整验证task/input/proposal/request/grant/decision binding。aggregate现明确停在`AwaitOracleWorkflow`，不会自动运行
+Oracle。Controller aggregate已从migration领域crate移到server composition root，旧模块/re-export直接删除；没有
+compatibility path。本片只运行本地model-free process control，没有调用live model、remote Worker、Docker或NPU。
 
 ## 2. 可复用基础
 
@@ -62,7 +68,7 @@ authority提交后才允许统一Proposal Host运行；terminal/proposal成为ty
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；旧 Blue/Red 拓扑不是目标产品拓扑 |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | readable twelve-stage Controller composition skeleton、durable SIR-to-user-decision prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | prefix明确等待真实user decision；Intent Admission/Oracle与Candidate suffix尚未并入一个连续aggregate；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
+| Product workflow | readable twelve-stage Controller composition skeleton、durable SIR-to-admitted-intent prefix、task-owned Candidate native suffix aggregate、Controller process drivers、shared generic Proposal Host supervision、independent model-free Intent Admission supervision、统一request/episode/observation/submission/terminal loop、scheduler/reconcile/receipt折回、exact replay | prefix明确停在Oracle边界；Oracle与Candidate suffix尚未并入一个连续aggregate；Host尚无external experiment yield/resume；尚无task intake/catalog、native success或最终migration workflow |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
@@ -79,7 +85,7 @@ authority提交后才允许统一Proposal Host运行；terminal/proposal成为ty
 
 ## 4. 当前仍未完成
 
-- 完整 Intent Admission、Oracle portfolio/Candidate authority chain；DEV-008–024 只覆盖一个窄
+- 完整 Intent/Oracle portfolio与Candidate authority chain；DEV-008–027 只覆盖一个窄
   host/finite-normal collection claim，从 promotion、Oracle publication 推进到 remote native repair build和
   recorded durable suffix；
 - native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
@@ -149,10 +155,12 @@ exact SIR Host request + recovery input
 → durable SIR episode start authority
 → typed terminal/proposal observation
 → model-free intent decision requests
-→ AwaitingUserIntentDecision
+→ actual typed user decision
+→ independent Intent Admission
+→ AwaitOracleWorkflow
 ```
 
-它尚未消费真实user decision，也未调用independent Intent Admission。
+它尚未接入Oracle Blue/Red、Oracle Admission或后续Candidate suffix。
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
 或 verdict。最新local product output是DEV-024 common-loop lifecycle controls；DEV-023 recorded/local manager、
@@ -190,5 +198,6 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-024 | Accepted | SIR/Candidate role-specific runner与旁路测试删除；统一冻结request/profile/capability、durable observation、strict repair与terminal lifecycle；无live model/Worker调用 |
 | DEV-025 | Accepted | 完整Controller顺序固化为typed stage-port骨架；unavailable stage fail closed；真实Candidate turn收敛为recover/select/execute；无live effect调用 |
 | DEV-026 | Accepted | durable Controller接通exact SIR→decision requests并停在用户决策边界；shared Host supervision、restart/replay/cross-task/model-drift controls闭合；无live effect调用 |
+| DEV-027 | Accepted | actual user decision与independent Intent Admission接入同一durable aggregate并停在Oracle边界；executable/restricted-store authority、real local child、restart/replay/cross-task/drift controls闭合；无live model/Worker调用 |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。
