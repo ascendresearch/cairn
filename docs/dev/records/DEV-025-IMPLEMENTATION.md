@@ -53,7 +53,7 @@ recover_candidate_controller_turn
 ```
 
 action router一眼展示当前已实现的真实分支：freeze native build、schedule Worker、reconcile observation、freeze
-Candidate Proposal Host episode、run Candidate Proposal Loop、return terminal。原有dispatch commit-before-effect、
+Candidate proposal step episode、run Candidate Proposal Loop、return terminal。原有dispatch commit-before-effect、
 Host invocation marker、receipt folding、blocked semantics和optimistic recovery不变，具体代码限制在各自函数内。
 
 ## 4. 占位规则

@@ -1,13 +1,19 @@
 # Cairn 当前开发基线
 
 - 状态：当前事实账本；不把目标设计误报为实现
-- 日期：2026-08-30
+- 日期：2026-08-31
 - 产品范围：仅限 CUDA → Ascend C 算子移植
 
 ## 1. 当前结论
 
 Cairn 已有可复用的 durable agent runtime、record/replay、tool loop、provider protocols、worker/scheduler 和
 局部验证基础，但新的 CUDA → Ascend C 端到端 workflow 尚未完成。
+
+D-044/DEV-036已经直接修正运行架构：proposal 是 `cairn-server` 主 workflow 中的 typed Agent step，没有
+独立process、binary、service identity、OS principal、私有episode database或invocation marker。旧DEV-022–029
+段落记录的是已被删除的开发路径，只用于解释历史证据，不能作为current-V1入口或部署说明。当前外部effect
+边界是`WorkflowToolRequest → Controller JobContract authority → capability-matched cairn-worker → exact
+observation`；App API尚未接上真实local Worker runner。
 
 CP0已经证明DeepSeek可作为runtime actor面对不同task产生task-generic SIR proposal，并在atomic compaction
 task上改变一个具体Oracle选择。CP0结论为`Go`：SIR当前以proposal-only capability进入架构，并继续沿第一个
@@ -29,43 +35,29 @@ native gate 正确关闭该绕过；DEV-020 的最新 exact repair 仍为 `Subje
 consumer、mid-episode SQLite restart、exact replay/changed-input和typed domain controls均已闭合，旧one-shot
 examples、专用smoke scripts和三项手工native ignored tests已删除。DEV-021没有调用模型或远端Worker，因此当前
 仍无 native build success、NPU execution、semantic Candidate Admission、performance 或最终 verdict。
-DEV-022又以一个generic Proposal Host process接管SIR及Candidate initial/revision/native repair profiles；
-DEV-021的persisted episode request现在可由Controller从public CAS物化、经Host运行并把typed publication返回
-同一workflow。跨role、strict binding、child-process restart replay均用recorded transport闭合，旧`cairn-sir`
-及SIR/Candidate专用one-shot launcher已删除。DEV-022同样没有调用live model或Worker。
-DEV-023现已让active Controller中的单任务process manager直接消费该durable next action：native dispatch先提交再
-schedule，Worker terminal receipt机械折回typed diagnostic/terminal，Candidate episode先冻结exact Host binary/
-model/runtime与operation marker再启动generic Host。`NoCandidate`、expired、ambiguous和Host invocation/process
-failure均保留原ID并typed blocked，不会隐式换attempt或episode。两个materially different task、local controlled
-receipt及real recorded Host child/restart controls已闭合；本片仍没有调用live model或Worker。
-DEV-024又删除了遗留的SIR/Candidate role-specific runner及可绕过generic Host的两套integration test，把所有
-现有profile收敛到一个durable Proposal Loop。Host application层现在明确执行freeze request、drive frozen
-episode、freeze terminal三段；共同loop在episode打开前冻结model-visible content IDs、tool catalog、budget和
-validated capability grant，tool result先归档为`OperationResult`再进入continuation，invalid strict submission
-可在同一budget内修复。Host只执行pure/read-only capability，外部effect typed fail closed并保留给Controller。
-`run_proposal_loop`顶层只保留open/dispatch/settle/admit/authorized-execute/project/advance步骤，各步骤之间使用
-distinct internal typestate。本片没有调用live model、Worker、Docker或NPU。
+DEV-022–024曾把SIR/Candidate proposal抽成独立进程，并把重复的role runner收敛到进程私有组合层；
+D-044/DEV-036已删除该进程crate、supervisor、stdin/stdout协议、binary identity、私有SQLite/CAS与process
+reconciliation。保留的是更早就存在于`cairn-agent`的domain-neutral episode/model/tool operation primitives，
+现在由Controller自己的event/content stores驱动；它们不构成独立proposal subsystem或execution authority。
 DEV-025又让Controller的完整产品顺序成为可读typed composition skeleton。每一阶段只有独立port且没有
 default成功实现；DEV-028纠正了其中把具体Blue/Red策略误写成必经stage的漂移。当前recorded control证明
 `Oracle Exploration → Oracle Admission`顺序，unavailable Oracle Exploration control证明不会运行任何下游stage。现有真实
 Candidate manager turn同时收敛为recover/select/execute三步，原有effect authority与receipt folding不变。完整
 Controller aggregate仍未接通，本片也没有调用live model、Worker、Docker或NPU。
-DEV-026现已接入第一个真实Controller prefix：exact SIR Host request和recovery input先归档并冻结，durable start
-authority提交后才允许统一Proposal Host运行；terminal/proposal成为typed observation，model-free decision requests
+DEV-026现已接入第一个真实Controller prefix：exact SIR request和recovery input先归档并冻结，durable start
+authority提交后才允许运行proposal step；terminal/proposal成为typed observation，model-free decision requests
 归档后状态明确停在`AwaitingUserIntentDecision`。完整骨架也加入derive decision requests与await user decision两个
-独立stage，Intent Admission不能替用户选择。通用Host supervision已从Candidate模块抽出供SIR/Candidate共享；本片
-没有运行live model、Intent Admission、Worker、Docker或NPU。
+独立stage，Intent Admission不能替用户选择。
 DEV-027继续把actual typed authority grant/decision和independent Intent Admission接入同一个task-owned aggregate：
 individual request先进入public CAS，Admission executable与restricted-store target先获得durable start authority，
 child使用immutable public store并先提交restricted contract/decision，Controller只接受canonical public outcome并
 完整验证task/input/proposal/request/grant/decision binding。aggregate通过`AwaitOracleExplorationWorkspace`接收
 Oracle输入，但不会自动运行strategy。Controller aggregate已从migration领域crate移到server composition root，旧模块/re-export直接删除；没有
 compatibility path。本片只运行本地model-free process control，没有调用live model、remote Worker、Docker或NPU。
-DEV-029补齐了generic Proposal Host的external experiment round trip：current-V1 Host outcome现在可以是terminal或
-request/episode/step/model-attempt/operation/exact-arguments绑定的durable yield；Controller重新核对Host journal并在
-Worker adapter调用前提交operation authorization/start，job/attempt/contract一致的execution receipt与observation
-成为canonical `OperationResult`后，同一episode从原native continuation继续。recorded control证明Host零external
-effect、yielding model turn不重发及terminal child restart；本片没有新增具体experiment tool，也未调用live Worker。
+DEV-029最初加入的process-specific external-effect yield/journal已删除。Current V1只保留
+request/episode/step/model-attempt/operation/exact-arguments绑定的`WorkflowToolRequest`：Controller在Worker
+adapter调用前提交operation authorization/start，job/attempt/contract一致的execution receipt与observation成为
+canonical `OperationResult`后，同一Agent step从原native continuation继续。
 DEV-030把Oracle完备性直接固化为current-V1生产类型：Controller按claim×concern×role机械展开mandatory
 work item，冻结source/docs/build/tests/knowledge/research/experiment capability的workspace，以parent-linked ledger
 保存strategy、Controller-authorized experiment、provenance observation和typed portfolio element，并由独立Admission
@@ -75,17 +67,30 @@ source/docs/build-tests/knowledge/tool catalogs/capability均已归档，再归�
 机械重算的initial ledger，并把task aggregate推进到`RunOracleExploration` ready authority。
 DEV-031已接通该strategy consumer。Controller从完整admitted intent body重建structured claim，选择一个exact
 cell与catalog executor，先提交durable run authority；deterministic strategy提交带implementation provenance的
-strict result，Agent strategy则由generic Proposal Host冻结exact source/docs/build-tests/knowledge、model、tool catalog
-和budget。Agent外部effect先yield，Controller在start authority后接收receipt-bound result，将其重算并归档为
+strict result，Agent strategy则由generic proposal step冻结exact source/docs/build-tests/knowledge、model、tool catalog
+和budget。Agent提出typed Worker request，Controller在start authority后接收receipt-bound result，将其重算并归档为
 distinct Controller observation、Oracle payload和run-bound Oracle observation，再更新immutable ledger并恢复同一
 episode。fixed model-debate modules/example/tests已删除；coverage gap保持terminal但Admission永远视为partial。本片
 只使用recorded adapter，没有调用live model、网络、remote Worker、Docker或NPU。
 DEV-032继续把terminal ledger机械冻结为exact portfolio与strict Admission policy，在同一个Controller aggregate中
 冻结qualified mechanism inventory和完整item × control attempt，只接受exact trusted receipt provenance并于event
 replay时model-free重算admitted/partial/rejected claim portfolio。DEV-033继续冻结admitted-only Candidate
-contract/workspace、exact typed public Oracle bodies、Candidate Host request/start/terminal、product-owned build plan、
+contract/workspace、exact typed public Oracle bodies、Candidate proposal request/start/terminal、product-owned build plan、
 durable build start与Worker receipt observation，再机械展开claim × item × plane Candidate controls并独立重算terminal；
-没有运行真实control mechanism、model、Worker或NPU。
+没有运行真实control mechanism、model、Worker或NPU。DEV-034已经把Oracle receipt入口替换为qualified
+mechanism runner：catalog冻结distinct mechanism/runner/qualification，Controller逐项形成run与runner-bound dispatch，
+先提交durable start authority，再只从job/attempt/contract/content-exact的Worker observation机械生成receipt并完成
+Oracle Admission。该slice使用recorded observation验证authority/replay，没有产生live control或设备事实。
+旧`collection_oracle_admission.rs`及其独立prepare/commit/publication API已同时删除；collection comparator仍可作为
+admitted Intent的typed consumer，但不能再绕过aggregate发布Oracle authority。
+DEV-035正在建立唯一客户入口：新增typed `cairn-sdk`、Unix-socket App API和reference
+`cairn-cli`，submit/list/status/watch/cancel/SIR review与三种用户响应都回到同一Controller stream；没有第二个
+task authority store，也没有fixture runner。首个正常入口dogfood曾由真实DeepSeek为NVIDIA `cuda-samples`
+`vectorAdd`生成source-cited SIR并完成用户选择与Intent Admission；其开发数据库冻结了已删除的process-based
+runtime identity，已按pre-release current-V1规则废弃，不能转移为新架构运行证据。
+本次评审还修正了Intent Admission只发布selected hypothesis而丢失其他caller-authoritative claims的问题：current V1
+contract同时保存exact scoped caller declarations与选定/补充的冲突解。新架构尚未产生Oracle outcome；
+App API的qualified Oracle mechanism runner仍显式fail closed。
 
 ## 2. 可复用基础
 
@@ -94,13 +99,13 @@ durable build start与Worker receipt observation，再机械展开claim × item 
 | Record/protocol | 强类型 V1 codec、CAS/event、durable identity、record/replay、SQLite fault/restart | 不自动具有 product authority 或 restricted capability |
 | Agent runtime | OpenAI-compatible/Anthropic paths、DeepSeek deployment、episode/tool/budget/repair、recorded provider | 保持 domain-neutral；Oracle Agent由catalog分配到单个claim × concern × role cell，不存在fixed debate topology |
 | Execution | scheduler/lease/attempt/output、Docker、CUDA/Ascend build 的历史证据 | Worker 不解释 operator intent，不把历史 run 变成当前 claim |
-| Product workflow | readable Controller composition skeleton、单一task-owned SIR→terminal aggregate、逐cell deterministic/Agent executor、typed effect observation projection、independent Oracle/Candidate Admission、generic Candidate Host、product-owned build authority、Worker receipt折回与exact replay | 尚无production Oracle/Candidate control runner、失败/partial后的generic revision policy、GitHub/NPU adapter、task intake/catalog、native success或live terminal verdict |
+| Product workflow | readable Controller composition skeleton、单一task-owned SIR→terminal aggregate、typed SDK/App API/CLI task intake与review、Controller内逐cell deterministic/Agent step、WorkflowTool→Worker observation contract、qualified Oracle control contract、independent Oracle/Candidate Admission、product-owned build authority | App API尚未组合真实local Worker/qualified Oracle runner；尚无generic revision policy、GitHub/NPU adapter、native success或live terminal verdict |
 | Verification mechanics | comparison、mutation、receipt binding 和历史 reduction controls | 只有出现真实 Gate consumer 后才按 exact implementation qualification |
 | Testkit | DEV-003 provenance/sanitation；DEV-001 clean-room reduction fixture | evaluator-only；production crate 不得依赖或读取 expected/private answer |
 
 ## 3. 历史证据的边界
 
-- 已删除的model-backed debate只保留Git历史事实，不是current product path；当前证据来自generic逐cell Host和
+- 已删除的model-backed debate只保留Git历史事实，不是current product path；当前证据来自Controller内逐cell Agent step和
   recorded effect adapter，不证明live model quality或完整Oracle portfolio adequacy。
 - `matmul-zero-k` 证明一条狭窄 materialization/call-adapter 路径，不代表一般 Oracle coverage。
 - historical reduction 证明若干 comparison/mutation blind spot，只作为 control；旧 domain shape 不定义新
@@ -111,13 +116,13 @@ durable build start与Worker receipt observation，再机械展开claim × item 
 
 ## 4. 当前仍未完成
 
-- qualified Oracle/Candidate control mechanism runner，以及把真实receipt接入现有mechanical attempt/evidence；
+- qualified Candidate control mechanism runner，以及把真实receipt接入现有mechanical Candidate attempt/evidence；
 - Candidate失败/partial后的generic、observation-bound revision policy；不得恢复已删除的collection/native三段式；
 - native ASC build success、真实 NPU execution、semantic/safety/performance admission 与最终 verdict；
 - 统一 CUDA reference → Ascend build/NPU evidence graph；
 - performance、knowledge/skill、feedback 和 platform/release hardening。
 
-目标设计中的完整 Proposal Host pool、多任务catalog、十一位置 catalog、七类 Planner、完整 mechanism registry 和
+目标设计中的完整 proposal step pool、多任务catalog、十一位置 catalog、七类 Planner、完整 mechanism registry 和
 future crate只是条件设计，不是当前待办或已实现事实；DEV-023只实现一个已存在Task需要的最小Controller supervisor，
 DEV-024只统一现有role consumer，不预建新role或Host pool。
 
@@ -161,7 +166,7 @@ DEV-008只允许独立Admission消费exact proposal + authority decision后构�
 independently admitted claim portfolio
 → admitted-only CandidateOracleContractV1
 → exact public claim/Oracle bodies + task workspace
-→ frozen generic Candidate Proposal Host episode
+→ frozen generic Candidate proposal step episode
 → strict CandidateProposalV1
 → product-owned CandidateBuildPlanV1
 → durable Worker start authority + ExecutionReceipt observation
@@ -185,19 +190,21 @@ exact SIR Host request + recovery input
 → per-cell deterministic/Agent strategy and typed observations
 → terminal portfolio + strict Admission policy freeze
 → qualified mechanism inventory + mechanical control attempt
+→ qualified runner-bound dispatch + durable start authority
+→ exact Worker observation + mechanical receipt
 → trusted evidence + independent claim outcome
 → admitted-only Candidate contract/workspace + exact public Oracle bodies
-→ generic Candidate Proposal Host request/start/typed terminal
+→ generic Candidate proposal step request/start/typed terminal
 → product-owned build authority + Worker receipt observation
 → mechanical Candidate control matrix + independent Admission
 → admitted / partial / rejected terminal
 ```
 
-旧`MigrationWorkflowV1`、collection/native Candidate suffix与固定`dav-3510` build profile已删除。具体Oracle/Candidate
-control mechanism runner与失败后的generic revision policy仍须后续slice实现。
+旧`MigrationWorkflowV1`、collection/native Candidate suffix与固定`dav-3510` build profile已删除。Oracle control
+runner已由DEV-034接入；具体Candidate control runner与失败后的generic revision policy仍须后续slice实现。
 
 最新live output仍是 DEV-020 的 authoritative `SubjectFailed` native build receipt，不是 admitted Candidate
-或 verdict。最新local product output是DEV-033 recorded Candidate terminal closure；所有DEV-021–033 recorded/local
+或 verdict。最新local product output是DEV-034 recorded Oracle runner/Admission closure；所有DEV-021–034 recorded/local
 workflow、generic-Host replay与receipt折回evidence仍不是新的live build。
 DEV-020证明 exact repair 在 exact CANN/`dav-3510` no-device environment 中未通过 `bisheng`；不能把compile
 failure外推为语义错误，也不能把recorded workflow或跨主机闭环误报为真实 NPU evidence。
@@ -227,17 +234,20 @@ failure外推为语义错误，也不能把recorded workflow或跨主机闭环�
 | DEV-019 | Accepted | 建立显式、可重复但不自动续轮的 native repair lineage；DeepSeek 提交 exact repair |
 | DEV-020 | Accepted | exact repair 远端 native rebuild 为 `SubjectFailed`；`__kernel__` 在当前 toolchain 为 unknown type |
 | DEV-021 | Accepted | task-owned current-V1 workflow固化native suffix；recorded two-material consumer、restart/replay与旧手工入口删除闭合；无model/remote Worker调用 |
-| DEV-022 | Accepted | generic Proposal Host承载SIR/Candidate role profiles并消费persisted workflow request；child restart exact terminal replay与旧专用launcher删除闭合；无live model/Worker调用 |
-| DEV-023 | Accepted | active Controller单任务manager消费durable action并连接Host/scheduler/receipt；exact operation marker、blocked no-replacement与旧public helper删除闭合；无live model/Worker调用 |
-| DEV-024 | Accepted | SIR/Candidate role-specific runner与旁路测试删除；统一冻结request/profile/capability、durable observation、strict repair与terminal lifecycle；无live model/Worker调用 |
+| DEV-022 | Superseded by DEV-036 | 历史独立proposal process已删除；只保留其typed role request/publication约束的历史证据 |
+| DEV-023 | Superseded by DEV-036 | 历史proposal child/supervision已删除；scheduler与Worker receipt约束由current workflow直接消费 |
+| DEV-024 | Amended by DEV-036 | role-specific旁路仍已删除；进程私有组合层改为Controller内共享Agent episode runner |
 | DEV-025 | Accepted | 完整Controller顺序固化为typed stage-port骨架；unavailable stage fail closed；真实Candidate turn收敛为recover/select/execute；无live effect调用 |
-| DEV-026 | Accepted | durable Controller接通exact SIR→decision requests并停在用户决策边界；shared Host supervision、restart/replay/cross-task/model-drift controls闭合；无live effect调用 |
+| DEV-026 | Amended by DEV-036 | durable Controller接通exact SIR→decision requests并停在用户决策边界；独立supervision已删除，typed restart/replay/cross-task/model-drift controls保留 |
 | DEV-027 | Accepted | actual user decision与independent Intent Admission接入同一durable aggregate并停在Oracle边界；executable/restricted-store authority、real local child、restart/replay/cross-task/drift controls闭合；无live model/Worker调用 |
 | DEV-028 | Accepted | Controller主骨架纠正为Oracle Exploration→Admission；旧Blue/Red公开路径删除并收窄为可选model-backed debate strategy；文档、示例、配置、tests与静态漂移controls闭合；无live effect调用 |
-| DEV-029 | Accepted | Proposal Host external effect改为typed durable yield；Controller start-before-Worker、receipt provenance和same-episode/no-redispatch resume闭合；无live effect或具体experiment adapter |
+| DEV-029 | Superseded by DEV-036 | process-specific yield/journal已删除；Controller start-before-Worker、receipt provenance和same-episode/no-redispatch约束保留为typed Worker request |
 | DEV-030 | Accepted | claim-scoped多平面obligation、durable exploration ledger、typed portfolio、independent admission内核与task-owned initial-ledger opening闭合；停在strategy consumer，无live model/Worker |
-| DEV-031 | Accepted | structured admitted claims、逐cell deterministic/Agent strategy、typed effect observation→ledger、strict completion provenance与fixed debate删除闭合；无live model/network/Worker/NPU |
+| DEV-031 | Accepted / amended by DEV-036 | structured admitted claims、逐cell deterministic/Agent strategy、typed Worker observation→ledger与fixed debate删除闭合；无live model/network/Worker/NPU |
 | DEV-032 | Accepted | terminal portfolio/policy、qualified mechanism inventory、机械control attempt、trusted evidence与independent claim outcome接入同一Controller aggregate；停在Candidate边界，无live model/network/Worker/NPU |
-| DEV-033 | Accepted | generic Candidate Host、product-owned build authority、Worker receipt observation、机械plane controls、independent Candidate Admission与terminal接入同一aggregate；旧collection/native suffix删除，无live model/network/Worker/NPU |
+| DEV-033 | Accepted / amended by DEV-036 | generic Candidate proposal step、product-owned build authority、Worker receipt observation、机械plane controls、independent Candidate Admission与terminal接入同一aggregate；无独立proposal runtime |
+| DEV-034 | Accepted | qualified Oracle mechanism/runner/qualification inventory、durable run/dispatch start、exact ExecutionReceipt observation与mechanical Admission receipt接入同一aggregate；无live model/network/Worker/Docker/NPU |
+| DEV-035 | InProgress | typed SDK/App API/CLI已接入同一aggregate；旧process数据库中的vectorAdd曾完成SIR review与Intent Admission，但已废弃；尚需local Worker runner后从正常入口重跑Oracle closure |
+| DEV-036 | Accepted | 独立proposal process/binary/supervisor/private journal/process-specific yield删除；SIR/Oracle/Candidate作为Controller typed Agent step运行，外部能力只形成typed Worker request |
 
 详细历史保留在 Git；当前状态以本表和 [`SLICE_CATALOG.md`](SLICE_CATALOG.md) 为准。

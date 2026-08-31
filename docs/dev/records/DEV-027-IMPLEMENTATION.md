@@ -82,7 +82,7 @@ Admission consumer，不声称已经泛化为完整Intent/Oracle portfolio。
 ## 6. 明确非目标
 
 - 不认证真实UI/HTTP subject；调用方仍须在进入typed grant API前完成用户身份认证；
-- 不让Controller、runtime model或Proposal Host读取restricted artifacts；
+- 不让Controller、runtime model或proposal step读取restricted artifacts；
 - 不接Oracle Blue/Red、Oracle Admission、Candidate suffix或global terminal；
 - 不实现Controller↔Host external experiment yield/resume；
 - 不扩展现有窄collection-output Intent schema为通用migration intent portfolio；

@@ -1,25 +1,22 @@
 [package]
-name = "cairn-proposal-host"
-description = "Generic role-scoped Proposal Host for Cairn"
+name = "cairn-sdk"
+description = "Typed Cairn task client resources and local App API transport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-cairn-agent.workspace = true
+cairn-admission.workspace = true
 cairn-codec.workspace = true
 cairn-migration = { workspace = true, features = ["agent-runtime"] }
-cairn-observability.workspace = true
 cairn-protocol.workspace = true
-cairn-record.workspace = true
-cairn-store-sqlite.workspace = true
 serde.workspace = true
-sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-tempfile.workspace = true
 
 [lints]
 workspace = true

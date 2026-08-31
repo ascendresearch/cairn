@@ -51,6 +51,33 @@ impl SqliteEventStore {
 }
 
 impl EventStore for SqliteEventStore {
+    fn list_streams(&self, kind: &AggregateKind) -> Result<Vec<StreamId>, EventStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT aggregate_id FROM streams
+                 WHERE aggregate_kind = ?1
+                 ORDER BY aggregate_id ASC",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![kind.as_str()], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let mut streams = Vec::new();
+        for row in rows {
+            let aggregate_id = row.map_err(storage_error)?;
+            streams.push(StreamId {
+                kind: kind.clone(),
+                id: AggregateId::new(aggregate_id).map_err(|error| {
+                    EventStoreError::InvalidEventPayload {
+                        message: error.to_string(),
+                    }
+                })?,
+            });
+        }
+        Ok(streams)
+    }
+
     fn append(
         &mut self,
         stream: &StreamId,

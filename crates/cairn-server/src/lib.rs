@@ -2,56 +2,56 @@
 
 pub mod controller_workflow;
 
-#[cfg(feature = "proposal-host")]
+#[cfg(feature = "migration-runtime")]
+mod app_api;
+#[cfg(feature = "migration-runtime")]
 mod controller_manager;
-#[cfg(feature = "proposal-host")]
+#[cfg(feature = "migration-runtime")]
 mod controller_state;
 mod enrollment;
-#[cfg(feature = "proposal-host")]
+#[cfg(feature = "migration-runtime")]
 mod intent_admission_supervisor;
-#[cfg(feature = "proposal-host")]
-mod proposal_host_supervisor;
+#[cfg(feature = "migration-runtime")]
+mod proposal_step_runner;
 mod scheduling;
 
-#[cfg(feature = "proposal-host")]
+#[cfg(feature = "migration-runtime")]
 pub use controller_manager::{
     ControllerWorkflowManagerStatusV1, authorize_controller_oracle_admission,
-    drive_controller_workflow_once, execute_controller_oracle_strategy_experiments,
+    dispatch_controller_oracle_worker_request, drive_controller_workflow_once,
     freeze_sir_controller_request, initialize_candidate_build, initialize_candidate_proposal_loop,
-    initialize_controller_oracle_exploration, prepare_candidate_strategy_proposal_host_request,
-    prepare_oracle_strategy_proposal_host_request, record_controller_oracle_admission_evidence,
+    initialize_controller_oracle_exploration, initialize_product_oracle_exploration,
+    prepare_candidate_strategy_proposal_step_request,
+    prepare_oracle_strategy_proposal_step_request, reauthorize_controller_intent_admission,
     record_controller_oracle_strategy_submission, record_controller_oracle_strategy_terminal,
     record_controller_user_intent_decision,
 };
-#[cfg(feature = "proposal-host")]
+#[cfg(feature = "migration-runtime")]
 pub use controller_state::{
     ControllerWorkflowError, ControllerWorkflowNextActionV1, ControllerWorkflowStateV1,
     ControllerWorkflowV1, FrozenCandidateAdmissionAuthorityV1, FrozenCandidateBuildAuthorityV1,
     FrozenCandidateOracleAuthorityV1, FrozenCandidateProposalAuthorityV1,
-    FrozenOracleAdmissionAuthorityV1, FrozenOracleExplorationAuthorityV1,
-    FrozenOraclePortfolioAuthorityV1, FrozenOracleStrategyAuthorityV1, FrozenSirAuthorityV1,
-    MigrationTerminalStatusV1, OracleStrategyCompletionV1, authorize_candidate_admission,
-    authorize_candidate_build, authorize_candidate_proposal_episode, authorize_intent_admission,
-    authorize_oracle_admission, authorize_oracle_strategy, authorize_sir_episode,
+    FrozenOracleAdmissionAuthorityV1, FrozenOracleControlAuthorityV1,
+    FrozenOracleExplorationAuthorityV1, FrozenOraclePortfolioAuthorityV1,
+    FrozenOracleStrategyAuthorityV1, FrozenSirAuthorityV1, MigrationTerminalStatusV1,
+    OracleStrategyCompletionV1, authorize_candidate_admission, authorize_candidate_build,
+    authorize_candidate_proposal_episode, authorize_intent_admission, authorize_oracle_admission,
+    authorize_oracle_strategy, authorize_sir_episode, cancel_controller_workflow,
     freeze_candidate_build, freeze_candidate_oracle_contract, freeze_candidate_proposal_request,
     freeze_controller_workflow, freeze_oracle_portfolio, open_oracle_exploration,
     record_admitted_intent, record_candidate_admission_outcome, record_candidate_build_observation,
-    record_candidate_proposal, record_intent_decision_requests, record_oracle_admission_outcome,
-    record_oracle_strategy_completion, record_oracle_strategy_observations, record_sir_proposal,
-    record_user_intent_decision, recover_controller_workflow,
+    record_candidate_proposal, record_intent_decision_requests, record_oracle_strategy_completion,
+    record_oracle_strategy_observations, record_sir_proposal, record_user_intent_decision,
+    recover_controller_workflow,
 };
-#[cfg(feature = "proposal-host")]
+#[cfg(feature = "migration-runtime")]
 pub use intent_admission_supervisor::{
     IntentAdmissionProcessBlockedV1, IntentAdmissionProcessConfigV1,
     IntentAdmissionProcessTimeoutMillis, IntentAdmissionStderrByteLimit,
     IntentAdmissionStdoutByteLimit,
 };
-#[cfg(feature = "proposal-host")]
-pub use proposal_host_supervisor::{
-    ProposalHostProcessBlockedV1, ProposalHostProcessConfigV1, ProposalHostProcessTimeoutMillis,
-    ProposalHostStderrByteLimit, ProposalHostStdoutByteLimit,
-    execute_proposal_host_controller_experiments,
-};
+#[cfg(feature = "migration-runtime")]
+pub use proposal_step_runner::{ProposalStepConfigV1, execute_controller_workflow_tools};
 
 pub use enrollment::{
     RegistryCredentialInspection, RegistryCredentialProvenance, RegistryCredentialStatus,
@@ -76,6 +76,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "migration-runtime")]
+use cairn_agent::{ModelTemplate, ModelTemplateRegistry, RuntimeModelAlias, RuntimeModelCatalog};
 use cairn_control_transport::{
     CertificateFingerprint, ControllerRejectCode, ControllerWireMessage, EnrollmentBundle,
     EnrollmentRejectCode, EnrollmentRequest, EnrollmentResponse, ServerTlsFiles, TransportPolicy,
@@ -121,6 +123,9 @@ pub struct ServerConfig {
     pub tls: ServerTlsFiles,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
+    /// Optional local product API. The field is required in current-V1 configuration; `null`
+    /// disables client task intake explicitly.
+    pub app_api: Option<AppApiConfigV1>,
     pub protocol_version: WorkerProtocolVersion,
     pub session_timeout_ms: WorkerSessionTimeoutMillis,
     /// Optional generic scheduler service. `null` disables new placement while worker control and
@@ -137,6 +142,39 @@ pub struct ServerConfig {
     #[serde(default)]
     pub transport: TransportPolicy,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
+}
+
+/// Local product API and migration-runtime composition.
+#[cfg(feature = "migration-runtime")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppApiConfigV1 {
+    pub unix_socket: PathBuf,
+    /// Authenticated principal represented by access to this local server boundary.
+    pub intent_authority_subject: cairn_admission::TaskIntentAuthoritySubject,
+    pub proposal_step: ProposalStepConfigV1,
+    pub intent_admission: IntentAdmissionProcessConfigV1,
+    pub oracle: ProductOracleConfigV1,
+}
+
+/// Product-owned, task-generic Oracle Exploration policy and public context.
+#[cfg(feature = "migration-runtime")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductOracleConfigV1 {
+    pub coverage_profile: cairn_migration::OracleCoverageProfileV1,
+    pub adversarial_policy: cairn_migration::OracleAdversarialPolicyV1,
+    pub budget: cairn_migration::OracleExplorationBudgetV1,
+    pub documentation: String,
+    pub build_and_tests: String,
+}
+
+/// Placeholder definition for builds that intentionally exclude migration Proposal step support.
+#[cfg(not(feature = "migration-runtime"))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppApiConfigV1 {
+    pub unix_socket: PathBuf,
 }
 
 /// Isolated server-authenticated listener and certificate authority used only for bootstrap.
@@ -202,7 +240,7 @@ pub struct ServerStorageConfig {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id>"
+        "usage: cairn-server <config.json> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -239,6 +277,55 @@ pub async fn run_from_arguments(
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let first = arguments.next().ok_or(ServerError::Usage)?;
+    #[cfg(feature = "migration-runtime")]
+    if first == "model" {
+        if arguments.next().as_deref() != Some(std::ffi::OsStr::new("resolve")) {
+            return Err(ServerError::Usage);
+        }
+        let catalog_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let template_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let alias = RuntimeModelAlias::new(
+            arguments
+                .next()
+                .ok_or(ServerError::Usage)?
+                .into_string()
+                .map_err(|_| ServerError::Usage)?,
+        )
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        let output_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let catalog: RuntimeModelCatalog = serde_json::from_slice(
+            &fs::read(catalog_path)
+                .map_err(|error| ServerError::Configuration(error.to_string()))?,
+        )
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        let template: ModelTemplate = serde_json::from_slice(
+            &fs::read(template_path)
+                .map_err(|error| ServerError::Configuration(error.to_string()))?,
+        )
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        let templates = ModelTemplateRegistry::from_templates([template])
+            .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        let resolved = catalog
+            .resolve(&templates, Some(&alias))
+            .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        write_new_secret_file(
+            &output_path,
+            &resolved
+                .canonical_bytes()
+                .map_err(|error| ServerError::Configuration(error.to_string()))?,
+        )?;
+        tracing::info!(
+            target: "cairn.server.model",
+            event = "runtime_model_resolved",
+            model_alias = alias.as_str(),
+            output = %output_path.display(),
+            "resolved secret-free runtime model snapshot"
+        );
+        return Ok(());
+    }
     if first == "reservation" {
         let action = arguments.next().ok_or(ServerError::Usage)?;
         if action != "release" {
@@ -683,6 +770,10 @@ pub fn revoke_enrollment_authority(
 /// # Errors
 ///
 /// Returns an error for invalid configuration, TLS/storage startup, or listener failure.
+#[allow(
+    clippy::too_many_lines,
+    reason = "startup keeps listener, storage, enrollment, and App API lifetimes visibly composed"
+)]
 pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     config.validate()?;
     let tls = config
@@ -704,6 +795,20 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
+    #[cfg(feature = "migration-runtime")]
+    if let Some(app_api_config) = config.app_api.clone() {
+        let app_api_server = config.clone();
+        tokio::spawn(async move {
+            if let Err(error) = app_api::run_listener(app_api_server, app_api_config).await {
+                tracing::error!(
+                    target: "cairn.server.app-api",
+                    event = "app_api_listener_failed",
+                    error = %error,
+                    "App API listener terminated"
+                );
+            }
+        });
+    }
     if let Some(service) = config.enrollment_service.clone() {
         let enrollment_tls_files = ServerTlsFiles {
             certificate: service.server_tls.certificate.clone(),
@@ -792,6 +897,26 @@ impl ServerConfig {
 
     fn validate(&self) -> Result<(), ServerError> {
         self.validate_schema()?;
+        #[cfg(feature = "migration-runtime")]
+        if let Some(app_api) = &self.app_api {
+            if !app_api.unix_socket.is_absolute() {
+                return Err(ServerError::Configuration(
+                    "App API unix_socket must be absolute".into(),
+                ));
+            }
+            app_api.proposal_step.validate()?;
+            app_api.intent_admission.validate(self)?;
+            if app_api.oracle.documentation.trim() != app_api.oracle.documentation
+                || app_api.oracle.documentation.is_empty()
+                || app_api.oracle.build_and_tests.trim() != app_api.oracle.build_and_tests
+                || app_api.oracle.build_and_tests.is_empty()
+            {
+                return Err(ServerError::Configuration(
+                    "Oracle documentation and build/test context must be non-empty and trimmed"
+                        .into(),
+                ));
+            }
+        }
         if self.scheduler.as_ref().is_some_and(|scheduler| {
             scheduler.policy_version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV1
         }) {
@@ -843,6 +968,12 @@ impl ServerConfig {
         resolve(&mut self.tls.certificate, base);
         resolve(&mut self.tls.private_key, base);
         resolve(&mut self.tls.client_ca, base);
+        #[cfg(feature = "migration-runtime")]
+        if let Some(app_api) = &mut self.app_api {
+            resolve(&mut app_api.unix_socket, base);
+            app_api.proposal_step.resolve_paths(base);
+            app_api.intent_admission.resolve_paths(base);
+        }
         if let Some(service) = &mut self.enrollment_service {
             resolve(&mut service.server_ca, base);
             resolve(&mut service.server_tls.certificate, base);

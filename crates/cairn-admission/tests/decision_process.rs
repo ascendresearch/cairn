@@ -3,15 +3,13 @@ use std::{fs, io::Cursor, path::Path, process::Command};
 use cairn_admission::{
     IntentAdmissionPublicOutcomeV1, TaskIntentAuthoritySubject, UserIntentAuthorityGrantArtifact,
     UserIntentAuthorityGrantV1, UserIntentAuthorityScopeV1, UserIntentDecisionArtifact,
-    UserIntentDecisionResponseV1, UserIntentDecisionV1, derive_collection_output_oracle_decision,
+    UserIntentDecisionResponseV1, UserIntentDecisionV1, UserProvidedIntentClaimV1,
 };
 use cairn_migration::{
-    AgentResolvedRuntimeModelArtifact, AuthoritativeIntentClaimV1, CollectionOracleElementArtifact,
-    CollectionOutputComparisonV1, CollectionOutputIntentV1, CollectionOutputOraclePolicyV1,
-    CollectionOutputOrderContractV1, CollectionReportedCount, ExpectedCollectionOracleOutputV1,
-    IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
-    IntentRecoveryRequestV1, ObservedCollectionOracleOutputV1, SirCallerClaimId,
-    SirCapabilityManifestV1, SirHypothesisId, SirTaskBundleArtifact, SirTaskLimits,
+    AgentResolvedRuntimeModelArtifact, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputV1, IntentRecoveryRequestV1, SirCallerClaimId, SirCapabilityManifestV1,
+    SirHypothesisClaim, SirHypothesisId, SirIntentDomain, SirIntentLayer, SirTaskBundleArtifact,
+    SirTaskLimits,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use cairn_record::ContentStore;
@@ -150,12 +148,11 @@ fn child_process_reads_exact_public_artifacts_and_emits_only_canonical_v1() {
     let request = batch.requests()[0].clone();
     let request_id = request.identity().expect("request identity");
     let selection_claim = SirCallerClaimId::new("copies-strictly-above").expect("caller claim");
+    let capacity_claim = SirCallerClaimId::new("output-capacity").expect("caller claim");
     let grant = UserIntentAuthorityGrantV1::new(
         task_id,
         TaskIntentAuthoritySubject::new("task-authority:user").expect("authority subject"),
-        UserIntentAuthorityScopeV1::CollectionOutput {
-            selection_claim: selection_claim.clone(),
-        },
+        UserIntentAuthorityScopeV1::new(vec![selection_claim, capacity_claim]).expect("scope"),
     );
     let grant_id = grant.identity().expect("grant identity");
     let decision = UserIntentDecisionV1::new(
@@ -163,12 +160,6 @@ fn child_process_reads_exact_public_artifacts_and_emits_only_canonical_v1() {
         grant_id,
         UserIntentDecisionResponseV1::SelectHypothesis {
             hypothesis: SirHypothesisId::new("order-unspecified").expect("hypothesis"),
-            authoritative_claim: AuthoritativeIntentClaimV1::CollectionOutput(
-                CollectionOutputIntentV1::exact_selected_occurrences(
-                    selection_claim,
-                    CollectionOutputOrderContractV1::UnspecifiedPermutation,
-                ),
-            ),
         },
     );
     let decision_id = decision.identity().expect("decision identity");
@@ -228,42 +219,25 @@ fn child_process_reads_exact_public_artifacts_and_emits_only_canonical_v1() {
         cairn_codec::to_vec(&outcome).expect("canonical outcome"),
         promoted.stdout
     );
-    let oracle = derive_collection_output_oracle_decision(&outcome).expect("Oracle policy");
     assert_eq!(
-        oracle.policy(),
-        CollectionOutputOraclePolicyV1::ExactMultisetAndCount
+        outcome
+            .contract()
+            .admitted_claim()
+            .operation()
+            .semantics()
+            .as_str(),
+        "Any permutation of qualifying values is acceptable."
     );
-    let first = ContentId::<CollectionOracleElementArtifact>::derive(b"first").expect("first");
-    let second = ContentId::<CollectionOracleElementArtifact>::derive(b"second").expect("second");
-    let expected =
-        ExpectedCollectionOracleOutputV1::new(vec![first, second]).expect("expected output");
-    let reordered =
-        ObservedCollectionOracleOutputV1::new(vec![second, first], CollectionReportedCount::new(2))
-            .expect("reordered output");
     assert_eq!(
-        oracle.compare(&expected, &reordered),
-        CollectionOutputComparisonV1::Equivalent
-    );
-    let missing =
-        ObservedCollectionOracleOutputV1::new(vec![first], CollectionReportedCount::new(1))
-            .expect("missing output");
-    assert_eq!(
-        oracle.compare(&expected, &missing),
-        CollectionOutputComparisonV1::ReportedCountMismatch
-    );
-    let wrong_count =
-        ObservedCollectionOracleOutputV1::new(vec![first, second], CollectionReportedCount::new(1))
-            .expect("wrong count output");
-    assert_eq!(
-        oracle.compare(&expected, &wrong_count),
-        CollectionOutputComparisonV1::ReportedCountMismatch
-    );
-    let duplicate =
-        ObservedCollectionOracleOutputV1::new(vec![first, first], CollectionReportedCount::new(2))
-            .expect("duplicate output");
-    assert_eq!(
-        oracle.compare(&expected, &duplicate),
-        CollectionOutputComparisonV1::ElementMultisetMismatch
+        outcome
+            .contract()
+            .admitted_claim()
+            .operation()
+            .caller_claims()
+            .iter()
+            .map(|claim| claim.id().as_str())
+            .collect::<Vec<_>>(),
+        vec!["copies-strictly-above", "output-capacity"]
     );
 
     let restricted =
@@ -285,17 +259,79 @@ fn child_process_reads_exact_public_artifacts_and_emits_only_canonical_v1() {
     let _: cairn_admission::RestrictedIntentAdmissionDecisionV1 =
         cairn_codec::from_slice(&archived_decision).expect("strict restricted decision");
 
+    let provided = UserIntentDecisionV1::new(
+        request_id,
+        grant_id,
+        UserIntentDecisionResponseV1::ProvideAuthoritativeClaim {
+            claim: UserProvidedIntentClaimV1::new(
+                SirIntentLayer::ObservableContract,
+                SirHypothesisClaim::new("Preserve stable source order for every qualifying value.")
+                    .expect("provided semantics"),
+                SirIntentDomain::new("Successful calls with sufficient output capacity.")
+                    .expect("provided domain"),
+            ),
+        },
+    );
+    let provided_id = provided.identity().expect("provided decision identity");
+    let mut controller_store = SqliteContentStore::open(&database, &cas).expect("controller store");
+    assert_eq!(
+        controller_store
+            .put::<UserIntentDecisionArtifact>(&mut Cursor::new(
+                cairn_codec::to_vec(&provided).expect("provided bytes"),
+            ))
+            .expect("archive provided decision")
+            .content_id,
+        provided_id
+    );
+    drop(controller_store);
+    let provided_restricted_database = state.path().join("provided-restricted.db");
+    let provided_restricted_cas = state.path().join("provided-restricted-cas");
+    let provided_output = Command::new(env!("CARGO_BIN_EXE_cairn-admission"))
+        .args([
+            "promote-user-intent",
+            database.to_str().expect("database path"),
+            cas.to_str().expect("CAS path"),
+            provided_restricted_database
+                .to_str()
+                .expect("restricted database"),
+            provided_restricted_cas.to_str().expect("restricted CAS"),
+            &provided_id.to_wire(),
+        ])
+        .env_clear()
+        .output()
+        .expect("provided promotion process");
+    assert!(
+        provided_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provided_output.stderr)
+    );
+    assert!(provided_output.stderr.is_empty());
+    let provided_outcome: IntentAdmissionPublicOutcomeV1 =
+        cairn_codec::from_slice(&provided_output.stdout).expect("provided outcome");
+    assert_eq!(
+        provided_outcome
+            .contract()
+            .admitted_claim()
+            .operation()
+            .semantics()
+            .as_str(),
+        "Preserve stable source order for every qualifying value."
+    );
+    assert_eq!(
+        provided_outcome
+            .contract()
+            .admitted_claim()
+            .operation()
+            .caller_claims()
+            .len(),
+        2
+    );
+
     let unoffered = UserIntentDecisionV1::new(
         request_id,
         grant_id,
         UserIntentDecisionResponseV1::SelectHypothesis {
             hypothesis: SirHypothesisId::new("not-an-offered-hypothesis").expect("hypothesis"),
-            authoritative_claim: AuthoritativeIntentClaimV1::CollectionOutput(
-                CollectionOutputIntentV1::exact_selected_occurrences(
-                    SirCallerClaimId::new("copies-strictly-above").expect("caller claim"),
-                    CollectionOutputOrderContractV1::UnspecifiedPermutation,
-                ),
-            ),
         },
     );
     let unoffered_id = unoffered.identity().expect("unoffered decision identity");

@@ -8,7 +8,6 @@ mod candidate_exploration;
 #[cfg(feature = "agent-runtime")]
 mod candidate_strategy_episode;
 mod collection_oracle;
-mod collection_oracle_admission;
 mod corpus_execution;
 mod corpus_observation;
 mod domain;
@@ -22,15 +21,12 @@ mod intent_admission;
 mod intent_claim;
 mod materialize;
 mod memory_surface;
+mod oracle_control;
 mod oracle_exploration;
 #[cfg(feature = "agent-runtime")]
 mod oracle_strategy_episode;
 #[cfg(feature = "agent-runtime")]
-mod proposal_experiment;
-#[cfg(feature = "agent-runtime")]
-mod proposal_host;
-#[cfg(feature = "agent-runtime")]
-mod proposal_loop;
+mod proposal_step;
 mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
@@ -38,6 +34,8 @@ mod reduction_mutation;
 mod sir;
 mod sir_contract;
 mod variant_execution;
+#[cfg(feature = "agent-runtime")]
+mod workflow_tool;
 
 pub use assemble::{
     AssembledBoundaryCaseInput, AssembledInputValueCaseInput, AssembledMemorySurfaceCaseInput,
@@ -103,17 +101,6 @@ pub use collection_oracle::{
     ObservedCollectionOracleOutputArtifact, ObservedCollectionOracleOutputV1,
     PreparedCollectionOutputComparisonEvidence, assemble_collection_f32_oracle_case,
     collection_oracle_mechanism_id, materialize_collection_output_comparison,
-};
-pub use collection_oracle_admission::{
-    AdmittedCollectionOracleClaimArtifact, AdmittedCollectionOracleClaimV1,
-    CollectionOracleAdmissionError, CollectionOracleAdmissionGateArtifact,
-    CollectionOracleClaimDomainV1, CollectionOracleClaimProposalArtifact,
-    CollectionOracleClaimProposalV1, CollectionOracleClaimStrengthV1, CollectionOracleClosureV1,
-    CollectionOracleQualificationExecution, CollectionOracleQualificationLimitV1,
-    CollectionOracleQualificationReceiptArtifact, CollectionOracleQualificationReceiptV1,
-    CollectionOracleQualificationTrialV1, CollectionOracleRequalificationTriggerV1,
-    PreparedAdmittedCollectionOracleClaim, collection_oracle_admission_gate_id,
-    prepare_admitted_collection_oracle_claim, prepare_collection_oracle_claim_proposal,
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
@@ -187,10 +174,7 @@ pub use intent_admission::{
     UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserIntentDecisionResponseKind,
     derive_user_intent_decision_requests,
 };
-pub use intent_claim::{
-    AuthoritativeIntentClaimV1, CollectionMembershipContractV1, CollectionOutputIntentV1,
-    CollectionOutputOrderContractV1, CollectionReportedCountContractV1,
-};
+pub use intent_claim::{AuthoritativeIntentClaimV1, OperationIntentV1};
 pub use materialize::{
     CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount,
     CorpusMaterializationError, MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
@@ -206,9 +190,16 @@ pub use memory_surface::{
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
 };
+pub use oracle_control::{
+    OracleControlDispatchArtifact, OracleControlDispatchV1, OracleControlRunArtifact,
+    OracleControlRunV1, OracleControlRunnerArtifact, OracleControlWorker,
+    OracleControlWorkerBindingV1, OracleControlWorkerError,
+    OracleMechanismQualificationReceiptArtifact, OracleMechanismQualificationReceiptV1,
+    TrustedOracleControlObservationV1,
+};
 pub use oracle_exploration::{
-    IndependentOracleAdmissionStages, OracleAdmissionAttemptArtifact, OracleAdmissionAttemptV1,
-    OracleAdmissionEvidenceArtifact, OracleAdmissionEvidenceV1,
+    AgentRuntimeBindingArtifact, IndependentOracleAdmissionStages, OracleAdmissionAttemptArtifact,
+    OracleAdmissionAttemptV1, OracleAdmissionEvidenceArtifact, OracleAdmissionEvidenceV1,
     OracleAdmissionMechanismCatalogArtifact, OracleAdmissionMechanismCatalogV1,
     OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1, OracleAdmissionPolicyArtifact,
     OracleAdmissionPolicyV1, OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact,
@@ -239,31 +230,22 @@ pub use oracle_exploration::{
     OracleStrategyToolV1, OracleUnknownEvidenceArtifact, OracleUnknownEvidenceV1,
     OracleUnknownReason, OracleWaiverAuthorityArtifact, OracleWorkItemArtifact, OracleWorkItemV1,
     OracleWorkspaceArtifact, OracleWorkspaceInput, OracleWorkspaceV1,
-    ProposalHostControllerObservationArtifact, TrustedOracleControlReceiptArtifact,
-    TrustedOracleWorkerReceiptArtifact, TrustedOracleWorkerReceiptV1,
+    TrustedOracleControlReceiptArtifact, TrustedOracleWorkerReceiptArtifact,
+    TrustedOracleWorkerReceiptV1, WorkflowToolControllerObservationArtifact,
     archive_oracle_framework_artifact, derive_oracle_claims, derive_oracle_work_items,
     recompute_oracle_admission, run_independent_oracle_admission, run_oracle_exploration,
 };
 #[cfg(feature = "agent-runtime")]
 pub(crate) use oracle_strategy_episode::{OracleStrategyProfileInput, run_oracle_strategy_profile};
 #[cfg(feature = "agent-runtime")]
-pub use proposal_experiment::{
-    ProposalHostControllerObservationV1, ProposalHostExecutedObservationV1,
-    ProposalHostExperimentDispatchArtifact, ProposalHostExperimentDispatchV1,
-    ProposalHostExperimentError, ProposalHostExperimentWorker, ProposalHostExperimentWorkerError,
-    ProposalHostWorkerBindingV1, ProposalHostWorkerObservationV1,
-    execute_proposal_host_experiments,
-};
-#[cfg(feature = "agent-runtime")]
-pub use proposal_host::{
-    ProposalHostBinaryIdentity, ProposalHostError, ProposalHostExperimentOperationV1,
-    ProposalHostExperimentRequestArtifact, ProposalHostExperimentRequestV1,
-    ProposalHostInvocationArtifact, ProposalHostOracleBuildTestsV1,
-    ProposalHostOracleDocumentationV1, ProposalHostOracleKnowledgeV1,
-    ProposalHostOracleMaterialsV1, ProposalHostOutcomeV1, ProposalHostPublicationV1,
-    ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostRoleRequestV1,
-    ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
-    ProposalHostTerminalArtifact, ProposalHostTerminalV1, run_proposal_host_episode,
+pub use proposal_step::{
+    ProposalStepError, ProposalStepOracleBuildTestsV1, ProposalStepOracleDocumentationV1,
+    ProposalStepOracleKnowledgeV1, ProposalStepOracleMaterialsV1, ProposalStepOutcomeV1,
+    ProposalStepPublicationV1, ProposalStepRequestArtifact, ProposalStepRequestV1,
+    ProposalStepRoleRequestV1, ProposalStepRuntimeV1, ProposalStepTaskSnapshotV1,
+    ProposalStepTaskSourceV1, ProposalStepTerminalArtifact, ProposalStepTerminalV1,
+    WorkflowToolOperationV1, WorkflowToolRequestArtifact, WorkflowToolRequestV1,
+    run_proposal_step_episode,
 };
 pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,
@@ -337,6 +319,13 @@ pub use variant_execution::{
     VariantBuildPlanV1, VariantBuildReceiptArtifact, VariantBuildReceiptV1, VariantExecutionError,
     VariantImplementationByteLimit, compose_exact_variant_trial, prepare_variant_build_job,
     validate_variant_build_receipt,
+};
+#[cfg(feature = "agent-runtime")]
+pub use workflow_tool::{
+    WorkflowToolControllerObservationV1, WorkflowToolDispatchArtifact, WorkflowToolDispatchV1,
+    WorkflowToolError, WorkflowToolExecutedObservationV1, WorkflowToolWorker,
+    WorkflowToolWorkerBindingV1, WorkflowToolWorkerError, WorkflowToolWorkerObservationV1,
+    execute_workflow_tools,
 };
 
 use cairn_execution::{

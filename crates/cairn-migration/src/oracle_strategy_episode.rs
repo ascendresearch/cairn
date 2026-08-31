@@ -1,4 +1,4 @@
-//! One-cell Oracle strategy profile for the generic Proposal Host.
+//! One-cell Oracle strategy profile for the generic Proposal step.
 
 use std::io::Cursor;
 
@@ -20,7 +20,7 @@ use crate::{
     OraclePortfolioElementV1, OracleStrategyExecutorV1, OracleStrategyRunV1,
     OracleStrategySubmissionArtifact, OracleStrategySubmissionOutcomeV1,
     OracleStrategySubmissionV1, OracleStrategyToolCatalogV1, OracleUnknownEvidenceV1,
-    OracleUnknownReason, OracleWorkItemV1, OracleWorkspaceV1, ProposalHostOracleMaterialsV1,
+    OracleUnknownReason, OracleWorkItemV1, OracleWorkspaceV1, ProposalStepOracleMaterialsV1,
     SirReadLineLimit, SirSourceLineNumber, SirTaskArtifactBytes, SirTaskArtifactPath,
     SirTaskLimits, SirTaskWorkspace,
 };
@@ -62,7 +62,7 @@ pub(crate) struct OracleStrategyProfileInput {
     pub claim: OracleClaimV1,
     pub item: OracleWorkItemV1,
     pub run: OracleStrategyRunV1,
-    pub materials: ProposalHostOracleMaterialsV1,
+    pub materials: ProposalStepOracleMaterialsV1,
     pub episode_id: EpisodeId,
     pub selection: ModelSelection,
     pub budget: EpisodeBudget,
@@ -293,7 +293,7 @@ pub(crate) fn run_oracle_strategy_profile<E, C, T>(
     task: SirTaskWorkspace,
     input: OracleStrategyProfileInput,
 ) -> Result<
-    crate::proposal_loop::ProposalProfileOutcomeV1<OracleStrategyProfileOutcome>,
+    cairn_agent::AgentProfileOutcomeV1<OracleStrategyProfileOutcome>,
     OracleStrategyProfileError,
 >
 where
@@ -304,7 +304,7 @@ where
     validate_bindings(&task, &input)?;
     archive_task(content, &task)?;
     let projection = archive_prompt(content, &task, &input)?;
-    let frozen = crate::proposal_loop::FrozenProposalLoopV1 {
+    let frozen = cairn_agent::FrozenAgentLoopV1 {
         task_id: input.workspace.task_id(),
         episode_id: input.episode_id,
         role: cairn_agent::AgentRoleName::new("oracle-cell-strategy")
@@ -323,7 +323,7 @@ where
         history: projection.request,
         context: projection.context,
         policy: projection.policy,
-        capability_grant: crate::proposal_loop::ProposalLoopCapabilityGrantV1::new(
+        capability_grant: cairn_agent::AgentLoopCapabilityGrantV1::new(
             tool_registrations()?.to_vec(),
         )
         .map_err(|error| OracleStrategyProfileError::Agent(error.to_string()))?,
@@ -338,22 +338,16 @@ where
             accepted: None,
         },
     };
-    let outcome = crate::proposal_loop::run_proposal_loop(
-        events,
-        content,
-        transport,
-        codec,
-        &frozen,
-        &mut gateway,
-    )
-    .map_err(|error| match error {
-        crate::proposal_loop::ProposalLoopError::UnavailableTool(tool) => {
-            OracleStrategyProfileError::UnavailableTool(tool)
-        }
-        error => OracleStrategyProfileError::Agent(error.to_string()),
-    })?;
+    let outcome =
+        cairn_agent::run_agent_loop(events, content, transport, codec, &frozen, &mut gateway)
+            .map_err(|error| match error {
+                cairn_agent::AgentLoopError::UnavailableTool(tool) => {
+                    OracleStrategyProfileError::UnavailableTool(tool)
+                }
+                error => OracleStrategyProfileError::Agent(error.to_string()),
+            })?;
     match outcome {
-        crate::proposal_loop::ProposalLoopOutcomeV1::Complete(completion) => {
+        cairn_agent::AgentLoopOutcomeV1::Complete(completion) => {
             let Some(submission) = gateway.submit.accepted else {
                 return Err(OracleStrategyProfileError::MissingSubmission(
                     completion.reason,
@@ -370,7 +364,7 @@ where
             if archived != submission.identity().map_err(invalid_error)? {
                 return invalid("archived Oracle strategy submission identity changed");
             }
-            Ok(crate::proposal_loop::ProposalProfileOutcomeV1::Complete(
+            Ok(cairn_agent::AgentProfileOutcomeV1::Complete(
                 OracleStrategyProfileOutcome {
                     submission,
                     completion_reason: completion.reason,
@@ -378,8 +372,8 @@ where
                 },
             ))
         }
-        crate::proposal_loop::ProposalLoopOutcomeV1::AwaitingController(request) => {
-            Ok(crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(request))
+        cairn_agent::AgentLoopOutcomeV1::WorkerRequest(request) => {
+            Ok(cairn_agent::AgentProfileOutcomeV1::WorkerRequest(request))
         }
     }
 }
@@ -388,7 +382,7 @@ fn validate_bindings(
     task: &SirTaskWorkspace,
     input: &OracleStrategyProfileInput,
 ) -> Result<(), OracleStrategyProfileError> {
-    let OracleStrategyExecutorV1::AgentEpisode { tools, .. } = input.run.executor() else {
+    let OracleStrategyExecutorV1::AgentStep { tools, .. } = input.run.executor() else {
         return invalid("Oracle strategy profile requires an Agent executor");
     };
     if task.bundle().identity().map_err(invalid_error)? != input.workspace.sir_task_bundle()

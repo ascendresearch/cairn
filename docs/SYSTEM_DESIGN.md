@@ -354,8 +354,8 @@ admission 后，才进入知识库 T1/T2。
 
 ## 8. Semantic Intent Recovery
 
-SIR 是可替换、proposal-only 的独立 Agent Loop，在 Controller/Admission authority 外的通用 Proposal
-Host 运行，只读不可变输入。它不是执行 Worker，也不要求专用 SIR binary。主要产物：
+SIR 是可替换、proposal-only 的 Controller workflow step，只读该 transition 冻结的不可变输入。它不
+执行 applicant code，也不拥有 Worker 或 Admission authority。主要产物：
 
 - `IntentHypothesisSet`；
 - `IntentEvidenceGraph`；
@@ -429,7 +429,7 @@ role 不共享私有 continuation。Retrieved content 永远是 data，不获得
 
 当前 OpenAI Responses、Chat Completions 和 Anthropic Messages 的 native continuation 设计继续
 有效；provider 选择与 CUDA→Ascend C 业务解耦。详见 [RECORD_REPLAY.md](RECORD_REPLAY.md)。产品侧
-Agent-capable function、strategy、profile、episode、Host、process 和 authority 的定义及当前派生 catalog 见
+Agent-capable function、strategy、profile、workflow step、Worker execution 和 authority 的定义及当前派生 catalog 见
 [AGENT_ARCHITECTURE.md](design/AGENT_ARCHITECTURE.md)。Agent-capable 位置数量不等于模型调用数、并发数
 或进程数，功能存在也不等于必须使用 Agent。
 
@@ -614,11 +614,10 @@ flowchart TB
       server --- db
       server --- cas
       server --- kb
-    end
-
-    subgraph proposal["Proposal processes"]
-      sir["Proposal Host / SIR episodes"]
-      episodes["Proposal Host / Synthesis / adversarial / typed Planner / Candidate episodes"]
+      sir["SIR workflow step"]
+      episodes["Oracle / planning / Candidate workflow steps"]
+      server --- sir
+      server --- episodes
     end
 
     subgraph authority["Admission authority"]
@@ -628,11 +627,8 @@ flowchart TB
     end
 
     client["CLI/UI/upstream"] <--> server
-    server <--> sir
-    server <--> episodes
     server <--> admission
-    model["Model providers"] <--> sir
-    model <--> episodes
+    model["Model providers"] <--> server
     cuda["Managed CUDA worker"] -->|"direct outbound mTLS/WSS"| server
     build["Managed Ascend build worker"] -->|"direct outbound mTLS/WSS"| server
     npu["Managed Ascend NPU worker"] -->|"direct outbound mTLS/WSS"| server
@@ -642,12 +638,11 @@ flowchart TB
 Workers 在 operator 已有可路由私网/VPN 上通过 direct outbound mTLS/WSS 连接 Controller，公共 durable
 task truth 留在 Controller。Single-lab Controller listener 绑定 `0.0.0.0` 并发布 VPN 可达 endpoint；
 目标架构没有 SSH tunnel、反向拨号或 Cairn 自建 VPN。Controller 保持模块化单体；SIR、Oracle
-synthesis/adversarial、typed Planner 和 Candidate 都以隔离 durable Agent episode 运行；capability/data
-boundary 相同的 episode 可共用通用 Proposal Host，不同边界按 policy 拆 Host instance。Admission gate 与 restricted material
-位于独立 authority process。首期可以共用一台受控主机和相同存储技术，但 public/restricted 使用
+synthesis/adversarial、typed planning 和 Candidate 都是主 workflow 的 typed step，不创建独立 proposal
+进程或权限域。Admission gate 与 restricted material 位于独立 authority process。首期可以共用一台受控主机和相同存储技术，但 public/restricted 使用
 不同数据库/CAS root、进程身份和 capability port。
 
-同一 Host 内的 episode 仍只能通过冻结 artifact、typed request/diagnostic 和 durable event 交互；不能
+不同 workflow step 仍只能通过冻结 artifact、typed request/diagnostic 和 durable event 交互；不能
 共享 private continuation、mutable scratch context、pending tool result 或未提交推理。多 Agent 共识、
 投票和重复反思不形成新的 evidence strength。详细交互和调用策略见
 [AGENT_ARCHITECTURE.md](design/AGENT_ARCHITECTURE.md)。
@@ -689,7 +684,6 @@ durable facts 必须可查询。Public protocol 与 internal schema 在 pre-rele
 | `cairn-verification` | generic claim/admission/comparator/mutation/verdict mechanics | 提案模型或 vendor source |
 | `cairn-cuda-ascend`（目标；直接替换当前 `cairn-migration`） | CUDA→Ascend C task、intent/Oracle/candidate workflow 与 domain artifacts | provider/worker implementations |
 | `cairn-server` | composition、API、provider/worker/storage adapters | 可复用 domain logic |
-| `cairn-proposal-host`（DEV-022最小实现） | 隔离承载已有SIR/Candidate role-scoped proposal episode | admitted constructor、restricted store、Worker credential |
 | `cairn-sir`（已删除） | DEV-008 one-shot SIR typed ingress/capability历史proof | DEV-022接管后无兼容路径；只在Git history保留 |
 | `cairn-admission`（目标） | restricted store、typed mechanical gates、公开 decision surface | model transport、applicant 修改 |
 | `cairn-worker` | opaque authorized execution | product adjudication |
@@ -734,7 +728,7 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 
 以下是目标设计，尚不能由上述控制宣称完成：
 
-- 通用 Proposal Host 中的 SIR/Oracle/Candidate Agent Loop 与完整 Controller process manager；
+- 主 workflow 中的 SIR/Oracle/Candidate Agent steps 与完整 Controller process manager；
 - claim-scoped authority graph 和多假设 intent contract；
 - 完整 Oracle portfolio 与多平面 verdict；
 - 真实 CUDA 和 Ascend C candidate adapter/device attestation；
@@ -744,7 +738,7 @@ crate 内模块；未来是否继续拆 crate，由真实依赖、第二种实�
 - 知识/skill registry、claim lifecycle、retraction propagation；
 - hidden-corpus exposure/burn/replenishment 与 feedback contamination control；
 - verifier mechanism/policy qualification 和反向影响审计；
-- 完整 Agent profile catalog、invocation policy、artifact-mediated interaction 和同 Host episode isolation；
+- 完整 Agent profile catalog、invocation policy、artifact-mediated interaction 和 cross-step binding controls；
 - 第二个真实 CUDA→Ascend C kernel 端到端控制。
 
 设计完成不等于这些能力已实现。未来开发顺序与 gate 由

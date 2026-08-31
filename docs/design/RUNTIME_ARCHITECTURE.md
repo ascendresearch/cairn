@@ -9,16 +9,15 @@
 
 ## 1. 运行时结论
 
-Cairn 的最小新架构部署不是单进程，也不是大规模微服务集群。它由以下进程角色组成，其中
-proposal host 可按 episode 启停：
+Cairn 的最小新架构部署不是单进程，也不是大规模微服务集群。它由以下进程角色组成：
 
-- 一个 active Controller；
-- 若干按 episode 启停、按 capability boundary 分实例的通用 Proposal Host；
+- 一个 active Controller；SIR、Oracle、Candidate 等 proposal 是其中的主工作流步骤；
 - 一个独立 Admission service；
 - 零到多个 managed execution workers；
 - public、restricted、secret 三种不同可见性存储边界。
 
-同一台主机部署不取消进程/文件权限/服务身份隔离。不同主机部署也不改变领域协议和 authority。
+proposal 不拥有独立进程、二进制、service identity、OS principal 或文件权限域。只有 applicant code、
+toolchain、Docker、host adapter 或设备执行才离开 Controller，并作为 typed job 进入具备相应能力的 Worker。
 
 ## 2. 进程拓扑
 
@@ -32,16 +31,17 @@ flowchart TB
       publicdb[("public-events-v1.db")]
       publiccas[("public CAS root")]
       registry[("knowledge/skill/hardware projections")]
+      sir["SIR proposal step"]
+      oracle["Oracle proposal steps"]
+      planner["Typed planning steps"]
+      cand["Candidate proposal steps"]
       controller --- publicdb
       controller --- publiccas
       controller --- registry
-    end
-
-    subgraph phost["Proposal / planning zone"]
-      sir["Proposal Host\nSIR episodes"]
-      oracle["Proposal Host\nOracle Exploration strategies"]
-      planner["Proposal Host\nTyped Planner episodes"]
-      cand["Proposal Host\nCandidate Search"]
+      controller --- sir
+      controller --- oracle
+      controller --- planner
+      controller --- cand
     end
 
     subgraph ahost["Admission authority zone"]
@@ -62,34 +62,22 @@ flowchart TB
     secrets[("secret references / OS secret provider")]
 
     client <--> controller
-    controller <--> sir
-    controller <--> oracle
-    controller <--> planner
-    controller <--> cand
     controller <--> admission
     cuda -->|"direct outbound mTLS/WSS"| controller
     build -->|"direct outbound mTLS/WSS"| controller
     npu -->|"direct outbound mTLS/WSS"| controller
     integ -->|"direct outbound mTLS/WSS"| controller
-    sir --> provider
-    oracle --> provider
-    planner --> provider
-    cand --> provider
+    controller --> provider
     admission -. "one-time restricted capability" .-> cuda
     admission -. "one-time restricted capability" .-> build
     admission -. "one-time restricted capability" .-> npu
     admission -. "one-time restricted capability" .-> integ
     controller -. "typed secret refs" .-> secrets
-    sir -. "exact role secret refs" .-> secrets
-    oracle -. "exact strategy secret refs" .-> secrets
-    planner -. "exact role secret refs" .-> secrets
-    cand -. "exact role secret refs" .-> secrets
 ```
 
-`proposal-host` 节点表示逻辑 episode 位置，不强制每个 episode 都是独立 OS process。具有相同
-OS/external capability boundary 的 episode 可以共用 Host，但 context、continuation、budget、artifact
-namespace 和 role grant 必须隔离；边界不同或运行不可信 tool 时按 policy 拆 process。图中的
-Admission→Workers 虚线是 restricted data plane；调度/lease 仍由 Controller control plane 管理。
+图中的 proposal 节点只是 Controller 主工作流中的领域步骤，不是部署节点。它们可以拥有不同的 typed
+input、budget、model continuation 和 stop condition，但不形成额外的运行 authority。图中的
+Admission→Workers 虚线是 restricted data plane；所有调度/lease 仍由 Controller control plane 管理。
 
 ## 3. 进程职责与权限
 
@@ -114,26 +102,21 @@ Controller 不执行 generated source，不持 restricted store file/credential�
 
 ### 3.2 SIR Agent Loop
 
-SIR 是由 Controller 打开的 durable proposal episode，接收冻结 `IntentRecoveryInputV1` 与 capability
-manifest，执行静态分析、受控研究/实验和模型推理，返回 `IntentHypothesisSetProposalV1`。它与 Oracle、
-Candidate 一样由通用 `cairn-proposal-host` 承载；SIR 这个 role 本身不要求专用 binary 或 service pool。
+SIR 是 Controller 主工作流中的 proposal step，接收冻结 `IntentRecoveryInputV1` 与 capability manifest，
+执行静态分析和模型推理，返回 `IntentHypothesisSetProposalV1`。
 它：
 
-- 在 authority path 中运行于 Controller/Admission 之外的 Proposal Host，并使用与 capability class 匹配的
-  OS principal 和工作目录；
-- 只读 allowlist public artifacts；
+- 通过 Controller 已冻结的 typed input 读取任务材料；
 - 没有 restricted/secret store 枚举权限；
-- 可查询获准知识、网络和论文快照，并通过 Controller 请求所有工具或 Worker job；
+- 可查询获准知识，并把任何编译、运行或设备验证需求提交为 Worker job；
 - 只写 proposal artifact 与运行记录；
-- 一个 run 失败不会破坏 task stream，可按 effect policy 重启或开新 run。
+- 不能构造 Admission outcome，也不能把自己的分析当成 execution observation。
 
-SIR episode protocol 稳定于“冻结输入/typed proposal/terminal outcome”，内部分析图和模型组合可替换。
-DEV-008 的 `cairn-sir` one-shot process只证明typed ingress与OS-principal boundary；DEV-022的通用
-Proposal Host已接管production SIR并删除该superseded专用路径。
+SIR 的稳定边界是“冻结输入 → typed proposal”。内部分析图和模型组合可替换，但不产生独立 process protocol。
 
-### 3.3 Proposal Host (`cairn-proposal-host`)
+### 3.3 主工作流中的 proposal step
 
-一个 Host instance 可以承载一个或多个 capability-equivalent 的 durable episode，例如：
+Controller 可以在主工作流中执行以下 proposal step：
 
 - Semantic Intent Recovery；
 - Oracle synthesis strategies；
@@ -142,19 +125,18 @@ Proposal Host已接管production SIR并删除该superseded专用路径。
 - Candidate Search；
 - 后续明确批准的 proposal-only role。
 
-启动时 Controller 签发/传递 exact `CapabilityManifest`、task/run identity、public snapshot 和预算。进程
-不能自行切换 role 或请求更宽 capability。每个 episode 拥有独立 provider continuation namespace；
-退出时由 Controller 确认全部 verdict-relevant inputs/outputs 已归档。Host process 的 OS 权限不能是
-其所有潜在 role 的无限并集；capability/data boundary 不同就使用不同实例。
+每个 step 都接收 exact task/run identity、public snapshot、模型选择、tool catalog 和预算。step 不能自行
+切换 role、扩大输入或生成 Admission authority。模型 continuation 只是该 workflow step 的运行状态；
+verdict-relevant 输入和输出必须在 transition 前归档。
 
 Typed Admission Planner 只能读取对应 kind 的公开 applicant、公开 policy、机械派生的 required set 和
 最小 obligation metadata。它不能与 Mechanical Gate 同进程，不能读取完整 hidden case/expected
 value，也不能调用 admitted constructor。详细设计见
 [`ADMISSION_ARCHITECTURE.md`](ADMISSION_ARCHITECTURE.md)。
 
-Host 只能投影 Controller 已授权的冻结输入；一个 episode 的 provider-native continuation、mutable
-scratch、pending tool result、未提交 draft 和私有 diagnostic 不得成为另一 episode 的输入。跨 episode
-协作只消费已提交 artifact 和 typed durable event，规则见
+一个 proposal step 只能投影 Controller 已授权的冻结输入；一个 step 的 provider-native continuation、
+pending tool result、未提交 draft 和私有 diagnostic 不得成为另一 step 的输入。跨 step 协作只消费已提交
+artifact 和 typed durable event，规则见
 [`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)。
 
 ### 3.4 Admission service (`cairn-admission`)
@@ -289,7 +271,7 @@ metadata。
 
 ### 6.2 内部 process protocol
 
-Proposal Host（承载 SIR/Oracle/Candidate/Planner episode）和 Admission 使用 typed V1 process/service
+proposal step（承载 SIR/Oracle/Candidate/Planner episode）和 Admission 使用 typed V1 process/service
 protocol。它至少包含：
 
 - process handshake 与 exact implementation identity；
@@ -328,7 +310,7 @@ native continuation/semantic projection。Admission gate 不走这条网络。
 ## 7. 一次完整任务的运行时路径
 
 1. Client 向 Controller 提交 CUDA kernel、host launch、context refs、target environment 和 policy；
-2. Controller 归档 public material，创建 task/intent run，在合适的 Proposal Host 打开 SIR episode；
+2. Controller 归档 public material，创建 task/intent run，在合适的 proposal step 打开 SIR episode；
 3. SIR 通过 scoped input/research/tool API 完成 proposal，Controller 归档结果；
 4. Controller 请求 Admission；Admission 运行 Intent gate，必要时调度区分实验；
 5. admitted intent 发布后，Controller 按 policy 启动 Oracle synthesis/adversarial strategies；
@@ -410,7 +392,7 @@ Public store 恢复不能用 restricted backup 替代，反之亦然；secret �
 
 - Controller 与 public store 位于控制主机；
 - Admission 与 restricted store 位于同一或更受限主机的独立 principal；
-- SIR/Oracle/Candidate/Planner episodes 位于无 restricted filesystem 权限的 Proposal Host zone；
+- SIR/Oracle/Candidate/planning steps 位于 Controller 主 workflow，且没有 restricted store handle；
 - CUDA worker、Ascend build worker、Ascend NPU worker 可为不同机器，也可在 capabilities 可验证时合并
   物理主机；
 - Controller control/enrollment listener 绑定 `0.0.0.0`，发布 VPN 内可达 endpoint；
@@ -419,7 +401,7 @@ Public store 恢复不能用 restricted backup 替代，反之亦然；secret �
 
 ### 10.3 Expanded lab profile（未来可选）
 
-- proposal host 可按 episode 横向扩展；
+- model-backed workflow steps 可由 Controller 在任务间并发调度；
 - worker pool 按 resource partition 扩展；
 - Admission 可扩展 read-only planner/worker coordination，但每个 admission stream 仍只有一个
   authoritative gate writer；
@@ -474,7 +456,7 @@ Metrics/logs 可丢失且只做观察。健康检查只报告 process/store/prov
 2. 启动 public/restricted store owner，并各自做 integrity check；
 3. 启动 Admission，加载 exact gate/mechanism qualification state；
 4. 启动 Controller，恢复 public process managers/outbox/leases；
-5. Proposal Host 按需启动 role-scoped episode，不在空闲时持有 broad token；
+5. proposal step 按需启动 role-scoped episode，不在空闲时持有 broad token；
 6. Workers enrollment/connect，resource facts 经 admission 后才可调度；
 7. 对外 API readiness 只在 Controller 恢复完成后开启。
 
@@ -513,5 +495,5 @@ Metrics/logs 可丢失且只做观察。健康检查只报告 process/store/prov
 9. logging 完全关闭不改变任何 artifact/outcome identity；
 10. hardware-free profile 不产生真实 CUDA/NPU/performance strength；
 11. real-lab profile 的 receipt 明确绑定 CUDA device、Ascend SoC、toolchain、binary、launch 和 state；
-12. 同一 Host 上并行/恢复多个 episode 时 continuation、context、budget、tool result 和 namespace 不串流；
+12. 并行/恢复多个 Agent step 时 continuation、context、budget 和 tool result 不串流；
 13. non-V1 process/storage input fail closed，不走 compatibility path。

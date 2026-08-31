@@ -31,7 +31,7 @@ revision build SubjectFailed
 | Role | Input/output | Capability | 明确没有 |
 | --- | --- | --- | --- |
 | Coding agent/builder | architecture、current code、recorded test material | 实现aggregate、typed events、Controller composition与机械controls | fixture解释权、runtime proposal或verdict authority |
-| Runtime model/proposal | 后续可消费`CandidateEpisodeRequestV1`并返回对应typed publication | 只在未来Proposal Host slice中提出source artifact | admitted intent、Oracle、receipt、调度或terminal authority |
+| Runtime model/proposal | 后续可消费`CandidateEpisodeRequestV1`并返回对应typed publication | 只在未来proposal step slice中提出source artifact | admitted intent、Oracle、receipt、调度或terminal authority |
 | Recorded consumer | exact episode request → exact follow-up/repair V1 | 离线证明同一production boundary有真实consumer | 模型能力、hidden answer或live evidence claim |
 | Controller/execution | durable workflow、CAS、scheduler IDs、verified receipt | commit-before-effect、materialization、schedule/reconcile、terminal classification | 修改Candidate source、解释compiler文本或授予semantic verdict |
 
@@ -47,7 +47,7 @@ scheduler，不在server中复制workflow policy。
   `CandidateNativeDiagnosticV1`分别携带首轮native diagnostic与repair diagnostic。
 - `CandidateNativeBuildDispatchV1`持久化publication、job、input bundle、environment、contract及全部attempt、
   placement、reservation、assignment、lease、control-message和scheduler command identities。调度重试只能复用这组身份。
-- `CandidateEpisodeRequestV1`是最小Proposal Host seam；请求在任何模型effect前commit，并固定kind、episode、
+- `CandidateEpisodeRequestV1`是最小proposal step seam；请求在任何模型effect前commit，并固定kind、episode、
   authority、parent、diagnostic和revision round。
 - `SubjectFailed`只允许打开受budget约束的下一轮；`TimedOut`/`InfrastructureFailed`、integrity failure、cancel、
   native compilation success与revision-budget exhaustion是不同terminal variants。in-doubt build先进入
@@ -114,7 +114,7 @@ CI中的live GitHub、Docker、GPU和Ascend Worker lanes保持显式ignored；�
 
 ## 8. 明确非目标与remaining unknown
 
-- 不实现完整CUDA→Ascend-C top-level workflow、generic Proposal Host service或多role Host迁移；
+- 不实现完整CUDA→Ascend-C top-level workflow、generic proposal step service或多role Host迁移；
 - 不调用DeepSeek或任何runtime model，不证明recorded consumer具有模型质量；
 - 不调用远端Worker，不重新证明DEV-016–020 live native gate；
 - 不自动解释或修复compiler diagnostic，不嵌入当前compiler文本或fixture-derived recipe；
@@ -122,5 +122,5 @@ CI中的live GitHub、Docker、GPU和Ascend Worker lanes保持显式ignored；�
 - 不扩展SIR authority/topology，不创建future empty crate；
 - 不建立compatibility、schema migration或V2。
 
-下一slice只能从已存在的`CandidateEpisodeRequestV1`真实consumer继续切片；若建立generic Proposal Host，必须让至少
+下一slice只能从已存在的`CandidateEpisodeRequestV1`真实consumer继续切片；若建立generic proposal step，必须让至少
 两种role profile共享同一Host implementation，并删除被接管的专用launcher，不能以空service或新手工repair替代proof。

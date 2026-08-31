@@ -1,6 +1,6 @@
-//! One task-generic durable Agent Loop used by every Proposal Host profile.
+//! One task-generic durable Agent Loop used by every Agent profile.
 
-use cairn_agent::{
+use crate::{
     AgentEpisode, AgentEpisodeState, AgentRoleName, AgentStep, AgentStepState, DispatchCompletion,
     EpisodeAdvance, EpisodeBudget, EpisodeCompletionReason, EpisodeOperationAdmissionOutcome,
     EpisodeStepAuthority, HistoryItem, InstructionBlock, ModelSelection, ModelTransport,
@@ -20,14 +20,19 @@ use cairn_protocol::{
 use cairn_record::{ContentStore, EventStore};
 use thiserror::Error;
 
-/// Exact trusted tool implementations and effect classes granted to one Proposal Host episode.
+/// Exact trusted tool implementations and effect classes granted to one Agent episode.
 #[derive(Debug)]
-pub(crate) struct ProposalLoopCapabilityGrantV1(Vec<ToolRegistration>);
+pub struct AgentLoopCapabilityGrantV1(Vec<ToolRegistration>);
 
-impl ProposalLoopCapabilityGrantV1 {
-    pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Result<Self, ProposalLoopError> {
+impl AgentLoopCapabilityGrantV1 {
+    /// Constructs the exact non-empty tool capability set for one Agent step.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty set or duplicate tool names.
+    pub fn new(registrations: Vec<ToolRegistration>) -> Result<Self, AgentLoopError> {
         if registrations.is_empty() {
-            return Err(ProposalLoopError::InvalidCapabilityGrant(
+            return Err(AgentLoopError::InvalidCapabilityGrant(
                 "capability grant has no tools".into(),
             ));
         }
@@ -36,41 +41,41 @@ impl ProposalLoopCapabilityGrantV1 {
             .iter()
             .any(|registration| !names.insert(registration.name().as_str()))
         {
-            return Err(ProposalLoopError::InvalidCapabilityGrant(
+            return Err(AgentLoopError::InvalidCapabilityGrant(
                 "capability grant repeats a tool name".into(),
             ));
         }
         Ok(Self(registrations))
     }
 
-    fn registration(&self, name: &ToolName) -> Result<ToolRegistration, ProposalLoopError> {
+    fn registration(&self, name: &ToolName) -> Result<ToolRegistration, AgentLoopError> {
         self.0
             .iter()
             .find(|registration| registration.name() == name)
             .cloned()
-            .ok_or_else(|| ProposalLoopError::UnavailableTool(name.as_str().to_owned()))
+            .ok_or_else(|| AgentLoopError::UnavailableTool(name.as_str().to_owned()))
     }
 }
 
 /// Exact model-visible input, profile, tool catalog, budget, and capability registrations frozen
-/// before one Proposal Host episode is opened.
-pub(crate) struct FrozenProposalLoopV1 {
-    pub(crate) task_id: TaskId,
-    pub(crate) episode_id: EpisodeId,
-    pub(crate) role: AgentRoleName,
-    pub(crate) selection: ModelSelection,
-    pub(crate) budget: EpisodeBudget,
-    pub(crate) native_spec: NativeRequestSpec,
-    pub(crate) user_text: String,
-    pub(crate) instruction: ContentId<InstructionBlock>,
-    pub(crate) tool_catalog: ContentId<ToolCatalog>,
-    pub(crate) history: ContentId<HistoryItem>,
-    pub(crate) context: ContentId<cairn_agent::ContextBlock>,
-    pub(crate) policy: ContentId<PolicyDocument>,
-    pub(crate) capability_grant: ProposalLoopCapabilityGrantV1,
+/// before one Agent episode is opened.
+pub struct FrozenAgentLoopV1 {
+    pub task_id: TaskId,
+    pub episode_id: EpisodeId,
+    pub role: AgentRoleName,
+    pub selection: ModelSelection,
+    pub budget: EpisodeBudget,
+    pub native_spec: NativeRequestSpec,
+    pub user_text: String,
+    pub instruction: ContentId<InstructionBlock>,
+    pub tool_catalog: ContentId<ToolCatalog>,
+    pub history: ContentId<HistoryItem>,
+    pub context: ContentId<crate::ContextBlock>,
+    pub policy: ContentId<PolicyDocument>,
+    pub capability_grant: AgentLoopCapabilityGrantV1,
 }
 
-impl FrozenProposalLoopV1 {
+impl FrozenAgentLoopV1 {
     fn turn_input_decision(
         &self,
         pending_results: Vec<ContentId<OperationResult>>,
@@ -89,67 +94,67 @@ impl FrozenProposalLoopV1 {
 
 /// Durable terminal position reached by the common Agent Loop before domain submission freezing.
 #[derive(Debug)]
-pub(crate) struct ProposalLoopCompletionV1 {
-    pub(crate) reason: EpisodeCompletionReason,
-    pub(crate) steps_started: u32,
+pub struct AgentLoopCompletionV1 {
+    pub reason: EpisodeCompletionReason,
+    pub steps_started: u32,
 }
 
-/// Exact non-authoritative external operation yielded to the Controller.
+/// Exact non-authoritative Worker operation requested by an Agent step.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProposalLoopExperimentOperationV1 {
-    pub(crate) operation_id: OperationId,
-    pub(crate) tool: ToolName,
-    pub(crate) implementation_version: cairn_agent::ToolImplementationVersion,
-    pub(crate) effect: ToolEffectClass,
-    pub(crate) arguments_id: ContentId<cairn_agent::ToolArguments>,
-    pub(crate) arguments: serde_json::Value,
+pub struct AgentWorkerOperationRequestV1 {
+    pub operation_id: OperationId,
+    pub tool: ToolName,
+    pub implementation_version: crate::ToolImplementationVersion,
+    pub effect: ToolEffectClass,
+    pub arguments_id: ContentId<crate::ToolArguments>,
+    pub arguments: serde_json::Value,
 }
 
-/// Durable same-episode safe point returned before any external effect receives authority.
+/// Same-episode request returned before any Worker execution receives Controller authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProposalLoopExperimentRequestV1 {
-    pub(crate) episode_id: EpisodeId,
-    pub(crate) step_id: StepId,
-    pub(crate) model_attempt_id: ModelAttemptId,
-    pub(crate) operations: Vec<ProposalLoopExperimentOperationV1>,
+pub struct AgentWorkerRequestV1 {
+    pub episode_id: EpisodeId,
+    pub step_id: StepId,
+    pub model_attempt_id: ModelAttemptId,
+    pub operations: Vec<AgentWorkerOperationRequestV1>,
 }
 
 #[derive(Debug)]
-pub(crate) enum ProposalLoopOutcomeV1 {
-    Complete(ProposalLoopCompletionV1),
-    AwaitingController(ProposalLoopExperimentRequestV1),
+pub enum AgentLoopOutcomeV1 {
+    Complete(AgentLoopCompletionV1),
+    WorkerRequest(AgentWorkerRequestV1),
 }
 
-pub(crate) enum ProposalProfileOutcomeV1<T> {
+pub enum AgentProfileOutcomeV1<T> {
     Complete(T),
-    AwaitingController(ProposalLoopExperimentRequestV1),
+    WorkerRequest(AgentWorkerRequestV1),
 }
 
-/// Failure while driving the common Proposal Host Agent Loop.
+/// Failure while driving the common Agent Loop.
 #[derive(Debug, Error)]
-pub(crate) enum ProposalLoopError {
-    #[error("Proposal Host Agent Loop failed: {0}")]
+pub enum AgentLoopError {
+    #[error("Agent Loop failed: {0}")]
     Agent(String),
-    #[error("Proposal Host profile does not grant tool {0}")]
+    #[error("Agent profile does not grant tool {0}")]
     UnavailableTool(String),
-    #[error("Proposal Host capability grant is invalid: {0}")]
+    #[error("Agent capability grant is invalid: {0}")]
     InvalidCapabilityGrant(String),
 }
 
-struct OpenedProposalEpisodeV1 {
+struct OpenedAgentEpisodeV1 {
     episode: AgentEpisode,
     authority: EpisodeStepAuthority,
     native: PreparedNativeRequest,
     pending_results: Vec<ContentId<OperationResult>>,
 }
 
-struct DispatchedProposalTurnV1 {
+struct DispatchedAgentTurnV1 {
     episode: AgentEpisode,
     step: AgentStep,
     attempt_id: ModelAttemptId,
 }
 
-struct SettledProposalTurnV1 {
+struct SettledAgentTurnV1 {
     episode: AgentEpisode,
     step: AgentStep,
     attempt_id: ModelAttemptId,
@@ -157,7 +162,7 @@ struct SettledProposalTurnV1 {
     proposed_tools: Vec<ToolName>,
 }
 
-struct AdmittedProposalTurnV1 {
+struct AdmittedAgentTurnV1 {
     episode: AgentEpisode,
     step: AgentStep,
     attempt_id: ModelAttemptId,
@@ -165,83 +170,88 @@ struct AdmittedProposalTurnV1 {
     operations: Vec<PreparedToolOperation>,
 }
 
-struct ObservedProposalTurnV1 {
+struct ObservedAgentTurnV1 {
     episode: AgentEpisode,
     step: AgentStep,
     attempt_id: ModelAttemptId,
     continuation: NativeContinuation,
 }
 
-struct ProjectedProposalTurnV1 {
+struct ProjectedAgentTurnV1 {
     episode: AgentEpisode,
     native: PreparedNativeRequest,
     pending_results: Vec<ContentId<OperationResult>>,
 }
 
-enum ProposalLoopStageV1<T> {
+enum AgentLoopStageV1<T> {
     Active(T),
-    Complete(ProposalLoopCompletionV1),
+    Complete(AgentLoopCompletionV1),
 }
 
-enum ProposalLoopAdvanceV1 {
-    Continue(OpenedProposalEpisodeV1),
-    Complete(ProposalLoopCompletionV1),
+enum AgentLoopAdvanceV1 {
+    Continue(OpenedAgentEpisodeV1),
+    Complete(AgentLoopCompletionV1),
 }
 
-enum ProposalLoopPositionV1 {
-    ReadyForAgent(OpenedProposalEpisodeV1),
-    ReadyForOperations(AdmittedProposalTurnV1),
-    ReadyForProjection(ObservedProposalTurnV1),
-    Complete(ProposalLoopCompletionV1),
+enum AgentLoopPositionV1 {
+    ReadyForAgent(OpenedAgentEpisodeV1),
+    ReadyForOperations(AdmittedAgentTurnV1),
+    ReadyForProjection(ObservedAgentTurnV1),
+    Complete(AgentLoopCompletionV1),
 }
 
-enum ProposalLoopOperationOutcomeV1 {
-    Observed(ObservedProposalTurnV1),
-    AwaitingController(ProposalLoopExperimentRequestV1),
+enum AgentWorkerTransitionV1 {
+    Observed(ObservedAgentTurnV1),
+    WorkerRequest(AgentWorkerRequestV1),
 }
 
 /// Opens and drives one durable Agent Loop from only the frozen profile and capability surface.
 ///
-/// Model dispatch and every Host-local tool operation receive durable start authority before their
+/// Model dispatch and every workflow-local tool operation receive durable start authority before their
 /// effect. Canonical tool results are archived as provenance-bearing `OperationResult` artifacts
 /// before they are projected into the next native continuation. Mutating or ambiguous external
-/// effects are never executed by the Proposal Host.
-pub(crate) fn run_proposal_loop<E, C, T, G>(
+/// effects are never executed by the Agent.
+///
+/// # Errors
+///
+/// Returns an error when the episode cannot be recovered, persisted, dispatched, decoded, or
+/// advanced through its granted tool surface.
+pub fn run_agent_loop<E, C, T, G>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
     codec: NativeProtocolCodec,
-    frozen: &FrozenProposalLoopV1,
+    frozen: &FrozenAgentLoopV1,
     gateway: &mut G,
-) -> Result<ProposalLoopOutcomeV1, ProposalLoopError>
+) -> Result<AgentLoopOutcomeV1, AgentLoopError>
 where
     E: EventStore,
     C: ContentStore,
     T: ModelTransport,
     G: ToolGateway,
 {
-    let mut position = open_or_recover_proposal_episode(events, content, codec, frozen)?;
+    let mut position = open_or_recover_agent_episode(events, content, codec, frozen)?;
 
     loop {
         position = match position {
-            ProposalLoopPositionV1::ReadyForAgent(opened) => {
+            AgentLoopPositionV1::ReadyForAgent(opened) => {
                 prepare_agent_operations(events, content, transport, codec, frozen, opened)?
             }
-            ProposalLoopPositionV1::ReadyForOperations(admitted) => {
-                match execute_or_yield_operations(events, content, gateway, admitted)? {
-                    ProposalLoopOperationOutcomeV1::Observed(observed) => {
-                        ProposalLoopPositionV1::ReadyForProjection(observed)
+            AgentLoopPositionV1::ReadyForOperations(admitted) => {
+                match execute_or_request_worker_operations(events, content, gateway, admitted)? {
+                    AgentWorkerTransitionV1::Observed(observed) => {
+                        AgentLoopPositionV1::ReadyForProjection(observed)
                     }
-                    ProposalLoopOperationOutcomeV1::AwaitingController(request) => {
-                        return Ok(ProposalLoopOutcomeV1::AwaitingController(request));
+                    AgentWorkerTransitionV1::WorkerRequest(request) => {
+                        return Ok(AgentLoopOutcomeV1::WorkerRequest(request));
                     }
                 }
             }
-            ProposalLoopPositionV1::ReadyForProjection(observed) => {
+            AgentLoopPositionV1::ReadyForProjection(observed) => {
                 project_and_advance(events, content, codec, frozen, observed)?
             }
-            ProposalLoopPositionV1::Complete(completion) => {
-                return Ok(ProposalLoopOutcomeV1::Complete(completion));
+            AgentLoopPositionV1::Complete(completion) => {
+                return Ok(AgentLoopOutcomeV1::Complete(completion));
             }
         };
     }
@@ -252,9 +262,9 @@ fn prepare_agent_operations<E, C, T>(
     content: &mut C,
     transport: &mut T,
     codec: NativeProtocolCodec,
-    frozen: &FrozenProposalLoopV1,
-    opened: OpenedProposalEpisodeV1,
-) -> Result<ProposalLoopPositionV1, ProposalLoopError>
+    frozen: &FrozenAgentLoopV1,
+    opened: OpenedAgentEpisodeV1,
+) -> Result<AgentLoopPositionV1, AgentLoopError>
 where
     E: EventStore,
     C: ContentStore,
@@ -264,10 +274,8 @@ where
     let settled = settle_agent_turn(events, content, codec, dispatched)?;
     let admitted = admit_agent_operations(events, content, frozen, settled)?;
     Ok(match admitted {
-        ProposalLoopStageV1::Active(admitted) => {
-            ProposalLoopPositionV1::ReadyForOperations(admitted)
-        }
-        ProposalLoopStageV1::Complete(completion) => ProposalLoopPositionV1::Complete(completion),
+        AgentLoopStageV1::Active(admitted) => AgentLoopPositionV1::ReadyForOperations(admitted),
+        AgentLoopStageV1::Complete(completion) => AgentLoopPositionV1::Complete(completion),
     })
 }
 
@@ -275,41 +283,37 @@ fn project_and_advance<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    frozen: &FrozenProposalLoopV1,
-    observed: ObservedProposalTurnV1,
-) -> Result<ProposalLoopPositionV1, ProposalLoopError> {
+    frozen: &FrozenAgentLoopV1,
+    observed: ObservedAgentTurnV1,
+) -> Result<AgentLoopPositionV1, AgentLoopError> {
     let projected = project_operation_observations(
         events,
         content,
         codec,
         frozen,
-        ProposalLoopStageV1::Active(observed),
+        AgentLoopStageV1::Active(observed),
     )?;
-    Ok(
-        match advance_proposal_episode(events, content, projected)? {
-            ProposalLoopAdvanceV1::Continue(next) => ProposalLoopPositionV1::ReadyForAgent(next),
-            ProposalLoopAdvanceV1::Complete(completion) => {
-                ProposalLoopPositionV1::Complete(completion)
-            }
-        },
-    )
+    Ok(match advance_runtime_episode(events, content, projected)? {
+        AgentLoopAdvanceV1::Continue(next) => AgentLoopPositionV1::ReadyForAgent(next),
+        AgentLoopAdvanceV1::Complete(completion) => AgentLoopPositionV1::Complete(completion),
+    })
 }
 
-fn open_or_recover_proposal_episode<E: EventStore, C: ContentStore>(
+fn open_or_recover_agent_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    frozen: &FrozenProposalLoopV1,
-) -> Result<ProposalLoopPositionV1, ProposalLoopError> {
+    frozen: &FrozenAgentLoopV1,
+) -> Result<AgentLoopPositionV1, AgentLoopError> {
     let episode = AgentEpisode::new(frozen.episode_id).map_err(agent_error)?;
     match recover_agent_episode(events, content, &episode).map_err(agent_error)? {
-        AgentEpisodeState::NotFound => open_new_proposal_episode(events, codec, frozen, episode)
-            .map(ProposalLoopPositionV1::ReadyForAgent),
+        AgentEpisodeState::NotFound => open_new_runtime_episode(events, codec, frozen, episode)
+            .map(AgentLoopPositionV1::ReadyForAgent),
         AgentEpisodeState::Active {
             step,
             model_attempt_id,
             step_state,
-        } => recover_active_proposal_episode(
+        } => recover_active_runtime_episode(
             events,
             content,
             codec,
@@ -321,22 +325,22 @@ fn open_or_recover_proposal_episode<E: EventStore, C: ContentStore>(
         AgentEpisodeState::Completed {
             reason,
             steps_started,
-        } => Ok(ProposalLoopPositionV1::Complete(ProposalLoopCompletionV1 {
+        } => Ok(AgentLoopPositionV1::Complete(AgentLoopCompletionV1 {
             reason,
             steps_started,
         })),
-        AgentEpisodeState::ReadyToPrepare(_) => Err(ProposalLoopError::Agent(
-            "Proposal Host recovery stopped between episode advance and model preparation".into(),
+        AgentEpisodeState::ReadyToPrepare(_) => Err(AgentLoopError::Agent(
+            "Agent recovery stopped between episode advance and model preparation".into(),
         )),
     }
 }
 
-fn open_new_proposal_episode<E: EventStore>(
+fn open_new_runtime_episode<E: EventStore>(
     events: &mut E,
     codec: NativeProtocolCodec,
-    frozen: &FrozenProposalLoopV1,
+    frozen: &FrozenAgentLoopV1,
     episode: AgentEpisode,
-) -> Result<OpenedProposalEpisodeV1, ProposalLoopError> {
+) -> Result<OpenedAgentEpisodeV1, AgentLoopError> {
     let authority = open_agent_episode(
         events,
         &episode,
@@ -352,7 +356,7 @@ fn open_new_proposal_episode<E: EventStore>(
     let native = codec
         .prepare_initial(&frozen.native_spec, &frozen.user_text)
         .map_err(agent_error)?;
-    Ok(OpenedProposalEpisodeV1 {
+    Ok(OpenedAgentEpisodeV1 {
         episode,
         authority,
         native,
@@ -360,7 +364,7 @@ fn open_new_proposal_episode<E: EventStore>(
     })
 }
 
-fn recover_active_proposal_episode<E: EventStore, C: ContentStore>(
+fn recover_active_runtime_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
@@ -368,13 +372,13 @@ fn recover_active_proposal_episode<E: EventStore, C: ContentStore>(
     step: AgentStep,
     attempt_id: ModelAttemptId,
     step_state: AgentStepState,
-) -> Result<ProposalLoopPositionV1, ProposalLoopError> {
+) -> Result<AgentLoopPositionV1, AgentLoopError> {
     match step_state {
         AgentStepState::OperationsBound(bound) => {
             let continuation =
                 recover_native_continuation(events, content, codec, &step, attempt_id)?;
-            Ok(ProposalLoopPositionV1::ReadyForOperations(
-                AdmittedProposalTurnV1 {
+            Ok(AgentLoopPositionV1::ReadyForOperations(
+                AdmittedAgentTurnV1 {
                     episode,
                     step,
                     attempt_id,
@@ -386,8 +390,8 @@ fn recover_active_proposal_episode<E: EventStore, C: ContentStore>(
         AgentStepState::ReadyForNextStep { .. } => {
             let continuation =
                 recover_native_continuation(events, content, codec, &step, attempt_id)?;
-            Ok(ProposalLoopPositionV1::ReadyForProjection(
-                ObservedProposalTurnV1 {
+            Ok(AgentLoopPositionV1::ReadyForProjection(
+                ObservedAgentTurnV1 {
                     episode,
                     step,
                     attempt_id,
@@ -396,10 +400,10 @@ fn recover_active_proposal_episode<E: EventStore, C: ContentStore>(
             ))
         }
         AgentStepState::Yielded { .. } => {
-            complete_episode(events, content, &episode).map(ProposalLoopPositionV1::Complete)
+            complete_episode(events, content, &episode).map(AgentLoopPositionV1::Complete)
         }
-        _ => Err(ProposalLoopError::Agent(
-            "Proposal Host episode is not at a recoverable external-effect safe point".into(),
+        _ => Err(AgentLoopError::Agent(
+            "Agent episode is not at a recoverable external-effect safe point".into(),
         )),
     }
 }
@@ -410,15 +414,13 @@ fn recover_native_continuation<E: EventStore, C: ContentStore>(
     codec: NativeProtocolCodec,
     step: &AgentStep,
     attempt_id: ModelAttemptId,
-) -> Result<NativeContinuation, ProposalLoopError> {
+) -> Result<NativeContinuation, AgentLoopError> {
     codec
         .recover_recorded(events, content, step.stream_id(), attempt_id)
         .map_err(agent_error)?
         .map(|(_, continuation)| continuation)
         .ok_or_else(|| {
-            ProposalLoopError::Agent(
-                "active Proposal Host step has no durable native continuation".into(),
-            )
+            AgentLoopError::Agent("active Agent step has no durable native continuation".into())
         })
 }
 
@@ -426,15 +428,15 @@ fn dispatch_agent_turn<E, C, T>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
-    frozen: &FrozenProposalLoopV1,
-    opened: OpenedProposalEpisodeV1,
-) -> Result<DispatchedProposalTurnV1, ProposalLoopError>
+    frozen: &FrozenAgentLoopV1,
+    opened: OpenedAgentEpisodeV1,
+) -> Result<DispatchedAgentTurnV1, AgentLoopError>
 where
     E: EventStore,
     C: ContentStore,
     T: ModelTransport,
 {
-    let OpenedProposalEpisodeV1 {
+    let OpenedAgentEpisodeV1 {
         episode,
         authority,
         native,
@@ -465,14 +467,14 @@ where
     )
     .map_err(agent_error)?
     {
-        DispatchCompletion::Response(_) => Ok(DispatchedProposalTurnV1 {
+        DispatchCompletion::Response(_) => Ok(DispatchedAgentTurnV1 {
             episode,
             step,
             attempt_id,
         }),
         DispatchCompletion::NotSent { diagnostic }
         | DispatchCompletion::Rejected { diagnostic }
-        | DispatchCompletion::Ambiguous { diagnostic } => Err(ProposalLoopError::Agent(diagnostic)),
+        | DispatchCompletion::Ambiguous { diagnostic } => Err(AgentLoopError::Agent(diagnostic)),
     }
 }
 
@@ -480,9 +482,9 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    dispatched: DispatchedProposalTurnV1,
-) -> Result<ProposalLoopStageV1<SettledProposalTurnV1>, ProposalLoopError> {
-    let DispatchedProposalTurnV1 {
+    dispatched: DispatchedAgentTurnV1,
+) -> Result<AgentLoopStageV1<SettledAgentTurnV1>, AgentLoopError> {
+    let DispatchedAgentTurnV1 {
         episode,
         step,
         attempt_id,
@@ -490,7 +492,7 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
     let AgentStepState::ReadyToDecode(received) =
         recover_agent_step(events, content, &step, attempt_id).map_err(agent_error)?
     else {
-        return Err(ProposalLoopError::Agent(
+        return Err(AgentLoopError::Agent(
             "model response did not recover at the decode boundary".into(),
         ));
     };
@@ -521,9 +523,9 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?;
     if matches!(settled, SettledAgentStep::Yielded { .. }) {
-        return complete_episode(events, content, &episode).map(ProposalLoopStageV1::Complete);
+        return complete_episode(events, content, &episode).map(AgentLoopStageV1::Complete);
     }
-    Ok(ProposalLoopStageV1::Active(SettledProposalTurnV1 {
+    Ok(AgentLoopStageV1::Active(SettledAgentTurnV1 {
         episode,
         step,
         attempt_id,
@@ -535,16 +537,16 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
 fn admit_agent_operations<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
-    frozen: &FrozenProposalLoopV1,
-    settled: ProposalLoopStageV1<SettledProposalTurnV1>,
-) -> Result<ProposalLoopStageV1<AdmittedProposalTurnV1>, ProposalLoopError> {
+    frozen: &FrozenAgentLoopV1,
+    settled: AgentLoopStageV1<SettledAgentTurnV1>,
+) -> Result<AgentLoopStageV1<AdmittedAgentTurnV1>, AgentLoopError> {
     let settled = match settled {
-        ProposalLoopStageV1::Active(settled) => settled,
-        ProposalLoopStageV1::Complete(completion) => {
-            return Ok(ProposalLoopStageV1::Complete(completion));
+        AgentLoopStageV1::Active(settled) => settled,
+        AgentLoopStageV1::Complete(completion) => {
+            return Ok(AgentLoopStageV1::Complete(completion));
         }
     };
-    let SettledProposalTurnV1 {
+    let SettledAgentTurnV1 {
         episode,
         step,
         attempt_id,
@@ -559,7 +561,7 @@ fn admit_agent_operations<E: EventStore, C: ContentStore>(
                 frozen.capability_grant.registration(name)?,
             ))
         })
-        .collect::<Result<Vec<_>, ProposalLoopError>>()?;
+        .collect::<Result<Vec<_>, AgentLoopError>>()?;
     match admit_episode_operations(
         events,
         content,
@@ -572,7 +574,7 @@ fn admit_agent_operations<E: EventStore, C: ContentStore>(
     .map_err(agent_error)?
     {
         EpisodeOperationAdmissionOutcome::Admitted(admission) => {
-            Ok(ProposalLoopStageV1::Active(AdmittedProposalTurnV1 {
+            Ok(AgentLoopStageV1::Active(AdmittedAgentTurnV1 {
                 episode,
                 step,
                 attempt_id,
@@ -583,25 +585,25 @@ fn admit_agent_operations<E: EventStore, C: ContentStore>(
         EpisodeOperationAdmissionOutcome::Completed {
             reason,
             steps_started,
-        } => Ok(ProposalLoopStageV1::Complete(ProposalLoopCompletionV1 {
+        } => Ok(AgentLoopStageV1::Complete(AgentLoopCompletionV1 {
             reason,
             steps_started,
         })),
     }
 }
 
-fn execute_or_yield_operations<E, C, G>(
+fn execute_or_request_worker_operations<E, C, G>(
     events: &mut E,
     content: &mut C,
     gateway: &mut G,
-    admitted: AdmittedProposalTurnV1,
-) -> Result<ProposalLoopOperationOutcomeV1, ProposalLoopError>
+    admitted: AdmittedAgentTurnV1,
+) -> Result<AgentWorkerTransitionV1, AgentLoopError>
 where
     E: EventStore,
     C: ContentStore,
     G: ToolGateway,
 {
-    let AdmittedProposalTurnV1 {
+    let AdmittedAgentTurnV1 {
         episode,
         step,
         attempt_id,
@@ -617,7 +619,7 @@ where
             ToolEffectClass::Pure | ToolEffectClass::ReadOnly
         ) {
             if !matches!(state, ToolOperationState::Completed { .. }) {
-                external.push(experiment_operation(&operation)?);
+                external.push(worker_operation_request(&operation)?);
             }
             continue;
         }
@@ -625,8 +627,8 @@ where
             continue;
         }
         if !matches!(state, ToolOperationState::NotFound) {
-            return Err(ProposalLoopError::Agent(
-                "Host-local tool operation requires explicit reconciliation".into(),
+            return Err(AgentLoopError::Agent(
+                "workflow-local tool operation requires explicit reconciliation".into(),
             ));
         }
         let authority =
@@ -651,8 +653,8 @@ where
         .map_err(agent_error)?;
     }
     if !external.is_empty() {
-        return Ok(ProposalLoopOperationOutcomeV1::AwaitingController(
-            ProposalLoopExperimentRequestV1 {
+        return Ok(AgentWorkerTransitionV1::WorkerRequest(
+            AgentWorkerRequestV1 {
                 episode_id: episode.episode_id(),
                 step_id: step.step_id(),
                 model_attempt_id: attempt_id,
@@ -660,21 +662,19 @@ where
             },
         ));
     }
-    Ok(ProposalLoopOperationOutcomeV1::Observed(
-        ObservedProposalTurnV1 {
-            episode,
-            step,
-            attempt_id,
-            continuation,
-        },
-    ))
+    Ok(AgentWorkerTransitionV1::Observed(ObservedAgentTurnV1 {
+        episode,
+        step,
+        attempt_id,
+        continuation,
+    }))
 }
 
-fn experiment_operation(
+fn worker_operation_request(
     operation: &PreparedToolOperation,
-) -> Result<ProposalLoopExperimentOperationV1, ProposalLoopError> {
+) -> Result<AgentWorkerOperationRequestV1, AgentLoopError> {
     let arguments = cairn_codec::from_slice(operation.argument_bytes()).map_err(agent_error)?;
-    Ok(ProposalLoopExperimentOperationV1 {
+    Ok(AgentWorkerOperationRequestV1 {
         operation_id: operation.operation_id(),
         tool: operation.tool().clone(),
         implementation_version: operation.implementation_version().clone(),
@@ -688,16 +688,16 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    frozen: &FrozenProposalLoopV1,
-    observed: ProposalLoopStageV1<ObservedProposalTurnV1>,
-) -> Result<ProposalLoopStageV1<ProjectedProposalTurnV1>, ProposalLoopError> {
+    frozen: &FrozenAgentLoopV1,
+    observed: AgentLoopStageV1<ObservedAgentTurnV1>,
+) -> Result<AgentLoopStageV1<ProjectedAgentTurnV1>, AgentLoopError> {
     let observed = match observed {
-        ProposalLoopStageV1::Active(observed) => observed,
-        ProposalLoopStageV1::Complete(completion) => {
-            return Ok(ProposalLoopStageV1::Complete(completion));
+        AgentLoopStageV1::Active(observed) => observed,
+        AgentLoopStageV1::Complete(completion) => {
+            return Ok(AgentLoopStageV1::Complete(completion));
         }
     };
-    let ObservedProposalTurnV1 {
+    let ObservedAgentTurnV1 {
         episode,
         step,
         attempt_id,
@@ -716,7 +716,7 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?
     else {
-        return Err(ProposalLoopError::Agent(
+        return Err(AgentLoopError::Agent(
             "tool operation requires explicit reconciliation".into(),
         ));
     };
@@ -726,25 +726,25 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
     let native = codec
         .prepare_continuation(&frozen.native_spec, &continuation)
         .map_err(agent_error)?;
-    Ok(ProposalLoopStageV1::Active(ProjectedProposalTurnV1 {
+    Ok(AgentLoopStageV1::Active(ProjectedAgentTurnV1 {
         episode,
         native,
         pending_results: results,
     }))
 }
 
-fn advance_proposal_episode<E: EventStore, C: ContentStore>(
+fn advance_runtime_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
-    projected: ProposalLoopStageV1<ProjectedProposalTurnV1>,
-) -> Result<ProposalLoopAdvanceV1, ProposalLoopError> {
+    projected: AgentLoopStageV1<ProjectedAgentTurnV1>,
+) -> Result<AgentLoopAdvanceV1, AgentLoopError> {
     let projected = match projected {
-        ProposalLoopStageV1::Active(projected) => projected,
-        ProposalLoopStageV1::Complete(completion) => {
-            return Ok(ProposalLoopAdvanceV1::Complete(completion));
+        AgentLoopStageV1::Active(projected) => projected,
+        AgentLoopStageV1::Complete(completion) => {
+            return Ok(AgentLoopAdvanceV1::Complete(completion));
         }
     };
-    let ProjectedProposalTurnV1 {
+    let ProjectedAgentTurnV1 {
         episode,
         native,
         pending_results,
@@ -761,7 +761,7 @@ fn advance_proposal_episode<E: EventStore, C: ContentStore>(
     .map_err(agent_error)?
     {
         EpisodeAdvance::NextStep(authority) => {
-            Ok(ProposalLoopAdvanceV1::Continue(OpenedProposalEpisodeV1 {
+            Ok(AgentLoopAdvanceV1::Continue(OpenedAgentEpisodeV1 {
                 episode,
                 authority,
                 native,
@@ -771,7 +771,7 @@ fn advance_proposal_episode<E: EventStore, C: ContentStore>(
         EpisodeAdvance::Completed {
             reason,
             steps_started,
-        } => Ok(ProposalLoopAdvanceV1::Complete(ProposalLoopCompletionV1 {
+        } => Ok(AgentLoopAdvanceV1::Complete(AgentLoopCompletionV1 {
             reason,
             steps_started,
         })),
@@ -782,7 +782,7 @@ fn complete_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     episode: &AgentEpisode,
-) -> Result<ProposalLoopCompletionV1, ProposalLoopError> {
+) -> Result<AgentLoopCompletionV1, AgentLoopError> {
     let EpisodeAdvance::Completed {
         reason,
         steps_started,
@@ -797,35 +797,35 @@ fn complete_episode<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?
     else {
-        return Err(ProposalLoopError::Agent(
+        return Err(AgentLoopError::Agent(
             "yielded step unexpectedly advanced".into(),
         ));
     };
-    Ok(ProposalLoopCompletionV1 {
+    Ok(AgentLoopCompletionV1 {
         reason,
         steps_started,
     })
 }
 
-fn observed_now() -> Result<ObservedAtUnixMillis, ProposalLoopError> {
+fn observed_now() -> Result<ObservedAtUnixMillis, AgentLoopError> {
     let milliseconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(agent_error)?
         .as_millis();
     let milliseconds = i64::try_from(milliseconds)
-        .map_err(|_| ProposalLoopError::Agent("wall clock overflow".into()))?;
+        .map_err(|_| AgentLoopError::Agent("wall clock overflow".into()))?;
     Ok(ObservedAtUnixMillis::new(milliseconds))
 }
 
-fn agent_error(error: impl std::fmt::Display) -> ProposalLoopError {
-    ProposalLoopError::Agent(error.to_string())
+fn agent_error(error: impl std::fmt::Display) -> AgentLoopError {
+    AgentLoopError::Agent(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use std::{io::Cursor, sync::Arc};
 
-    use cairn_agent::{
+    use crate::{
         AdapterVersion, CanonicalToolResult, ContextBlock, DeploymentName, EpisodeStepLimit,
         EpisodeToolOperationLimit, ModelName, ModelOutputTokenLimit, ModelProtocolConfig,
         ModelSelection, ModelTransportResponse, NativeRequestSpec, NativeToolDefinition,
@@ -860,19 +860,19 @@ mod tests {
             ToolEffectClass::ReadOnly,
         );
 
-        let error = ProposalLoopCapabilityGrantV1::new(vec![registration.clone(), registration])
+        let error = AgentLoopCapabilityGrantV1::new(vec![registration.clone(), registration])
             .expect_err("duplicate semantic capability must be rejected");
 
         assert!(matches!(
             error,
-            ProposalLoopError::InvalidCapabilityGrant(message)
+            AgentLoopError::InvalidCapabilityGrant(message)
                 if message == "capability grant repeats a tool name"
         ));
     }
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn external_effect_proposal_is_durably_bound_but_never_executed_in_host() {
+    fn external_effect_proposal_is_durably_bound_but_never_executed_in_workflow() {
         let temporary = tempfile::tempdir().expect("temporary state");
         let mut content = SqliteContentStore::open(
             temporary.path().join("content.db"),
@@ -882,7 +882,7 @@ mod tests {
         let mut events =
             SqliteEventStore::open(temporary.path().join("events.db")).expect("events");
         let tool = ToolName::new("request_external_probe").expect("tool");
-        let frozen = FrozenProposalLoopV1 {
+        let frozen = FrozenAgentLoopV1 {
             task_id: TaskId::new(),
             episode_id: EpisodeId::new(),
             role: AgentRoleName::new("generic-effect-control").expect("role"),
@@ -936,7 +936,7 @@ mod tests {
                 &mut content,
                 &serde_json::json!({"schema_version":1,"external_effect":"controller-only"}),
             ),
-            capability_grant: ProposalLoopCapabilityGrantV1::new(vec![ToolRegistration::new(
+            capability_grant: AgentLoopCapabilityGrantV1::new(vec![ToolRegistration::new(
                 tool,
                 ToolImplementationVersion::new("external-probe-v1").expect("version"),
                 ToolEffectClass::Idempotent,
@@ -966,7 +966,7 @@ mod tests {
         let dispatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let transport_dispatches = Arc::clone(&dispatches);
         let mut transport = ScriptedModelTransport::new(
-            move |_: &cairn_agent::PreparedModelRequest| -> Result<_, TransportError> {
+            move |_: &crate::PreparedModelRequest| -> Result<_, TransportError> {
                 let index = transport_dispatches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(ModelTransportResponse::without_usage(if index == 0 {
                     request_response.clone()
@@ -977,7 +977,7 @@ mod tests {
         );
         let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let invoked_by_gateway = Arc::clone(&invoked);
-        let mut gateway = cairn_agent::ScriptedToolGateway::new(
+        let mut gateway = crate::ScriptedToolGateway::new(
             move |_: &PreparedToolOperation| -> Result<_, ToolGatewayError> {
                 invoked_by_gateway.store(true, std::sync::atomic::Ordering::SeqCst);
                 CanonicalToolResult::from_value(&serde_json::json!({"unexpected":true}))
@@ -990,7 +990,7 @@ mod tests {
         })
         .expect("codec");
 
-        let outcome = run_proposal_loop(
+        let outcome = run_agent_loop(
             &mut events,
             &mut content,
             &mut transport,
@@ -998,9 +998,9 @@ mod tests {
             &frozen,
             &mut gateway,
         )
-        .expect("Host must durably yield external authority to Controller");
-        let ProposalLoopOutcomeV1::AwaitingController(request) = outcome else {
-            panic!("external effect must yield")
+        .expect("workflow must return a Worker request before external authority");
+        let AgentLoopOutcomeV1::WorkerRequest(request) = outcome else {
+            panic!("external effect must produce a Worker request")
         };
         assert_eq!(request.episode_id, frozen.episode_id);
         assert_eq!(request.operations.len(), 1);
@@ -1014,9 +1014,9 @@ mod tests {
         let AgentEpisodeState::Active {
             step_state: AgentStepState::OperationsBound(bound),
             ..
-        } = recover_agent_episode(&events, &mut content, &episode).expect("recover yield")
+        } = recover_agent_episode(&events, &mut content, &episode).expect("recover Worker request")
         else {
-            panic!("yield must preserve bound operations")
+            panic!("Worker request must preserve bound operations")
         };
         let operation = bound.into_operations().pop().expect("external operation");
         let authority = authorize_tool_operation(
@@ -1036,7 +1036,7 @@ mod tests {
         .expect("durable start");
         let controller_invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let controller_gateway_invoked = Arc::clone(&controller_invoked);
-        let mut controller_gateway = cairn_agent::ScriptedToolGateway::new(
+        let mut controller_gateway = crate::ScriptedToolGateway::new(
             move |_: &PreparedToolOperation| -> Result<_, ToolGatewayError> {
                 controller_gateway_invoked.store(true, std::sync::atomic::Ordering::SeqCst);
                 CanonicalToolResult::from_value(&serde_json::json!({
@@ -1058,7 +1058,7 @@ mod tests {
         .expect("Controller records observation");
         assert!(controller_invoked.load(std::sync::atomic::Ordering::SeqCst));
 
-        let resumed = run_proposal_loop(
+        let resumed = run_agent_loop(
             &mut events,
             &mut content,
             &mut transport,
@@ -1067,7 +1067,7 @@ mod tests {
             &mut gateway,
         )
         .expect("resume exact episode");
-        let ProposalLoopOutcomeV1::Complete(completion) = resumed else {
+        let AgentLoopOutcomeV1::Complete(completion) = resumed else {
             panic!("recorded observation must resume to terminal")
         };
         assert_eq!(completion.reason, EpisodeCompletionReason::Yielded);

@@ -1,5 +1,8 @@
 # DEV-031 — 逐 cell Oracle strategy consumer 与 typed effect observation
 
+> Amended by D-044/DEV-036: the per-cell authority remains; model execution now occurs in a
+> Controller workflow step and external capability requests use `WorkflowTool*`→Worker.
+
 - 状态：`Accepted`
 - 日期：2026-08-30
 - 依赖：D-043、DEV-029、DEV-030
@@ -34,7 +37,7 @@ strategy，先保存provenance observation，再原子接受strict typed submiss
 - ledger只接受当前run/item的contribution、experiment request或explicit unknown，并为每次变化生成parent-linked
   immutable revision。
 
-### 2.3 Oracle Proposal Host profile
+### 2.3 Oracle proposal step profile
 
 一个Agent request只包含：structured claim、一个work item、一个run、source task、documentation、build/tests、
 knowledge、model、budget和current-V1四项tool catalog。通用`run_proposal_loop`仍是唯一runtime lifecycle。
@@ -49,11 +52,11 @@ Controller重新打开exact Host journal并验证yielded operation；每个effec
 authorization/start。可信receipt与public result形成：
 
 ```text
-ProposalHostControllerObservationV1
+WorkflowToolControllerObservationV1
 → OracleObservationPayloadV1
 → OracleExplorationObservationV1(item, run)
 → OracleExplorationLedgerV1 revision
-→ same Proposal Host episode resume
+→ same proposal step episode resume
 ```
 
 model-visible result同时携带Controller重算的typed Oracle observation identity，所以Agent只能引用当前run已投影

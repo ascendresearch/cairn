@@ -42,7 +42,7 @@ fn decision_requests(
 
     let proposal_id =
         ContentId::<SirIntentHypothesisSetProposalArtifact>::from_str(&proposal_wire)?;
-    let store = SqliteContentStore::open_immutable_read_only(database, cas)?;
+    let store = SqliteContentStore::open_read_only(database, cas)?;
     let proposal: IntentHypothesisSetProposalV1 = load(&store, &proposal_id)?;
     let recovery_input_id = proposal.recovery_input();
     let recovery_input: IntentRecoveryInputV1 = load(&store, &recovery_input_id)?;
@@ -67,7 +67,7 @@ fn promote(mut arguments: impl Iterator<Item = String>) -> Result<(), Box<dyn st
     }
 
     let decision_id = ContentId::<UserIntentDecisionArtifact>::from_str(&decision_wire)?;
-    let public = SqliteContentStore::open_immutable_read_only(public_database, public_cas)?;
+    let public = SqliteContentStore::open_read_only(public_database, public_cas)?;
     let decision: UserIntentDecisionV1 = load(&public, &decision_id)?;
     let request_id = decision.request();
     let request: UserIntentDecisionRequestV1 = load(&public, &request_id)?;

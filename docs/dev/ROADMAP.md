@@ -28,9 +28,9 @@ DEV-004 generic DeepSeek SIR proposal path
 → DEV-016..018 product-owned native ASC gate + native-feedback follow-up
 → DEV-019..020 repeatable explicit repair lineage + native rebuild
 → DEV-021 Controller-owned durable Candidate workflow spine
-→ DEV-022 generic Proposal Host + persisted workflow request consumer
+→ DEV-022 generic proposal step + persisted workflow request consumer
 → DEV-023 Controller-owned single-task process manager
-→ DEV-024 unified Proposal Host request lifecycle
+→ DEV-024 unified proposal step request lifecycle
 → DEV-025 readable typed Controller workflow skeleton
 → DEV-026 durable SIR-to-user-decision Controller prefix
 → next: user decision + independent Intent Admission transition, or Controller-owned experiment observation round-trip
@@ -43,7 +43,7 @@ Admission → `MigrationIntentContractV1` → collection comparator policy → a
 DEV-012则让configured DeepSeek通过durable agent runtime读取task-scoped source并提交首个typed Candidate
 proposal。DEV-013–020 已经把该 artifact 推进到远端 generic/native build、receipt-bound diagnostic、隔离
 DeepSeek revision/repair 和 rebuild；DEV-021–023已把这些transition固化到Controller state machine、通用
-Proposal Host和single-task manager，DEV-024统一了现有role的Host lifecycle。最新native gate仍为
+proposal step和single-task manager，DEV-024统一了现有role的Host lifecycle。最新native gate仍为
 `SubjectFailed`。DEV-025冻结完整Controller typed skeleton，DEV-026已接入SIR→decision requests durable prefix并
 停在user authority。下一阶段优先接入user decision + independent Intent Admission，或实现Controller-owned
 experiment observation round-trip/native success/NPU correctness的最短路径；仍保持expected observation、
@@ -51,7 +51,7 @@ candidate output与Admission authority分离。尚未完成CP1、完整
 Candidate verdict 链或通用 governance。
 
 DEV-008 的最小 one-shot SIR ingress 只是首个真实 authority consumer 的历史capability proof，DEV-022已删除
-该专用process；当前production SIR/Candidate loops由通用Proposal Host承载，Oracle仍等待真实consumer。DEV-010 的局部
+该专用process；当前production SIR/Candidate loops由通用proposal step承载，Oracle仍等待真实consumer。DEV-010 的局部
 qualification 也不授权完整 mechanism registry、七类 Planner、十一位置 Agent catalog 或面向未来 stage
 的兼容接口。
 

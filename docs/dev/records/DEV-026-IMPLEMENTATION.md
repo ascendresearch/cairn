@@ -1,5 +1,8 @@
 # DEV-026 implementation — durable Controller SIR-to-user-decision prefix
 
+> Amended by D-044/DEV-036: the SIR/user-decision authority remains, while the child-process,
+> supervisor and binary-invocation mechanics described below were deleted from current V1.
+
 - 状态：`Accepted`
 - 日期：2026-08-29
 - Slice：[`DEV-026`](../SLICE_CATALOG.md#3-当前critical-slices)
@@ -12,7 +15,7 @@
 ## 1. Objective
 
 把DEV-025的第一个真实空接缝接入task-owned durable Controller aggregate，同时保持业务流程本身就是可读的
-架构骨架：冻结exact SIR Host request/input，先提交durable start authority，再运行统一Proposal Host，把terminal
+架构骨架：冻结exact SIR Host request/input，先提交durable start authority，再运行统一proposal step，把terminal
 作为带provenance的proposal observation持久化，机械生成用户意图决策请求，然后明确停在
 `AwaitingUserIntentDecision`。Controller不得代替用户选择，也不得提前调用Intent Admission。
 
@@ -56,8 +59,8 @@ freeze → SIR → derive decision requests → await user decision → Intent A
 
 ## 4. 统一Host监督
 
-通用Proposal Host的binary/model/runtime freeze、timeout、stdout/stderr bound、invocation marker和drift validation
-已从`candidate_manager`搬到`proposal_host_supervisor`。SIR和Candidate消费同一真实process seam，不存在SIR专用
+通用proposal step的binary/model/runtime freeze、timeout、stdout/stderr bound、invocation marker和drift validation
+已从`candidate_manager`搬到`proposal_step_supervisor`。SIR和Candidate消费同一真实process seam，不存在SIR专用
 进程或复制的监督逻辑。invocation marker继续使用`create_new`阻止同一episode的并发/隐式重复启动；启动窗口不明
 时必须reconciliation，不能用相同bytes作为再次执行外部effect的授权。
 

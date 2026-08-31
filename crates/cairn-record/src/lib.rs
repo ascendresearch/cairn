@@ -173,6 +173,17 @@ pub fn derive_event_id(
 
 /// Append-only event-store contract.
 pub trait EventStore {
+    /// Lists aggregate streams of one exact kind in aggregate-identity order.
+    ///
+    /// This is a discovery read model over the authoritative stream catalog. It does not create a
+    /// second task registry and it grants no authority to mutate the returned aggregates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventStoreError`] when persisted identities fail validation or the adapter cannot
+    /// read the stream catalog.
+    fn list_streams(&self, kind: &AggregateKind) -> Result<Vec<StreamId>, EventStoreError>;
+
     /// Atomically appends a non-empty event batch under an expected stream revision.
     ///
     /// # Errors

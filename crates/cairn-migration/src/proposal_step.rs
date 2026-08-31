@@ -1,4 +1,4 @@
-//! Generic Proposal Host boundary over domain-specific SIR and Candidate role profiles.
+//! Generic Proposal step boundary over domain-specific SIR and Candidate role profiles.
 
 use cairn_agent::{
     EpisodeBudget, EpisodeCompletionReason, ModelOutputTokenLimit, ModelSelection, ModelTransport,
@@ -8,14 +8,14 @@ use cairn_protocol::{
     ContentId, ContentType, EpisodeId, ModelAttemptId, OperationId, SchemaVersion, StepId, TaskId,
 };
 use cairn_record::{ContentStore, EventStore};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
 use crate::{
-    AgentResolvedRuntimeModelArtifact, CandidateOracleContractV1, CandidateOracleMaterialsV1,
-    CandidateProposalArtifact, CandidateProposalV1, CandidateStrategyProfileInput,
-    CandidateWorkspaceV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
-    IntentRecoveryRequestV1, OracleBuildTestSnapshotArtifact, OracleClaimV1,
+    AgentResolvedRuntimeModelArtifact, AgentRuntimeBindingArtifact, CandidateOracleContractV1,
+    CandidateOracleMaterialsV1, CandidateProposalArtifact, CandidateProposalV1,
+    CandidateStrategyProfileInput, CandidateWorkspaceV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputV1, IntentRecoveryRequestV1, OracleBuildTestSnapshotArtifact, OracleClaimV1,
     OracleDocumentationSnapshotArtifact, OracleKnowledgeSnapshotArtifact, OracleStrategyExecutorV1,
     OracleStrategyProfileInput, OracleStrategyRunV1, OracleStrategySubmissionArtifact,
     OracleStrategySubmissionV1, OracleStrategyToolCatalogV1, OracleWorkItemV1, OracleWorkspaceV1,
@@ -24,139 +24,72 @@ use crate::{
     run_candidate_strategy_profile, run_oracle_strategy_profile, run_sir_profile,
 };
 
-/// Exact complete runtime invocation snapshot archived before an episode starts.
-pub enum ProposalHostInvocationArtifact {}
-impl ContentType for ProposalHostInvocationArtifact {
-    const DOMAIN: &'static str = "migration.proposal-host-invocation.v1";
+/// Canonical request accepted by one generic Proposal step episode.
+pub enum ProposalStepRequestArtifact {}
+
+impl ContentType for ProposalStepRequestArtifact {
+    const DOMAIN: &'static str = "migration.proposal-step-request.v1";
 }
 
-/// Canonical request accepted by one generic Proposal Host episode.
-pub enum ProposalHostRequestArtifact {}
+/// Canonical terminal outcome returned by one generic Proposal step episode.
+pub enum ProposalStepTerminalArtifact {}
 
-impl ContentType for ProposalHostRequestArtifact {
-    const DOMAIN: &'static str = "migration.proposal-host-request.v1";
+impl ContentType for ProposalStepTerminalArtifact {
+    const DOMAIN: &'static str = "migration.proposal-step-terminal.v1";
 }
 
-/// Canonical terminal outcome returned by one generic Proposal Host episode.
-pub enum ProposalHostTerminalArtifact {}
-
-impl ContentType for ProposalHostTerminalArtifact {
-    const DOMAIN: &'static str = "migration.proposal-host-terminal.v1";
-}
-
-/// Canonical durable-yield identity returned before Controller-owned experiment execution.
+/// Canonical request identity returned before Controller-owned Worker execution.
 ///
 /// ```compile_fail
-/// use cairn_migration::{ProposalHostExperimentRequestArtifact, ProposalHostTerminalArtifact};
+/// use cairn_migration::{WorkflowToolRequestArtifact, ProposalStepTerminalArtifact};
 /// use cairn_protocol::ContentId;
-/// fn require_experiment(_: ContentId<ProposalHostExperimentRequestArtifact>) {}
-/// fn invalid(terminal: ContentId<ProposalHostTerminalArtifact>) {
+/// fn require_experiment(_: ContentId<WorkflowToolRequestArtifact>) {}
+/// fn invalid(terminal: ContentId<ProposalStepTerminalArtifact>) {
 ///     require_experiment(terminal);
 /// }
 /// ```
-pub enum ProposalHostExperimentRequestArtifact {}
+pub enum WorkflowToolRequestArtifact {}
 
-impl ContentType for ProposalHostExperimentRequestArtifact {
-    const DOMAIN: &'static str = "migration.proposal-host-experiment-request.v1";
-}
-
-/// Exact digest of the generic Proposal Host executable authorized for an invocation.
-///
-/// This identity is intentionally distinct from a managed Worker's binary identity: a Proposal
-/// Host has model/proposal authority and never receives execution authority.
-///
-/// ```compile_fail
-/// use cairn_execution::WorkerBinaryIdentity;
-/// use cairn_migration::ProposalHostBinaryIdentity;
-/// fn require_host(_: ProposalHostBinaryIdentity) {}
-/// fn invalid(worker: WorkerBinaryIdentity) {
-///     require_host(worker);
-/// }
-/// ```
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct ProposalHostBinaryIdentity(String);
-
-impl ProposalHostBinaryIdentity {
-    /// Creates one exact lowercase SHA-256 executable identity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects any value outside the canonical `sha256:<64 lowercase hex>` representation.
-    pub fn new(value: impl Into<String>) -> Result<Self, ProposalHostError> {
-        let value = value.into();
-        let digest = value.strip_prefix("sha256:").ok_or_else(|| {
-            ProposalHostError::InvalidRequest(
-                "Proposal Host binary identity is not a canonical SHA-256 digest".into(),
-            )
-        })?;
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return invalid(
-                "Proposal Host binary identity is not a canonical lowercase SHA-256 digest",
-            );
-        }
-        Ok(Self(value))
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Serialize for ProposalHostBinaryIdentity {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for ProposalHostBinaryIdentity {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
-    }
-}
-
-impl std::fmt::Display for ProposalHostBinaryIdentity {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
+impl ContentType for WorkflowToolRequestArtifact {
+    const DOMAIN: &'static str = "migration.workflow-tool-request.v1";
 }
 
 /// One exact source entry in a Controller-materialized task snapshot.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProposalHostTaskSourceV1 {
+pub struct ProposalStepTaskSourceV1 {
     path: SirTaskArtifactPath,
     source: String,
 }
 
-impl ProposalHostTaskSourceV1 {
+impl ProposalStepTaskSourceV1 {
     #[must_use]
     pub fn new(path: SirTaskArtifactPath, source: String) -> Self {
         Self { path, source }
     }
+
+    #[must_use]
+    pub const fn path(&self) -> &SirTaskArtifactPath {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
 }
 
-/// Exact task material projected into a Host without granting an arbitrary filesystem root.
+/// Exact task material projected into one proposal step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProposalHostTaskSnapshotV1 {
+pub struct ProposalStepTaskSnapshotV1 {
     bundle: SirTaskBundleV1,
-    sources: Vec<ProposalHostTaskSourceV1>,
+    sources: Vec<ProposalStepTaskSourceV1>,
 }
 
-const ORACLE_HOST_TEXT_SNAPSHOT_LIMIT: usize = 512 * 1024;
+const ORACLE_STEP_TEXT_SNAPSHOT_LIMIT: usize = 512 * 1024;
 
-macro_rules! oracle_host_text_snapshot {
+macro_rules! oracle_step_text_snapshot {
     ($name:ident, $wire:ident, $artifact:ty, $label:literal) => {
         #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
         pub struct $name {
@@ -172,7 +105,7 @@ macro_rules! oracle_host_text_snapshot {
         }
 
         impl $name {
-            /// Constructs one exact UTF-8 snapshot transferred into the Host process.
+            /// Constructs one exact UTF-8 snapshot consumed by the proposal step.
             ///
             /// # Errors
             ///
@@ -180,9 +113,9 @@ macro_rules! oracle_host_text_snapshot {
             pub fn new(
                 identity: ContentId<$artifact>,
                 text: String,
-            ) -> Result<Self, ProposalHostError> {
+            ) -> Result<Self, ProposalStepError> {
                 if text.is_empty()
-                    || text.len() > ORACLE_HOST_TEXT_SNAPSHOT_LIMIT
+                    || text.len() > ORACLE_STEP_TEXT_SNAPSHOT_LIMIT
                     || ContentId::<$artifact>::derive(text.as_bytes()).map_err(codec)? != identity
                 {
                     return invalid(concat!($label, " snapshot identity or size changed"));
@@ -202,7 +135,7 @@ macro_rules! oracle_host_text_snapshot {
         }
 
         impl TryFrom<$wire> for $name {
-            type Error = ProposalHostError;
+            type Error = ProposalStepError;
 
             fn try_from(wire: $wire) -> Result<Self, Self::Error> {
                 Self::new(wire.identity, wire.text)
@@ -222,40 +155,40 @@ macro_rules! oracle_host_text_snapshot {
     };
 }
 
-oracle_host_text_snapshot!(
-    ProposalHostOracleDocumentationV1,
-    ProposalHostOracleDocumentationWire,
+oracle_step_text_snapshot!(
+    ProposalStepOracleDocumentationV1,
+    ProposalStepOracleDocumentationWire,
     OracleDocumentationSnapshotArtifact,
     "Oracle documentation"
 );
-oracle_host_text_snapshot!(
-    ProposalHostOracleBuildTestsV1,
-    ProposalHostOracleBuildTestsWire,
+oracle_step_text_snapshot!(
+    ProposalStepOracleBuildTestsV1,
+    ProposalStepOracleBuildTestsWire,
     OracleBuildTestSnapshotArtifact,
     "Oracle build/test"
 );
-oracle_host_text_snapshot!(
-    ProposalHostOracleKnowledgeV1,
-    ProposalHostOracleKnowledgeWire,
+oracle_step_text_snapshot!(
+    ProposalStepOracleKnowledgeV1,
+    ProposalStepOracleKnowledgeWire,
     OracleKnowledgeSnapshotArtifact,
     "Oracle knowledge"
 );
 
-/// Exact human-readable public material projected into one Oracle strategy Host request.
+/// Exact human-readable public material projected into one Oracle strategy step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProposalHostOracleMaterialsV1 {
-    documentation: ProposalHostOracleDocumentationV1,
-    build_and_tests: ProposalHostOracleBuildTestsV1,
-    knowledge: ProposalHostOracleKnowledgeV1,
+pub struct ProposalStepOracleMaterialsV1 {
+    documentation: ProposalStepOracleDocumentationV1,
+    build_and_tests: ProposalStepOracleBuildTestsV1,
+    knowledge: ProposalStepOracleKnowledgeV1,
 }
 
-impl ProposalHostOracleMaterialsV1 {
+impl ProposalStepOracleMaterialsV1 {
     #[must_use]
     pub fn new(
-        documentation: ProposalHostOracleDocumentationV1,
-        build_and_tests: ProposalHostOracleBuildTestsV1,
-        knowledge: ProposalHostOracleKnowledgeV1,
+        documentation: ProposalStepOracleDocumentationV1,
+        build_and_tests: ProposalStepOracleBuildTestsV1,
+        knowledge: ProposalStepOracleKnowledgeV1,
     ) -> Self {
         Self {
             documentation,
@@ -265,28 +198,38 @@ impl ProposalHostOracleMaterialsV1 {
     }
 
     #[must_use]
-    pub const fn documentation(&self) -> &ProposalHostOracleDocumentationV1 {
+    pub const fn documentation(&self) -> &ProposalStepOracleDocumentationV1 {
         &self.documentation
     }
 
     #[must_use]
-    pub const fn build_and_tests(&self) -> &ProposalHostOracleBuildTestsV1 {
+    pub const fn build_and_tests(&self) -> &ProposalStepOracleBuildTestsV1 {
         &self.build_and_tests
     }
 
     #[must_use]
-    pub const fn knowledge(&self) -> &ProposalHostOracleKnowledgeV1 {
+    pub const fn knowledge(&self) -> &ProposalStepOracleKnowledgeV1 {
         &self.knowledge
     }
 }
 
-impl ProposalHostTaskSnapshotV1 {
+impl ProposalStepTaskSnapshotV1 {
     #[must_use]
-    pub fn new(bundle: SirTaskBundleV1, sources: Vec<ProposalHostTaskSourceV1>) -> Self {
+    pub fn new(bundle: SirTaskBundleV1, sources: Vec<ProposalStepTaskSourceV1>) -> Self {
         Self { bundle, sources }
     }
 
-    /// Copies the exact already-validated workspace into a process-transfer snapshot.
+    #[must_use]
+    pub const fn bundle(&self) -> &SirTaskBundleV1 {
+        &self.bundle
+    }
+
+    #[must_use]
+    pub fn sources(&self) -> &[ProposalStepTaskSourceV1] {
+        &self.sources
+    }
+
+    /// Copies the exact already-validated workspace into a step-owned snapshot.
     #[must_use]
     pub fn from_workspace(workspace: &SirTaskWorkspace) -> Self {
         Self {
@@ -294,12 +237,12 @@ impl ProposalHostTaskSnapshotV1 {
             sources: workspace
                 .materialized_sources()
                 .into_iter()
-                .map(|(path, source)| ProposalHostTaskSourceV1 { path, source })
+                .map(|(path, source)| ProposalStepTaskSourceV1 { path, source })
                 .collect(),
         }
     }
 
-    fn workspace(&self, limits: SirTaskLimits) -> Result<SirTaskWorkspace, ProposalHostError> {
+    fn workspace(&self, limits: SirTaskLimits) -> Result<SirTaskWorkspace, ProposalStepError> {
         SirTaskWorkspace::from_materialized(
             self.bundle.clone(),
             self.sources
@@ -308,17 +251,16 @@ impl ProposalHostTaskSnapshotV1 {
                 .collect(),
             limits,
         )
-        .map_err(|error| ProposalHostError::InvalidRequest(error.to_string()))
+        .map_err(|error| ProposalStepError::InvalidRequest(error.to_string()))
     }
 }
 
-/// Runtime facts frozen before a Proposal Host may dispatch a model effect.
+/// Runtime facts frozen before a Proposal step may dispatch a model effect.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProposalHostRuntimeV1 {
+pub struct ProposalStepRuntimeV1 {
     schema_version: SchemaVersion,
     episode_id: EpisodeId,
-    binary_identity: ProposalHostBinaryIdentity,
     model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     selection: ModelSelection,
     budget: EpisodeBudget,
@@ -326,11 +268,10 @@ pub struct ProposalHostRuntimeV1 {
     task_limits: SirTaskLimits,
 }
 
-impl ProposalHostRuntimeV1 {
+impl ProposalStepRuntimeV1 {
     #[must_use]
     pub fn new(
         episode_id: EpisodeId,
-        binary_identity: ProposalHostBinaryIdentity,
         model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
         selection: ModelSelection,
         budget: EpisodeBudget,
@@ -340,7 +281,6 @@ impl ProposalHostRuntimeV1 {
         Self {
             schema_version: schema_v1(),
             episode_id,
-            binary_identity,
             model_configuration,
             selection,
             budget,
@@ -352,11 +292,6 @@ impl ProposalHostRuntimeV1 {
     #[must_use]
     pub const fn episode_id(&self) -> EpisodeId {
         self.episode_id
-    }
-
-    #[must_use]
-    pub const fn binary_identity(&self) -> &ProposalHostBinaryIdentity {
-        &self.binary_identity
     }
 
     #[must_use]
@@ -384,67 +319,67 @@ impl ProposalHostRuntimeV1 {
     /// # Errors
     ///
     /// Returns an error if canonical encoding fails.
-    pub fn identity(&self) -> Result<ContentId<ProposalHostInvocationArtifact>, ProposalHostError> {
+    pub fn identity(&self) -> Result<ContentId<AgentRuntimeBindingArtifact>, ProposalStepError> {
         if self.schema_version != schema_v1() {
-            return invalid("Proposal Host runtime is not current V1");
+            return invalid("Proposal step runtime is not current V1");
         }
         ContentId::derive(&cairn_codec::to_vec(self).map_err(codec)?).map_err(codec)
     }
 }
 
-/// Closed set of domain-specific role inputs currently consumed by the generic Host.
+/// Closed set of domain-specific inputs consumed by the main workflow proposal step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "role")]
 #[allow(clippy::large_enum_variant)]
-pub enum ProposalHostRoleRequestV1 {
+pub enum ProposalStepRoleRequestV1 {
     Sir {
         task_id: TaskId,
         recovery_request: IntentRecoveryRequestV1,
-        task: ProposalHostTaskSnapshotV1,
+        task: ProposalStepTaskSnapshotV1,
     },
     OracleStrategy {
         workspace: OracleWorkspaceV1,
         claim: OracleClaimV1,
         work_item: OracleWorkItemV1,
         run: OracleStrategyRunV1,
-        task: ProposalHostTaskSnapshotV1,
-        materials: ProposalHostOracleMaterialsV1,
+        task: ProposalStepTaskSnapshotV1,
+        materials: ProposalStepOracleMaterialsV1,
     },
     CandidateStrategy {
         workspace: CandidateWorkspaceV1,
         contract: CandidateOracleContractV1,
         oracle_materials: CandidateOracleMaterialsV1,
-        task: ProposalHostTaskSnapshotV1,
-        public_materials: ProposalHostOracleMaterialsV1,
+        task: ProposalStepTaskSnapshotV1,
+        public_materials: ProposalStepOracleMaterialsV1,
     },
 }
 
-/// Exact current-V1 Host request. Deserialization reruns every role binding invariant.
+/// Exact current-V1 proposal-step request. Deserialization reruns every role binding invariant.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostRequestV1 {
+pub struct ProposalStepRequestV1 {
     schema_version: SchemaVersion,
-    runtime: ProposalHostRuntimeV1,
-    role: ProposalHostRoleRequestV1,
+    runtime: ProposalStepRuntimeV1,
+    role: ProposalStepRoleRequestV1,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostRequestWire {
+struct ProposalStepRequestWire {
     schema_version: SchemaVersion,
-    runtime: ProposalHostRuntimeV1,
-    role: ProposalHostRoleRequestV1,
+    runtime: ProposalStepRuntimeV1,
+    role: ProposalStepRoleRequestV1,
 }
 
-impl ProposalHostRequestV1 {
-    /// Creates and validates one exact role-scoped Host request.
+impl ProposalStepRequestV1 {
+    /// Creates and validates one exact proposal-step request.
     ///
     /// # Errors
     ///
     /// Rejects task, recovery, parent, diagnostic, workflow, or episode binding drift.
     pub fn new(
-        runtime: ProposalHostRuntimeV1,
-        role: ProposalHostRoleRequestV1,
-    ) -> Result<Self, ProposalHostError> {
+        runtime: ProposalStepRuntimeV1,
+        role: ProposalStepRoleRequestV1,
+    ) -> Result<Self, ProposalStepError> {
         let value = Self {
             schema_version: schema_v1(),
             runtime,
@@ -455,29 +390,29 @@ impl ProposalHostRequestV1 {
     }
 
     #[must_use]
-    pub const fn runtime(&self) -> &ProposalHostRuntimeV1 {
+    pub const fn runtime(&self) -> &ProposalStepRuntimeV1 {
         &self.runtime
     }
 
     #[must_use]
-    pub const fn role(&self) -> &ProposalHostRoleRequestV1 {
+    pub const fn role(&self) -> &ProposalStepRoleRequestV1 {
         &self.role
     }
 
-    /// Reconstructs the exact SIR input frozen by this Host request.
+    /// Reconstructs the exact SIR input frozen by this proposal-step request.
     ///
     /// # Errors
     ///
     /// Rejects a non-SIR role or an invalid task/capability binding.
-    pub fn sir_recovery_input(&self) -> Result<IntentRecoveryInputV1, ProposalHostError> {
+    pub fn sir_recovery_input(&self) -> Result<IntentRecoveryInputV1, ProposalStepError> {
         self.validate()?;
-        let ProposalHostRoleRequestV1::Sir {
+        let ProposalStepRoleRequestV1::Sir {
             task_id,
             recovery_request,
             task,
         } = &self.role
         else {
-            return invalid("Proposal Host request is not an SIR role");
+            return invalid("Proposal step request is not an SIR role");
         };
         IntentRecoveryInputV1::new(
             *task_id,
@@ -488,32 +423,32 @@ impl ProposalHostRequestV1 {
         .map_err(role_error)
     }
 
-    /// Derives the exact request identity used by the Host terminal.
+    /// Derives the exact request identity used by the step terminal.
     ///
     /// # Errors
     ///
     /// Returns an error if validation or canonical encoding fails.
-    pub fn identity(&self) -> Result<ContentId<ProposalHostRequestArtifact>, ProposalHostError> {
+    pub fn identity(&self) -> Result<ContentId<ProposalStepRequestArtifact>, ProposalStepError> {
         self.validate()?;
         let bytes = cairn_codec::to_vec(self).map_err(codec)?;
         ContentId::derive(&bytes).map_err(codec)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn validate(&self) -> Result<(), ProposalHostError> {
+    fn validate(&self) -> Result<(), ProposalStepError> {
         if self.schema_version != schema_v1() {
-            return invalid("Proposal Host request is not current V1");
+            return invalid("Proposal step request is not current V1");
         }
         let workspace = match &self.role {
-            ProposalHostRoleRequestV1::Sir { task, .. }
-            | ProposalHostRoleRequestV1::OracleStrategy { task, .. }
-            | ProposalHostRoleRequestV1::CandidateStrategy { task, .. } => {
+            ProposalStepRoleRequestV1::Sir { task, .. }
+            | ProposalStepRoleRequestV1::OracleStrategy { task, .. }
+            | ProposalStepRoleRequestV1::CandidateStrategy { task, .. } => {
                 task.workspace(self.runtime.task_limits)?
             }
         };
         match &self.role {
-            ProposalHostRoleRequestV1::Sir { .. } => Ok(()),
-            ProposalHostRoleRequestV1::OracleStrategy {
+            ProposalStepRoleRequestV1::Sir { .. } => Ok(()),
+            ProposalStepRoleRequestV1::OracleStrategy {
                 workspace,
                 claim,
                 work_item,
@@ -535,11 +470,11 @@ impl ProposalHostRequestV1 {
                         "Oracle strategy request changed its workspace or cell binding",
                     );
                 }
-                let OracleStrategyExecutorV1::AgentEpisode {
+                let OracleStrategyExecutorV1::AgentStep {
                     invocation, tools, ..
                 } = run.executor()
                 else {
-                    return invalid("Oracle Proposal Host request names a non-Agent executor");
+                    return invalid("Oracle Proposal step request names a non-Agent executor");
                 };
                 if *invocation != self.runtime.identity()?
                     || *tools
@@ -548,12 +483,12 @@ impl ProposalHostRequestV1 {
                             .map_err(role_error)?
                 {
                     return invalid(
-                        "Oracle strategy run changed its Proposal Host invocation or tool catalog",
+                        "Oracle strategy run changed its Proposal step invocation or tool catalog",
                     );
                 }
                 Ok(())
             }
-            ProposalHostRoleRequestV1::CandidateStrategy {
+            ProposalStepRoleRequestV1::CandidateStrategy {
                 workspace: candidate_workspace,
                 contract,
                 oracle_materials,
@@ -582,10 +517,10 @@ impl ProposalHostRequestV1 {
     }
 }
 
-impl TryFrom<ProposalHostRequestWire> for ProposalHostRequestV1 {
-    type Error = ProposalHostError;
+impl TryFrom<ProposalStepRequestWire> for ProposalStepRequestV1 {
+    type Error = ProposalStepError;
 
-    fn try_from(wire: ProposalHostRequestWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: ProposalStepRequestWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
             runtime: wire.runtime,
@@ -596,20 +531,20 @@ impl TryFrom<ProposalHostRequestWire> for ProposalHostRequestV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostRequestV1 {
+impl<'de> Deserialize<'de> for ProposalStepRequestV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        ProposalHostRequestWire::deserialize(deserializer)?
+        ProposalStepRequestWire::deserialize(deserializer)?
             .try_into()
             .map_err(de::Error::custom)
     }
 }
 
-/// Exact external operation proposed by an Agent and durably bound by the Proposal Host.
+/// Exact external operation proposed by an Agent and durably bound by the Proposal step.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostExperimentOperationV1 {
+pub struct WorkflowToolOperationV1 {
     operation_id: OperationId,
     tool: ToolName,
     implementation_version: ToolImplementationVersion,
@@ -620,7 +555,7 @@ pub struct ProposalHostExperimentOperationV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostExperimentOperationWire {
+struct WorkflowToolOperationWire {
     operation_id: OperationId,
     tool: ToolName,
     implementation_version: ToolImplementationVersion,
@@ -629,7 +564,7 @@ struct ProposalHostExperimentOperationWire {
     arguments: serde_json::Value,
 }
 
-impl ProposalHostExperimentOperationV1 {
+impl WorkflowToolOperationV1 {
     #[must_use]
     pub const fn operation_id(&self) -> OperationId {
         self.operation_id
@@ -660,25 +595,27 @@ impl ProposalHostExperimentOperationV1 {
         &self.arguments
     }
 
-    fn validate(&self) -> Result<(), ProposalHostError> {
+    fn validate(&self) -> Result<(), ProposalStepError> {
         if matches!(
             self.effect,
             ToolEffectClass::Pure | ToolEffectClass::ReadOnly
         ) {
-            return invalid("Proposal Host experiment request contains a Host-local operation");
+            return invalid("Proposal step Worker request contains a workflow-local operation");
         }
         let bytes = cairn_codec::to_vec(&self.arguments).map_err(codec)?;
         if ContentId::<ToolArguments>::derive(&bytes).map_err(codec)? != self.arguments_id {
-            return invalid("Proposal Host experiment arguments changed their content identity");
+            return invalid(
+                "Proposal step Worker request arguments changed their content identity",
+            );
         }
         Ok(())
     }
 }
 
-impl TryFrom<ProposalHostExperimentOperationWire> for ProposalHostExperimentOperationV1 {
-    type Error = ProposalHostError;
+impl TryFrom<WorkflowToolOperationWire> for WorkflowToolOperationV1 {
+    type Error = ProposalStepError;
 
-    fn try_from(wire: ProposalHostExperimentOperationWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: WorkflowToolOperationWire) -> Result<Self, Self::Error> {
         let value = Self {
             operation_id: wire.operation_id,
             tool: wire.tool,
@@ -692,42 +629,42 @@ impl TryFrom<ProposalHostExperimentOperationWire> for ProposalHostExperimentOper
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostExperimentOperationV1 {
+impl<'de> Deserialize<'de> for WorkflowToolOperationV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        ProposalHostExperimentOperationWire::deserialize(deserializer)?
+        WorkflowToolOperationWire::deserialize(deserializer)?
             .try_into()
             .map_err(de::Error::custom)
     }
 }
 
-/// Request-bound durable safe point at which only the Controller may grant experiment authority.
+/// Request-bound safe point at which only the Controller may authorize Worker execution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostExperimentRequestV1 {
+pub struct WorkflowToolRequestV1 {
     schema_version: SchemaVersion,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     episode_id: EpisodeId,
     step_id: StepId,
     model_attempt_id: ModelAttemptId,
-    operations: Vec<ProposalHostExperimentOperationV1>,
+    operations: Vec<WorkflowToolOperationV1>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostExperimentRequestWire {
+struct WorkflowToolRequestWire {
     schema_version: SchemaVersion,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     episode_id: EpisodeId,
     step_id: StepId,
     model_attempt_id: ModelAttemptId,
-    operations: Vec<ProposalHostExperimentOperationV1>,
+    operations: Vec<WorkflowToolOperationV1>,
 }
 
-impl ProposalHostExperimentRequestV1 {
+impl WorkflowToolRequestV1 {
     #[must_use]
-    pub const fn request(&self) -> ContentId<ProposalHostRequestArtifact> {
+    pub const fn request(&self) -> ContentId<ProposalStepRequestArtifact> {
         self.request
     }
 
@@ -747,57 +684,55 @@ impl ProposalHostExperimentRequestV1 {
     }
 
     #[must_use]
-    pub fn operations(&self) -> &[ProposalHostExperimentOperationV1] {
+    pub fn operations(&self) -> &[WorkflowToolOperationV1] {
         &self.operations
     }
 
-    /// Derives the exact durable-yield identity.
+    /// Derives the exact Worker-request identity.
     ///
     /// # Errors
     ///
     /// Rejects an invalid structure or canonical codec/content identity failure.
-    pub fn identity(
-        &self,
-    ) -> Result<ContentId<ProposalHostExperimentRequestArtifact>, ProposalHostError> {
+    pub fn identity(&self) -> Result<ContentId<WorkflowToolRequestArtifact>, ProposalStepError> {
         self.validate_structure()?;
         ContentId::derive(&cairn_codec::to_vec(self).map_err(codec)?).map_err(codec)
     }
 
-    /// Revalidates this yield against the exact Host request that opened the episode.
+    /// Revalidates this Worker request against the proposal step that opened the episode.
     ///
     /// # Errors
     ///
     /// Rejects structure, request identity, or episode identity drift.
     pub fn validate_against(
         &self,
-        request: &ProposalHostRequestV1,
-    ) -> Result<(), ProposalHostError> {
+        request: &ProposalStepRequestV1,
+    ) -> Result<(), ProposalStepError> {
         self.validate_structure()?;
         if self.request != request.identity()? || self.episode_id != request.runtime.episode_id {
-            return invalid("Proposal Host experiment changed its request or episode identity");
+            return invalid("Proposal step Worker request changed its request or episode identity");
         }
         Ok(())
     }
 
-    fn validate_structure(&self) -> Result<(), ProposalHostError> {
+    fn validate_structure(&self) -> Result<(), ProposalStepError> {
         if self.schema_version != schema_v1() || self.operations.is_empty() {
-            return invalid("Proposal Host experiment request structure is invalid");
+            return invalid("Proposal step Worker request structure is invalid");
         }
         let mut ids = std::collections::HashSet::new();
         for operation in &self.operations {
             operation.validate()?;
             if !ids.insert(operation.operation_id) {
-                return invalid("Proposal Host experiment repeats an operation identity");
+                return invalid("Proposal step Worker request repeats an operation identity");
             }
         }
         Ok(())
     }
 }
 
-impl TryFrom<ProposalHostExperimentRequestWire> for ProposalHostExperimentRequestV1 {
-    type Error = ProposalHostError;
+impl TryFrom<WorkflowToolRequestWire> for WorkflowToolRequestV1 {
+    type Error = ProposalStepError;
 
-    fn try_from(wire: ProposalHostExperimentRequestWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: WorkflowToolRequestWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
             request: wire.request,
@@ -811,50 +746,52 @@ impl TryFrom<ProposalHostExperimentRequestWire> for ProposalHostExperimentReques
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostExperimentRequestV1 {
+impl<'de> Deserialize<'de> for WorkflowToolRequestV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        ProposalHostExperimentRequestWire::deserialize(deserializer)?
+        WorkflowToolRequestWire::deserialize(deserializer)?
             .try_into()
             .map_err(de::Error::custom)
     }
 }
 
-/// Process result: either a terminal proposal or a durable Controller experiment safe point.
+/// Step result: either a terminal proposal or a typed Worker request for the Controller.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "outcome")]
-pub enum ProposalHostOutcomeV1 {
+pub enum ProposalStepOutcomeV1 {
     Terminal {
-        terminal: Box<ProposalHostTerminalV1>,
+        terminal: Box<ProposalStepTerminalV1>,
     },
-    AwaitingController {
-        experiment: ProposalHostExperimentRequestV1,
+    WorkerRequest {
+        request: WorkflowToolRequestV1,
     },
 }
 
-impl ProposalHostOutcomeV1 {
-    /// Revalidates either current outcome against the exact Host request.
+impl ProposalStepOutcomeV1 {
+    /// Revalidates either current outcome against the exact proposal-step request.
     ///
     /// # Errors
     ///
-    /// Rejects terminal or experiment request/episode/role/binding drift.
+    /// Rejects terminal or Worker request/episode/role/binding drift.
     pub fn validate_against(
         &self,
-        request: &ProposalHostRequestV1,
-    ) -> Result<(), ProposalHostError> {
+        request: &ProposalStepRequestV1,
+    ) -> Result<(), ProposalStepError> {
         match self {
             Self::Terminal { terminal } => terminal.validate_against(request),
-            Self::AwaitingController { experiment } => experiment.validate_against(request),
+            Self::WorkerRequest {
+                request: worker_request,
+            } => worker_request.validate_against(request),
         }
     }
 }
 
-/// Typed proposal publication produced by a role-scoped Host episode.
+/// Typed proposal publication produced by a main-workflow proposal step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "role")]
-pub enum ProposalHostPublicationV1 {
+pub enum ProposalStepPublicationV1 {
     Sir {
         proposal_id: ContentId<SirIntentHypothesisSetProposalArtifact>,
         proposal: IntentHypothesisSetProposalV1,
@@ -869,31 +806,31 @@ pub enum ProposalHostPublicationV1 {
     },
 }
 
-/// Exact terminal result bound to one Host request and durable agent episode.
+/// Exact terminal result bound to one proposal-step request and durable agent episode.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostTerminalV1 {
+pub struct ProposalStepTerminalV1 {
     schema_version: SchemaVersion,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     episode_id: EpisodeId,
-    publication: ProposalHostPublicationV1,
+    publication: ProposalStepPublicationV1,
     completion_reason: EpisodeCompletionReason,
     steps_started: u32,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostTerminalWire {
+struct ProposalStepTerminalWire {
     schema_version: SchemaVersion,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     episode_id: EpisodeId,
-    publication: ProposalHostPublicationV1,
+    publication: ProposalStepPublicationV1,
     completion_reason: EpisodeCompletionReason,
     steps_started: u32,
 }
 
-impl ProposalHostTerminalV1 {
+impl ProposalStepTerminalV1 {
     #[must_use]
-    pub const fn request(&self) -> ContentId<ProposalHostRequestArtifact> {
+    pub const fn request(&self) -> ContentId<ProposalStepRequestArtifact> {
         self.request
     }
 
@@ -903,7 +840,7 @@ impl ProposalHostTerminalV1 {
     }
 
     #[must_use]
-    pub const fn publication(&self) -> &ProposalHostPublicationV1 {
+    pub const fn publication(&self) -> &ProposalStepPublicationV1 {
         &self.publication
     }
 
@@ -922,7 +859,7 @@ impl ProposalHostTerminalV1 {
     /// # Errors
     ///
     /// Returns an error if the terminal cannot be canonically encoded.
-    pub fn identity(&self) -> Result<ContentId<ProposalHostTerminalArtifact>, ProposalHostError> {
+    pub fn identity(&self) -> Result<ContentId<ProposalStepTerminalArtifact>, ProposalStepError> {
         self.validate_structure()?;
         ContentId::derive(&cairn_codec::to_vec(self).map_err(codec)?).map_err(codec)
     }
@@ -934,31 +871,31 @@ impl ProposalHostTerminalV1 {
     /// Rejects request, role, episode, or publication binding drift.
     pub fn validate_against(
         &self,
-        request: &ProposalHostRequestV1,
-    ) -> Result<(), ProposalHostError> {
+        request: &ProposalStepRequestV1,
+    ) -> Result<(), ProposalStepError> {
         self.validate_structure()?;
         if self.request != request.identity()? || self.episode_id != request.runtime.episode_id {
-            return invalid("Proposal Host terminal changed its request or episode identity");
+            return invalid("Proposal step terminal changed its request or episode identity");
         }
         let matching_role = matches!(
             (&request.role, &self.publication),
             (
-                ProposalHostRoleRequestV1::Sir { .. },
-                ProposalHostPublicationV1::Sir { .. }
+                ProposalStepRoleRequestV1::Sir { .. },
+                ProposalStepPublicationV1::Sir { .. }
             ) | (
-                ProposalHostRoleRequestV1::OracleStrategy { .. },
-                ProposalHostPublicationV1::OracleStrategy { .. }
+                ProposalStepRoleRequestV1::OracleStrategy { .. },
+                ProposalStepPublicationV1::OracleStrategy { .. }
             ) | (
-                ProposalHostRoleRequestV1::CandidateStrategy { .. },
-                ProposalHostPublicationV1::CandidateStrategy { .. }
+                ProposalStepRoleRequestV1::CandidateStrategy { .. },
+                ProposalStepPublicationV1::CandidateStrategy { .. }
             )
         );
         if !matching_role {
-            return invalid("Proposal Host terminal changed its requested role");
+            return invalid("Proposal step terminal changed its requested role");
         }
         if let (
-            ProposalHostRoleRequestV1::OracleStrategy { run, work_item, .. },
-            ProposalHostPublicationV1::OracleStrategy { submission, .. },
+            ProposalStepRoleRequestV1::OracleStrategy { run, work_item, .. },
+            ProposalStepPublicationV1::OracleStrategy { submission, .. },
         ) = (&request.role, &self.publication)
         {
             if submission.run() != run.identity().map_err(role_error)?
@@ -968,8 +905,8 @@ impl ProposalHostTerminalV1 {
             }
         }
         if let (
-            ProposalHostRoleRequestV1::CandidateStrategy { contract, .. },
-            ProposalHostPublicationV1::CandidateStrategy { proposal, .. },
+            ProposalStepRoleRequestV1::CandidateStrategy { contract, .. },
+            ProposalStepPublicationV1::CandidateStrategy { proposal, .. },
         ) = (&request.role, &self.publication)
         {
             if proposal.oracle_contract() != contract.identity().map_err(role_error)?
@@ -983,12 +920,12 @@ impl ProposalHostTerminalV1 {
         Ok(())
     }
 
-    fn validate_structure(&self) -> Result<(), ProposalHostError> {
+    fn validate_structure(&self) -> Result<(), ProposalStepError> {
         if self.schema_version != schema_v1() || self.steps_started == 0 {
-            return invalid("Proposal Host terminal structure is invalid");
+            return invalid("Proposal step terminal structure is invalid");
         }
         let episode_id = match &self.publication {
-            ProposalHostPublicationV1::Sir {
+            ProposalStepPublicationV1::Sir {
                 proposal_id,
                 proposal,
             } => {
@@ -997,7 +934,7 @@ impl ProposalHostTerminalV1 {
                 }
                 proposal.episode_id()
             }
-            ProposalHostPublicationV1::OracleStrategy {
+            ProposalStepPublicationV1::OracleStrategy {
                 submission_id,
                 submission,
             } => {
@@ -1006,7 +943,7 @@ impl ProposalHostTerminalV1 {
                 }
                 self.episode_id
             }
-            ProposalHostPublicationV1::CandidateStrategy {
+            ProposalStepPublicationV1::CandidateStrategy {
                 proposal_id,
                 proposal,
             } => {
@@ -1017,16 +954,16 @@ impl ProposalHostTerminalV1 {
             }
         };
         if episode_id != self.episode_id {
-            return invalid("Proposal Host publication changed its episode identity");
+            return invalid("Proposal step publication changed its episode identity");
         }
         Ok(())
     }
 }
 
-impl TryFrom<ProposalHostTerminalWire> for ProposalHostTerminalV1 {
-    type Error = ProposalHostError;
+impl TryFrom<ProposalStepTerminalWire> for ProposalStepTerminalV1 {
+    type Error = ProposalStepError;
 
-    fn try_from(wire: ProposalHostTerminalWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: ProposalStepTerminalWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
             request: wire.request,
@@ -1040,82 +977,82 @@ impl TryFrom<ProposalHostTerminalWire> for ProposalHostTerminalV1 {
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostTerminalV1 {
+impl<'de> Deserialize<'de> for ProposalStepTerminalV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        ProposalHostTerminalWire::deserialize(deserializer)?
+        ProposalStepTerminalWire::deserialize(deserializer)?
             .try_into()
             .map_err(de::Error::custom)
     }
 }
 
-struct FrozenProposalHostRequestV1 {
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: ProposalHostRequestV1,
-    runtime: ProposalHostRuntimeV1,
+struct FrozenProposalStepRequestV1 {
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: ProposalStepRequestV1,
+    runtime: ProposalStepRuntimeV1,
     workspace: SirTaskWorkspace,
 }
 
-struct CompletedProposalHostRequestV1 {
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: ProposalHostRequestV1,
+struct CompletedProposalStepRequestV1 {
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: ProposalStepRequestV1,
     episode_id: EpisodeId,
-    publication: ProposalHostPublicationV1,
+    publication: ProposalStepPublicationV1,
     completion_reason: EpisodeCompletionReason,
     steps_started: u32,
 }
 
-enum DrivenProposalHostRequestV1 {
-    Complete(Box<CompletedProposalHostRequestV1>),
-    AwaitingController(Box<AwaitingControllerProposalHostRequestV1>),
+enum DrivenProposalStepRequestV1 {
+    Complete(Box<CompletedProposalStepRequestV1>),
+    WorkerRequest(Box<WorkerRequestProposalStepRequestV1>),
 }
 
-struct AwaitingControllerProposalHostRequestV1 {
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: ProposalHostRequestV1,
-    experiment: crate::proposal_loop::ProposalLoopExperimentRequestV1,
+struct WorkerRequestProposalStepRequestV1 {
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: ProposalStepRequestV1,
+    worker_request: cairn_agent::AgentWorkerRequestV1,
 }
 
-/// Processes any supported request through the single frozen-input Proposal Host lifecycle.
+/// Processes any supported request through the single frozen-input Proposal step lifecycle.
 ///
 /// # Errors
 ///
 /// Rejects invalid frozen material, durable Agent Loop failures, invalid typed submissions, or a
 /// terminal outcome that does not bind to the exact request.
-pub fn run_proposal_host_episode<E, C, T>(
+pub fn run_proposal_step_episode<E, C, T>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
     protocol_codec: NativeProtocolCodec,
-    request: ProposalHostRequestV1,
-) -> Result<ProposalHostOutcomeV1, ProposalHostError>
+    request: ProposalStepRequestV1,
+) -> Result<ProposalStepOutcomeV1, ProposalStepError>
 where
     E: EventStore,
     C: ContentStore,
     T: ModelTransport,
 {
-    let frozen = freeze_proposal_host_request(request)?;
+    let frozen = freeze_proposal_step_request(request)?;
     let driven =
-        drive_frozen_proposal_host_request(events, content, transport, protocol_codec, frozen)?;
-    freeze_proposal_host_outcome(driven)
+        drive_frozen_proposal_step_request(events, content, transport, protocol_codec, frozen)?;
+    freeze_proposal_step_outcome(driven)
 }
 
-fn freeze_proposal_host_request(
-    request: ProposalHostRequestV1,
-) -> Result<FrozenProposalHostRequestV1, ProposalHostError> {
+fn freeze_proposal_step_request(
+    request: ProposalStepRequestV1,
+) -> Result<FrozenProposalStepRequestV1, ProposalStepError> {
     request.validate()?;
     let request_id = request.identity()?;
     let runtime = request.runtime.clone();
     let workspace = match &request.role {
-        ProposalHostRoleRequestV1::Sir { task, .. }
-        | ProposalHostRoleRequestV1::OracleStrategy { task, .. }
-        | ProposalHostRoleRequestV1::CandidateStrategy { task, .. } => {
+        ProposalStepRoleRequestV1::Sir { task, .. }
+        | ProposalStepRoleRequestV1::OracleStrategy { task, .. }
+        | ProposalStepRoleRequestV1::CandidateStrategy { task, .. } => {
             task.workspace(runtime.task_limits)?
         }
     };
-    Ok(FrozenProposalHostRequestV1 {
+    Ok(FrozenProposalStepRequestV1 {
         request_id,
         request,
         runtime,
@@ -1124,19 +1061,19 @@ fn freeze_proposal_host_request(
 }
 
 #[allow(clippy::too_many_lines)]
-fn drive_frozen_proposal_host_request<E, C, T>(
+fn drive_frozen_proposal_step_request<E, C, T>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
     protocol_codec: NativeProtocolCodec,
-    frozen: FrozenProposalHostRequestV1,
-) -> Result<DrivenProposalHostRequestV1, ProposalHostError>
+    frozen: FrozenProposalStepRequestV1,
+) -> Result<DrivenProposalStepRequestV1, ProposalStepError>
 where
     E: EventStore,
     C: ContentStore,
     T: ModelTransport,
 {
-    let FrozenProposalHostRequestV1 {
+    let FrozenProposalStepRequestV1 {
         request_id,
         request,
         runtime,
@@ -1144,7 +1081,7 @@ where
     } = frozen;
     let terminal_request = request.clone();
     let completed = match request.role {
-        ProposalHostRoleRequestV1::Sir {
+        ProposalStepRoleRequestV1::Sir {
             task_id,
             recovery_request,
             ..
@@ -1167,11 +1104,11 @@ where
                 },
             )
             .map_err(role_error)?;
-            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+            let cairn_agent::AgentProfileOutcomeV1::Complete(outcome) = outcome else {
                 return awaiting_controller(request_id, terminal_request, outcome);
             };
             (
-                ProposalHostPublicationV1::Sir {
+                ProposalStepPublicationV1::Sir {
                     proposal_id: outcome.proposal_id(),
                     proposal: outcome.proposal().clone(),
                 },
@@ -1179,7 +1116,7 @@ where
                 outcome.steps_started(),
             )
         }
-        ProposalHostRoleRequestV1::OracleStrategy {
+        ProposalStepRoleRequestV1::OracleStrategy {
             workspace: oracle_workspace,
             claim,
             work_item,
@@ -1207,12 +1144,12 @@ where
                 },
             )
             .map_err(role_error)?;
-            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+            let cairn_agent::AgentProfileOutcomeV1::Complete(outcome) = outcome else {
                 return awaiting_controller(request_id, terminal_request, outcome);
             };
             let submission = outcome.submission().clone();
             (
-                ProposalHostPublicationV1::OracleStrategy {
+                ProposalStepPublicationV1::OracleStrategy {
                     submission_id: submission.identity().map_err(role_error)?,
                     submission,
                 },
@@ -1220,7 +1157,7 @@ where
                 outcome.steps_started(),
             )
         }
-        ProposalHostRoleRequestV1::CandidateStrategy {
+        ProposalStepRoleRequestV1::CandidateStrategy {
             workspace: candidate_workspace,
             contract,
             oracle_materials,
@@ -1247,12 +1184,12 @@ where
                 },
             )
             .map_err(role_error)?;
-            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
+            let cairn_agent::AgentProfileOutcomeV1::Complete(outcome) = outcome else {
                 return awaiting_controller(request_id, terminal_request, outcome);
             };
             let proposal = outcome.proposal().clone();
             (
-                ProposalHostPublicationV1::CandidateStrategy {
+                ProposalStepPublicationV1::CandidateStrategy {
                     proposal_id: proposal.identity().map_err(role_error)?,
                     proposal,
                 },
@@ -1262,8 +1199,8 @@ where
         }
     };
     let (publication, completion_reason, steps_started) = completed;
-    Ok(DrivenProposalHostRequestV1::Complete(Box::new(
-        CompletedProposalHostRequestV1 {
+    Ok(DrivenProposalStepRequestV1::Complete(Box::new(
+        CompletedProposalStepRequestV1 {
             request_id,
             request: terminal_request,
             episode_id: runtime.episode_id,
@@ -1275,39 +1212,38 @@ where
 }
 
 fn awaiting_controller(
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: ProposalHostRequestV1,
-    outcome: crate::proposal_loop::ProposalProfileOutcomeV1<impl Sized>,
-) -> Result<DrivenProposalHostRequestV1, ProposalHostError> {
-    let crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(experiment) = outcome
-    else {
-        return invalid("completed Proposal Host profile lost its publication");
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: ProposalStepRequestV1,
+    outcome: cairn_agent::AgentProfileOutcomeV1<impl Sized>,
+) -> Result<DrivenProposalStepRequestV1, ProposalStepError> {
+    let cairn_agent::AgentProfileOutcomeV1::WorkerRequest(worker_request) = outcome else {
+        return invalid("completed Proposal step profile lost its publication");
     };
-    Ok(DrivenProposalHostRequestV1::AwaitingController(Box::new(
-        AwaitingControllerProposalHostRequestV1 {
+    Ok(DrivenProposalStepRequestV1::WorkerRequest(Box::new(
+        WorkerRequestProposalStepRequestV1 {
             request_id,
             request,
-            experiment,
+            worker_request,
         },
     )))
 }
 
-fn freeze_proposal_host_outcome(
-    driven: DrivenProposalHostRequestV1,
-) -> Result<ProposalHostOutcomeV1, ProposalHostError> {
-    let DrivenProposalHostRequestV1::Complete(completed) = driven else {
-        let DrivenProposalHostRequestV1::AwaitingController(awaiting) = driven else {
+fn freeze_proposal_step_outcome(
+    driven: DrivenProposalStepRequestV1,
+) -> Result<ProposalStepOutcomeV1, ProposalStepError> {
+    let DrivenProposalStepRequestV1::Complete(completed) = driven else {
+        let DrivenProposalStepRequestV1::WorkerRequest(awaiting) = driven else {
             unreachable!()
         };
-        let AwaitingControllerProposalHostRequestV1 {
+        let WorkerRequestProposalStepRequestV1 {
             request_id,
             request,
-            experiment,
+            worker_request,
         } = *awaiting;
-        let operations = experiment
+        let operations = worker_request
             .operations
             .into_iter()
-            .map(|operation| ProposalHostExperimentOperationV1 {
+            .map(|operation| WorkflowToolOperationV1 {
                 operation_id: operation.operation_id,
                 tool: operation.tool,
                 implementation_version: operation.implementation_version,
@@ -1316,18 +1252,20 @@ fn freeze_proposal_host_outcome(
                 arguments: operation.arguments,
             })
             .collect();
-        let experiment = ProposalHostExperimentRequestV1 {
+        let worker_request = WorkflowToolRequestV1 {
             schema_version: schema_v1(),
             request: request_id,
-            episode_id: experiment.episode_id,
-            step_id: experiment.step_id,
-            model_attempt_id: experiment.model_attempt_id,
+            episode_id: worker_request.episode_id,
+            step_id: worker_request.step_id,
+            model_attempt_id: worker_request.model_attempt_id,
             operations,
         };
-        experiment.validate_against(&request)?;
-        return Ok(ProposalHostOutcomeV1::AwaitingController { experiment });
+        worker_request.validate_against(&request)?;
+        return Ok(ProposalStepOutcomeV1::WorkerRequest {
+            request: worker_request,
+        });
     };
-    let terminal = ProposalHostTerminalV1 {
+    let terminal = ProposalStepTerminalV1 {
         schema_version: schema_v1(),
         request: completed.request_id,
         episode_id: completed.episode_id,
@@ -1336,7 +1274,7 @@ fn freeze_proposal_host_outcome(
         steps_started: completed.steps_started,
     };
     terminal.validate_against(&completed.request)?;
-    Ok(ProposalHostOutcomeV1::Terminal {
+    Ok(ProposalStepOutcomeV1::Terminal {
         terminal: Box::new(terminal),
     })
 }
@@ -1345,26 +1283,26 @@ fn schema_v1() -> SchemaVersion {
     SchemaVersion::new(1).expect("current V1 is a valid schema version")
 }
 
-fn invalid<T>(message: impl Into<String>) -> Result<T, ProposalHostError> {
-    Err(ProposalHostError::InvalidRequest(message.into()))
+fn invalid<T>(message: impl Into<String>) -> Result<T, ProposalStepError> {
+    Err(ProposalStepError::InvalidRequest(message.into()))
 }
 
-fn codec(error: impl std::fmt::Display) -> ProposalHostError {
-    ProposalHostError::Codec(error.to_string())
+fn codec(error: impl std::fmt::Display) -> ProposalStepError {
+    ProposalStepError::Codec(error.to_string())
 }
 
-fn role_error(error: impl std::fmt::Display) -> ProposalHostError {
-    ProposalHostError::Role(error.to_string())
+fn role_error(error: impl std::fmt::Display) -> ProposalStepError {
+    ProposalStepError::Role(error.to_string())
 }
 
-/// Failure at the generic Host boundary without erasing role-specific diagnostics.
+/// Failure while executing a proposal step without erasing role-specific diagnostics.
 #[derive(Debug, Error)]
-pub enum ProposalHostError {
-    #[error("invalid Proposal Host request: {0}")]
+pub enum ProposalStepError {
+    #[error("invalid Proposal step request: {0}")]
     InvalidRequest(String),
-    #[error("Proposal Host codec failed: {0}")]
+    #[error("Proposal step codec failed: {0}")]
     Codec(String),
-    #[error("Proposal Host role episode failed: {0}")]
+    #[error("Proposal step role episode failed: {0}")]
     Role(String),
 }
 
@@ -1373,28 +1311,16 @@ mod tests {
     use cairn_agent::{ToolArguments, ToolEffectClass, ToolImplementationVersion, ToolName};
     use cairn_protocol::{ContentId, OperationId};
 
-    use super::{ProposalHostBinaryIdentity, ProposalHostExperimentOperationV1};
+    use super::WorkflowToolOperationV1;
 
     #[test]
-    fn host_binary_identity_is_exact_lowercase_sha256_and_revalidated_on_decode() {
-        let valid = format!("sha256:{}", "a".repeat(64));
-        let identity = ProposalHostBinaryIdentity::new(valid.clone()).expect("identity");
-        assert_eq!(identity.as_str(), valid);
-        assert!(ProposalHostBinaryIdentity::new(format!("sha256:{}", "A".repeat(64))).is_err());
-        assert!(ProposalHostBinaryIdentity::new("sha256:short").is_err());
-        assert!(
-            serde_json::from_str::<ProposalHostBinaryIdentity>("\"sha256:not-a-digest\"").is_err()
-        );
-    }
-
-    #[test]
-    fn experiment_operation_revalidates_external_effect_and_exact_arguments() {
+    fn worker_operation_request_revalidates_external_effect_and_exact_arguments() {
         let arguments = serde_json::json!({"probe":"bounded"});
         let arguments_id = ContentId::<ToolArguments>::derive(
             &cairn_codec::to_vec(&arguments).expect("arguments bytes"),
         )
         .expect("arguments identity");
-        let operation = ProposalHostExperimentOperationV1 {
+        let operation = WorkflowToolOperationV1 {
             operation_id: OperationId::new(),
             tool: ToolName::new("request_bounded_probe").expect("tool"),
             implementation_version: ToolImplementationVersion::new("bounded-probe-v1")
@@ -1404,13 +1330,12 @@ mod tests {
             arguments,
         };
         let bytes = cairn_codec::to_vec(&operation).expect("operation bytes");
-        let _: ProposalHostExperimentOperationV1 =
-            cairn_codec::from_slice(&bytes).expect("strict operation");
+        let _: WorkflowToolOperationV1 = cairn_codec::from_slice(&bytes).expect("strict operation");
 
         let mut value = serde_json::to_value(&operation).expect("operation value");
         value["effect"] = serde_json::json!("read-only");
         assert!(
-            cairn_codec::from_slice::<ProposalHostExperimentOperationV1>(
+            cairn_codec::from_slice::<WorkflowToolOperationV1>(
                 &cairn_codec::to_vec(&value).expect("changed bytes")
             )
             .is_err()
@@ -1418,7 +1343,7 @@ mod tests {
         let mut value = serde_json::to_value(&operation).expect("operation value");
         value["arguments"]["probe"] = serde_json::json!("changed");
         assert!(
-            cairn_codec::from_slice::<ProposalHostExperimentOperationV1>(
+            cairn_codec::from_slice::<WorkflowToolOperationV1>(
                 &cairn_codec::to_vec(&value).expect("changed bytes")
             )
             .is_err()

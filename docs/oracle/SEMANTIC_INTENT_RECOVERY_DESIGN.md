@@ -282,7 +282,7 @@ gate 本身必须 model-free，只读取已验证 identity、policy、decision �
 
 ### 7.1 Host 与依赖隔离
 
-最终 authority 架构中，SIR 是独立 durable Agent Loop，由 Controller 通过通用 Proposal Host port
+最终 authority 架构中，SIR 是独立 durable Agent Loop，由 Controller 通过通用 proposal step port
 运行。其实现可以更换为规则、静态分析、不同模型、多 episode、形式化工具或它们的组合，而不改变
 Oracle Explorer、Candidate Search 和 Admission 的接口。SIR role 本身不要求专用 binary；只有
 data/tool/credential/OS capability 不同时才拆 Host instance。
@@ -291,7 +291,7 @@ data/tool/credential/OS capability 不同时才拆 Host instance。
 reasoning；它仍没有Admission权限。DEV-008在首个admitted consumer出现时增加了独立one-shot
 `cairn-sir` recorded-ingress process、typed `SirRunId`/`OperationId` protocol和独立OS principal smoke，
 并由另一个`cairn-admission` principal完成promotion。当前process adapter只物化并复验已有proposal，不应被
-误报为新的模型host或目标 SIR service pool；DEV-022 generic Proposal Host接管production SIR profile后，
+误报为新的模型host或目标 SIR service pool；DEV-022 generic proposal step接管production SIR profile后，
 直接删除该 one-shot path。
 
 依赖方向只能是：
@@ -458,7 +458,7 @@ boundary，但不证明需要专用 SIR process；没有 consumer 的空 crate�
 DEV-006用现有production runtime闭合第1、2项，并以真实DeepSeek strict-repair/restart验证current V1；
 DEV-007/008闭合第4、5、6项，并用最小independent SIR ingress与Admission process落实第一条authority
 boundary。DEV-009–021又把contract推进到Oracle、Candidate、remote build、diagnostic、model repair、rebuild
-与durable workflow；DEV-022实现第3项中的最小generic Proposal Host lifecycle并删除专用`cairn-sir`。
+与durable workflow；DEV-022实现第3项中的最小generic proposal step lifecycle并删除专用`cairn-sir`。
 完整Controller coordinator/supervisor仍未实现，不能据此预建完整process tree。
 
 设计允许分块演进，但每一步都保持相同隔离边界：

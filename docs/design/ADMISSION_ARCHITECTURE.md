@@ -44,9 +44,8 @@ Typed Mechanical Gate & Decision Publication trusted, deterministic
 2. Planner 不能删除 required obligation、改变 policy、制造 receipt 或产生 admitted type；
 3. 不存在一个万能 `Admission Planner Agent`，而是 admission-kind-specific typed profile family；
 4. Planner 是可选能力，不是每类 Admission 的必经模型步骤；
-5. 多个 planner episode 可以运行在同一 Planning Host，但 context、continuation、capability 和 artifact
-   lineage 必须隔离；
-6. Planning Host 与 Mechanical Gate 必须跨 authority/process boundary；
+5. 多个 planning step 可以共享 Controller process，但 context、continuation 和 artifact lineage 必须强类型绑定；
+6. Controller planning step 与 Mechanical Gate 必须跨 authority boundary，后者仍位于独立 Admission process；
 7. 一个 Admission service 首期可以承载多种 type-specific gate，不因此共享 policy 或 outcome 类型；
 8. Planner 错误最坏只能导致计划拒绝、成本增加、预算耗尽或 unverifiable，不能导致 false pass；
 9. final decision 只能从冻结 applicant、trusted policy、authoritative receipt 和 qualified mechanism
@@ -169,7 +168,7 @@ Mechanical Gate 按 exact admission kind：
 `PlannerEpisode<K>` 是一次具体 attempt 的 durable 运行实例，绑定 applicant、policy、required set、
 profile、context snapshot、continuation 和预算。
 
-同一模型或同一个 Planning Host 可以运行多个 `K`，不使 profile/episode 可互换。一个进程中存在多个
+同一模型或同一个 Controller planning step 可以运行多个 `K`，不使 profile/episode 可互换。一个进程中存在多个
 episode 时，必须按 episode 分离 continuation、tool result、knowledge snapshot 和 writable artifact
 namespace。
 
@@ -483,7 +482,7 @@ flowchart TB
     controller["Controller\nworkflow / public record / scheduler"]
 
     subgraph proposal["Proposal authority zone"]
-      host["Planning Host"]
+      host["Controller planning step"]
       intentp["IntentEvidencePlanner episode"]
       oraclep["OracleControlPlanner episode"]
       perfp["Optional typed planner episodes"]
@@ -518,28 +517,18 @@ flowchart TB
 
 ### 10.1 必须跨进程的边界
 
-- Planning Host 与 Admission service；
+- Controller planning step 与 Admission service；
 - Admission service/restricted store 与普通 Controller principal；
 - generated/applicant code execution 与控制面；
 - remote device Worker 与 Controller/Admission。
 
 Admission service 不链接 model transport，不持 provider credential，不执行模型 continuation。
 
-### 10.2 不要求一 profile 一进程
+### 10.2 Planning 不创建进程
 
-Intent、Oracle、Hardware、Performance、Candidate、Knowledge 和 Skill planner episode 可以运行在同一
-Planning Host，也可以按风险在不同 process instance 中运行。是否跨进程由：
-
-- capability 是否不同；
-- 数据可见性是否不同；
-- tool/plugin 是否执行不可信代码；
-- dependency/runtime 是否不同；
-- 故障/资源隔离需求；
-
-决定，而不是由“有几个 Agent 名称”决定。
-
-同一 Host 中仍必须具备 durable episode isolation。未经 policy 授权，任何 episode 不得读取另一
-episode 的 private continuation、unsubmitted reasoning、tool result 或 writable namespace。
+Intent、Oracle、Hardware、Performance、Candidate、Knowledge 和 Skill planning 都是 Controller workflow
+中的 typed step。它们不创建 process instance。未经 policy 授权，任何 step 不得读取另一 step 的 private
+continuation、unsubmitted reasoning 或 tool result。需要执行能力的 tool/plugin 必须成为 Worker job。
 
 ### 10.3 Planner 调用路径
 
@@ -547,13 +536,13 @@ Admission service 不直接调用 provider：
 
 1. Admission 生成 sanitized `PlannerInputEnvelope<K>`；
 2. Controller 验证 planning request 与 public task/run binding；
-3. Planning Host 创建 exact profile episode；
-4. Host 通过 Controller 的 capability gateway 查询公开 artifact/knowledge/tool；
-5. Host 返回 `AdmissionPlanProposal<K>`；
+3. Controller 创建 exact typed planning step；
+4. planning step 通过 Controller ports 查询公开 artifact/knowledge/tool；
+5. planning step 返回 `AdmissionPlanProposal<K>`；
 6. Controller 归档 proposal 并提交给 Admission；
 7. Admission validator 决定是否执行。
 
-该路径避免给 Admission gate 引入 model transport，也避免给 Planning Host restricted store handle。
+该路径避免给 Admission gate 引入 model transport，也避免给 Controller planning step restricted store handle。
 
 ## 11. 数据可见性与 hidden metadata
 
@@ -705,7 +694,7 @@ Profile、template、tool menu、knowledge policy 或 verdict-relevant selection
 | Planner 请求越权 capability | policy denial + security diagnostic，不启动 effect |
 | Planner 删除 required obligation | plan rejection；required set 保持不变 |
 | Planner budget exhausted |若无授权 deterministic continuation，则 Admission `BudgetExhausted`/`Unverifiable` |
-| Provider/Planning Host failure | infrastructure failure，不归咎 applicant |
+| Provider/Controller planning step failure | infrastructure failure，不归咎 applicant |
 | Experiment effect ambiguous | reconcile，不能盲重试或标 claim violated |
 | Worker/device/tool failure | infrastructure/invalid measurement，不等于 applicant fail |
 | Receipt incomplete/corrupt | closure failure，fail closed |
@@ -759,9 +748,9 @@ src/admission/
 只拥有业务中立的 episode、model、tool、budget 和 continuation runtime。它不知道
 `IntentEvidencePlanner` 或 `OracleControlPlanner`。
 
-### 17.3 `cairn-proposal-host`
+### 17.3 Controller proposal-step modules
 
-拥有 Planning Host adapter：读取 exact typed profile、投影 context、执行 episode、提交 plan proposal。
+拥有 Controller planning step adapter：读取 exact typed profile、投影 context、执行 episode、提交 plan proposal。
 它不拥有 required-set derivation、plan acceptance 或 gate。
 
 ### 17.4 `cairn-admission`
@@ -791,8 +780,8 @@ src/
 └── mechanism_qualification.rs
 ```
 
-Admission binary 不依赖 model transport/provider credential。架构测试禁止 proposal host 链接 restricted
-store adapter，禁止普通 Controller composition 获得 restricted reader。
+Admission binary 不依赖 model transport/provider credential。架构测试禁止 proposal workflow step 链接
+restricted store adapter，禁止普通 Controller composition 获得 restricted reader。
 
 ## 18. 强类型边界
 
@@ -840,12 +829,11 @@ compile-fail/static boundary tests。
 
 ### 19.3 Process/storage controls
 
-- Planning Host 无 restricted filesystem/API permission；
+- Controller planning step 无 restricted filesystem/API permission；
 - Admission process 无 model provider dependency/credential；
 - Controller 无 restricted store path/credential；
 - hidden job 不经过 public CAS；
-- 同一 Planning Host 的多 episode 隔离；
-- 按风险切换为 per-episode process 不改变 artifact/protocol semantics；
+- 不同 planning step 的 continuation/tool-result substitution fail closed；
 - logging 完全关闭不改变 decision；
 - non-V1 input fail closed，无 compatibility branch。
 
@@ -875,7 +863,7 @@ DEV-008 Intent Gate 的适用范围。这不是通用 Admission 平台。当前�
 - 通用service lifecycle、Controller event/outbox与crash publication recovery；
 - 外部用户身份认证/UI；当前grant由Controller归档路径提供；
 - typed required-evidence derivation family；
-- planner profiles与Planning Host bridge；
+- planner profiles与Controller planning step bridge；
 - hidden corpus、restricted device job data plane与七类gate的完整receipt closure；
 - profile/mechanism qualification与evaluation registry；
 - 完整 Oracle/Candidate Admission 及 Hardware/Performance authority 链。

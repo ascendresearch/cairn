@@ -10,15 +10,15 @@
 
 Cairn 采用下面的软件形态：
 
-> 模块化 Controller + role-scoped Agent Loop / 通用 Proposal Host + 独立 Admission authority + 通用执行 Worker +
+> 模块化 Controller（内含 role-scoped proposal steps）+ 独立 Admission authority + 通用执行 Worker +
 > 按可见性分区的 event/CAS。
 
 这不是“每个概念一个微服务”。Controller 仍是控制面的模块化单体，拥有工作流、调度、公共记录、
 API 和反馈路由。只有必须获得替换性或 authority 隔离的能力跨进程：
 
-- Semantic Intent Recovery（SIR）、Oracle synthesis、adversarial exploration、typed Admission Planner
-  和 Candidate Search 是不同的 durable Agent Loop，不共享私有 continuation；相同 capability/data
-  boundary 由通用 Proposal Host 承载，不同边界按 policy 拆 Host instance；
+- Semantic Intent Recovery（SIR）、Oracle synthesis、adversarial exploration、typed planning 和 Candidate
+  Search 是 Controller 主 workflow 中不同的 Agent step，拥有不同 typed input/output 和 continuation binding，
+  但不映射成独立进程或权限域；
 - Admission Gate 与 restricted material 位于独立 Admission 进程；
 - CUDA、Ascend build、Ascend NPU 和模型集成通过 opaque job Worker 执行；
 - Hardware Performance Model 首期是 Controller 中的独立确定性领域服务，通过 ports 获取规格、
@@ -31,7 +31,7 @@ API 和反馈路由。只有必须获得替换性或 authority 隔离的能力�
 1. **不漂移产品范围**：业务层、公共资源和评估始终明确写作 CUDA → Ascend C；
 2. **可替换提案机制**：未来可用静态分析、IR、形式化方法或更强模型替换 SIR/Explorer，而不改变
    admitted contract；
-3. **不可伪造 authority**：模型、proposal process、candidate workspace 和普通知识检索没有
+3. **不可伪造 authority**：模型输出、proposal step、candidate workspace 和普通知识检索没有
    promotion edge；
 4. **证据可闭合**：任何正式结论都能沿 typed identity 回到 event、artifact、receipt 或明确的
    external/secret reference；
@@ -54,7 +54,7 @@ flowchart TB
       controller --- ksr
     end
 
-    subgraph proposals["Proposal plane — untrusted"]
+    subgraph proposals["Controller workflow proposal steps"]
       sir["SIR Agent Loop"]
       oracle["Oracle Exploration\npolicy-selected strategies"]
       planner["Typed Admission Planner episodes"]
@@ -99,11 +99,11 @@ flowchart TB
 
 图中的连线表示受控协议，不表示任意双向数据访问。尤其是：
 
-- proposal process 只能通过授予的 capability 获取公开输入、知识快照和 tool；
+- proposal step 只能消费当前 workflow transition 冻结的公开输入、知识快照和 tool catalog；
 - Controller 可以请求 admission，但不能枚举或读取 hidden corpus；
 - Admission 可以读取被授权的公共 artifact，不能改写 applicant；
 - Worker 只看 `JobContract`，不知道 job 属于 intent、Oracle 还是 candidate；
-- Proposal Host 不直接连接 Worker；所有实验请求由 Controller 授权、调度和恢复；
+- proposal step 不直接执行验证；所有编译、运行和设备请求由 Controller 授权、调度到 Worker 并恢复 observation；
 - Secret store 返回临时能力或在 adapter 内解析，不把 secret bytes 写入 event/CAS。
 
 ## 4. 三种平面与五个 authority domain
@@ -196,16 +196,12 @@ Prompt、skill、知识正文、模型声明和进程命令行 role 名称都不
 Controller 不执行 applicant 代码，不读取 restricted corpus，不把 profiler 文本直接解释成 verdict，
 也不允许 model output 直接 append authoritative decision event。
 
-## 7. 为什么 SIR 是独立 Loop，而不是专用进程
+## 7. 为什么 SIR 是独立业务 step，而不是专用进程
 
-SIR 是最可能快速演化的子系统：它未来可能组合 Clang/LLVM 静态事实、CUDA 动态画像、模型图、
-symbolic execution、公开知识/论文检索、多模型或形式化工具。它必须作为独立 durable Agent Loop
-保留冻结输入、profile、budget、continuation 和 proposal contract，不能嵌入业务 aggregate。
-
-进入 authority path 的 SIR episode 由 Controller 在通用 Proposal Host 中打开。Host 位于 Controller
-与 Admission authority 之外；需要不同网络、凭据、工具或 OS sandbox 时拆独立 Host instance，而不是
-因为 role 名为 SIR 就维护专用 service。该边界强制它只接收冻结的 `IntentRecoveryInputV1`，只产出
-`IntentHypothesisSetProposalV1`/实验提案，并且：
+SIR 可能组合 Clang/LLVM 静态事实、CUDA 动态画像、模型图、公开知识、多模型或形式化工具。它作为
+Controller aggregate 中一个具有明确 typed transition 的业务 step，保留冻结输入、profile、budget、
+continuation binding 和 proposal contract，但不拥有独立 process lifecycle。它只接收冻结的
+`IntentRecoveryInputV1`，只产出 `IntentHypothesisSetProposalV1` 或 Worker tool request，并且：
 
 - 不能构造 `MigrationIntentContract`；
 - 不能读取 hidden intent corpus；
@@ -213,9 +209,8 @@ symbolic execution、公开知识/论文检索、多模型或形式化工具。�
 - 不能直接调度未授权设备；
 - 失败或替换不改变 Controller 的 durable task truth。
 
-历史 `cairn-sir` one-shot binary只是一项typed ingress/capability proof；DEV-022的通用Proposal Host
-接管production SIR后已直接删除superseded process path；DEV-024继续删除遗留`run_sir_episode`代码入口、
-重复loop和旁路测试。SIR领域profile/schema仍作为generic Host中的真实consumer保留。详细工作流见
+历史 proposal one-shot binary 已删除；current V1 不保留 launcher、process
+protocol、兼容 reader 或 invocation identity。SIR 领域 profile/schema 由主 workflow 直接消费。详细工作流见
 [`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md)。
 
 DEV-025把完整跨角色顺序写成`run_controller_workflow`的可读typed skeleton；它通过无default implementation的
@@ -259,9 +254,9 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 
 | 方案 | 拒绝原因 |
 | --- | --- |
-| 所有能力都放进 `cairn-server` | SIR 不可替换、hidden 访问面过宽、proposal 与 authority 易混合 |
+| 所有能力都放进 `cairn-server` 且不设 typed ports | proposal、execution 与 authority 易混合 |
 | 每个 bounded context 一个微服务 | 首期引入无收益的网络和一致性复杂度 |
-| 一个通用 Planning Host 持有所有 role 权限并共享上下文 | continuation、知识、hidden diagnostic 和 candidate context 可能串流；Host 只能承载 capability-equivalent 的隔离 episode |
+| 一个 generic planning context 持有所有 role 输入 | continuation、知识、hidden diagnostic 和 candidate context 可能串流；必须使用 distinct typed step binding |
 | 每个 Agent role 一个专用进程/binary | role 与部署拓扑错误绑定；进程只按 capability/data/authority 拆分 |
 | Agent 直接运行 Docker 或连接 Worker | 绕过 Controller 的 effect authority、调度、receipt 和恢复 |
 | Worker 依赖 Controller 反向拨号或 SSH tunnel | 扩大设备侧入站面，并把临时部署拓扑变成产品协议 |
@@ -299,7 +294,7 @@ Hardware、Feedback 六个概念，就立刻创建六个网络服务；也不能
 - process 由 systemd、容器编排还是 Controller 的受限 child supervisor 管理；
 - restricted one-time capability 的具体传输与加密 adapter；
 - SQLite/CAS 之后是否替换为远程 store；
-- proposal host 的实例池预热策略；
+- model transport client 的连接复用策略；
 - Controller/Admission 的 HA 与多副本；
 - vector retrieval、分布式 CAS 和跨 region 部署。
 
@@ -324,8 +319,7 @@ rebuild 串成一条窄链，并以单任务Controller manager连接durable Cand
 Oracle → remote build/repair/workflow-manager consumers。以下仍是目标而非实现：
 
 - `cairn-migration` 尚未重命名并重组为明确的 CUDA → Ascend C 产品 crate；
-- 已有最小通用 Proposal Host和一个existing Task的Controller supervisor，尚无task intake/global catalog、Host
-  pool或完整Admission service lifecycle；
+- 已有主 workflow proposal steps 和 task intake；尚无完整 Agent catalog 或 Admission service lifecycle；
 - 产品侧 Agent profile catalog、invocation policy 和 interaction validator 尚未实现；
 - public read-only/restricted write-only路径已在DEV-008窄slice闭合；secret storage、public event/outbox和
   通用restricted data plane尚未实现；

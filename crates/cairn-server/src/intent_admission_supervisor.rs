@@ -162,7 +162,6 @@ pub enum IntentAdmissionProcessBlockedV1 {
 
 pub(crate) struct IntentAdmissionProcessFailure {
     pub(crate) reason: IntentAdmissionProcessBlockedV1,
-    pub(crate) diagnostic: String,
 }
 
 /// Runs the independently authorized gate and accepts only one canonical public outcome.
@@ -236,7 +235,6 @@ pub(crate) async fn run_intent_admission_process(
     if !status.success() {
         return Err(IntentAdmissionProcessFailure {
             reason: IntentAdmissionProcessBlockedV1::ExitFailure,
-            diagnostic: String::from_utf8_lossy(&stderr).into_owned(),
         });
     }
     let outcome: IntentAdmissionPublicOutcomeV1 = cairn_codec::from_slice(&stdout)
@@ -302,22 +300,16 @@ fn resolve(path: &mut PathBuf, base: &Path) {
 
 fn failure(
     reason: IntentAdmissionProcessBlockedV1,
-    error: impl std::fmt::Display,
+    _error: impl std::fmt::Display,
 ) -> IntentAdmissionProcessFailure {
-    IntentAdmissionProcessFailure {
-        reason,
-        diagnostic: error.to_string(),
-    }
+    IntentAdmissionProcessFailure { reason }
 }
 
 fn failure_message(
     reason: IntentAdmissionProcessBlockedV1,
-    diagnostic: &str,
+    _diagnostic: &str,
 ) -> IntentAdmissionProcessFailure {
-    IntentAdmissionProcessFailure {
-        reason,
-        diagnostic: diagnostic.into(),
-    }
+    IntentAdmissionProcessFailure { reason }
 }
 
 fn supervisor_error(error: impl std::fmt::Display) -> ServerError {

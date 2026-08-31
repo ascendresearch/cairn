@@ -1,5 +1,8 @@
 # DEV-033 — task-generic Candidate authority and aggregate merge
 
+> Amended by D-044/DEV-036: Candidate authority/build/Admission remain; the independent proposal
+> runtime described below was deleted from current V1.
+
 - 状态：`Accepted`
 - 日期：2026-08-30
 - 依赖：D-043、DEV-030–032
@@ -21,7 +24,7 @@ independent Oracle outcome
 → derive CandidateOracleContractV1
 → derive CandidateWorkspaceV1
 → materialize exact admitted claim/portfolio artifact bodies
-→ freeze Candidate Proposal Host request
+→ freeze Candidate proposal step request
 → durable Candidate episode start authority
 → common run_proposal_loop
 → strict CandidateProposalV1 terminal
@@ -39,7 +42,7 @@ independent Oracle outcome
   docs/build-tests/knowledge的distinct typed edges。
 - `CandidateOracleMaterialsV1`要求每个claim body、portfolio element、semantic material kind和exact CAS body
   与contract完整对应；缺失、额外、重排、跨cell、typed identity或body drift全部fail closed。
-- generic Proposal Host新增`CandidateStrategy` role；它只有bounded task read和pure
+- generic proposal step新增`CandidateStrategy` role；它只有bounded task read和pure
   `candidate_submit_proposal`，没有Admission、execution、hidden-material或verdict authority。
 - Candidate profile的函数主体保持可读架构：validate frozen inputs、archive task、archive prompt、freeze loop、
   open gateways、run common loop、finish typed publication。

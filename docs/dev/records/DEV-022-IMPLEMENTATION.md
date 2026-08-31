@@ -1,4 +1,7 @@
-# DEV-022 implementation — generic role-scoped Proposal Host
+# DEV-022 implementation — generic role-scoped proposal step
+
+> Historical record: D-044/DEV-036 deleted the process crate, supervisor, private journal and
+> binary identity described below. This file is not a current architecture or runtime contract.
 
 - 状态：`Accepted`
 - 日期：2026-08-29
@@ -8,7 +11,7 @@
 
 ## 1. Objective
 
-用一个真正的 `cairn-proposal-host` process 和一套 current-V1 typed contract 承载 SIR、Candidate initial、
+用一个真正的 `cairn-proposal-step` process 和一套 current-V1 typed contract 承载 SIR、Candidate initial、
 Candidate revision、Candidate native follow-up 与 Candidate native repair role profile。领域角色继续拥有各自
 prompt、tool gateway、continuation 与 publication 类型；Host 只负责共同的隔离、冻结输入、runtime binding、
 durable episode 和 terminal boundary。
@@ -21,7 +24,7 @@ CAS 按 exact typed identity 重建 Host request，Host publication 再提交回
 | 边界 | 拥有 | 明确没有 |
 | --- | --- | --- |
 | Controller composition | workflow next action、public CAS materialization、exact invocation snapshot | 模型推理、Candidate source修改、restricted store转交 |
-| Proposal Host | exact role request、public task snapshot、model selection/budget、durable Agent episode | Worker credential、Docker/device access、Admission constructor、restricted/hidden material |
+| proposal step | exact role request、public task snapshot、model selection/budget、durable Agent episode | Worker credential、Docker/device access、Admission constructor、restricted/hidden material |
 | role profile | role-specific prompt、tools、submission validation、typed publication | 调度、receipt、workflow terminal或verdict authority |
 | Admission/Worker | 保持原有独立process/authority | 不因Host引入而合并或转交 |
 
@@ -31,14 +34,14 @@ configuration、context、budget、task snapshot、role variant 和 publication 
 
 ## 3. Current-V1 contract
 
-- `ProposalHostRuntimeV1`冻结 episode、exact `AgentResolvedRuntimeModelArtifact`、selection、budget、output limit
-  与 task limits，并以 `ProposalHostInvocationArtifact` identity 绑定 workflow request；
-- `ProposalHostTaskSnapshotV1`只携带 Controller 已物化、重新验证的 bundle/source bytes，不传任意 filesystem root；
-- closed `ProposalHostRoleRequestV1`区分五种当前消费者，反序列化后重新验证 task、recovery、parent、diagnostic、
+- `ProposalStepRuntimeV1`冻结 episode、exact `AgentResolvedRuntimeModelArtifact`、selection、budget、output limit
+  与 task limits，并以 `AgentRuntimeBindingArtifact` identity 绑定 workflow request；
+- `ProposalStepTaskSnapshotV1`只携带 Controller 已物化、重新验证的 bundle/source bytes，不传任意 filesystem root；
+- closed `ProposalStepRoleRequestV1`区分五种当前消费者，反序列化后重新验证 task、recovery、parent、diagnostic、
   workflow request、episode 与 invocation binding；
 - later native repair同时携带exact parent-repair artifact，Host重新推导immediate parent identity与root follow-up
   lineage；首轮repair必须没有parent-repair，不能只凭两个看似合理的ID拼接lineage；
-- `ProposalHostTerminalV1`绑定 exact request/episode、role-specific publication identity、completion reason 与 step count；
+- `ProposalStepTerminalV1`绑定 exact request/episode、role-specific publication identity、completion reason 与 step count；
 - `CandidateEpisodeRequestV1`直接加入 distinct typed invocation identity；旧 current-V1 读写路径同步修改，没有
   V2、legacy alias、dual reader/writer 或 converter；
 - 原 `SirResolvedRuntimeModelArtifact`的角色泄漏命名直接替换为
@@ -46,7 +49,7 @@ configuration、context、budget、task snapshot、role variant 和 publication 
 
 ## 4. Durable process 与 workflow consumer
 
-`cairn-proposal-host`从 canonical stdin 接收一个请求，验证 exact resolved-model bytes，在 episode 专属 SQLite
+`cairn-proposal-step`从 canonical stdin 接收一个请求，验证 exact resolved-model bytes，在 episode 专属 SQLite
 event/CAS 中运行现有 durable agent loop。正常完成后，它重新打开 store 校验 durable Agent terminal，再原子保存
 canonical `terminal.v1.json` checkpoint；同一请求的后续进程启动先验证 checkpoint、request binding 与 Agent
 projection，然后原样重放 terminal，不再次 dispatch 模型。

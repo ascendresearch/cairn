@@ -8,40 +8,47 @@ use cairn_admission::{
     UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1, UserIntentDecisionArtifact,
     UserIntentDecisionV1,
 };
+use cairn_execution::{ExecutionReceiptArtifact, JobContractArtifact};
 use cairn_migration::{
-    CandidateBuildPlanV1, CandidateBuildRequestArtifact, CandidateExplorationError,
-    CandidateOracleContractArtifact, CandidateOracleContractV1, CandidateOracleElementMaterialV1,
-    CandidateOracleMaterialV1, CandidateOracleMaterialsV1, CandidateWorkspaceArtifact,
-    CandidateWorkspaceV1, IntentDecisionRequestBatchArtifact, IntentHypothesisSetProposalV1,
-    IntentRecoveryInputArtifact, IntentRecoveryInputV1, MigrationIntentContractArtifact,
-    OracleAdmissionAttemptArtifact, OracleAdmissionAttemptV1, OracleAdmissionEvidenceArtifact,
-    OracleAdmissionEvidenceV1, OracleAdmissionMechanismCatalogArtifact,
-    OracleAdmissionMechanismCatalogV1, OracleAdmissionOutcomeArtifact,
-    OracleAdmissionPolicyArtifact, OracleAdmissionPolicyV1, OracleBuildTestSnapshotArtifact,
-    OracleClaimArtifact, OracleComparatorProposalArtifact, OracleControlReceiptV1,
+    AgentRuntimeBindingArtifact, CandidateBuildPlanV1, CandidateBuildRequestArtifact,
+    CandidateExplorationError, CandidateOracleContractArtifact, CandidateOracleContractV1,
+    CandidateOracleElementMaterialV1, CandidateOracleMaterialV1, CandidateOracleMaterialsV1,
+    CandidateWorkspaceArtifact, CandidateWorkspaceV1, IntentDecisionRequestBatchArtifact,
+    IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
+    MigrationIntentContractArtifact, OracleAdmissionAttemptArtifact, OracleAdmissionAttemptV1,
+    OracleAdmissionEvidenceArtifact, OracleAdmissionEvidenceV1,
+    OracleAdmissionMechanismCatalogArtifact, OracleAdmissionMechanismCatalogV1,
+    OracleAdmissionOutcomeArtifact, OracleAdmissionPolicyArtifact, OracleAdmissionPolicyV1,
+    OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact, OracleClaimArtifact,
+    OracleComparatorProposalArtifact, OracleControlDispatchArtifact, OracleControlDispatchV1,
+    OracleControlReceiptV1, OracleControlRunArtifact, OracleControlRunV1,
+    OracleControlRunnerArtifact, OracleControlWorker, OracleControlWorkerError,
     OracleCoverageGapArtifact, OracleCoveragePolicyArtifact, OracleCoveragePolicyV1,
-    OracleDocumentationSnapshotArtifact, OracleExecutionSafetyProposalArtifact,
-    OracleExperimentArgumentsArtifact, OracleExperimentRequestArtifact,
-    OracleExperimentToolCatalogArtifact, OracleExplorationCapabilityGrantArtifact,
+    OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact,
+    OracleExecutionSafetyProposalArtifact, OracleExperimentArgumentsArtifact,
+    OracleExperimentRequestArtifact, OracleExperimentToolCatalogArtifact,
+    OracleExplorationBudgetV1, OracleExplorationCapabilityGrantArtifact,
     OracleExplorationLedgerArtifact, OracleExplorationLedgerV1,
     OracleExplorationObservationArtifact, OracleExplorationObservationV1,
-    OracleKnowledgeSnapshotArtifact, OracleObligationResolutionV1,
-    OracleObservationPayloadArtifact, OraclePortfolioElementArtifact, OraclePortfolioElementKindV1,
-    OraclePortfolioElementV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleQualifiedMechanismArtifact, OracleResearchToolCatalogArtifact,
+    OracleKnowledgeSnapshotArtifact, OracleMechanismQualificationReceiptV1,
+    OracleObligationResolutionV1, OracleObservationPayloadArtifact, OraclePortfolioElementArtifact,
+    OraclePortfolioElementKindV1, OraclePortfolioElementV1, OraclePortfolioProposalArtifact,
+    OraclePortfolioProposalV1, OracleQualifiedMechanismArtifact, OracleResearchToolCatalogArtifact,
     OracleSourceSnapshotArtifact, OracleStrategyCatalogArtifact, OracleStrategyCatalogV1,
-    OracleStrategyExecutorV1, OracleStrategyImplementationArtifact, OracleStrategyRunArtifact,
-    OracleStrategyRunV1, OracleStrategySubmissionArtifact, OracleStrategySubmissionOutcomeV1,
-    OracleStrategySubmissionV1, OracleStrategyToolCatalogV1, OracleUnknownEvidenceArtifact,
-    OracleWorkspaceArtifact, OracleWorkspaceV1, ProposalHostControllerObservationArtifact,
-    ProposalHostExperimentRequestV1, ProposalHostExperimentWorker, ProposalHostInvocationArtifact,
-    ProposalHostOracleBuildTestsV1, ProposalHostOracleDocumentationV1,
-    ProposalHostOracleKnowledgeV1, ProposalHostOracleMaterialsV1, ProposalHostPublicationV1,
-    ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostRoleRequestV1,
-    ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
-    ProposalHostTerminalArtifact, ProposalHostTerminalV1, SirIntentHypothesisSetProposalArtifact,
-    SirTaskBundleV1, TrustedOracleControlReceiptArtifact, UserIntentDecisionRequestArtifact,
-    UserIntentDecisionRequestV1, derive_oracle_claims, derive_oracle_work_items,
+    OracleStrategyExecutorV1, OracleStrategyImplementationArtifact, OracleStrategyKindV1,
+    OracleStrategyName, OracleStrategyRegistrationV1, OracleStrategyRoleV1,
+    OracleStrategyRunArtifact, OracleStrategyRunV1, OracleStrategySubmissionArtifact,
+    OracleStrategySubmissionOutcomeV1, OracleStrategySubmissionV1, OracleStrategyToolCatalogV1,
+    OracleUnknownEvidenceArtifact, OracleWorkspaceArtifact, OracleWorkspaceInput,
+    OracleWorkspaceV1, ProposalStepOracleBuildTestsV1, ProposalStepOracleDocumentationV1,
+    ProposalStepOracleKnowledgeV1, ProposalStepOracleMaterialsV1, ProposalStepPublicationV1,
+    ProposalStepRequestArtifact, ProposalStepRequestV1, ProposalStepRoleRequestV1,
+    ProposalStepRuntimeV1, ProposalStepTaskSnapshotV1, ProposalStepTaskSourceV1,
+    ProposalStepTerminalArtifact, ProposalStepTerminalV1, SirIntentHypothesisSetProposalArtifact,
+    SirTaskArtifactBytes, SirTaskBundleArtifact, SirTaskBundleV1,
+    TrustedOracleControlReceiptArtifact, UserIntentDecisionRequestArtifact,
+    UserIntentDecisionRequestV1, WorkflowToolControllerObservationArtifact, WorkflowToolRequestV1,
+    WorkflowToolWorker, derive_oracle_claims, derive_oracle_work_items,
     derive_user_intent_decision_requests, prepare_generic_candidate_build_job,
     recompute_oracle_admission,
 };
@@ -59,24 +66,24 @@ use crate::controller_state::{
     ControllerWorkflowNextActionV1, ControllerWorkflowV1, FrozenCandidateAdmissionAuthorityV1,
     FrozenCandidateBuildAuthorityV1, FrozenCandidateOracleAuthorityV1,
     FrozenCandidateProposalAuthorityV1, FrozenOracleAdmissionAuthorityV1,
-    FrozenOracleExplorationAuthorityV1, FrozenOraclePortfolioAuthorityV1,
-    FrozenOracleStrategyAuthorityV1, FrozenSirAuthorityV1, OracleStrategyCompletionV1,
-    authorize_candidate_build, authorize_candidate_proposal_episode, authorize_intent_admission,
-    authorize_oracle_admission, authorize_oracle_strategy, authorize_sir_episode,
+    FrozenOracleControlAuthorityV1, FrozenOracleExplorationAuthorityV1,
+    FrozenOraclePortfolioAuthorityV1, FrozenOracleStrategyAuthorityV1, FrozenSirAuthorityV1,
+    IntentAdmissionBlockReasonV1, OracleStrategyCompletionV1, authorize_candidate_build,
+    authorize_candidate_proposal_episode, authorize_intent_admission, authorize_oracle_admission,
+    authorize_oracle_control, authorize_oracle_strategy, authorize_sir_episode,
     freeze_candidate_build, freeze_candidate_oracle_contract, freeze_candidate_proposal_request,
     freeze_controller_workflow, freeze_oracle_portfolio, open_oracle_exploration,
-    record_admitted_intent, record_candidate_proposal, record_intent_decision_requests,
-    record_oracle_admission_outcome, record_oracle_strategy_completion,
-    record_oracle_strategy_observations, record_sir_proposal, record_user_intent_decision,
-    recover_controller_workflow,
+    reauthorize_intent_admission, record_admitted_intent, record_candidate_proposal,
+    record_intent_admission_blocked, record_intent_decision_requests,
+    record_oracle_admission_outcome, record_oracle_control_observation,
+    record_oracle_strategy_completion, record_oracle_strategy_observations, record_sir_proposal,
+    record_user_intent_decision, recover_controller_workflow,
 };
 use crate::intent_admission_supervisor::{
     IntentAdmissionProcessBlockedV1, IntentAdmissionProcessConfigV1, run_intent_admission_process,
 };
-use crate::proposal_host_supervisor::{
-    ProposalHostProcessBlockedV1, ProposalHostProcessConfigV1,
-    execute_proposal_host_controller_experiments, initialize_proposal_host_operation,
-    run_proposal_host_process,
+use crate::proposal_step_runner::{
+    ProposalStepConfigV1, execute_controller_workflow_tools, run_proposal_step,
 };
 use crate::{ControllerWorkflowStateV1, ServerConfig, ServerError, observed_now};
 
@@ -89,12 +96,8 @@ pub enum ControllerWorkflowManagerStatusV1 {
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
     },
-    ProposalHostBlocked {
-        episode_id: EpisodeId,
-        reason: ProposalHostProcessBlockedV1,
-    },
-    AwaitingControllerExperiment {
-        experiment: cairn_migration::ProposalHostExperimentRequestV1,
+    WorkerRequest {
+        request: cairn_migration::WorkflowToolRequestV1,
     },
     IntentAdmissionBlocked {
         decision: ContentId<UserIntentDecisionArtifact>,
@@ -117,8 +120,12 @@ pub enum ControllerWorkflowManagerStatusV1 {
     AwaitingOracleAdmissionMechanisms {
         authority: FrozenOraclePortfolioAuthorityV1,
     },
-    AwaitingOracleControlReceipts {
-        authority: FrozenOracleAdmissionAuthorityV1,
+    OracleControlBlocked {
+        run: ContentId<OracleControlRunArtifact>,
+        reason: OracleControlWorkerError,
+    },
+    OracleAdmissionCompleted {
+        outcome: ContentId<OracleAdmissionOutcomeArtifact>,
     },
     OracleAdmissionHasNoCandidateAuthority {
         outcome: ContentId<OracleAdmissionOutcomeArtifact>,
@@ -128,7 +135,7 @@ pub enum ControllerWorkflowManagerStatusV1 {
     },
     AwaitingCandidateBuild {
         authority: FrozenCandidateProposalAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<cairn_migration::CandidateProposalArtifact>,
     },
     CandidateBuildReady {
@@ -159,11 +166,34 @@ pub enum ControllerWorkflowManagerStatusV1 {
 pub fn freeze_sir_controller_request(
     server: &ServerConfig,
     workflow: &ControllerWorkflowV1,
-    request: &ProposalHostRequestV1,
+    request: &ProposalStepRequestV1,
+    command_id: &CommandId,
+    observed_at: cairn_protocol::ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let recovery_input = request.sir_recovery_input().map_err(manager_error)?;
     let mut content = open_content(server)?;
-    let request_id = archive::<ProposalHostRequestArtifact, _>(&mut content, request)?;
+    let ProposalStepRoleRequestV1::Sir { task, .. } = request.role() else {
+        return Err(ServerError::MigrationWorkflow(
+            "Controller intake request is not an SIR role".into(),
+        ));
+    };
+    for (source, artifact) in task.sources().iter().zip(task.bundle().artifacts()) {
+        let descriptor = content
+            .put::<SirTaskArtifactBytes>(&mut Cursor::new(source.source().as_bytes()))
+            .map_err(manager_error)?;
+        if source.path() != artifact.path() || descriptor.content_id != artifact.identity() {
+            return Err(ServerError::MigrationWorkflow(
+                "task source changed while archiving the submitted snapshot".into(),
+            ));
+        }
+    }
+    let bundle_id = archive::<SirTaskBundleArtifact, _>(&mut content, task.bundle())?;
+    if bundle_id != recovery_input.task_bundle() {
+        return Err(ServerError::MigrationWorkflow(
+            "task bundle changed while archiving the submitted snapshot".into(),
+        ));
+    }
+    let request_id = archive::<ProposalStepRequestArtifact, _>(&mut content, request)?;
     let recovery_input_id =
         archive::<IntentRecoveryInputArtifact, _>(&mut content, &recovery_input)?;
     let mut events = open_events(server)?;
@@ -174,8 +204,8 @@ pub fn freeze_sir_controller_request(
         request,
         recovery_input_id,
         &recovery_input,
-        &CommandId::new(),
-        observed_now()?,
+        command_id,
+        observed_at,
     )
     .map_err(manager_error)?;
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
@@ -191,6 +221,8 @@ pub fn record_controller_user_intent_decision(
     workflow: &ControllerWorkflowV1,
     grant: &UserIntentAuthorityGrantV1,
     decision: &UserIntentDecisionV1,
+    command_id: &CommandId,
+    observed_at: cairn_protocol::ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let state = recover_controller_turn(server, workflow)?;
     let ControllerWorkflowStateV1::AwaitingUserIntentDecision { requests, .. } = state else {
@@ -214,8 +246,8 @@ pub fn record_controller_user_intent_decision(
         grant,
         decision_id,
         decision,
-        &CommandId::new(),
-        observed_now()?,
+        command_id,
+        observed_at,
     )
     .map_err(manager_error)?;
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
@@ -286,6 +318,155 @@ pub fn initialize_controller_oracle_exploration(
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
 }
 
+/// Constructs and opens the product-owned generic Oracle workspace for an admitted task.
+///
+/// The catalog assigns one fresh Proposal step episode to each mandatory concern, avoiding shared
+/// episode state across independent cells. No task-specific knowledge or fixture rule is added.
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "workspace construction validates one closed set of strongly typed Oracle inputs"
+)]
+pub fn initialize_product_oracle_exploration(
+    server: &ServerConfig,
+    proposal_step: &ProposalStepConfigV1,
+    workflow: &ControllerWorkflowV1,
+    coverage_profile: OracleCoverageProfileV1,
+    adversarial_policy: OracleAdversarialPolicyV1,
+    budget: OracleExplorationBudgetV1,
+    documentation: &str,
+    build_and_tests: &str,
+) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
+    let state = recover_controller_turn(server, workflow)?;
+    let ControllerWorkflowStateV1::AdmittedIntent {
+        authority,
+        contract,
+        ..
+    } = state
+    else {
+        return Err(ServerError::MigrationWorkflow(
+            "Controller has no admitted intent ready for product Oracle initialization".into(),
+        ));
+    };
+    let mut content = open_content(server)?;
+    let recovery_input: IntentRecoveryInputV1 =
+        load_canonical(&content, authority.recovery_input())?;
+    let policy = OracleCoveragePolicyV1::new(coverage_profile, adversarial_policy);
+    let required_roles = if adversarial_policy == OracleAdversarialPolicyV1::RequiredForEveryConcern
+    {
+        2_usize
+    } else {
+        1_usize
+    };
+    let required_runs = policy
+        .concerns()
+        .len()
+        .checked_mul(required_roles)
+        .ok_or_else(|| ServerError::MigrationWorkflow("Oracle run budget overflow".into()))?;
+    if usize::try_from(budget.strategy_runs.get()).map_err(manager_error)? < required_runs {
+        return Err(ServerError::Configuration(
+            "Oracle strategy run budget cannot cover every mandatory concern and role".into(),
+        ));
+    }
+
+    let model_bytes =
+        std::fs::read(&proposal_step.resolved_runtime_model).map_err(manager_error)?;
+    let authorship_model = archive_bytes::<ModelConfigurationArtifact>(&mut content, &model_bytes)?;
+    let strategy_tools = OracleStrategyToolCatalogV1::standard();
+    let strategy_tools_id = archive::<cairn_migration::OracleStrategyToolCatalogArtifact, _>(
+        &mut content,
+        &strategy_tools,
+    )?;
+    let mut strategies = Vec::new();
+    for (index, concern) in policy.concerns().iter().enumerate() {
+        let synthesis_runtime = proposal_step.runtime(EpisodeId::new())?;
+        let synthesis_invocation =
+            archive::<AgentRuntimeBindingArtifact, _>(&mut content, &synthesis_runtime)?;
+        strategies.push(
+            OracleStrategyRegistrationV1::new(
+                OracleStrategyName::new(format!("model-synthesis-{index:02}"))
+                    .map_err(manager_error)?,
+                OracleStrategyKindV1::ModelBackedSynthesis,
+                OracleStrategyExecutorV1::AgentStep {
+                    authorship_model,
+                    invocation: synthesis_invocation,
+                    tools: strategy_tools_id,
+                },
+                vec![OracleStrategyRoleV1::Synthesis],
+                vec![*concern],
+            )
+            .map_err(manager_error)?,
+        );
+        if adversarial_policy == OracleAdversarialPolicyV1::RequiredForEveryConcern {
+            let adversarial_runtime = proposal_step.runtime(EpisodeId::new())?;
+            let adversarial_invocation =
+                archive::<AgentRuntimeBindingArtifact, _>(&mut content, &adversarial_runtime)?;
+            strategies.push(
+                OracleStrategyRegistrationV1::new(
+                    OracleStrategyName::new(format!("model-adversarial-{index:02}"))
+                        .map_err(manager_error)?,
+                    OracleStrategyKindV1::ModelBackedAdversarial,
+                    OracleStrategyExecutorV1::AgentStep {
+                        authorship_model,
+                        invocation: adversarial_invocation,
+                        tools: strategy_tools_id,
+                    },
+                    vec![OracleStrategyRoleV1::Adversarial],
+                    vec![*concern],
+                )
+                .map_err(manager_error)?,
+            );
+        }
+    }
+    strategies.sort_by(|left, right| left.name().cmp(right.name()));
+    let catalog = OracleStrategyCatalogV1::new(strategies).map_err(manager_error)?;
+    let policy_id = archive::<OracleCoveragePolicyArtifact, _>(&mut content, &policy)?;
+    let catalog_id = archive::<OracleStrategyCatalogArtifact, _>(&mut content, &catalog)?;
+    let source_manifest = format!("submitted-task-bundle:{}", recovery_input.task_bundle());
+    let source =
+        archive_bytes::<OracleSourceSnapshotArtifact>(&mut content, source_manifest.as_bytes())?;
+    let documentation = archive_bytes::<OracleDocumentationSnapshotArtifact>(
+        &mut content,
+        documentation.as_bytes(),
+    )?;
+    let build_and_tests =
+        archive_bytes::<OracleBuildTestSnapshotArtifact>(&mut content, build_and_tests.as_bytes())?;
+    let knowledge = archive_bytes::<OracleKnowledgeSnapshotArtifact>(
+        &mut content,
+        b"No task-specific knowledge base is configured for this run.",
+    )?;
+    let research_tools = archive_bytes::<OracleResearchToolCatalogArtifact>(
+        &mut content,
+        b"{\"schema_version\":1,\"tools\":[]}",
+    )?;
+    let experiment_tools = archive_bytes::<OracleExperimentToolCatalogArtifact>(
+        &mut content,
+        b"{\"schema_version\":1,\"tools\":[]}",
+    )?;
+    let capability_grant = archive_bytes::<OracleExplorationCapabilityGrantArtifact>(
+        &mut content,
+        b"{\"capabilities\":[\"read-task-artifact\",\"submit-cell-result\"],\"schema_version\":1}",
+    )?;
+    let workspace = OracleWorkspaceV1::new(&OracleWorkspaceInput {
+        task_id: workflow.task_id(),
+        admitted_intent: contract,
+        sir_input: authority.recovery_input(),
+        sir_task_bundle: recovery_input.task_bundle(),
+        source,
+        documentation,
+        build_and_tests,
+        knowledge,
+        research_tools,
+        experiment_tools,
+        capability_grant,
+        coverage_policy: policy_id,
+        strategy_catalog: catalog_id,
+        budget,
+    });
+    drop(content);
+    initialize_controller_oracle_exploration(server, workflow, &workspace, &policy, &catalog)
+}
+
 /// Freezes qualified independent-control mechanisms before any Oracle Admission control runs.
 ///
 /// Mechanism registrations are typed by control family and must reference material already
@@ -312,6 +493,13 @@ pub fn authorize_controller_oracle_admission(
     let policy: OracleAdmissionPolicyV1 = load_canonical(&content, authority.policy())?;
     for registration in mechanisms.mechanisms() {
         verify_content::<OracleQualifiedMechanismArtifact>(&content, registration.mechanism())?;
+        verify_content::<OracleControlRunnerArtifact>(&content, registration.runner())?;
+        let qualification: OracleMechanismQualificationReceiptV1 =
+            load_canonical(&content, registration.qualification())?;
+        registration
+            .validate_qualification(&qualification)
+            .map_err(manager_error)?;
+        verify_content::<ExecutionReceiptArtifact>(&content, qualification.evidence())?;
     }
     let _ = archive::<OracleAdmissionMechanismCatalogArtifact, _>(&mut content, mechanisms)?;
     let attempt =
@@ -342,17 +530,26 @@ pub fn authorize_controller_oracle_admission(
 ///
 /// Rejects missing trusted receipt material, cross-attempt evidence, duplicate controls,
 /// noncanonical identities, or a durable transition failure.
-pub fn record_controller_oracle_admission_evidence(
+fn finalize_controller_oracle_admission(
     server: &ServerConfig,
     workflow: &ControllerWorkflowV1,
     receipts: Vec<OracleControlReceiptV1>,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let state = recover_controller_turn(server, workflow)?;
-    let ControllerWorkflowStateV1::OracleAdmissionAuthorized(authority) = state else {
+    let ControllerWorkflowStateV1::OracleControlsObserved {
+        authority,
+        receipts: observed,
+    } = state
+    else {
         return Err(ServerError::MigrationWorkflow(
-            "Controller has no authorized Oracle Admission attempt".into(),
+            "Controller has no complete Oracle control observations".into(),
         ));
     };
+    if receipts != observed {
+        return Err(ServerError::MigrationWorkflow(
+            "Oracle Admission evidence differs from durable control observations".into(),
+        ));
+    }
     let mut content = open_content(server)?;
     let proposal: OraclePortfolioProposalV1 =
         load_canonical(&content, authority.portfolio().proposal())?;
@@ -367,7 +564,7 @@ pub fn record_controller_oracle_admission_evidence(
     let _ = archive::<OracleAdmissionEvidenceArtifact, _>(&mut content, &evidence)?;
     let outcome = recompute_oracle_admission(&proposal, &policy, &mechanisms, &attempt, &evidence)
         .map_err(manager_error)?;
-    let _ = archive::<OracleAdmissionOutcomeArtifact, _>(&mut content, &outcome)?;
+    let outcome_id = archive::<OracleAdmissionOutcomeArtifact, _>(&mut content, &outcome)?;
     let mut events = open_events(server)?;
     record_oracle_admission_outcome(
         &mut events,
@@ -382,7 +579,198 @@ pub fn record_controller_oracle_admission_evidence(
         observed_now()?,
     )
     .map_err(manager_error)?;
+    Ok(
+        ControllerWorkflowManagerStatusV1::OracleAdmissionCompleted {
+            outcome: outcome_id,
+        },
+    )
+}
+
+fn prepare_or_finalize_oracle_controls<W: OracleControlWorker>(
+    server: &ServerConfig,
+    workflow: &ControllerWorkflowV1,
+    authority: &FrozenOracleAdmissionAuthorityV1,
+    receipts: Vec<OracleControlReceiptV1>,
+    worker: &mut W,
+) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
+    let mut content = open_content(server)?;
+    let mechanisms: OracleAdmissionMechanismCatalogV1 =
+        load_canonical(&content, authority.mechanisms())?;
+    let attempt: OracleAdmissionAttemptV1 = load_canonical(&content, authority.attempt())?;
+    let _ = OracleAdmissionEvidenceV1::new(&attempt, receipts.clone()).map_err(manager_error)?;
+    let next = attempt.required_controls().iter().find(|obligation| {
+        !receipts.iter().any(|receipt| {
+            receipt.item() == obligation.item() && receipt.control() == obligation.control()
+        })
+    });
+    let Some(obligation) = next else {
+        drop(content);
+        return finalize_controller_oracle_admission(server, workflow, receipts);
+    };
+    let run = OracleControlRunV1::new(&attempt, &mechanisms, obligation.clone())
+        .map_err(manager_error)?;
+    let run_id = archive::<OracleControlRunArtifact, _>(&mut content, &run)?;
+    let runner_id = run.runner();
+    let binding = match worker.prepare(&run) {
+        Ok(binding) => binding,
+        Err(reason) => {
+            let classification = oracle_control_worker_error_class(&reason);
+            tracing::warn!(
+                target: "cairn.server.controller-workflow",
+                event = "oracle_control_prepare_blocked",
+                task_id = %workflow.task_id(),
+                run_id = %run_id,
+                runner_id = %runner_id,
+                classification,
+                "qualified Oracle control preparation is blocked"
+            );
+            return Ok(ControllerWorkflowManagerStatusV1::OracleControlBlocked {
+                run: run_id,
+                reason,
+            });
+        }
+    };
+    verify_content::<JobContractArtifact>(&content, binding.contract())?;
+    let dispatch = OracleControlDispatchV1::new(&run, binding).map_err(manager_error)?;
+    let _ = archive::<OracleControlDispatchArtifact, _>(&mut content, &dispatch)?;
+    let mut events = open_events(server)?;
+    authorize_oracle_control(
+        &mut events,
+        workflow,
+        &mechanisms,
+        &attempt,
+        &receipts,
+        &run,
+        &dispatch,
+        &CommandId::new(),
+        observed_now()?,
+    )
+    .map_err(manager_error)?;
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exact load, effect, observation archival, durable commit, and safe terminal log remain visible in one control step"
+)]
+fn execute_authorized_oracle_control<W: OracleControlWorker>(
+    server: &ServerConfig,
+    workflow: &ControllerWorkflowV1,
+    authority: &FrozenOracleControlAuthorityV1,
+    previous_receipts: &[OracleControlReceiptV1],
+    worker: &mut W,
+) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
+    let mut content = open_content(server)?;
+    let run: OracleControlRunV1 = load_canonical(&content, authority.run())?;
+    let dispatch: OracleControlDispatchV1 = load_canonical(&content, authority.dispatch())?;
+    if dispatch.run() != authority.run() || dispatch.runner() != run.runner() {
+        return Err(ServerError::MigrationWorkflow(
+            "Oracle control runner or dispatch changed after durable authorization".into(),
+        ));
+    }
+    let job_id = dispatch.worker().job_id();
+    let attempt_id = dispatch.worker().attempt_id();
+    let contract_id = dispatch.worker().contract();
+    let runner_id = dispatch.runner();
+    tracing::info!(
+        target: "cairn.server.controller-workflow",
+        event = "oracle_control_execution_started",
+        task_id = %workflow.task_id(),
+        run_id = %authority.run(),
+        runner_id = %runner_id,
+        job_id = %job_id,
+        attempt_id = %attempt_id,
+        contract_id = %contract_id,
+        "qualified Oracle control execution started"
+    );
+    let observation = match worker.execute(&dispatch) {
+        Ok(observation) => observation,
+        Err(reason) => {
+            let classification = oracle_control_worker_error_class(&reason);
+            tracing::warn!(
+                target: "cairn.server.controller-workflow",
+                event = "oracle_control_execution_blocked",
+                task_id = %workflow.task_id(),
+                run_id = %authority.run(),
+                runner_id = %runner_id,
+                job_id = %job_id,
+                attempt_id = %attempt_id,
+                contract_id = %contract_id,
+                classification,
+                "qualified Oracle control execution requires reconciliation"
+            );
+            return Ok(ControllerWorkflowManagerStatusV1::OracleControlBlocked {
+                run: authority.run(),
+                reason,
+            });
+        }
+    };
+    observation
+        .validate_against(&dispatch)
+        .map_err(manager_error)?;
+    let archived_receipt =
+        archive::<ExecutionReceiptArtifact, _>(&mut content, observation.receipt())?;
+    if archived_receipt != observation.receipt_id() {
+        return Err(ServerError::MigrationWorkflow(
+            "Oracle control Worker receipt identity changed during archival".into(),
+        ));
+    }
+    let observation_id =
+        archive::<TrustedOracleControlReceiptArtifact, _>(&mut content, &observation)?;
+    let receipt = OracleControlReceiptV1::from_trusted_observation(
+        authority.admission().portfolio().proposal(),
+        &run,
+        &observation,
+    )
+    .map_err(manager_error)?;
+    if receipt.receipt() != observation_id {
+        return Err(ServerError::MigrationWorkflow(
+            "Oracle control trusted observation identity changed during projection".into(),
+        ));
+    }
+    let result = observation.result();
+    let elapsed_ms = observation.receipt().elapsed().get();
+    let output_count = observation.receipt().outputs().len();
+    let exit_code = observation.receipt().exit_code();
+    let receipt_id = observation.receipt_id();
+    let mut events = open_events(server)?;
+    record_oracle_control_observation(
+        &mut events,
+        workflow,
+        &run,
+        &dispatch,
+        &observation,
+        &receipt,
+        &CommandId::new(),
+        observed_now()?,
+    )
+    .map_err(manager_error)?;
+    tracing::info!(
+        target: "cairn.server.controller-workflow",
+        event = "oracle_control_execution_completed",
+        task_id = %workflow.task_id(),
+        run_id = %authority.run(),
+        runner_id = %runner_id,
+        job_id = %job_id,
+        attempt_id = %attempt_id,
+        contract_id = %contract_id,
+        receipt_id = %receipt_id,
+        result = ?result,
+        exit_code,
+        elapsed_ms,
+        output_count,
+        prior_receipt_count = previous_receipts.len(),
+        "qualified Oracle control execution completed"
+    );
+    Ok(ControllerWorkflowManagerStatusV1::Advanced)
+}
+
+const fn oracle_control_worker_error_class(error: &OracleControlWorkerError) -> &'static str {
+    match error {
+        OracleControlWorkerError::NotStarted(_) => "not-started",
+        OracleControlWorkerError::Rejected(_) => "rejected",
+        OracleControlWorkerError::Ambiguous(_) => "ambiguous",
+    }
 }
 
 /// Archives one strict cell-scoped strategy submission and advances the exact ledger revision.
@@ -406,7 +794,7 @@ pub fn record_controller_oracle_strategy_submission(
     let run: OracleStrategyRunV1 = load_canonical(&content, authority.run())?;
     let OracleStrategyExecutorV1::Deterministic { implementation } = run.executor() else {
         return Err(ServerError::MigrationWorkflow(
-            "Agent-backed Oracle strategy requires a Proposal Host terminal".into(),
+            "Agent-backed Oracle strategy requires a Proposal step terminal".into(),
         ));
     };
     let completion = OracleStrategyCompletionV1::Deterministic {
@@ -416,7 +804,7 @@ pub fn record_controller_oracle_strategy_submission(
     record_controller_oracle_completion(server, workflow, &authority, &completion)
 }
 
-/// Records one exact Proposal Host terminal as the durable completion of an Agent strategy run.
+/// Records one exact Proposal step terminal as the durable completion of an Agent strategy run.
 ///
 /// # Errors
 ///
@@ -424,8 +812,8 @@ pub fn record_controller_oracle_strategy_submission(
 pub fn record_controller_oracle_strategy_terminal(
     server: &ServerConfig,
     workflow: &ControllerWorkflowV1,
-    request: &ProposalHostRequestV1,
-    terminal: &ProposalHostTerminalV1,
+    request: &ProposalStepRequestV1,
+    terminal: &ProposalStepTerminalV1,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let state = recover_controller_turn(server, workflow)?;
     let ControllerWorkflowStateV1::OracleStrategyAuthorized(authority) = state else {
@@ -435,7 +823,7 @@ pub fn record_controller_oracle_strategy_terminal(
     };
     let request_id = request.identity().map_err(manager_error)?;
     let terminal_id = terminal.identity().map_err(manager_error)?;
-    let completion = OracleStrategyCompletionV1::AgentEpisode {
+    let completion = OracleStrategyCompletionV1::AgentStep {
         request_id,
         request: Box::new(request.clone()),
         terminal_id,
@@ -444,22 +832,25 @@ pub fn record_controller_oracle_strategy_terminal(
     record_controller_oracle_completion(server, workflow, &authority, &completion)
 }
 
-/// Executes one yielded Oracle Host effect and durably projects its typed observations.
+/// Dispatches one Oracle proposal-step Worker request and projects its typed observations.
 ///
-/// The generic Host journal grants start authority before the Worker adapter is invoked. This
+/// The generic Agent runtime state grants start authority before the Worker adapter is invoked. This
 /// wrapper then archives the Controller observation, Oracle payload, and exact run-bound Oracle
-/// observation in the task Controller store before the same Host episode may resume.
+/// observation in the task Controller store before the same Agent episode may resume.
 ///
 /// # Errors
 ///
 /// Rejects non-Oracle roles, request/run/ledger drift, missing projection bodies, Worker failures,
-/// or any Host/Controller persistence failure.
-pub fn execute_controller_oracle_strategy_experiments<W: ProposalHostExperimentWorker>(
+/// or any Agent/Controller persistence failure.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the Worker round trip validates and archives each authority-bearing lineage edge"
+)]
+pub fn dispatch_controller_oracle_worker_request<W: WorkflowToolWorker>(
     server: &ServerConfig,
-    proposal_host: &ProposalHostProcessConfigV1,
     workflow: &ControllerWorkflowV1,
-    request: &ProposalHostRequestV1,
-    experiment: &ProposalHostExperimentRequestV1,
+    proposal_request: &ProposalStepRequestV1,
+    worker_request: &WorkflowToolRequestV1,
     worker: &mut W,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let state = recover_controller_turn(server, workflow)?;
@@ -468,7 +859,8 @@ pub fn execute_controller_oracle_strategy_experiments<W: ProposalHostExperimentW
             "Controller has no authorized Oracle strategy effect".into(),
         ));
     };
-    let ProposalHostRoleRequestV1::OracleStrategy { run: requested, .. } = request.role() else {
+    let ProposalStepRoleRequestV1::OracleStrategy { run: requested, .. } = proposal_request.role()
+    else {
         return Err(ServerError::MigrationWorkflow(
             "Controller effect request is not an Oracle strategy".into(),
         ));
@@ -477,19 +869,26 @@ pub fn execute_controller_oracle_strategy_experiments<W: ProposalHostExperimentW
     let run: OracleStrategyRunV1 = load_canonical(&content, authority.run())?;
     let ledger: OracleExplorationLedgerV1 =
         load_canonical(&content, authority.exploration().ledger())?;
-    if requested != &run || experiment.request() != request.identity().map_err(manager_error)? {
+    if requested != &run
+        || worker_request.request() != proposal_request.identity().map_err(manager_error)?
+    {
         return Err(ServerError::MigrationWorkflow(
-            "Oracle Host effect changed its authorized request or run".into(),
+            "Oracle proposal effect changed its authorized request or run".into(),
         ));
     }
     drop(content);
-
-    let executed =
-        execute_proposal_host_controller_experiments(proposal_host, request, experiment, worker)?;
+    let mut events = open_events(server)?;
     let mut content = open_content(server)?;
+    let executed = execute_controller_workflow_tools(
+        &mut events,
+        &mut content,
+        proposal_request,
+        worker_request,
+        worker,
+    )?;
     let mut observations = Vec::with_capacity(executed.len());
     for value in executed {
-        let controller_id = archive::<ProposalHostControllerObservationArtifact, _>(
+        let controller_id = archive::<WorkflowToolControllerObservationArtifact, _>(
             &mut content,
             value.controller(),
         )?;
@@ -571,26 +970,26 @@ fn record_controller_oracle_completion(
     let run: OracleStrategyRunV1 = load_canonical(&content, authority.run())?;
     let submission = match completion {
         OracleStrategyCompletionV1::Deterministic { submission, .. } => submission,
-        OracleStrategyCompletionV1::AgentEpisode {
+        OracleStrategyCompletionV1::AgentStep {
             request_id,
             request,
             terminal_id,
             terminal,
         } => {
             let archived_request =
-                archive::<ProposalHostRequestArtifact, _>(&mut content, request)?;
+                archive::<ProposalStepRequestArtifact, _>(&mut content, request)?;
             let archived_terminal =
-                archive::<ProposalHostTerminalArtifact, _>(&mut content, terminal)?;
+                archive::<ProposalStepTerminalArtifact, _>(&mut content, terminal)?;
             if archived_request != *request_id || archived_terminal != *terminal_id {
                 return Err(ServerError::MigrationWorkflow(
-                    "Oracle Proposal Host completion identity changed".into(),
+                    "Oracle Proposal step completion identity changed".into(),
                 ));
             }
-            let ProposalHostPublicationV1::OracleStrategy { submission, .. } =
+            let ProposalStepPublicationV1::OracleStrategy { submission, .. } =
                 terminal.publication()
             else {
                 return Err(ServerError::MigrationWorkflow(
-                    "Oracle Proposal Host returned a non-Oracle publication".into(),
+                    "Oracle Proposal step returned a non-Oracle publication".into(),
                 ));
             };
             submission
@@ -617,7 +1016,7 @@ fn record_controller_oracle_completion(
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
 }
 
-/// Materializes one exact Agent-backed Oracle cell as a generic Proposal Host request.
+/// Materializes one exact Agent-backed Oracle cell as a generic Proposal step request.
 ///
 /// The request carries the structured admitted claim plus exactly one claim × concern × role work
 /// item. It performs no model, network, or Worker effect.
@@ -625,10 +1024,10 @@ fn record_controller_oracle_completion(
 /// # Errors
 ///
 /// Rejects a non-Agent executor, invocation/run/cell drift, or missing/corrupt task material.
-pub fn prepare_oracle_strategy_proposal_host_request(
+pub fn prepare_oracle_strategy_proposal_step_request(
     server: &ServerConfig,
     authority: &FrozenOracleStrategyAuthorityV1,
-) -> Result<ProposalHostRequestV1, ServerError> {
+) -> Result<ProposalStepRequestV1, ServerError> {
     let content = open_content(server)?;
     let workspace: OracleWorkspaceV1 =
         load_canonical(&content, authority.exploration().workspace())?;
@@ -650,25 +1049,25 @@ pub fn prepare_oracle_strategy_proposal_host_request(
         .find(|claim| claim.identity().is_ok_and(|id| id == item.claim()))
         .cloned()
         .ok_or_else(|| ServerError::MigrationWorkflow("Oracle strategy claim is absent".into()))?;
-    let OracleStrategyExecutorV1::AgentEpisode { invocation, .. } = run.executor() else {
+    let OracleStrategyExecutorV1::AgentStep { invocation, .. } = run.executor() else {
         return Err(ServerError::MigrationWorkflow(
-            "Oracle strategy is not assigned to Proposal Host".into(),
+            "Oracle strategy is not assigned to Proposal step".into(),
         ));
     };
-    let runtime: ProposalHostRuntimeV1 = load_canonical(&content, *invocation)?;
+    let runtime: ProposalStepRuntimeV1 = load_canonical(&content, *invocation)?;
     let bundle: SirTaskBundleV1 = load_canonical(&content, workspace.sir_task_bundle())?;
-    let materials = ProposalHostOracleMaterialsV1::new(
-        ProposalHostOracleDocumentationV1::new(
+    let materials = ProposalStepOracleMaterialsV1::new(
+        ProposalStepOracleDocumentationV1::new(
             workspace.documentation(),
             load_utf8_content(&content, workspace.documentation())?,
         )
         .map_err(manager_error)?,
-        ProposalHostOracleBuildTestsV1::new(
+        ProposalStepOracleBuildTestsV1::new(
             workspace.build_and_tests(),
             load_utf8_content(&content, workspace.build_and_tests())?,
         )
         .map_err(manager_error)?,
-        ProposalHostOracleKnowledgeV1::new(
+        ProposalStepOracleKnowledgeV1::new(
             workspace.knowledge(),
             load_utf8_content(&content, workspace.knowledge())?,
         )
@@ -680,26 +1079,26 @@ pub fn prepare_oracle_strategy_proposal_host_request(
         content
             .write_to(&artifact.identity(), &mut bytes)
             .map_err(manager_error)?;
-        sources.push(ProposalHostTaskSourceV1::new(
+        sources.push(ProposalStepTaskSourceV1::new(
             artifact.path().clone(),
             String::from_utf8(bytes).map_err(manager_error)?,
         ));
     }
-    ProposalHostRequestV1::new(
+    ProposalStepRequestV1::new(
         runtime,
-        ProposalHostRoleRequestV1::OracleStrategy {
+        ProposalStepRoleRequestV1::OracleStrategy {
             workspace,
             claim,
             work_item: item,
             run,
-            task: ProposalHostTaskSnapshotV1::new(bundle, sources),
+            task: ProposalStepTaskSnapshotV1::new(bundle, sources),
             materials,
         },
     )
     .map_err(manager_error)
 }
 
-/// Materializes one exact admitted Candidate authority as a generic Proposal Host request.
+/// Materializes one exact admitted Candidate authority as a generic Proposal step request.
 ///
 /// The caller supplies the already frozen runtime/model/budget selection. This function loads
 /// only public artifacts reachable from the Candidate workspace and admitted Oracle contract;
@@ -709,11 +1108,11 @@ pub fn prepare_oracle_strategy_proposal_host_request(
 ///
 /// Rejects runtime/task/workspace drift, absent portfolio element bodies, a typed material/body
 /// mismatch, or any admitted-contract inconsistency.
-pub fn prepare_candidate_strategy_proposal_host_request(
+pub fn prepare_candidate_strategy_proposal_step_request(
     server: &ServerConfig,
     authority: &FrozenCandidateOracleAuthorityV1,
-    runtime: ProposalHostRuntimeV1,
-) -> Result<ProposalHostRequestV1, ServerError> {
+    runtime: ProposalStepRuntimeV1,
+) -> Result<ProposalStepRequestV1, ServerError> {
     let content = open_content(server)?;
     let workspace: CandidateWorkspaceV1 = load_canonical(&content, authority.workspace())?;
     let contract: CandidateOracleContractV1 = load_canonical(&content, authority.contract())?;
@@ -759,18 +1158,18 @@ pub fn prepare_candidate_strategy_proposal_host_request(
     }
     let oracle_materials =
         CandidateOracleMaterialsV1::new(&contract, claims, elements).map_err(manager_error)?;
-    let public_materials = ProposalHostOracleMaterialsV1::new(
-        ProposalHostOracleDocumentationV1::new(
+    let public_materials = ProposalStepOracleMaterialsV1::new(
+        ProposalStepOracleDocumentationV1::new(
             workspace.documentation(),
             load_utf8_content(&content, workspace.documentation())?,
         )
         .map_err(manager_error)?,
-        ProposalHostOracleBuildTestsV1::new(
+        ProposalStepOracleBuildTestsV1::new(
             workspace.build_and_tests(),
             load_utf8_content(&content, workspace.build_and_tests())?,
         )
         .map_err(manager_error)?,
-        ProposalHostOracleKnowledgeV1::new(
+        ProposalStepOracleKnowledgeV1::new(
             workspace.knowledge(),
             load_utf8_content(&content, workspace.knowledge())?,
         )
@@ -778,9 +1177,9 @@ pub fn prepare_candidate_strategy_proposal_host_request(
     );
     let bundle: SirTaskBundleV1 = load_canonical(&content, workspace.task_bundle())?;
     let task = materialize_task_snapshot(&content, bundle)?;
-    ProposalHostRequestV1::new(
+    ProposalStepRequestV1::new(
         runtime,
-        ProposalHostRoleRequestV1::CandidateStrategy {
+        ProposalStepRoleRequestV1::CandidateStrategy {
             workspace,
             contract,
             oracle_materials,
@@ -794,7 +1193,7 @@ pub fn prepare_candidate_strategy_proposal_host_request(
 /// Freezes the exact Candidate runtime and all admitted public material into the task aggregate.
 ///
 /// This step performs no model effect. The following manager turn separately commits start
-/// authority before the Proposal Host process can run.
+/// authority before the proposal step can run.
 ///
 /// # Errors
 ///
@@ -804,11 +1203,11 @@ pub fn initialize_candidate_proposal_loop(
     server: &ServerConfig,
     workflow: &ControllerWorkflowV1,
     authority: &FrozenCandidateOracleAuthorityV1,
-    runtime: ProposalHostRuntimeV1,
+    runtime: ProposalStepRuntimeV1,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
-    let request = prepare_candidate_strategy_proposal_host_request(server, authority, runtime)?;
+    let request = prepare_candidate_strategy_proposal_step_request(server, authority, runtime)?;
     let mut content = open_content(server)?;
-    let request_id = archive::<ProposalHostRequestArtifact, _>(&mut content, &request)?;
+    let request_id = archive::<ProposalStepRequestArtifact, _>(&mut content, &request)?;
     let mut events = open_events(server)?;
     freeze_candidate_proposal_request(
         &mut events,
@@ -864,19 +1263,19 @@ pub fn initialize_candidate_build(
 fn materialize_task_snapshot(
     content: &SqliteContentStore,
     bundle: SirTaskBundleV1,
-) -> Result<ProposalHostTaskSnapshotV1, ServerError> {
+) -> Result<ProposalStepTaskSnapshotV1, ServerError> {
     let mut sources = Vec::with_capacity(bundle.artifacts().len());
     for artifact in bundle.artifacts() {
         let mut bytes = Vec::new();
         content
             .write_to(&artifact.identity(), &mut bytes)
             .map_err(manager_error)?;
-        sources.push(ProposalHostTaskSourceV1::new(
+        sources.push(ProposalStepTaskSourceV1::new(
             artifact.path().clone(),
             String::from_utf8(bytes).map_err(manager_error)?,
         ));
     }
-    Ok(ProposalHostTaskSnapshotV1::new(bundle, sources))
+    Ok(ProposalStepTaskSnapshotV1::new(bundle, sources))
 }
 
 fn load_candidate_oracle_material(
@@ -932,17 +1331,26 @@ fn read_content<T: ContentType>(
 ///
 /// # Errors
 ///
-/// Returns configuration, canonical storage, durable workflow, or Proposal Host initialization
+/// Returns configuration, canonical storage, durable workflow, or Proposal step initialization
 /// failures without selecting a replacement task, request, or episode.
-pub async fn drive_controller_workflow_once(
+pub async fn drive_controller_workflow_once<W: OracleControlWorker>(
     server: &ServerConfig,
-    proposal_host: &ProposalHostProcessConfigV1,
+    proposal_step: &ProposalStepConfigV1,
     intent_admission: &IntentAdmissionProcessConfigV1,
     workflow: &ControllerWorkflowV1,
+    oracle_controls: &mut W,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let state = recover_controller_turn(server, workflow)?;
     let action = select_controller_action(&state);
-    execute_controller_action(server, proposal_host, intent_admission, workflow, action).await
+    execute_controller_action(
+        server,
+        proposal_step,
+        intent_admission,
+        workflow,
+        oracle_controls,
+        action,
+    )
+    .await
 }
 
 fn recover_controller_turn(
@@ -958,11 +1366,12 @@ fn select_controller_action(state: &ControllerWorkflowStateV1) -> ControllerWork
 }
 
 #[allow(clippy::too_many_lines)]
-async fn execute_controller_action(
+async fn execute_controller_action<W: OracleControlWorker>(
     server: &ServerConfig,
-    proposal_host: &ProposalHostProcessConfigV1,
+    proposal_step: &ProposalStepConfigV1,
     intent_admission: &IntentAdmissionProcessConfigV1,
     workflow: &ControllerWorkflowV1,
+    oracle_controls: &mut W,
     action: ControllerWorkflowNextActionV1,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     match action {
@@ -971,7 +1380,7 @@ async fn execute_controller_action(
             authorize_sir_episode_start(server, workflow, &authority)
         }
         ControllerWorkflowNextActionV1::RunSirEpisode(authority) => {
-            run_authorized_sir_episode(server, proposal_host, workflow, &authority).await
+            run_authorized_sir_episode(server, proposal_step, workflow, &authority)
         }
         ControllerWorkflowNextActionV1::DeriveIntentDecisionRequests {
             authority,
@@ -1013,14 +1422,31 @@ async fn execute_controller_action(
             authorize_next_oracle_action(server, workflow, &authority)
         }
         ControllerWorkflowNextActionV1::RunOracleStrategy(authority) => {
-            run_authorized_oracle_strategy(server, proposal_host, workflow, authority).await
+            run_authorized_oracle_strategy(server, proposal_step, workflow, authority)
         }
         ControllerWorkflowNextActionV1::AwaitOracleAdmissionMechanisms(authority) => {
             Ok(ControllerWorkflowManagerStatusV1::AwaitingOracleAdmissionMechanisms { authority })
         }
-        ControllerWorkflowNextActionV1::AwaitOracleControlReceipts(authority) => {
-            Ok(ControllerWorkflowManagerStatusV1::AwaitingOracleControlReceipts { authority })
-        }
+        ControllerWorkflowNextActionV1::RunOracleAdmissionControls {
+            authority,
+            receipts,
+        } => prepare_or_finalize_oracle_controls(
+            server,
+            workflow,
+            &authority,
+            receipts,
+            oracle_controls,
+        ),
+        ControllerWorkflowNextActionV1::ExecuteOracleAdmissionControl {
+            authority,
+            previous_receipts,
+        } => execute_authorized_oracle_control(
+            server,
+            workflow,
+            &authority,
+            &previous_receipts,
+            oracle_controls,
+        ),
         ControllerWorkflowNextActionV1::PrepareCandidateOracleContract {
             authority,
             outcome,
@@ -1033,7 +1459,7 @@ async fn execute_controller_action(
             authorize_candidate_proposal_start(server, workflow, &authority)
         }
         ControllerWorkflowNextActionV1::RunCandidateProposalEpisode(authority) => {
-            run_authorized_candidate_proposal(server, proposal_host, workflow, &authority).await
+            run_authorized_candidate_proposal(server, proposal_step, workflow, &authority)
         }
         ControllerWorkflowNextActionV1::AwaitCandidateBuild {
             authority,
@@ -1096,49 +1522,30 @@ fn authorize_candidate_proposal_start(
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
 }
 
-async fn run_authorized_candidate_proposal(
+fn run_authorized_candidate_proposal(
     server: &ServerConfig,
-    proposal_host: &ProposalHostProcessConfigV1,
+    proposal_step: &ProposalStepConfigV1,
     workflow: &ControllerWorkflowV1,
     authority: &FrozenCandidateProposalAuthorityV1,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let mut content = open_content(server)?;
-    let request: ProposalHostRequestV1 = load_canonical(&content, authority.request())?;
-    initialize_proposal_host_operation(proposal_host, request.runtime())?;
-    let outcome = match run_proposal_host_process(proposal_host, &request).await {
-        Ok(outcome) => outcome,
-        Err(failure) => {
-            tracing::warn!(
-                target: "cairn.server.controller-workflow",
-                event = "candidate_proposal_host_blocked",
-                task_id = %workflow.task_id(),
-                episode_id = %authority.episode_id(),
-                reason = ?failure.reason,
-                diagnostic = %failure.diagnostic,
-                "Candidate Proposal Host operation requires reconciliation"
-            );
-            return Ok(ControllerWorkflowManagerStatusV1::ProposalHostBlocked {
-                episode_id: authority.episode_id(),
-                reason: failure.reason,
-            });
-        }
-    };
-    let cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } = outcome else {
-        let cairn_migration::ProposalHostOutcomeV1::AwaitingController { experiment } = outcome
-        else {
+    let request: ProposalStepRequestV1 = load_canonical(&content, authority.request())?;
+    let mut events = open_events(server)?;
+    let outcome = run_proposal_step(proposal_step, &mut events, &mut content, &request)?;
+    let cairn_migration::ProposalStepOutcomeV1::Terminal { terminal } = outcome else {
+        let cairn_migration::ProposalStepOutcomeV1::WorkerRequest { request } = outcome else {
             unreachable!()
         };
-        return Ok(ControllerWorkflowManagerStatusV1::AwaitingControllerExperiment { experiment });
+        return Ok(ControllerWorkflowManagerStatusV1::WorkerRequest { request });
     };
-    let ProposalHostPublicationV1::CandidateStrategy { proposal, .. } = terminal.publication()
+    let ProposalStepPublicationV1::CandidateStrategy { proposal, .. } = terminal.publication()
     else {
         return Err(ServerError::MigrationWorkflow(
-            "Candidate Host returned a non-Candidate publication".into(),
+            "Candidate proposal step returned a non-Candidate publication".into(),
         ));
     };
     let _ = archive::<cairn_migration::CandidateProposalArtifact, _>(&mut content, proposal)?;
-    let terminal_id = archive::<ProposalHostTerminalArtifact, _>(&mut content, &terminal)?;
-    let mut events = open_events(server)?;
+    let terminal_id = archive::<ProposalStepTerminalArtifact, _>(&mut content, &terminal)?;
     record_candidate_proposal(
         &mut events,
         workflow,
@@ -1196,9 +1603,9 @@ fn freeze_controller_candidate_oracle_contract(
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
 }
 
-async fn run_authorized_oracle_strategy(
+fn run_authorized_oracle_strategy(
     server: &ServerConfig,
-    proposal_host: &ProposalHostProcessConfigV1,
+    proposal_step: &ProposalStepConfigV1,
     workflow: &ControllerWorkflowV1,
     authority: FrozenOracleStrategyAuthorityV1,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
@@ -1211,32 +1618,16 @@ async fn run_authorized_oracle_strategy(
         return Ok(ControllerWorkflowManagerStatusV1::OracleStrategyReady { authority });
     }
     drop(content);
-    let request = prepare_oracle_strategy_proposal_host_request(server, &authority)?;
-    initialize_proposal_host_operation(proposal_host, request.runtime())?;
-    let outcome = match run_proposal_host_process(proposal_host, &request).await {
-        Ok(outcome) => outcome,
-        Err(failure) => {
-            tracing::warn!(
-                target: "cairn.server.controller-workflow",
-                event = "oracle_strategy_proposal_host_blocked",
-                task_id = %workflow.task_id(),
-                episode_id = %request.runtime().episode_id(),
-                reason = ?failure.reason,
-                diagnostic = %failure.diagnostic,
-                "Oracle strategy Proposal Host operation requires reconciliation"
-            );
-            return Ok(ControllerWorkflowManagerStatusV1::ProposalHostBlocked {
-                episode_id: request.runtime().episode_id(),
-                reason: failure.reason,
-            });
-        }
-    };
+    let request = prepare_oracle_strategy_proposal_step_request(server, &authority)?;
+    let mut events = open_events(server)?;
+    let mut content = open_content(server)?;
+    let outcome = run_proposal_step(proposal_step, &mut events, &mut content, &request)?;
     match outcome {
-        cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } => {
+        cairn_migration::ProposalStepOutcomeV1::Terminal { terminal } => {
             record_controller_oracle_strategy_terminal(server, workflow, &request, &terminal)
         }
-        cairn_migration::ProposalHostOutcomeV1::AwaitingController { experiment } => {
-            Ok(ControllerWorkflowManagerStatusV1::AwaitingControllerExperiment { experiment })
+        cairn_migration::ProposalStepOutcomeV1::WorkerRequest { request } => {
+            Ok(ControllerWorkflowManagerStatusV1::WorkerRequest { request })
         }
     }
 }
@@ -1336,48 +1727,29 @@ fn authorize_sir_episode_start(
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
 }
 
-async fn run_authorized_sir_episode(
+fn run_authorized_sir_episode(
     server: &ServerConfig,
-    proposal_host: &ProposalHostProcessConfigV1,
+    proposal_step: &ProposalStepConfigV1,
     workflow: &ControllerWorkflowV1,
     authority: &FrozenSirAuthorityV1,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let mut content = open_content(server)?;
-    let request: ProposalHostRequestV1 = load_canonical(&content, authority.request())?;
-    initialize_proposal_host_operation(proposal_host, request.runtime())?;
-    let outcome = match run_proposal_host_process(proposal_host, &request).await {
-        Ok(outcome) => outcome,
-        Err(failure) => {
-            tracing::warn!(
-                target: "cairn.server.controller-workflow",
-                event = "sir_proposal_host_blocked",
-                task_id = %workflow.task_id(),
-                episode_id = %authority.episode_id(),
-                reason = ?failure.reason,
-                diagnostic = %failure.diagnostic,
-                "SIR Proposal Host operation requires reconciliation"
-            );
-            return Ok(ControllerWorkflowManagerStatusV1::ProposalHostBlocked {
-                episode_id: authority.episode_id(),
-                reason: failure.reason,
-            });
-        }
-    };
-    let cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } = outcome else {
-        let cairn_migration::ProposalHostOutcomeV1::AwaitingController { experiment } = outcome
-        else {
+    let request: ProposalStepRequestV1 = load_canonical(&content, authority.request())?;
+    let mut events = open_events(server)?;
+    let outcome = run_proposal_step(proposal_step, &mut events, &mut content, &request)?;
+    let cairn_migration::ProposalStepOutcomeV1::Terminal { terminal } = outcome else {
+        let cairn_migration::ProposalStepOutcomeV1::WorkerRequest { request } = outcome else {
             unreachable!()
         };
-        return Ok(ControllerWorkflowManagerStatusV1::AwaitingControllerExperiment { experiment });
+        return Ok(ControllerWorkflowManagerStatusV1::WorkerRequest { request });
     };
-    let ProposalHostPublicationV1::Sir { proposal, .. } = terminal.publication() else {
+    let ProposalStepPublicationV1::Sir { proposal, .. } = terminal.publication() else {
         return Err(ServerError::MigrationWorkflow(
-            "SIR Host returned a non-SIR publication".into(),
+            "SIR proposal step returned a non-SIR publication".into(),
         ));
     };
     let _ = archive::<SirIntentHypothesisSetProposalArtifact, _>(&mut content, proposal)?;
-    let terminal_id = archive::<ProposalHostTerminalArtifact, _>(&mut content, &terminal)?;
-    let mut events = open_events(server)?;
+    let terminal_id = archive::<ProposalStepTerminalArtifact, _>(&mut content, &terminal)?;
     record_sir_proposal(
         &mut events,
         workflow,
@@ -1395,17 +1767,17 @@ fn derive_and_record_intent_decision_requests(
     server: &ServerConfig,
     workflow: &ControllerWorkflowV1,
     authority: &FrozenSirAuthorityV1,
-    terminal_id: ContentId<ProposalHostTerminalArtifact>,
+    terminal_id: ContentId<ProposalStepTerminalArtifact>,
     proposal_id: ContentId<SirIntentHypothesisSetProposalArtifact>,
 ) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
     let mut content = open_content(server)?;
-    let terminal: ProposalHostTerminalV1 = load_canonical(&content, terminal_id)?;
+    let terminal: ProposalStepTerminalV1 = load_canonical(&content, terminal_id)?;
     let proposal: IntentHypothesisSetProposalV1 = load_canonical(&content, proposal_id)?;
     let recovery_input: IntentRecoveryInputV1 =
         load_canonical(&content, authority.recovery_input())?;
     if !matches!(
         terminal.publication(),
-        ProposalHostPublicationV1::Sir { proposal_id: id, .. } if *id == proposal_id
+        ProposalStepPublicationV1::Sir { proposal_id: id, .. } if *id == proposal_id
     ) {
         return Err(ServerError::MigrationWorkflow(
             "SIR terminal changed the durable proposal observation".into(),
@@ -1472,13 +1844,24 @@ async fn run_authorized_intent_admission(
         {
             Ok(outcome) => outcome,
             Err(failure) => {
+                let mut events = open_events(server)?;
+                record_intent_admission_blocked(
+                    &mut events,
+                    workflow,
+                    decision,
+                    executable,
+                    restricted_store,
+                    intent_block_reason(failure.reason),
+                    &CommandId::new(),
+                    observed_now()?,
+                )
+                .map_err(manager_error)?;
                 tracing::warn!(
                     target: "cairn.server.controller-workflow",
                     event = "intent_admission_blocked",
                     task_id = %workflow.task_id(),
                     decision = %decision,
                     reason = ?failure.reason,
-                    diagnostic = %failure.diagnostic,
                     "Intent Admission operation requires reconciliation"
                 );
                 return Ok(ControllerWorkflowManagerStatusV1::IntentAdmissionBlocked {
@@ -1502,6 +1885,58 @@ async fn run_authorized_intent_admission(
     )
     .map_err(manager_error)?;
     Ok(ControllerWorkflowManagerStatusV1::Advanced)
+}
+
+/// Reauthorizes one durably blocked Intent Admission operation against current configured bytes.
+pub fn reauthorize_controller_intent_admission(
+    server: &ServerConfig,
+    config: &IntentAdmissionProcessConfigV1,
+    workflow: &ControllerWorkflowV1,
+    command_id: &CommandId,
+    observed_at: cairn_protocol::ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowManagerStatusV1, ServerError> {
+    let state = recover_controller_turn(server, workflow)?;
+    let ControllerWorkflowStateV1::IntentAdmissionBlocked { decision, .. } = state else {
+        return Err(ServerError::MigrationWorkflow(
+            "Controller Intent Admission is not awaiting reconciliation".into(),
+        ));
+    };
+    config.validate(server)?;
+    let executable = config.executable_identity()?;
+    let restricted_store = config.restricted_store_identity()?;
+    let mut events = open_events(server)?;
+    reauthorize_intent_admission(
+        &mut events,
+        workflow,
+        decision,
+        executable,
+        restricted_store,
+        command_id,
+        observed_at,
+    )
+    .map_err(manager_error)?;
+    Ok(ControllerWorkflowManagerStatusV1::Advanced)
+}
+
+const fn intent_block_reason(
+    reason: IntentAdmissionProcessBlockedV1,
+) -> IntentAdmissionBlockReasonV1 {
+    match reason {
+        IntentAdmissionProcessBlockedV1::InvocationDrift => {
+            IntentAdmissionBlockReasonV1::InvocationDrift
+        }
+        IntentAdmissionProcessBlockedV1::TimedOut => IntentAdmissionBlockReasonV1::TimedOut,
+        IntentAdmissionProcessBlockedV1::ExitFailure => IntentAdmissionBlockReasonV1::ExitFailure,
+        IntentAdmissionProcessBlockedV1::StdoutLimitExceeded => {
+            IntentAdmissionBlockReasonV1::StdoutLimitExceeded
+        }
+        IntentAdmissionProcessBlockedV1::StderrLimitExceeded => {
+            IntentAdmissionBlockReasonV1::StderrLimitExceeded
+        }
+        IntentAdmissionProcessBlockedV1::InvalidOutcome => {
+            IntentAdmissionBlockReasonV1::InvalidOutcome
+        }
+    }
 }
 
 fn open_events(server: &ServerConfig) -> Result<SqliteEventStore, ServerError> {
@@ -1529,13 +1964,13 @@ fn verify_oracle_workspace_material(
             OracleStrategyExecutorV1::Deterministic { implementation } => {
                 verify_content::<OracleStrategyImplementationArtifact>(content, *implementation)?;
             }
-            OracleStrategyExecutorV1::AgentEpisode {
+            OracleStrategyExecutorV1::AgentStep {
                 authorship_model,
                 invocation,
                 tools,
             } => {
                 verify_content::<ModelConfigurationArtifact>(content, *authorship_model)?;
-                verify_content::<ProposalHostInvocationArtifact>(content, *invocation)?;
+                verify_content::<AgentRuntimeBindingArtifact>(content, *invocation)?;
                 let tool_catalog: OracleStrategyToolCatalogV1 = load_canonical(content, *tools)?;
                 if tool_catalog != OracleStrategyToolCatalogV1::standard() {
                     return Err(ServerError::MigrationWorkflow(
@@ -1645,6 +2080,23 @@ fn archive<T: ContentType, V: Serialize>(
     if actual != expected {
         return Err(ServerError::MigrationWorkflow(
             "Controller artifact changed its canonical typed identity during archival".into(),
+        ));
+    }
+    Ok(actual)
+}
+
+fn archive_bytes<T: ContentType>(
+    content: &mut SqliteContentStore,
+    bytes: &[u8],
+) -> Result<ContentId<T>, ServerError> {
+    let expected = ContentId::<T>::derive(bytes).map_err(manager_error)?;
+    let actual = content
+        .put::<T>(&mut Cursor::new(bytes))
+        .map_err(manager_error)?
+        .content_id;
+    if actual != expected {
+        return Err(ServerError::MigrationWorkflow(
+            "Controller byte artifact changed identity during archival".into(),
         ));
     }
     Ok(actual)

@@ -27,7 +27,8 @@ use thiserror::Error;
 
 use crate::{
     AuthoritativeIntentClaimV1, IntentRecoveryInputArtifact, MigrationIntentContractArtifact,
-    ProposalHostInvocationArtifact, SirTaskBundleArtifact,
+    OracleControlRunV1, OracleControlRunnerArtifact, OracleMechanismQualificationReceiptArtifact,
+    SirTaskBundleArtifact, TrustedOracleControlObservationV1,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -43,10 +44,16 @@ macro_rules! artifact {
     };
 }
 
+artifact!(
+    /// Exact complete Proposal step runtime invocation cited by an Agent-backed Oracle strategy.
+    AgentRuntimeBindingArtifact,
+    "agent.runtime-binding.v1"
+);
+
 artifact!(OracleClaimArtifact, "migration.oracle-claim.v1");
 artifact!(
-    ProposalHostControllerObservationArtifact,
-    "migration.proposal-host-controller-observation.v1"
+    WorkflowToolControllerObservationArtifact,
+    "migration.workflow-tool-controller-observation.v1"
 );
 artifact!(
     OracleCoveragePolicyArtifact,
@@ -558,11 +565,11 @@ pub enum OracleStrategyExecutorV1 {
     Deterministic {
         implementation: ContentId<OracleStrategyImplementationArtifact>,
     },
-    AgentEpisode {
+    AgentStep {
         /// Verification-domain authorship identity retained on proposed Oracle material.
         authorship_model: ContentId<ModelConfigurationArtifact>,
-        /// Exact resolved model, budget and transport invocation consumed by Proposal Host.
-        invocation: ContentId<ProposalHostInvocationArtifact>,
+        /// Exact resolved model, budget and transport invocation consumed by Proposal step.
+        invocation: ContentId<AgentRuntimeBindingArtifact>,
         tools: ContentId<OracleStrategyToolCatalogArtifact>,
     },
 }
@@ -577,7 +584,7 @@ pub enum OracleStrategyToolV1 {
     SubmitCellResult,
 }
 
-/// Canonical current-V1 Proposal Host tool surface for one Oracle strategy cell.
+/// Canonical current-V1 Proposal step tool surface for one Oracle strategy cell.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleStrategyToolCatalogV1 {
     schema_version: u16,
@@ -672,7 +679,7 @@ impl OracleStrategyRegistrationV1 {
         validate_strict(&concerns, "strategy concerns")?;
         match (&executor, kind) {
             (
-                OracleStrategyExecutorV1::AgentEpisode { .. },
+                OracleStrategyExecutorV1::AgentStep { .. },
                 OracleStrategyKindV1::DeterministicAnalyzer,
             )
             | (
@@ -1559,8 +1566,8 @@ pub enum OracleObservationProvenanceV1 {
         request: ContentId<OracleExperimentRequestArtifact>,
         receipt: ContentId<TrustedOracleWorkerReceiptArtifact>,
     },
-    ProposalHostEffect {
-        observation: ContentId<ProposalHostControllerObservationArtifact>,
+    WorkflowTool {
+        observation: ContentId<WorkflowToolControllerObservationArtifact>,
     },
 }
 
@@ -1568,7 +1575,7 @@ pub enum OracleObservationProvenanceV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleObservationPayloadV1 {
     schema_version: u16,
-    source: ContentId<ProposalHostControllerObservationArtifact>,
+    source: ContentId<WorkflowToolControllerObservationArtifact>,
     value: serde_json::Value,
 }
 
@@ -1576,14 +1583,14 @@ pub struct OracleObservationPayloadV1 {
 #[serde(deny_unknown_fields)]
 struct OracleObservationPayloadWire {
     schema_version: u16,
-    source: ContentId<ProposalHostControllerObservationArtifact>,
+    source: ContentId<WorkflowToolControllerObservationArtifact>,
     value: serde_json::Value,
 }
 
 impl OracleObservationPayloadV1 {
     #[must_use]
     pub fn new(
-        source: ContentId<ProposalHostControllerObservationArtifact>,
+        source: ContentId<WorkflowToolControllerObservationArtifact>,
         value: serde_json::Value,
     ) -> Self {
         Self {
@@ -1594,7 +1601,7 @@ impl OracleObservationPayloadV1 {
     }
 
     #[must_use]
-    pub const fn source(&self) -> ContentId<ProposalHostControllerObservationArtifact> {
+    pub const fn source(&self) -> ContentId<WorkflowToolControllerObservationArtifact> {
         self.source
     }
 
@@ -1651,10 +1658,10 @@ struct OracleExplorationObservationWire {
 }
 
 impl OracleExplorationObservationV1 {
-    pub fn proposal_host_effect(
+    pub fn workflow_tool(
         item: ContentId<OracleWorkItemArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
-        source: ContentId<ProposalHostControllerObservationArtifact>,
+        source: ContentId<WorkflowToolControllerObservationArtifact>,
         payload: &OracleObservationPayloadV1,
     ) -> Result<Self, OracleFrameworkError> {
         if payload.source() != source {
@@ -1664,7 +1671,7 @@ impl OracleExplorationObservationV1 {
             schema_version: SCHEMA_V1,
             item,
             run,
-            provenance: OracleObservationProvenanceV1::ProposalHostEffect {
+            provenance: OracleObservationProvenanceV1::WorkflowTool {
                 observation: source,
             },
             payload: payload.identity()?,
@@ -1709,11 +1716,11 @@ impl OracleExplorationObservationV1 {
     }
 
     #[cfg(feature = "agent-runtime")]
-    pub(crate) fn validates_proposal_host_effect(
+    pub(crate) fn validates_workflow_tool(
         &self,
         item: ContentId<OracleWorkItemArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
-        source: ContentId<ProposalHostControllerObservationArtifact>,
+        source: ContentId<WorkflowToolControllerObservationArtifact>,
         payload: &OracleObservationPayloadV1,
     ) -> Result<bool, OracleFrameworkError> {
         Ok(self.item == item
@@ -1722,7 +1729,7 @@ impl OracleExplorationObservationV1 {
             && payload.source() == source
             && matches!(
                 self.provenance,
-                OracleObservationProvenanceV1::ProposalHostEffect { observation }
+                OracleObservationProvenanceV1::WorkflowTool { observation }
                     if observation == source
             ))
     }
@@ -2957,6 +2964,8 @@ impl<'de> Deserialize<'de> for OracleAdmissionPolicyV1 {
 pub struct OracleQualifiedMechanismRegistrationV1 {
     control: OracleControlFamilyV1,
     mechanism: ContentId<OracleQualifiedMechanismArtifact>,
+    runner: ContentId<OracleControlRunnerArtifact>,
+    qualification: ContentId<OracleMechanismQualificationReceiptArtifact>,
 }
 
 impl OracleQualifiedMechanismRegistrationV1 {
@@ -2964,8 +2973,15 @@ impl OracleQualifiedMechanismRegistrationV1 {
     pub const fn new(
         control: OracleControlFamilyV1,
         mechanism: ContentId<OracleQualifiedMechanismArtifact>,
+        runner: ContentId<OracleControlRunnerArtifact>,
+        qualification: ContentId<OracleMechanismQualificationReceiptArtifact>,
     ) -> Self {
-        Self { control, mechanism }
+        Self {
+            control,
+            mechanism,
+            runner,
+            qualification,
+        }
     }
 
     #[must_use]
@@ -2976,6 +2992,33 @@ impl OracleQualifiedMechanismRegistrationV1 {
     #[must_use]
     pub const fn mechanism(&self) -> ContentId<OracleQualifiedMechanismArtifact> {
         self.mechanism
+    }
+
+    #[must_use]
+    pub const fn runner(&self) -> ContentId<OracleControlRunnerArtifact> {
+        self.runner
+    }
+
+    #[must_use]
+    pub const fn qualification(&self) -> ContentId<OracleMechanismQualificationReceiptArtifact> {
+        self.qualification
+    }
+
+    pub fn validate_qualification(
+        &self,
+        receipt: &crate::OracleMechanismQualificationReceiptV1,
+    ) -> Result<(), OracleFrameworkError> {
+        if receipt.control() != self.control
+            || receipt.mechanism() != self.mechanism
+            || receipt.runner() != self.runner
+            || receipt
+                .identity()
+                .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?
+                != self.qualification
+        {
+            return Err(OracleFrameworkError::AdmissionMechanismCatalogDrift);
+        }
+        Ok(())
     }
 }
 
@@ -3020,6 +3063,16 @@ impl OracleAdmissionMechanismCatalogV1 {
             .iter()
             .find(|registration| registration.control == control)
             .map(|registration| registration.mechanism)
+    }
+
+    #[must_use]
+    pub fn registration(
+        &self,
+        control: OracleControlFamilyV1,
+    ) -> Option<&OracleQualifiedMechanismRegistrationV1> {
+        self.mechanisms
+            .iter()
+            .find(|registration| registration.control == control)
     }
 
     pub fn identity(
@@ -3278,6 +3331,30 @@ impl OracleControlReceiptV1 {
             receipt,
             result,
         }
+    }
+
+    pub fn from_trusted_observation(
+        proposal: ContentId<OraclePortfolioProposalArtifact>,
+        run: &OracleControlRunV1,
+        observation: &TrustedOracleControlObservationV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        if observation.run()
+            != run
+                .identity()
+                .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?
+        {
+            return Err(OracleFrameworkError::ReceiptBindingMismatch);
+        }
+        Ok(Self {
+            proposal,
+            item: run.obligation().item(),
+            control: run.obligation().control(),
+            mechanism: run.obligation().mechanism(),
+            receipt: observation
+                .identity()
+                .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?,
+            result: observation.result(),
+        })
     }
 
     #[must_use]
@@ -3953,6 +4030,24 @@ mod tests {
                             OracleControlFamilyV1::Hidden => "hidden mechanism",
                             OracleControlFamilyV1::Bypass => "bypass mechanism",
                         }),
+                        id(match control {
+                            OracleControlFamilyV1::MechanismQualification => {
+                                "mechanism qualification runner"
+                            }
+                            OracleControlFamilyV1::Honest => "honest runner",
+                            OracleControlFamilyV1::Mutant => "mutant runner",
+                            OracleControlFamilyV1::Hidden => "hidden runner",
+                            OracleControlFamilyV1::Bypass => "bypass runner",
+                        }),
+                        id(match control {
+                            OracleControlFamilyV1::MechanismQualification => {
+                                "mechanism qualification receipt"
+                            }
+                            OracleControlFamilyV1::Honest => "honest qualification receipt",
+                            OracleControlFamilyV1::Mutant => "mutant qualification receipt",
+                            OracleControlFamilyV1::Hidden => "hidden qualification receipt",
+                            OracleControlFamilyV1::Bypass => "bypass qualification receipt",
+                        }),
                     )
                 })
                 .collect(),
@@ -4389,11 +4484,26 @@ mod tests {
             TaskId::new(),
             id("admitted intent"),
             OracleClaimName::new("transform-output").expect("claim name"),
-            AuthoritativeIntentClaimV1::CollectionOutput(
-                crate::CollectionOutputIntentV1::exact_selected_occurrences(
-                    crate::SirCallerClaimId::new("selected-output").expect("caller claim"),
-                    crate::CollectionOutputOrderContractV1::StableInputRelative,
-                ),
+            AuthoritativeIntentClaimV1::new(
+                crate::OperationIntentV1::new(
+                    vec![
+                        crate::SirCallerClaimV1::new(
+                            crate::SirCallerClaimId::new("selected-output").expect("caller claim"),
+                            crate::SirIntentLayer::ObservableContract,
+                            crate::SirCallerClaimStatement::new(
+                                "preserve observable transform outputs",
+                            )
+                            .expect("caller claim statement"),
+                            vec![],
+                        )
+                        .expect("caller claim"),
+                    ],
+                    crate::SirIntentLayer::ObservableContract,
+                    crate::SirHypothesisClaim::new("preserve observable transform outputs")
+                        .expect("semantics"),
+                    crate::SirIntentDomain::new("all caller-authorized inputs").expect("domain"),
+                )
+                .expect("operation intent"),
             ),
         );
         let item = OracleWorkItemV1::new(

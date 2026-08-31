@@ -153,6 +153,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-cli"
+version = "0.1.0"
+dependencies = [
+ "cairn-admission",
+ "cairn-codec",
+ "cairn-migration",
+ "cairn-protocol",
+ "cairn-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "cairn-codec"
 version = "0.1.0"
 dependencies = [
@@ -229,23 +243,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cairn-proposal-host"
-version = "0.1.0"
-dependencies = [
- "cairn-agent",
- "cairn-codec",
- "cairn-migration",
- "cairn-observability",
- "cairn-protocol",
- "cairn-record",
- "cairn-store-sqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
 name = "cairn-protocol"
 version = "0.1.0"
 dependencies = [
@@ -268,6 +265,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-sdk"
+version = "0.1.0"
+dependencies = [
+ "cairn-admission",
+ "cairn-codec",
+ "cairn-migration",
+ "cairn-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "cairn-server"
 version = "0.1.0"
 dependencies = [
@@ -280,6 +291,7 @@ dependencies = [
  "cairn-observability",
  "cairn-protocol",
  "cairn-record",
+ "cairn-sdk",
  "cairn-store-sqlite",
  "cairn-verification",
  "cairn-worker",

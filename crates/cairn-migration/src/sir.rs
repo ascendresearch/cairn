@@ -363,7 +363,57 @@ pub struct SirTaskWorkspace {
 
 #[cfg(feature = "agent-runtime")]
 impl SirTaskWorkspace {
-    /// Reconstructs one exact bounded task snapshot supplied by a Controller or Proposal Host.
+    /// Freezes an already materialized ordered source bundle at a client/application boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty, duplicate, unsorted, oversized, or otherwise invalid task material.
+    pub fn from_sources(
+        sources: Vec<(SirTaskArtifactPath, String)>,
+        limits: SirTaskLimits,
+    ) -> Result<Self, SirError> {
+        let source_count = u32::try_from(sources.len())
+            .map_err(|_| SirError::TaskRoot("too many task files".to_owned()))?;
+        if source_count == 0 || source_count > limits.max_files.get() {
+            return Err(SirError::TaskRoot(
+                "materialized task file count violates configured limits".to_owned(),
+            ));
+        }
+        if sources.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(SirError::TaskRoot(
+                "materialized task paths must be unique and sorted".to_owned(),
+            ));
+        }
+        let mut total_bytes = 0_u64;
+        let mut artifacts = Vec::with_capacity(sources.len());
+        for (path, source) in &sources {
+            total_bytes = total_bytes
+                .checked_add(u64::try_from(source.len()).map_err(|_| {
+                    SirError::TaskRoot("task artifact byte length overflow".to_owned())
+                })?)
+                .ok_or_else(|| SirError::TaskRoot("task byte total overflow".to_owned()))?;
+            if total_bytes > limits.max_task_bytes.get() {
+                return Err(SirError::TaskRoot(
+                    "task bytes exceed configured limit".to_owned(),
+                ));
+            }
+            let line_count = u32::try_from(source.lines().count())
+                .map_err(|_| SirError::TaskRoot("too many source lines".to_owned()))?;
+            artifacts.push(SirTaskArtifactV1 {
+                path: path.clone(),
+                identity: ContentId::<SirTaskArtifactBytes>::derive(source.as_bytes())
+                    .map_err(|error| SirError::Codec(error.to_string()))?,
+                line_count: SirSourceLineCount::new(line_count),
+            });
+        }
+        let bundle = SirTaskBundleV1::try_from(SirTaskBundleWire {
+            schema_version: SCHEMA_V1,
+            artifacts,
+        })?;
+        Self::from_materialized(bundle, sources, limits)
+    }
+
+    /// Reconstructs one exact bounded task snapshot supplied by a Controller or Proposal step.
     ///
     /// # Errors
     ///
@@ -664,7 +714,7 @@ mod runtime {
 
 Inspect only the offered task artifacts. First use sir_read_task_artifact to read the source, host launch, ABI, tests, or build files needed for your analysis. Treat observable source facts separately from intent inferences. Cite exact task-local paths and inclusive line ranges.
 
-The caller declaration is an attributed authority source, not a fact to overwrite. Keep caller claims separate from source observations and from your hypotheses. Submit exactly one complete proposal through sir_submit_intent_hypotheses. It must contain source-observed facts with citations, at least two genuinely competing hypotheses, an explicit conflict, at least one unknown, and at least one evidence-backed invariant. Also report applicable optimization freedoms, source-behavior dispositions, and disambiguation experiments; use empty arrays when none are justified. Every reference must point to an ID declared in this proposal or the frozen caller declaration. Use lowercase kebab-case local IDs and sort every top-level collection lexicographically by its id.
+The caller declaration is an attributed authority source, not a fact to overwrite. Keep caller claims separate from source observations and from your hypotheses. Submit exactly one complete proposal through sir_submit_intent_hypotheses. It must contain source-observed facts with citations, at least two genuinely competing hypotheses, an explicit conflict, at least one unknown, and at least one evidence-backed invariant. When a conflict cannot be resolved by offered evidence and requires the task authority, include an unknown for that exact decision and a disambiguation experiment that jointly targets the unknown plus either the conflict itself or at least two hypotheses named by that conflict. Classify the unknown by its real subject; numerical or deployment decisions must not be relabeled merely to satisfy a schema. Also report applicable optimization freedoms, source-behavior dispositions, and disambiguation experiments; use empty arrays when none are justified. Every reference must point to an ID declared in this proposal or the frozen caller declaration. Use lowercase kebab-case local IDs and sort every top-level collection lexicographically by its id.
 
 The proposal is non-authoritative. Do not claim admission, correctness, a confidence score, or a migration verdict. Do not invent content identities or use paths outside the offered task bundle.";
 
@@ -1062,7 +1112,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         }
     }
 
-    /// Prepares the SIR domain profile and delegates its episode to the common Proposal Host loop.
+    /// Prepares the SIR domain profile and delegates its episode to the common Proposal step loop.
     ///
     /// Recorded and live providers implement the same [`ModelTransport`] seam. All source reads and
     /// proposal submissions pass through durable operation admission and execution; the model never
@@ -1079,7 +1129,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
         codec: NativeProtocolCodec,
         workspace: SirTaskWorkspace,
         input: SirProfileInput,
-    ) -> Result<crate::proposal_loop::ProposalProfileOutcomeV1<SirProfileOutcome>, SirProfileError>
+    ) -> Result<cairn_agent::AgentProfileOutcomeV1<SirProfileOutcome>, SirProfileError>
     where
         E: EventStore,
         C: ContentStore,
@@ -1097,7 +1147,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             input.max_output_tokens,
         )
         .map_err(SirProfileError::Sir)?;
-        let frozen = crate::proposal_loop::FrozenProposalLoopV1 {
+        let frozen = cairn_agent::FrozenAgentLoopV1 {
             task_id: input.task_id,
             episode_id: input.episode_id,
             role: cairn_agent::AgentRoleName::new("sir-intent-analyst")
@@ -1111,7 +1161,7 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             history: projection.request,
             context: projection.context,
             policy: projection.policy,
-            capability_grant: crate::proposal_loop::ProposalLoopCapabilityGrantV1::new(
+            capability_grant: cairn_agent::AgentLoopCapabilityGrantV1::new(
                 sir_tool_registrations()?.to_vec(),
             )
             .map_err(|error| SirProfileError::Agent(error.to_string()))?,
@@ -1127,32 +1177,24 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
             ),
         };
 
-        let outcome = crate::proposal_loop::run_proposal_loop(
-            events,
-            content,
-            transport,
-            codec,
-            &frozen,
-            &mut gateway,
-        )
-        .map_err(|error| match error {
-            crate::proposal_loop::ProposalLoopError::UnavailableTool(tool) => {
-                SirProfileError::UnavailableTool(tool)
-            }
-            error => SirProfileError::Agent(error.to_string()),
-        })?;
+        let outcome =
+            cairn_agent::run_agent_loop(events, content, transport, codec, &frozen, &mut gateway)
+                .map_err(|error| match error {
+                cairn_agent::AgentLoopError::UnavailableTool(tool) => {
+                    SirProfileError::UnavailableTool(tool)
+                }
+                error => SirProfileError::Agent(error.to_string()),
+            })?;
         match outcome {
-            crate::proposal_loop::ProposalLoopOutcomeV1::Complete(completion) => {
-                finish_sir_episode(
-                    content,
-                    &gateway.submit,
-                    completion.reason,
-                    completion.steps_started,
-                )
-                .map(crate::proposal_loop::ProposalProfileOutcomeV1::Complete)
-            }
-            crate::proposal_loop::ProposalLoopOutcomeV1::AwaitingController(request) => {
-                Ok(crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(request))
+            cairn_agent::AgentLoopOutcomeV1::Complete(completion) => finish_sir_episode(
+                content,
+                &gateway.submit,
+                completion.reason,
+                completion.steps_started,
+            )
+            .map(cairn_agent::AgentProfileOutcomeV1::Complete),
+            cairn_agent::AgentLoopOutcomeV1::WorkerRequest(request) => {
+                Ok(cairn_agent::AgentProfileOutcomeV1::WorkerRequest(request))
             }
         }
     }

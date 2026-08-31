@@ -14,6 +14,7 @@ mod metering;
 mod native_protocol;
 mod operation;
 mod provider_catalog;
+mod runtime_loop;
 mod semantic;
 mod step;
 mod step_operation;
@@ -63,6 +64,11 @@ pub use provider_catalog::{
     ResolvedRuntimeModel, ResponsesReasoningReplay, RuntimeModelCatalog, RuntimeModelConfig,
     SamplingTemperatureMillis, SecretFilePath, ToolSchemaDialect, TransportByteLimit,
     TransportTimeoutMillis,
+};
+pub use runtime_loop::{
+    AgentLoopCapabilityGrantV1, AgentLoopCompletionV1, AgentLoopError, AgentLoopOutcomeV1,
+    AgentProfileOutcomeV1, AgentWorkerOperationRequestV1, AgentWorkerRequestV1, FrozenAgentLoopV1,
+    run_agent_loop,
 };
 pub use semantic::{
     AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,

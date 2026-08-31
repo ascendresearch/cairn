@@ -36,7 +36,7 @@
 7. Agent 全部属于 Proposal authority，不能生成 admitted artifact、execution receipt 或最终 verdict；
 8. 多 Agent 交互只通过冻结 artifact、typed request/diagnostic 和 durable event，不共享私有 continuation
    或可变工作内存；
-9. capability-equivalent episodes 可以共用 Host，是否拆进程由 data/tool/OS/authority boundary 决定，
+9. Agent steps 共用 Controller process；data/tool/OS execution capability 只能通过匹配 Worker 获得，
    不由 Agent 名称或数量决定；
 10. 多 Agent 一致、投票或重复反思不提升 evidence strength；真实证据仍由独立执行和 Mechanical Gate
     建立。
@@ -97,18 +97,14 @@ capability grant、budget、continuation 和 artifact lineage。新 revision 不
 
 Model transport 只完成一次 Turn，不执行 tool、不拥有 loop。
 
-### 3.7 Host Process
+### 3.7 Workflow placement
 
-承载一个或多个 capability-equivalent Agent Episodes 的 OS 进程。Host 不等于 Agent：
-
-- 一个 Host 可承载多个隔离 episode；
-- 一个逻辑 role 可在多个 Host instance 上运行；
-- 同一模型可以服务多个 episode；
-- process restart 不产生新的业务 role。
+Agent step 在 Controller 主 workflow 中运行，不拥有独立 OS 进程、service identity 或权限域。同一模型可服务
+多个 step；step 的业务身份来自 typed workflow authority，而不是运行位置。
 
 ### 3.8 Authority
 
-Agent profile、role 名称、模型能力和 Host process 都不授予 Admission 或 Execution authority。Agent
+Agent profile、role 名称和模型能力都不授予 Admission 或 Execution authority。Agent
 只有 proposal capability；Controller、Admission、Worker 和 User/Policy authority 的权利由独立端口、
 进程身份和 typed policy 决定。
 
@@ -163,10 +159,10 @@ Agent-capable 标记可以变化而不改变 admission/evidence contract。
 | 目标设计中的 Agent-capable 逻辑位置 | 11 | 本节 typed catalog 派生 |
 | 已有明确实现/运行证据的 model-backed 产品 profiles | 2：Blue synthesis、Red adversarial | 当前代码与 Oracle dogfood；不代表完整目标 catalog |
 | 某一时刻正在运行的 Agent episodes | `0..N` | durable runtime projection |
-| 部署中的 Agent-capable Host processes | 按 capability class 和负载变化 | deployment/process inventory |
+| Controller 中可运行的 Agent workflow steps | 按 task、policy 和预算变化 | durable workflow projection |
 
 模型 template、provider deployment、Planner kind、strategy implementation 和 episode attempt 也分别有自己
-的数量，不能拿来替换上表任一口径。新增 profile 时修改 typed catalog；启动新 episode 或扩容 Host 不
+的数量，不能拿来替换上表任一口径。新增 profile 时修改 typed catalog；启动新 step 或扩容 Worker 不
 修改 profile catalog。
 
 ## 5. 哪些组件不是 Agent
@@ -447,32 +443,20 @@ profile request
 `Adjudicate`、`ReadRestrictedAdmissionStore`、`PublishAdmissionDecision` 和 worker evidence write capability
 永远不授予 Agent profile。
 
-### 11.3 Process split rule
+### 11.3 Execution split rule
 
-Episodes 只有在下列条件全部相同或可由 Host 安全收窄时才可共用 Host instance：
-
-- OS user/filesystem/network boundary；
-- provider/secret resolver scope；
-- tool executable/sandbox policy；
-- public data classification；
-- hardware/external-service request scope；
-- failure/resource isolation requirement。
-
-若 Host 只能通过持有权限并集工作，则必须拆 process。Prompt 中声明“你现在是另一个 role”不能替代
-重新授权或新 episode。
+Agent step 自身不通过拆进程获得能力。凡是需要 tool executable、sandbox、Docker、host filesystem、
+hardware 或 external execution capability 的操作，都必须形成 typed Worker job，并由 scheduler 按 resource
+requirement 选择 Worker。Prompt 中声明“你现在拥有某能力”不能替代 workflow authority 或 Worker receipt。
 
 ## 12. Process topology
 
 ```mermaid
 flowchart TB
-    controller["Controller\nprocess manager / public record / policy"]
-
-    subgraph proposalzone["Proposal Host zone"]
-      hosta["Host A\ncapability class A"]
-      hostb["Host B\ncapability class B"]
-      episodes["SIR / synthesis / adversarial / planner / candidate episodes"]
-      hosta --- episodes
-      hostb --- episodes
+    subgraph control["Controller"]
+      controller["workflow manager / public record / policy"]
+      episodes["SIR / synthesis / adversarial / planning / candidate steps"]
+      controller --- episodes
     end
 
     admission["Admission service\nno model transport"]
@@ -480,19 +464,16 @@ flowchart TB
     public[("Public event/CAS")]
     restricted[("Restricted admission event/CAS")]
 
-    controller <--> hosta
-    controller <--> hostb
     controller <--> admission
     workers -->|"direct outbound mTLS/WSS"| controller
     controller --- public
     admission --- restricted
 ```
 
-SIR 保持独立的 role/profile/episode contract，但不保持专用进程。它与其他 proposal/planning episodes
-一样按 capability class 共享通用 Host implementation；context、continuation、budget、tool result、
-namespace 和 grant 仍逐 episode 隔离。Mechanical Gate、restricted store 和 generated-code Worker
-永远不与 Agent episode 混在同一 authority process。Agent 请求实验时只调用 Controller tool gateway，
-不能直接连接 Worker 或启动本地 Docker。
+SIR 保持独立的 role/profile/step contract，但不保持专用进程。它与其他 proposal/planning steps 一样由
+Controller workflow 驱动；context、continuation、budget、tool result 和 grant 通过 typed step binding
+区分。Mechanical Gate 与 restricted store 仍属于 Admission authority。Agent 请求实验时只提交 Controller
+tool request，不能直接连接 Worker 或启动本地 Docker。
 
 ## 13. Episode lifecycle
 
@@ -596,7 +577,7 @@ Public product APIs 不使用 `agent_type: String`、`role: String` 或一个 ge
 DTO decode 后立即转换为具体 profile/episode 类型并重新验证。Domain-neutral runtime 可持 opaque
 validated role key，但产品逻辑不能用它代替 typed product profile。
 
-容易混淆的 role、profile、episode、Host、model、tool proposal/authorization 和 proposal/admitted 类型
+容易混淆的 role、profile、step、model、tool proposal/authorization 和 proposal/admitted 类型
 必须有 compile-fail/equivalent static boundary tests。
 
 ## 17. Record、Replay 与 Observability
@@ -621,7 +602,7 @@ validated role key，但产品逻辑不能用它代替 typed product profile。
 - semantic replay 重建 provider-neutral turns，不冒充 native continuation；
 - live counterfactual 使用新 branch/episode identity；
 - 不同 profile/model/knowledge/feedback 的比较声明 changed variable 和 first divergence；
-- Host process 布局变化但 inputs/outputs 相同，不改变业务 artifact identity。
+- Controller 部署布局变化但 inputs/outputs 相同，不改变业务 artifact identity。
 
 ### 17.3 Observability
 
@@ -642,7 +623,7 @@ prompt/request/response body、reasoning、tool args/results、source、hidden�
 | Submission malformed | atomic rejection + bounded same-episode repair |
 | Proposal semantically rejected | typed diagnostic；允许负责 episode 修订 |
 | Agent budget exhausted | explicit terminal；required work 保持 incomplete |
-| Host crash | 从 durable episode 恢复，不读取日志补状态 |
+| Controller interruption | 从 durable workflow/model-operation state 恢复，不读取日志补状态 |
 | Cross-episode context leak | security failure；相关 evidence 无效并做 impact audit |
 | Hidden diagnostic disclosure | exposure ledger + burn/replenish |
 | Agent hallucinated `passed` | 普通 proposal text；无 authority effect |
@@ -705,15 +686,13 @@ descriptors，不保存一个人工维护的“Agent 总数”字段；数量由
 budget、dispatch/recovery 和 recorded providers。其生产代码不得出现 CUDA、Ascend、Oracle、Intent、
 Planner 或 Candidate 业务分支。
 
-### 20.3 SIR 与 Proposal/Planning Host
+### 20.3 SIR、Oracle 与 Candidate proposal steps
 
-- `cairn-proposal-host` 读取 SIR/Oracle/Planner/Candidate product profile，形成 runtime episode spec，执行
-  model/tool loop；
-- Host 只实现 capability gateway，不拥有 admission policy；
-- 不同 capability class 使用不同 Host instance/config/principal。
+- 产品 profile 形成 exact model/tool input，由 `cairn-server` 主 workflow 驱动；
+- `cairn-agent` 执行领域中立的 model/tool state transitions，不拥有 admission policy；
+- 需要外部能力的 tool request 只能进入 Controller→Worker execution path。
 
-已删除的`cairn-sir`是DEV-008 one-shot recorded-ingress/capability历史proof，不是目标长期process crate。
-DEV-022的Proposal Host接管production SIR profile时已直接删除该路径。
+历史 proposal one-shot process 已从 current V1 删除。
 
 ### 20.4 Instructions 与 templates
 
@@ -725,7 +704,7 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 ### 21.1 Catalog/type tests
 
 - 11 个当前位置可从 catalog 派生，但无 hard-coded runtime count；
-- profile/episode/Host/model IDs 不可互换；
+- profile/step/model IDs 不可互换；
 - wrong-role submission 和 wrong-profile Planner plan compile/decode fail；
 - Agent submission 不能传入 admitted-only API；
 - 新增/删除 profile 时 requirements/docs/catalog consistency check 变红。
@@ -733,8 +712,8 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 ### 21.2 Interaction tests
 
 - synthesis/adversarial 只通过 frozen artifact 交互；
-- 同 Host 多 episode continuation/context/tool result 不串流；
-- capability boundary 变化强制新 process instance；
+- 不同 Agent step 的 continuation/context/tool result 不串流；
+- execution capability 变化生成不同 Worker resource requirement；
 - ensemble majority 无法产生 admitted outcome；
 - hidden/private continuation cross-link 拒绝；
 - unchanged rejected revision 不获得新 identity；
@@ -765,7 +744,7 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 - domain-neutral `cairn-agent` 的 provider、continuation、tool、budget 和 durable episode 基础；
 - OpenAI Responses、Chat Completions、Anthropic Messages 的 native protocol paths；
 - model/template/deployment/protocol/credential 分层；
-- generic Proposal Host逐cell Oracle Agent profile、external-effect durable yield、typed observation projection；
+- Controller内generic proposal step、逐cell Oracle Agent profile、typed Worker request与observation projection；
 - terminal portfolio到Independent Oracle Admission的durable authority/evidence/outcome aggregate；
 - recorded/scripted provider 和部分 replay/failure controls。
 
@@ -779,10 +758,10 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 - Agent invocation/expected-information-gain policy；
 - common-dependency/contamination graph 的完整 Agent 投影；
 - Candidate Search 的正式 Agent profile；
-- 同 Host 多 episode isolation 和 capability-driven process split；
+- cross-step continuation/tool-result binding controls；
 - profile-specific evaluation dashboard/receipts。
 
-当前recorded逐cell Oracle Host证明exact role input、结构化提交、effect observation和revision ledger机制，不证明
+当前recorded逐cell Oracle step证明exact role input、结构化提交、effect observation和revision ledger机制，不证明
 live模型质量、完整Oracle portfolio或Admission closure。
 
 ## 23. 已完成的首期 proof 与下一边界
@@ -798,8 +777,8 @@ Oracle admission、Candidate generation、remote native build、typed diagnostic
 native success、NPU correctness 或最终 verdict。
 
 下一边界是把这些已观察 transition 固化成
-[`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md) 的 Controller state machine 和 generic Proposal
-Host lifecycle；不为尚无 consumer 的 profile、reviewer 或 process 预建结构。
+[`WORKFLOW_ARCHITECTURE.md`](WORKFLOW_ARCHITECTURE.md) 的 Controller state machine；不为尚无 consumer
+的 profile、reviewer 或 process 预建结构。
 
 ## 24. Catalog 维护规则
 
@@ -822,8 +801,8 @@ path。Pre-release V1 直接修改当前 catalog/schema/code/tests/docs 并重�
 | --- | --- |
 | 固定“系统有 11 个 Agent” | 混淆 capability catalog、runtime instances、进程和必需功能 |
 | 一个业务概念一个 Agent | Agent inflation；确定性机制被错误包装为推理 |
-| 一个 Agent 一个进程 | 进程边界应由 capability/data/authority 决定 |
-| 一个 Host 持有全部能力 | role 隔离退化成 prompt 自律，权限形成并集 |
+| 一个 Agent 一个进程 | proposal 是 workflow step；执行能力应路由到 Worker |
+| Agent step 直接持有执行能力 | role 边界退化成 prompt 自律，权限形成并集 |
 | Agent 自由群聊/共享 memory | 不可重建、污染、泄漏和 authority 模糊 |
 | 多数票/多模型一致即通过 | proposal agreement 不构成 execution/admission evidence |
 | Agent 直接连接 Worker | 绕过 Controller policy、scheduler 和 effect authority |

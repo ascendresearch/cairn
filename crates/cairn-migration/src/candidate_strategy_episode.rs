@@ -18,7 +18,7 @@ use thiserror::Error;
 use crate::{
     AgentResolvedRuntimeModelArtifact, CandidateOracleContractV1, CandidateOracleMaterialsV1,
     CandidateProposalArtifact, CandidateProposalSubmissionV1, CandidateProposalV1,
-    CandidateWorkspaceV1, ProposalHostOracleMaterialsV1, SirReadLineLimit, SirSourceLineNumber,
+    CandidateWorkspaceV1, ProposalStepOracleMaterialsV1, SirReadLineLimit, SirSourceLineNumber,
     SirTaskArtifactBytes, SirTaskArtifactPath, SirTaskLimits, SirTaskWorkspace,
 };
 
@@ -53,7 +53,7 @@ pub(crate) struct CandidateStrategyProfileInput {
     pub workspace: CandidateWorkspaceV1,
     pub contract: CandidateOracleContractV1,
     pub oracle_materials: CandidateOracleMaterialsV1,
-    pub public_materials: ProposalHostOracleMaterialsV1,
+    pub public_materials: ProposalStepOracleMaterialsV1,
     pub episode_id: EpisodeId,
     pub model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
     pub selection: ModelSelection,
@@ -227,7 +227,7 @@ pub(crate) fn run_candidate_strategy_profile<E, C, T>(
     task: SirTaskWorkspace,
     input: &CandidateStrategyProfileInput,
 ) -> Result<
-    crate::proposal_loop::ProposalProfileOutcomeV1<CandidateStrategyProfileOutcome>,
+    cairn_agent::AgentProfileOutcomeV1<CandidateStrategyProfileOutcome>,
     CandidateStrategyProfileError,
 >
 where
@@ -240,20 +240,14 @@ where
     let projection = archive_candidate_prompt(content, &task, input)?;
     let frozen = freeze_candidate_loop(input, &projection)?;
     let mut gateway = open_candidate_gateways(task, input)?;
-    let outcome = crate::proposal_loop::run_proposal_loop(
-        events,
-        content,
-        transport,
-        codec,
-        &frozen,
-        &mut gateway,
-    )
-    .map_err(|error| match error {
-        crate::proposal_loop::ProposalLoopError::UnavailableTool(tool) => {
-            CandidateStrategyProfileError::UnavailableTool(tool)
-        }
-        error => CandidateStrategyProfileError::Agent(error.to_string()),
-    })?;
+    let outcome =
+        cairn_agent::run_agent_loop(events, content, transport, codec, &frozen, &mut gateway)
+            .map_err(|error| match error {
+                cairn_agent::AgentLoopError::UnavailableTool(tool) => {
+                    CandidateStrategyProfileError::UnavailableTool(tool)
+                }
+                error => CandidateStrategyProfileError::Agent(error.to_string()),
+            })?;
     finish_candidate_loop(content, outcome, gateway.submit.accepted)
 }
 
@@ -348,8 +342,8 @@ fn archive_candidate_prompt(
 fn freeze_candidate_loop(
     input: &CandidateStrategyProfileInput,
     projection: &PromptProjectionV1,
-) -> Result<crate::proposal_loop::FrozenProposalLoopV1, CandidateStrategyProfileError> {
-    Ok(crate::proposal_loop::FrozenProposalLoopV1 {
+) -> Result<cairn_agent::FrozenAgentLoopV1, CandidateStrategyProfileError> {
+    Ok(cairn_agent::FrozenAgentLoopV1 {
         task_id: input.workspace.task_id(),
         episode_id: input.episode_id,
         role: cairn_agent::AgentRoleName::new("candidate-strategy")
@@ -368,7 +362,7 @@ fn freeze_candidate_loop(
         history: projection.request,
         context: projection.context,
         policy: projection.policy,
-        capability_grant: crate::proposal_loop::ProposalLoopCapabilityGrantV1::new(
+        capability_grant: cairn_agent::AgentLoopCapabilityGrantV1::new(
             tool_registrations()?.to_vec(),
         )
         .map_err(|error| CandidateStrategyProfileError::Agent(error.to_string()))?,
@@ -395,14 +389,14 @@ fn open_candidate_gateways(
 
 fn finish_candidate_loop(
     content: &mut impl ContentStore,
-    outcome: crate::proposal_loop::ProposalLoopOutcomeV1,
+    outcome: cairn_agent::AgentLoopOutcomeV1,
     accepted: Option<CandidateProposalV1>,
 ) -> Result<
-    crate::proposal_loop::ProposalProfileOutcomeV1<CandidateStrategyProfileOutcome>,
+    cairn_agent::AgentProfileOutcomeV1<CandidateStrategyProfileOutcome>,
     CandidateStrategyProfileError,
 > {
     match outcome {
-        crate::proposal_loop::ProposalLoopOutcomeV1::Complete(completion) => {
+        cairn_agent::AgentLoopOutcomeV1::Complete(completion) => {
             let Some(proposal) = accepted else {
                 return Err(CandidateStrategyProfileError::MissingProposal(
                     completion.reason,
@@ -419,7 +413,7 @@ fn finish_candidate_loop(
             if archived != proposal.identity().map_err(invalid_error)? {
                 return invalid("archived Candidate proposal identity changed");
             }
-            Ok(crate::proposal_loop::ProposalProfileOutcomeV1::Complete(
+            Ok(cairn_agent::AgentProfileOutcomeV1::Complete(
                 CandidateStrategyProfileOutcome {
                     proposal,
                     completion_reason: completion.reason,
@@ -427,8 +421,8 @@ fn finish_candidate_loop(
                 },
             ))
         }
-        crate::proposal_loop::ProposalLoopOutcomeV1::AwaitingController(request) => {
-            Ok(crate::proposal_loop::ProposalProfileOutcomeV1::AwaitingController(request))
+        cairn_agent::AgentLoopOutcomeV1::WorkerRequest(request) => {
+            Ok(cairn_agent::AgentProfileOutcomeV1::WorkerRequest(request))
         }
     }
 }

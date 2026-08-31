@@ -22,7 +22,7 @@
 | [`LOGICAL_ARCHITECTURE.md`](LOGICAL_ARCHITECTURE.md) | bounded context、aggregate、command/event、数据流和 capability 如何组合？ | 规范性逻辑架构设计 |
 | [`RUNTIME_ARCHITECTURE.md`](RUNTIME_ARCHITECTURE.md) | Controller、提案进程、Admission、存储和各类 Worker 如何运行、隔离与恢复？ | 规范性运行架构设计 |
 | [`ADMISSION_ARCHITECTURE.md`](ADMISSION_ARCHITECTURE.md) | Typed Planner profiles、required evidence、机械 Gate 和 Admission 软件如何组合？ | 规范性 Admission 软件架构 |
-| [`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md) | Agent-capable function、strategy、profile、episode、Host、process 与 authority 如何区分和交互？ | 规范性 Agent 软件架构 |
+| [`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md) | Agent-capable function、strategy、profile、workflow step、Worker execution 与 authority 如何区分和交互？ | 规范性 Agent 软件架构 |
 
 ## 阅读顺序
 

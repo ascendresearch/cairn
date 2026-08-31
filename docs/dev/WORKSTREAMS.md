@@ -16,7 +16,7 @@ expected answer；只有适用的 independent Admission/Gate 才能形成正式 
 | --- | --- | --- |
 | `WS-WORKFLOW` | product-owned strong state、transition、feedback routing 与 restart/replay | generic ID/string state、fixture/compiler-text policy |
 | `WS-CONTROL` | Controller process manager、operation authority、scheduler/Host composition | product semantics、restricted Gate 重算、直接执行 generated code |
-| `WS-AGENT` | domain-neutral episode/provider/tool/budget/replay runtime；有 consumer 后承载 generic Host | fixture answer、Worker credential、admitted constructor |
+| `WS-AGENT` | domain-neutral model/provider/tool/budget/replay runtime；由Controller workflow steps消费 | fixture answer、Worker credential、admitted constructor |
 | `WS-EXECUTION` | direct outbound Worker control、opaque job/receipt、local/remote adapters | SIR/Oracle/Candidate 业务 adjudication |
 | `WS-ADMISSION` | restricted evidence 与 mechanical Gate | model continuation、applicant 修改、普通 workflow orchestration |
 | `WS-QUALITY` | recorded/restart/invalid-transition、context absence 与适用 external lanes | 反向定义 prompt、Intent 或 Oracle policy |
@@ -41,7 +41,7 @@ WS-PRODUCT: generic task projection + typed proposal shape
 - recorded response 必须经过同一 runtime decode/control flow，不能直接构造 domain output；
 - live run 有明确 model/deployment/token/tool/wall budget；
 - malformed output、missing citation、unknown/conflict 有 typed failure；
-- 不创建独立SIR或无consumer的Proposal Host/Admission空crate；DEV-022 Host只承载已有typed consumers。
+- 不创建独立SIR或无consumer的proposal step/Admission空crate；DEV-022 Host只承载已有typed consumers。
 
 ## 4. DEV-005 协作（历史 CP0）
 

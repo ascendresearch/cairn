@@ -1,4 +1,7 @@
-# DEV-024 implementation — unified Proposal Host request lifecycle
+# DEV-024 implementation — unified proposal step request lifecycle
+
+> Historical record: D-044/DEV-036 deleted this generic process request/terminal lifecycle. Current
+> proposal work is a typed Controller workflow step.
 
 - 状态：`Accepted`
 - 日期：2026-08-29
@@ -8,7 +11,7 @@
 
 ## 1. Objective
 
-删除遗留的role-specific SIR/Candidate Agent Loop runner及其旁路测试，把所有现有Proposal Host profile固化到
+删除遗留的role-specific SIR/Candidate Agent Loop runner及其旁路测试，把所有现有proposal step profile固化到
 同一条request lifecycle：冻结exact request与runtime facts，打开独立durable episode，只执行Host获准的
 pure/read-only tool，把结果先归档为observation，再接收strict typed proposal并冻结terminal publication。
 
@@ -17,11 +20,11 @@ generic Agent Loop的真实领域consumer，不是专用process或第二套runti
 
 ## 2. Current-V1 lifecycle
 
-`run_proposal_host_episode`现在只编排三个业务阶段：
+`run_proposal_step_episode`现在只编排三个业务阶段：
 
-1. `freeze_proposal_host_request`验证current-V1 exact request/runtime binding，并物化bounded task snapshot；
-2. `drive_frozen_proposal_host_request`选择领域profile，但所有profile都进入同一个`run_proposal_loop`；
-3. `freeze_proposal_host_terminal`构造并反向校验request-bound terminal artifact。
+1. `freeze_proposal_step_request`验证current-V1 exact request/runtime binding，并物化bounded task snapshot；
+2. `drive_frozen_proposal_step_request`选择领域profile，但所有profile都进入同一个`run_proposal_loop`；
+3. `freeze_proposal_step_terminal`构造并反向校验request-bound terminal artifact。
 
 `run_proposal_loop`本身同样只保留可直接阅读的流程骨架：
 
@@ -53,7 +56,7 @@ instruction/history/context/policy/tool-catalog content identity及validated cap
 - profile strict submission gateway负责schema、identity和lineage校验；无效提交原子拒绝，错误作为同一episode的
   operation result返回，Agent可在剩余budget内修复；
 - completion只产生request-bound terminal；Controller process manager随后持久化terminal并把publication折回task
-  workflow，Proposal Host本身不拥有下游Gate authority。
+  workflow，proposal step本身不拥有下游Gate authority。
 
 ## 4. 替换与删除
 
@@ -72,7 +75,7 @@ artifact边界。
 
 - generic loop unit control证明external-effect tool会先durably bind，但Host绝不执行其gateway；
 - duplicate semantic capability name被current-V1 grant constructor拒绝；
-- Proposal Host integration先提交invalid SIR proposal，再在同一budget内修复为valid proposal；
+- proposal step integration先提交invalid SIR proposal，再在同一budget内修复为valid proposal；
 - 同一Host test同时运行SIR与Candidate profile并验证cross-role publication隔离；
 - persisted Candidate workflow request/terminal round-trip及strict request drift negatives继续覆盖Controller折回边界；
 - source scan证明旧runner符号和role-specific runner test path已消失。

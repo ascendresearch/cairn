@@ -17,7 +17,7 @@ output-order决策；DEV-008又证明该结果可经用户authority和独立Admi
 policy。DEV-009–012 已把该 policy 推进到 local Oracle publication 与真实 DeepSeek Candidate proposal；
 DEV-013–020 又用现有 Controller/remote Worker 打通 generic/native build、receipt-bound diagnostic、隔离
 DeepSeek repair 与 rebuild。DEV-021–023已把Candidate native suffix固化成durable Controller workflow、通用
-Proposal Host和single-task manager；DEV-024又删除role-specific runner并统一Host request lifecycle。最新native
+proposal step和single-task manager；DEV-024又删除role-specific runner并统一Host request lifecycle。最新native
 rebuild仍为`SubjectFailed`；DEV-025冻结完整Controller typed skeleton，DEV-026已把SIR→decision requests接入
 task-owned durable prefix并明确等待真实user decision。当前继续接入independent Intent Admission，或建设
 Controller-owned experiment round-trip/native success/NPU correctness的真实consumer。
@@ -75,7 +75,7 @@ Controller-owned experiment round-trip/native success/NPU correctness的真实co
 - DEV-019–020：Accepted，建立显式可重复 repair lineage 并再次远端 native build；最新结果仍为
   `SubjectFailed`，不含 NPU/semantic/verdict evidence。
 - DEV-021：Accepted，Candidate native suffix已固化为Controller-owned durable spine。
-- DEV-022：Accepted，同一generic Proposal Host已承载SIR/Candidate role并接通persisted workflow request；
+- DEV-022：Accepted，同一generic proposal step已承载SIR/Candidate role并接通persisted workflow request；
   没有live model/Worker或新的native evidence。
 - DEV-023：Accepted，active Controller single-task manager接通Host supervision、scheduler/reconcile和receipt折回。
 - DEV-024：Accepted，删除SIR/Candidate role-specific runner和旁路测试，统一freeze/episode/observation/strict
@@ -90,6 +90,6 @@ CP0结论是`Go`：SIR继续留在当前建设路径。完整`IntentRecoveryInpu
 observation、局部mechanism qualification、commit-before-publish local claim、Candidate source、remote
 native build 和 model repair。下一阶段采用
 [`WORKFLOW_ARCHITECTURE.md`](../design/WORKFLOW_ARCHITECTURE.md) 冻结的 Controller state machine、通用
-Proposal Host、统一 Worker 实验与 direct Worker→Controller 网络；局部 claim 和 compile feedback 仍不等于
+proposal step、统一 Worker 实验与 direct Worker→Controller 网络；局部 claim 和 compile feedback 仍不等于
 完整 CP1、`AdmittedOraclePortfolio` 或 release authority，也不恢复 DEV-002 式第三人 fixture review、
 预建通用 qualification 框架或固定多 Agent 拓扑。

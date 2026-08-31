@@ -46,14 +46,16 @@ Implemented coverage now is:
 | scheduler | start, optimistic retry, no candidate, placement completion | attempt, placement, snapshot, reservation, assignment, worker IDs |
 | worker session | connect/register/disconnect/error | worker, incarnation, connection, pool |
 | assignment/execution | offer/admission/start/result and local/controller terminal receipt | job, assignment, attempt, contract, receipt IDs |
+| Controller workflow / Oracle control | durable transition committed; qualified control prepare/start/block/complete | task, command, event, run, runner, job, attempt, contract, receipt IDs |
+| local App API | listener ready; submit/cancel/intent decision committed; request/supervisor rejected | task, command, request, hypothesis IDs; response kind and bounded counts |
 | heartbeat/resources | sent/accepted | worker and connection IDs; DEBUG only |
 | registry/enrollment | mutation and listener/bundle lifecycle without secret path or bytes | event, worker, credential/reservation IDs where applicable |
 
-Still incomplete: production Oracle coordination has not yet moved to generic `AgentEpisode`;
-candidate/admission comparison phases need their own lifecycle events; the future external API has
-no request tracing; metrics export, distributed trace propagation, dashboards, and alert rules are
-not implemented. SQLite/CAS reads and frame acknowledgements deliberately are not logged at INFO
-because per-operation lifecycle and durable events provide the useful boundary without flooding.
+Still incomplete: candidate/admission comparison phases need their own lifecycle events; the local
+App API has lifecycle logging but no distributed trace propagation; metrics export, dashboards,
+and alert rules are not implemented. SQLite/CAS reads and frame acknowledgements deliberately are
+not logged at INFO because per-operation lifecycle and durable events provide the useful boundary
+without flooding.
 
 ## 3. Initialization and output
 

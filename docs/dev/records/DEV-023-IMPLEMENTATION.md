@@ -1,5 +1,8 @@
 # DEV-023 implementation — Controller-owned Candidate process manager
 
+> Historical record: D-044/DEV-036 deleted the proposal child-process and supervision portions
+> described below. Scheduler and Worker receipt evidence remains historical input only.
+
 - 状态：`Accepted`
 - 日期：2026-08-29
 - Slice：[`DEV-023`](../SLICE_CATALOG.md#3-当前critical-slices)
@@ -8,7 +11,7 @@
 
 ## 1. Objective
 
-把DEV-021的durable `CandidateWorkflowNextActionV1`、DEV-022 generic Proposal Host child和现有Controller
+把DEV-021的durable `CandidateWorkflowNextActionV1`、DEV-022 generic proposal step child和现有Controller
 scheduler/assignment recovery连接为一个Controller-owned单任务process manager。Manager只监管一个配置中明确
 给出的、已经打开的`TaskId`；这是真实product consumer，不是新的逐步手工launcher，也不预建task catalog、Host
 pool或多租户协议。
@@ -19,19 +22,19 @@ pool或多租户协议。
 | --- | --- | --- |
 | Candidate workflow | exact next action、publication/diagnostic lineage、revision budget、terminal classification | model/provider、Worker credential、compiler解释 |
 | Controller manager | commit-before-effect、Host process lifecycle、scheduler调用、receipt机械折回 | source修改、Intent/Oracle移动、Admission/verdict |
-| Generic Proposal Host | exact role request、episode-local durable Agent Loop、typed proposal terminal | Worker/Controller DB、Docker/device、restricted material |
+| Generic proposal step | exact role request、episode-local durable Agent Loop、typed proposal terminal | Worker/Controller DB、Docker/device、restricted material |
 | Managed Worker | exact immutable contract、execution journal、worker-controlled receipt | Candidate role、model、workflow transition |
 
 Server current-V1配置新增一个可选`candidate_workflow_manager`，只包含一个exact `TaskId`及一个严格
-`ProposalHostProcessConfigV1`。未配置时Controller继续只提供worker control/scheduler；配置时启动前必须证明该task
+`ProposalStepProcessConfigV1`。未配置时Controller继续只提供worker control/scheduler；配置时启动前必须证明该task
 workflow已存在，随后在同一active Controller进程中恢复并监管。
 
 ## 3. Current-V1 types与Host start authority
 
-- 新增distinct positive `ProposalHostProcessTimeoutMillis`、`ProposalHostStdoutByteLimit`、
-  `ProposalHostStderrByteLimit`与`CandidateWorkflowPollIntervalMillis`；反序列化重新执行上下界校验。
-- 新增`ProposalHostBinaryIdentity`，只接受canonical lowercase SHA-256；它与`WorkerBinaryIdentity`静态不可互换。
-- `ProposalHostRuntimeV1`直接修改current V1，冻结exact Host binary identity；Controller与Host分别从实际executable
+- 新增distinct positive `ProposalStepProcessTimeoutMillis`、`ProposalStepStdoutByteLimit`、
+  `ProposalStepStderrByteLimit`与`CandidateWorkflowPollIntervalMillis`；反序列化重新执行上下界校验。
+- 新增`ProposalStepBinaryIdentity`，只接受canonical lowercase SHA-256；它与`WorkerBinaryIdentity`静态不可互换。
+- `ProposalStepRuntimeV1`直接修改current V1，冻结exact Host binary identity；Controller与Host分别从实际executable
   bytes重算并复核，没有V2、fallback reader或legacy alias。
 - Controller在提交`CandidateEpisodeRequested`前，为exact episode建立`invocation.v1.json` marker。Host没有该
   marker就拒绝运行；第一次运行在打开episode stores后、任何模型effect前建立exact request-bound
@@ -71,12 +74,12 @@ invocation drift都成为closed typed blocked status。它们保留原dispatch/r
 
 已删除/关闭：
 
-- `cairn-server`对`archive_proposal_host_runtime`、`prepare_candidate_proposal_host_request`、
+- `cairn-server`对`archive_proposal_step_runtime`、`prepare_candidate_proposal_step_request`、
   `prepare_candidate_native_build_dispatch`与`schedule_candidate_native_build`的public re-export；
-- 只通过上述public helpers证明手工物化的`proposal_host_materialization` integration test。
+- 只通过上述public helpers证明手工物化的`proposal_step_materialization` integration test。
 
 四项low-level mechanics保留为private manager implementation。Generic scheduler、native materializers、diagnostic
-constructors、`cairn-proposal-host`和role-specific runners都有当前consumer，不是legacy path。更早的generic
+constructors、`cairn-proposal-step`和role-specific runners都有当前consumer，不是legacy path。更早的generic
 Candidate build/revision live smoke不属于本suffix manager的等价路径，本片不删除。
 
 ## 7. Tests与controls

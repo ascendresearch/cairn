@@ -11,7 +11,7 @@ use crate::{
     SirConflictId, SirDeclaredUnknownId, SirDeclaredUnknownKind, SirDeclaredUnknownQuestion,
     SirDisambiguationTargetV1, SirHypothesisClaim, SirHypothesisId, SirIntentClaimRefV1,
     SirIntentDomain, SirIntentHypothesisSetProposalArtifact, SirIntentLayer, SirUnknownId,
-    SirUnknownKind, SirUnknownQuestion,
+    SirUnknownQuestion,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -108,6 +108,16 @@ impl UserIntentDecisionOptionV1 {
     pub const fn claim(&self) -> &SirHypothesisClaim {
         &self.claim
     }
+
+    #[must_use]
+    pub const fn layer(&self) -> SirIntentLayer {
+        self.layer
+    }
+
+    #[must_use]
+    pub const fn domain(&self) -> &SirIntentDomain {
+        &self.domain
+    }
 }
 
 /// One claim-scoped question that evidence cannot decide on behalf of the user.
@@ -180,6 +190,16 @@ impl UserIntentDecisionRequestV1 {
     #[must_use]
     pub fn options(&self) -> &[UserIntentDecisionOptionV1] {
         &self.options
+    }
+
+    #[must_use]
+    pub const fn question(&self) -> &SirUnknownQuestion {
+        &self.question
+    }
+
+    #[must_use]
+    pub fn conflicts(&self) -> &[SirConflictId] {
+        &self.conflicts
     }
 
     /// Derives the semantic content identity of this exact request.
@@ -334,8 +354,8 @@ pub enum IntentAdmissionError {
     Codec(String),
     #[error("{0} identity does not match its canonical bytes")]
     IdentityMismatch(&'static str),
-    #[error("proposal has no desired-semantics unknown")]
-    NoDesiredSemanticsUnknown,
+    #[error("proposal has no user-decision conflict closure")]
+    NoUserDecisionClosure,
     #[error("desired-semantics unknown {unknown} lacks a closed conflict/option graph")]
     IncompleteDecisionClosure { unknown: String },
     #[error("invalid Intent Admission structure: {0}")]
@@ -401,17 +421,17 @@ pub fn derive_user_intent_decision_requests(
         })
         .collect::<Vec<_>>();
 
-    let desired_unknowns = submission
+    let decision_unknowns = submission
         .unknowns()
         .iter()
-        .filter(|unknown| unknown.kind() == SirUnknownKind::DesiredSemantics)
+        .filter(|unknown| !conflicts_for_unknown(submission, unknown.id()).is_empty())
         .collect::<Vec<_>>();
-    if desired_unknowns.is_empty() {
-        return Err(IntentAdmissionError::NoDesiredSemanticsUnknown);
+    if decision_unknowns.is_empty() {
+        return Err(IntentAdmissionError::NoUserDecisionClosure);
     }
 
-    let mut requests = Vec::with_capacity(desired_unknowns.len());
-    for unknown in desired_unknowns {
+    let mut requests = Vec::with_capacity(decision_unknowns.len());
+    for unknown in decision_unknowns {
         let conflict_ids = conflicts_for_unknown(submission, unknown.id());
         let mut option_ids = BTreeSet::new();
         for conflict_id in &conflict_ids {
@@ -465,16 +485,39 @@ fn conflicts_for_unknown(
     unknown: &SirUnknownId,
 ) -> Vec<SirConflictId> {
     let mut conflict_ids = BTreeSet::new();
+    let mut targeted_hypotheses = BTreeSet::new();
     for experiment in submission.disambiguation_experiments() {
         let targets_unknown = experiment.targets().iter().any(
             |target| matches!(target, SirDisambiguationTargetV1::Unknown { unknown: target } if target == unknown),
         );
         if targets_unknown {
             for target in experiment.targets() {
-                if let SirDisambiguationTargetV1::Conflict { conflict } = target {
-                    conflict_ids.insert(conflict.clone());
+                match target {
+                    SirDisambiguationTargetV1::Conflict { conflict } => {
+                        conflict_ids.insert(conflict.clone());
+                    }
+                    SirDisambiguationTargetV1::Hypothesis { hypothesis } => {
+                        targeted_hypotheses.insert(hypothesis.clone());
+                    }
+                    SirDisambiguationTargetV1::Unknown { .. } => {}
                 }
             }
+        }
+    }
+    for conflict in submission.conflicts() {
+        let overlapping_hypotheses = conflict
+            .claims()
+            .iter()
+            .filter(|claim| {
+                matches!(
+                    claim,
+                    SirIntentClaimRefV1::Hypothesis { hypothesis }
+                        if targeted_hypotheses.contains(hypothesis)
+                )
+            })
+            .count();
+        if overlapping_hypotheses >= 2 {
+            conflict_ids.insert(conflict.id().clone());
         }
     }
     conflict_ids.into_iter().collect()
@@ -644,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_nonsemantic_and_dangling_inputs_fail_closed() {
+    fn incomplete_closure_fails_but_exact_nonsemantic_user_decision_is_preserved() {
         let input = recovery_input();
         let input_id = input.identity().expect("input identity");
 
@@ -659,22 +702,21 @@ mod tests {
                 input_id,
                 &input
             ),
-            Err(IntentAdmissionError::IncompleteDecisionClosure { .. })
+            Err(IntentAdmissionError::NoUserDecisionClosure)
         ));
 
         let source_unknown = proposal(
             &input,
             submission_value("source-behavior", true, "copies-strictly-above"),
         );
-        assert!(matches!(
-            derive_user_intent_decision_requests(
-                source_unknown.identity().expect("proposal identity"),
-                &source_unknown,
-                input_id,
-                &input
-            ),
-            Err(IntentAdmissionError::NoDesiredSemanticsUnknown)
-        ));
+        let source_batch = derive_user_intent_decision_requests(
+            source_unknown.identity().expect("proposal identity"),
+            &source_unknown,
+            input_id,
+            &input,
+        )
+        .expect("source-behavior decision closure");
+        assert_eq!(source_batch.requests().len(), 1);
 
         let dangling = proposal(
             &input,

@@ -697,22 +697,18 @@ A real conflict among normative documents blocks the affected implementation sli
 impacted documents are reconciled. Cairn does not add fallback behavior or dual interpretations to
 paper over a design conflict during pre-release V1 development.
 
-## D-034 — The control plane is modular, while proposal and admission authorities cross processes
+## D-034 — The control plane is modular, while admission authority crosses processes
 
-- Decision: accepted
+- Decision: amended by D-044
 
 Cairn keeps workflow, public record/CAS, scheduling, API, feedback routing, knowledge/skill registry,
 and the initial deterministic Hardware Performance Model in a modular Controller. It does not turn
 every domain concept into a microservice.
 
-Semantic Intent Recovery runs outside Controller and Admission authority from its first authoritative
-V1 consumer, but D-043 clarifies that SIR is a logical Agent Loop rather than a dedicated process
-kind. SIR, Oracle synthesis/adversarial strategies, typed Admission Planners, and Candidate Search
-run as isolated durable episodes in capability-equivalent Proposal Host instances. A different
-data/tool/OS capability boundary requires a different Host instance. The mechanical Admission gate
-and restricted material run in a separate authority process. A process boundary is required by
-replaceability, hidden-data visibility, execution risk, or promotion authority—not by Agent count or
-module name.
+SIR, Oracle synthesis/adversarial strategies, typed planning, and Candidate Search are typed steps in
+the Controller workflow. They do not receive a separate process identity or proposal authority.
+Mechanical Admission and restricted material remain a separate authority process. Applicant code,
+toolchains, Docker, host adapters and devices execute only on managed Workers.
 
 ## D-035 — Public, restricted-admission, and secret storage are separate capabilities
 
@@ -756,7 +752,7 @@ deterministic typed validator before any external effect.
 
 Intent, Oracle, Hardware Fact, Performance, Candidate, Knowledge, and Skill planning use distinct
 profile, applicant, obligation, experiment-request, diagnostic, receipt, and outcome types. They may
-share the domain-neutral agent runtime, model provider, and a capability-equivalent Planning Host,
+share the domain-neutral agent runtime and model provider in distinct Controller planning steps,
 but not private continuation, mutable context, writable artifact namespace, or authority. Intent and
 Oracle commonly benefit from reasoning-based planning; Hardware and Performance prefer deterministic
 measurement recipes with optional adaptive planning; Candidate Admission initially uses a
@@ -771,15 +767,15 @@ authoritative receipts, and qualified mechanisms.
 - Decision: accepted
 
 Cairn distinguishes an Agent-capable product function, a replaceable strategy, a typed planner or
-agent profile, a durable episode, a Host process, and an authority. The current design derives eleven
+agent profile, a durable model execution, a workflow step, and an authority. The current design derives eleven
 Agent-capable logical positions from four exploration/generation functions and seven Admission Planner
 profiles. Eleven is an inventory result, not a protocol constant, process count, concurrency target,
 or requirement to invoke a model. Required functions may use deterministic strategies when their
 typed contract and policy permit. Blue and Red remain current model-backed Oracle synthesis and
 adversarial profiles rather than permanent Agent kinds.
 
-Multiple capability-equivalent episodes may share a Host, but each retains its own identity, context
-snapshot, continuation, budget, tool results, writable namespace, and capability grant. Cross-episode
+Multiple Agent steps may use the same Controller process and model transport, but each retains its own
+identity, context snapshot, continuation, budget, tool results, and capability grant. Cross-step
 interaction occurs only through immutable provenance-bearing artifacts, typed requests/diagnostics,
 and durable events selected by trusted policy. Private continuation, mutable scratch state, unpublished
 reasoning, pending tool results, and unsubmitted drafts do not cross episode boundaries. Agent
@@ -787,7 +783,7 @@ agreement, voting, or repeated reflection creates neither receipt authority nor 
 
 Processes split when data visibility, external tools, OS sandbox, credentials, or authority differ,
 not merely because role names differ. The mechanical Admission Gate remains model-free and outside
-every Agent Host.
+every Agent workflow step.
 
 ## D-039 — The first SIR evaluation fixture is a clean-room finite-f32 reduction
 
@@ -962,16 +958,14 @@ The first narrow workflow has reached remote native build, diagnostic, model rep
 Cairn now freezes the observed stages as one Controller-owned durable state machine. SIR, Oracle
 Exploration, Candidate Search, and optional typed Admission planning are distinct logical Agent Loops.
 Within Oracle Exploration, synthesis, adversarial, analyzer, mutation, property, and counterexample
-strategies are policy-selected implementations rather than mandatory global stages. The loops have
-different typed inputs, feedback routes, stop conditions, and proposal outputs, but none requires a
-role-specific OS process. Capability-equivalent loops use the generic Proposal Host;
-instances split only for data visibility, credentials, tool access, OS sandbox, or authority.
+strategies are policy-selected implementations rather than mandatory global stages. The steps have
+different typed inputs, feedback routes, stop conditions, and proposal outputs, but none maps to a
+proposal process, binary, service identity or OS sandbox.
 
 SIR may use task-scoped source/caller context, frozen knowledge, allowlisted public web and paper
-research, and Controller-authorized experiments. It remains proposal-only. All experiments that run
+research, and Controller-authorized Worker requests. It remains proposal-only. All experiments that run
 code, toolchains, Docker, host adapters, or devices are opaque jobs scheduled by the Controller onto
-managed Workers, including a local CPU/host Worker. Proposal Hosts do not launch Docker directly or
-connect to Workers. Oracle qualification uses independently bound honest, fault/mutant,
+managed Workers, including a local CPU/host Worker. Oracle qualification uses independently bound honest, fault/mutant,
 wrong-binding, domain/conflict, bypass, and hidden-disjoint controls; an Agent may propose these
 checks but cannot certify its own judge.
 
@@ -984,6 +978,22 @@ tunnels, port-forwarding fallbacks, and a Cairn-managed VPN are not part of the 
 Network reachability does not replace mTLS, registry authority, pool assignment, leases, or exact
 receipt binding.
 
-The existing `cairn-sir` one-shot process remains current implementation evidence for a typed ingress
-and OS-principal boundary, not a permanent target service. When the generic Proposal Host consumes
-the production SIR profile, the superseded dedicated path is removed directly in current V1.
+## D-044 — Proposal stays in the Controller workflow
+
+- Decision: accepted
+
+Proposal work runs inside the main Controller workflow. Cairn has no independent proposal process, binary,
+service pool, OS principal, process protocol, private journal, or invocation-binary identity. SIR,
+Oracle and Candidate proposal steps consume frozen typed inputs and publish domain-specific typed
+outputs through ordinary workflow transitions.
+
+A proposal step may execute pure or read-only logic over its offered inputs. When it needs compilation,
+applicant execution, Docker, a host adapter, or device validation, it submits a typed tool request to
+the Controller. The Controller derives and durably authorizes a `JobContract`, schedules it to a
+capability-matched managed Worker, and accepts only exact job/attempt/contract-bound observation.
+The model cannot execute or certify that effect itself.
+
+The domain-neutral model-turn and tool-operation recovery primitives in `cairn-agent` are runtime
+infrastructure, not a proposal sub-workflow or authority domain. Current V1 deletes the former
+proposal process crate, supervisor, stdin/stdout protocol, per-episode databases, process failure
+states and binary identity directly; no compatibility reader or format version is introduced.

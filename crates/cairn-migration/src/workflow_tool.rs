@@ -1,4 +1,4 @@
-//! Controller-owned bridge from a Proposal Host durable yield to a managed Worker observation.
+//! Controller-owned bridge from a proposal-step Worker request to a managed Worker observation.
 
 use cairn_agent::{
     AgentEpisode, AgentEpisodeState, AgentStepState, CanonicalToolResult, OperationResult,
@@ -16,24 +16,23 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    OracleExplorationObservationV1, OracleObservationPayloadV1,
-    ProposalHostControllerObservationArtifact, ProposalHostExperimentOperationV1,
-    ProposalHostExperimentRequestArtifact, ProposalHostExperimentRequestV1, ProposalHostRequestV1,
-    ProposalHostRoleRequestV1,
+    OracleExplorationObservationV1, OracleObservationPayloadV1, ProposalStepRequestV1,
+    ProposalStepRoleRequestV1, WorkflowToolControllerObservationArtifact, WorkflowToolOperationV1,
+    WorkflowToolRequestArtifact, WorkflowToolRequestV1,
 };
 
-/// Identity of one exact Controller-authorized experiment dispatch.
-pub enum ProposalHostExperimentDispatchArtifact {}
+/// Identity of one exact Controller-authorized Worker dispatch.
+pub enum WorkflowToolDispatchArtifact {}
 
-impl ContentType for ProposalHostExperimentDispatchArtifact {
-    const DOMAIN: &'static str = "migration.proposal-host-experiment-dispatch.v1";
+impl ContentType for WorkflowToolDispatchArtifact {
+    const DOMAIN: &'static str = "migration.workflow-tool-dispatch.v1";
 }
 
-/// Controller-recomputed effect observation returned to the same Host episode.
+/// Controller-recomputed effect observation returned to the same Agent episode.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostControllerObservationV1 {
+pub struct WorkflowToolControllerObservationV1 {
     schema_version: SchemaVersion,
-    dispatch: ProposalHostExperimentDispatchV1,
+    dispatch: WorkflowToolDispatchV1,
     receipt_id: ContentId<ExecutionReceiptArtifact>,
     receipt: ExecutionReceipt,
     observation: serde_json::Value,
@@ -41,19 +40,19 @@ pub struct ProposalHostControllerObservationV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostControllerObservationWire {
+struct WorkflowToolControllerObservationWire {
     schema_version: SchemaVersion,
-    dispatch: ProposalHostExperimentDispatchV1,
+    dispatch: WorkflowToolDispatchV1,
     receipt_id: ContentId<ExecutionReceiptArtifact>,
     receipt: ExecutionReceipt,
     observation: serde_json::Value,
 }
 
-impl ProposalHostControllerObservationV1 {
+impl WorkflowToolControllerObservationV1 {
     fn from_worker(
-        dispatch: ProposalHostExperimentDispatchV1,
-        observed: ProposalHostWorkerObservationV1,
-    ) -> Result<Self, ProposalHostExperimentError> {
+        dispatch: WorkflowToolDispatchV1,
+        observed: WorkflowToolWorkerObservationV1,
+    ) -> Result<Self, WorkflowToolError> {
         let value = Self {
             schema_version: schema_v1(),
             dispatch,
@@ -66,7 +65,7 @@ impl ProposalHostControllerObservationV1 {
     }
 
     #[must_use]
-    pub const fn dispatch(&self) -> &ProposalHostExperimentDispatchV1 {
+    pub const fn dispatch(&self) -> &WorkflowToolDispatchV1 {
         &self.dispatch
     }
 
@@ -82,13 +81,12 @@ impl ProposalHostControllerObservationV1 {
     /// Rejects schema, dispatch, Worker receipt, or canonical codec drift.
     pub fn identity(
         &self,
-    ) -> Result<ContentId<ProposalHostControllerObservationArtifact>, ProposalHostExperimentError>
-    {
+    ) -> Result<ContentId<WorkflowToolControllerObservationArtifact>, WorkflowToolError> {
         self.validate()?;
         ContentId::derive(&cairn_codec::to_vec(self).map_err(codec_error)?).map_err(codec_error)
     }
 
-    fn validate(&self) -> Result<(), ProposalHostExperimentError> {
+    fn validate(&self) -> Result<(), WorkflowToolError> {
         if self.schema_version != schema_v1()
             || self.receipt.job_id() != self.dispatch.worker.job_id
             || self.receipt.attempt_id() != self.dispatch.worker.attempt_id
@@ -106,10 +104,10 @@ impl ProposalHostControllerObservationV1 {
     }
 }
 
-impl TryFrom<ProposalHostControllerObservationWire> for ProposalHostControllerObservationV1 {
-    type Error = ProposalHostExperimentError;
+impl TryFrom<WorkflowToolControllerObservationWire> for WorkflowToolControllerObservationV1 {
+    type Error = WorkflowToolError;
 
-    fn try_from(wire: ProposalHostControllerObservationWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: WorkflowToolControllerObservationWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
             dispatch: wire.dispatch,
@@ -122,12 +120,12 @@ impl TryFrom<ProposalHostControllerObservationWire> for ProposalHostControllerOb
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostControllerObservationV1 {
+impl<'de> Deserialize<'de> for WorkflowToolControllerObservationV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        ProposalHostControllerObservationWire::deserialize(deserializer)?
+        WorkflowToolControllerObservationWire::deserialize(deserializer)?
             .try_into()
             .map_err(serde::de::Error::custom)
     }
@@ -135,23 +133,23 @@ impl<'de> Deserialize<'de> for ProposalHostControllerObservationV1 {
 
 /// Exact Controller effect plus its optional Oracle-domain projection.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostExecutedObservationV1 {
-    controller: ProposalHostControllerObservationV1,
+pub struct WorkflowToolExecutedObservationV1 {
+    controller: WorkflowToolControllerObservationV1,
     oracle_payload: Option<OracleObservationPayloadV1>,
     oracle_observation: Option<OracleExplorationObservationV1>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostExecutedObservationWire {
-    controller: ProposalHostControllerObservationV1,
+struct WorkflowToolExecutedObservationWire {
+    controller: WorkflowToolControllerObservationV1,
     oracle_payload: Option<OracleObservationPayloadV1>,
     oracle_observation: Option<OracleExplorationObservationV1>,
 }
 
-impl ProposalHostExecutedObservationV1 {
+impl WorkflowToolExecutedObservationV1 {
     #[must_use]
-    pub const fn controller(&self) -> &ProposalHostControllerObservationV1 {
+    pub const fn controller(&self) -> &WorkflowToolControllerObservationV1 {
         &self.controller
     }
 
@@ -165,7 +163,7 @@ impl ProposalHostExecutedObservationV1 {
         self.oracle_observation.as_ref()
     }
 
-    fn validate(&self) -> Result<(), ProposalHostExperimentError> {
+    fn validate(&self) -> Result<(), WorkflowToolError> {
         self.controller.validate()?;
         match (&self.oracle_payload, &self.oracle_observation) {
             (None, None) => Ok(()),
@@ -173,7 +171,7 @@ impl ProposalHostExecutedObservationV1 {
                 let controller_id = self.controller.identity()?;
                 if payload.source() != controller_id
                     || !observation
-                        .validates_proposal_host_effect(
+                        .validates_workflow_tool(
                             observation.item(),
                             observation.run(),
                             controller_id,
@@ -190,10 +188,10 @@ impl ProposalHostExecutedObservationV1 {
     }
 }
 
-impl TryFrom<ProposalHostExecutedObservationWire> for ProposalHostExecutedObservationV1 {
-    type Error = ProposalHostExperimentError;
+impl TryFrom<WorkflowToolExecutedObservationWire> for WorkflowToolExecutedObservationV1 {
+    type Error = WorkflowToolError;
 
-    fn try_from(wire: ProposalHostExecutedObservationWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: WorkflowToolExecutedObservationWire) -> Result<Self, Self::Error> {
         let value = Self {
             controller: wire.controller,
             oracle_payload: wire.oracle_payload,
@@ -204,12 +202,12 @@ impl TryFrom<ProposalHostExecutedObservationWire> for ProposalHostExecutedObserv
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostExecutedObservationV1 {
+impl<'de> Deserialize<'de> for WorkflowToolExecutedObservationV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        ProposalHostExecutedObservationWire::deserialize(deserializer)?
+        WorkflowToolExecutedObservationWire::deserialize(deserializer)?
             .try_into()
             .map_err(serde::de::Error::custom)
     }
@@ -218,13 +216,13 @@ impl<'de> Deserialize<'de> for ProposalHostExecutedObservationV1 {
 /// Worker-side execution identity selected without performing the external effect.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProposalHostWorkerBindingV1 {
+pub struct WorkflowToolWorkerBindingV1 {
     job_id: JobId,
     attempt_id: AttemptId,
     contract_id: ContentId<JobContractArtifact>,
 }
 
-impl ProposalHostWorkerBindingV1 {
+impl WorkflowToolWorkerBindingV1 {
     #[must_use]
     pub const fn new(
         job_id: JobId,
@@ -256,28 +254,28 @@ impl ProposalHostWorkerBindingV1 {
 
 /// Exact dispatch visible to a trusted Controller Worker adapter only after durable start authority.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProposalHostExperimentDispatchV1 {
+pub struct WorkflowToolDispatchV1 {
     schema_version: SchemaVersion,
-    experiment: ContentId<ProposalHostExperimentRequestArtifact>,
+    worker_request: ContentId<WorkflowToolRequestArtifact>,
     operation_id: OperationId,
     tool_attempt_id: AttemptId,
-    worker: ProposalHostWorkerBindingV1,
+    worker: WorkflowToolWorkerBindingV1,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalHostExperimentDispatchWire {
+struct WorkflowToolDispatchWire {
     schema_version: SchemaVersion,
-    experiment: ContentId<ProposalHostExperimentRequestArtifact>,
+    worker_request: ContentId<WorkflowToolRequestArtifact>,
     operation_id: OperationId,
     tool_attempt_id: AttemptId,
-    worker: ProposalHostWorkerBindingV1,
+    worker: WorkflowToolWorkerBindingV1,
 }
 
-impl ProposalHostExperimentDispatchV1 {
+impl WorkflowToolDispatchV1 {
     #[must_use]
-    pub const fn experiment(&self) -> ContentId<ProposalHostExperimentRequestArtifact> {
-        self.experiment
+    pub const fn worker_request(&self) -> ContentId<WorkflowToolRequestArtifact> {
+        self.worker_request
     }
 
     #[must_use]
@@ -291,7 +289,7 @@ impl ProposalHostExperimentDispatchV1 {
     }
 
     #[must_use]
-    pub const fn worker(&self) -> &ProposalHostWorkerBindingV1 {
+    pub const fn worker(&self) -> &WorkflowToolWorkerBindingV1 {
         &self.worker
     }
 
@@ -300,29 +298,26 @@ impl ProposalHostExperimentDispatchV1 {
     /// # Errors
     ///
     /// Returns an error if current-V1 canonical encoding or content identity derivation fails.
-    pub fn identity(
-        &self,
-    ) -> Result<ContentId<ProposalHostExperimentDispatchArtifact>, ProposalHostExperimentError>
-    {
+    pub fn identity(&self) -> Result<ContentId<WorkflowToolDispatchArtifact>, WorkflowToolError> {
         self.validate()?;
         ContentId::derive(&cairn_codec::to_vec(self).map_err(codec_error)?).map_err(codec_error)
     }
 
-    fn validate(&self) -> Result<(), ProposalHostExperimentError> {
+    fn validate(&self) -> Result<(), WorkflowToolError> {
         if self.schema_version != schema_v1() {
-            return invalid("Proposal Host experiment dispatch is not current V1");
+            return invalid("Proposal step Worker dispatch is not current V1");
         }
         Ok(())
     }
 }
 
-impl TryFrom<ProposalHostExperimentDispatchWire> for ProposalHostExperimentDispatchV1 {
-    type Error = ProposalHostExperimentError;
+impl TryFrom<WorkflowToolDispatchWire> for WorkflowToolDispatchV1 {
+    type Error = WorkflowToolError;
 
-    fn try_from(wire: ProposalHostExperimentDispatchWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: WorkflowToolDispatchWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
-            experiment: wire.experiment,
+            worker_request: wire.worker_request,
             operation_id: wire.operation_id,
             tool_attempt_id: wire.tool_attempt_id,
             worker: wire.worker,
@@ -332,12 +327,12 @@ impl TryFrom<ProposalHostExperimentDispatchWire> for ProposalHostExperimentDispa
     }
 }
 
-impl<'de> Deserialize<'de> for ProposalHostExperimentDispatchV1 {
+impl<'de> Deserialize<'de> for WorkflowToolDispatchV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        ProposalHostExperimentDispatchWire::deserialize(deserializer)?
+        WorkflowToolDispatchWire::deserialize(deserializer)?
             .try_into()
             .map_err(serde::de::Error::custom)
     }
@@ -345,25 +340,25 @@ impl<'de> Deserialize<'de> for ProposalHostExperimentDispatchV1 {
 
 /// Trusted Worker result returned to the Controller before it becomes a model-visible observation.
 #[derive(Clone, Debug)]
-pub struct ProposalHostWorkerObservationV1 {
-    dispatch: ContentId<ProposalHostExperimentDispatchArtifact>,
+pub struct WorkflowToolWorkerObservationV1 {
+    dispatch: ContentId<WorkflowToolDispatchArtifact>,
     receipt_id: ContentId<ExecutionReceiptArtifact>,
     receipt: ExecutionReceipt,
     observation: serde_json::Value,
 }
 
-impl ProposalHostWorkerObservationV1 {
+impl WorkflowToolWorkerObservationV1 {
     /// Binds one trusted Worker receipt and public observation to the exact dispatch.
     ///
     /// # Errors
     ///
     /// Rejects job, attempt, contract, dispatch, receipt identity, or codec drift.
     pub fn new(
-        dispatch: &ProposalHostExperimentDispatchV1,
+        dispatch: &WorkflowToolDispatchV1,
         receipt_id: ContentId<ExecutionReceiptArtifact>,
         receipt: ExecutionReceipt,
         observation: serde_json::Value,
-    ) -> Result<Self, ProposalHostExperimentError> {
+    ) -> Result<Self, WorkflowToolError> {
         if dispatch.schema_version != schema_v1()
             || receipt.job_id() != dispatch.worker.job_id
             || receipt.attempt_id() != dispatch.worker.attempt_id
@@ -386,7 +381,7 @@ impl ProposalHostWorkerObservationV1 {
 }
 
 /// Trusted adapter selected by Controller policy for one external tool implementation.
-pub trait ProposalHostExperimentWorker {
+pub trait WorkflowToolWorker {
     /// Resolves an exact Worker job/attempt/contract without starting the external workload.
     ///
     /// # Errors
@@ -394,8 +389,8 @@ pub trait ProposalHostExperimentWorker {
     /// Returns a classified error when the adapter cannot prepare an exact execution binding.
     fn prepare(
         &mut self,
-        operation: &ProposalHostExperimentOperationV1,
-    ) -> Result<ProposalHostWorkerBindingV1, ProposalHostExperimentWorkerError>;
+        operation: &WorkflowToolOperationV1,
+    ) -> Result<WorkflowToolWorkerBindingV1, WorkflowToolWorkerError>;
 
     /// Executes only after the Controller has committed durable tool-operation start authority.
     ///
@@ -404,29 +399,29 @@ pub trait ProposalHostExperimentWorker {
     /// Returns a classified terminal or ambiguous Worker observation failure.
     fn execute(
         &mut self,
-        dispatch: &ProposalHostExperimentDispatchV1,
-    ) -> Result<ProposalHostWorkerObservationV1, ProposalHostExperimentWorkerError>;
+        dispatch: &WorkflowToolDispatchV1,
+    ) -> Result<WorkflowToolWorkerObservationV1, WorkflowToolWorkerError>;
 }
 
 /// Worker failure classification preserved by the neutral agent operation state machine.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum ProposalHostExperimentWorkerError {
-    #[error("Worker proved the experiment did not start: {0}")]
+pub enum WorkflowToolWorkerError {
+    #[error("Worker proved the requested operation did not start: {0}")]
     NotStarted(String),
-    #[error("Worker rejected the experiment: {0}")]
+    #[error("Worker rejected the requested operation: {0}")]
     Rejected(String),
-    #[error("Worker experiment outcome is ambiguous: {0}")]
+    #[error("Worker operation outcome is ambiguous: {0}")]
     Ambiguous(String),
 }
 
-/// Failure while validating, authorizing, executing, or publishing an experiment round trip.
+/// Failure while validating, authorizing, executing, or publishing a Worker round trip.
 #[derive(Debug, Error)]
-pub enum ProposalHostExperimentError {
-    #[error("invalid Proposal Host experiment: {0}")]
+pub enum WorkflowToolError {
+    #[error("invalid proposal-step Worker request: {0}")]
     Invalid(String),
-    #[error("Proposal Host experiment codec failed: {0}")]
+    #[error("proposal-step Worker request codec failed: {0}")]
     Codec(String),
-    #[error("Proposal Host experiment durable operation failed: {0}")]
+    #[error("proposal-step Worker operation failed: {0}")]
     Agent(String),
 }
 
@@ -434,15 +429,13 @@ pub enum ProposalHostExperimentError {
 #[serde(deny_unknown_fields)]
 struct ProvenanceBearingObservationV1 {
     schema_version: SchemaVersion,
-    controller_observation: ContentId<ProposalHostControllerObservationArtifact>,
+    controller_observation: ContentId<WorkflowToolControllerObservationArtifact>,
     oracle_observation: Option<ContentId<crate::OracleExplorationObservationArtifact>>,
-    executed: ProposalHostExecutedObservationV1,
+    executed: WorkflowToolExecutedObservationV1,
 }
 
 impl ProvenanceBearingObservationV1 {
-    fn new(
-        executed: ProposalHostExecutedObservationV1,
-    ) -> Result<Self, ProposalHostExperimentError> {
+    fn new(executed: WorkflowToolExecutedObservationV1) -> Result<Self, WorkflowToolError> {
         executed.validate()?;
         let controller_observation = executed.controller.identity()?;
         let oracle_observation = executed
@@ -459,7 +452,7 @@ impl ProvenanceBearingObservationV1 {
         })
     }
 
-    fn validate(self) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError> {
+    fn validate(self) -> Result<WorkflowToolExecutedObservationV1, WorkflowToolError> {
         if self.schema_version != schema_v1()
             || self.executed.controller.identity()? != self.controller_observation
             || self
@@ -478,49 +471,49 @@ impl ProvenanceBearingObservationV1 {
     }
 }
 
-/// Controller validates a Host yield, grants durable start authority, invokes the selected Worker,
+/// Controller validates a workflow tool request, grants durable start authority, invokes the selected Worker,
 /// and records a receipt-bound observation into the same episode operation stream.
 ///
-/// Calling the Proposal Host again after this function resumes the exact episode and projects the
-/// observation into its native continuation without another dispatch of the yielding model turn.
+/// Calling the Proposal step again after this function resumes the exact episode and projects the
+/// observation into its native continuation without another dispatch of the requesting model turn.
 ///
 /// # Errors
 ///
-/// Rejects Host/yield/binding/receipt drift, missing authority, classified Worker failures, and
+/// Rejects workflow-tool/binding/receipt drift, missing authority, classified Worker failures, and
 /// durable operation publication failures.
-pub fn execute_proposal_host_experiments<E, C, W>(
+pub fn execute_workflow_tools<E, C, W>(
     events: &mut E,
     content: &mut C,
-    host_request: &ProposalHostRequestV1,
-    experiment: &ProposalHostExperimentRequestV1,
+    workflow_request: &ProposalStepRequestV1,
+    worker_request: &WorkflowToolRequestV1,
     worker: &mut W,
-) -> Result<Vec<ProposalHostExecutedObservationV1>, ProposalHostExperimentError>
+) -> Result<Vec<WorkflowToolExecutedObservationV1>, WorkflowToolError>
 where
     E: EventStore,
     C: ContentStore,
-    W: ProposalHostExperimentWorker,
+    W: WorkflowToolWorker,
 {
-    experiment
-        .validate_against(host_request)
+    worker_request
+        .validate_against(workflow_request)
         .map_err(agent_error)?;
-    let durable = recover_bound_operations(events, content, host_request, experiment)?;
-    let mut observations = Vec::with_capacity(experiment.operations().len());
-    for yielded in experiment.operations() {
+    let durable = recover_bound_operations(events, content, workflow_request, worker_request)?;
+    let mut observations = Vec::with_capacity(worker_request.operations().len());
+    for requested in worker_request.operations() {
         let operation = durable
             .iter()
-            .find(|operation| operation.operation_id() == yielded.operation_id())
+            .find(|operation| operation.operation_id() == requested.operation_id())
             .ok_or_else(|| {
-                ProposalHostExperimentError::Invalid(
-                    "yielded operation is absent from the durable step binding".into(),
+                WorkflowToolError::Invalid(
+                    "requested operation is absent from the durable step binding".into(),
                 )
             })?;
-        validate_operation(operation, yielded)?;
+        validate_operation(operation, requested)?;
         observations.push(execute_one_experiment(
             events,
             content,
-            host_request,
-            experiment,
-            yielded,
+            workflow_request,
+            worker_request,
+            requested,
             operation.clone(),
             worker,
         )?);
@@ -531,40 +524,41 @@ where
 fn recover_bound_operations<E: EventStore, C: ContentStore>(
     events: &E,
     content: &mut C,
-    host_request: &ProposalHostRequestV1,
-    experiment: &ProposalHostExperimentRequestV1,
-) -> Result<Vec<PreparedToolOperation>, ProposalHostExperimentError> {
-    let episode = AgentEpisode::new(host_request.runtime().episode_id()).map_err(agent_error)?;
+    workflow_request: &ProposalStepRequestV1,
+    worker_request: &WorkflowToolRequestV1,
+) -> Result<Vec<PreparedToolOperation>, WorkflowToolError> {
+    let episode =
+        AgentEpisode::new(workflow_request.runtime().episode_id()).map_err(agent_error)?;
     let AgentEpisodeState::Active {
         step,
         model_attempt_id,
         step_state: AgentStepState::OperationsBound(bound),
     } = recover_agent_episode(events, content, &episode).map_err(agent_error)?
     else {
-        return invalid("Proposal Host episode is not waiting at a bound-operation safe point");
+        return invalid("Proposal step episode is not waiting at a bound-operation safe point");
     };
-    if step.step_id() != experiment.step_id()
-        || model_attempt_id != experiment.model_attempt_id()
-        || bound.operations().len() < experiment.operations().len()
+    if step.step_id() != worker_request.step_id()
+        || model_attempt_id != worker_request.model_attempt_id()
+        || bound.operations().len() < worker_request.operations().len()
     {
-        return invalid("Proposal Host experiment changed its durable step binding");
+        return invalid("proposal-step Worker request changed its step binding");
     }
     Ok(bound.into_operations())
 }
 
 fn validate_operation(
     durable: &PreparedToolOperation,
-    yielded: &ProposalHostExperimentOperationV1,
-) -> Result<(), ProposalHostExperimentError> {
-    if durable.tool() != yielded.tool()
-        || durable.implementation_version() != yielded.implementation_version()
-        || durable.effect() != yielded.effect()
-        || durable.arguments_id() != yielded.arguments_id()
+    requested: &WorkflowToolOperationV1,
+) -> Result<(), WorkflowToolError> {
+    if durable.tool() != requested.tool()
+        || durable.implementation_version() != requested.implementation_version()
+        || durable.effect() != requested.effect()
+        || durable.arguments_id() != requested.arguments_id()
         || cairn_codec::from_slice::<serde_json::Value>(durable.argument_bytes())
             .map_err(codec_error)?
-            != *yielded.arguments()
+            != *requested.arguments()
     {
-        return invalid("Proposal Host experiment differs from its durable operation binding");
+        return invalid("proposal-step Worker request differs from its operation binding");
     }
     Ok(())
 }
@@ -572,31 +566,33 @@ fn validate_operation(
 fn execute_one_experiment<E, C, W>(
     events: &mut E,
     content: &mut C,
-    host_request: &ProposalHostRequestV1,
-    experiment: &ProposalHostExperimentRequestV1,
-    yielded: &ProposalHostExperimentOperationV1,
+    workflow_request: &ProposalStepRequestV1,
+    worker_request: &WorkflowToolRequestV1,
+    requested: &WorkflowToolOperationV1,
     operation: PreparedToolOperation,
     worker: &mut W,
-) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError>
+) -> Result<WorkflowToolExecutedObservationV1, WorkflowToolError>
 where
     E: EventStore,
     C: ContentStore,
-    W: ProposalHostExperimentWorker,
+    W: WorkflowToolWorker,
 {
     match recover_tool_operation(events, operation.operation_id()).map_err(agent_error)? {
         ToolOperationState::Completed { result_id, .. } => {
-            return recover_executed_observation(content, result_id, host_request);
+            return recover_executed_observation(content, result_id, workflow_request);
         }
         ToolOperationState::NotFound => {}
-        _ => return invalid("Proposal Host experiment operation requires explicit reconciliation"),
+        _ => {
+            return invalid("proposal-step Worker operation requires explicit reconciliation");
+        }
     }
     let binding = worker
-        .prepare(yielded)
+        .prepare(requested)
         .map_err(|error| worker_error(&error))?;
     let tool_attempt_id = AttemptId::new();
-    let dispatch = ProposalHostExperimentDispatchV1 {
+    let dispatch = WorkflowToolDispatchV1 {
         schema_version: schema_v1(),
-        experiment: experiment.identity().map_err(agent_error)?,
+        worker_request: worker_request.identity().map_err(agent_error)?,
         operation_id: operation.operation_id(),
         tool_attempt_id,
         worker: binding,
@@ -614,7 +610,7 @@ where
     let mut gateway = WorkerGateway {
         worker,
         dispatch,
-        host_request,
+        workflow_request,
         executed: None,
     };
     let _ = execute_tool_operation(
@@ -628,17 +624,17 @@ where
     .map_err(agent_error)?;
     gateway
         .executed
-        .ok_or_else(|| ProposalHostExperimentError::Agent("Worker returned no observation".into()))
+        .ok_or_else(|| WorkflowToolError::Agent("Worker returned no observation".into()))
 }
 
 struct WorkerGateway<'a, W> {
     worker: &'a mut W,
-    dispatch: ProposalHostExperimentDispatchV1,
-    host_request: &'a ProposalHostRequestV1,
-    executed: Option<ProposalHostExecutedObservationV1>,
+    dispatch: WorkflowToolDispatchV1,
+    workflow_request: &'a ProposalStepRequestV1,
+    executed: Option<WorkflowToolExecutedObservationV1>,
 }
 
-impl<W: ProposalHostExperimentWorker> ToolGateway for WorkerGateway<'_, W> {
+impl<W: WorkflowToolWorker> ToolGateway for WorkerGateway<'_, W> {
     fn invoke(
         &mut self,
         operation: &PreparedToolOperation,
@@ -652,15 +648,11 @@ impl<W: ProposalHostExperimentWorker> ToolGateway for WorkerGateway<'_, W> {
             .worker
             .execute(&self.dispatch)
             .map_err(|error| match error {
-                ProposalHostExperimentWorkerError::NotStarted(message) => {
+                WorkflowToolWorkerError::NotStarted(message) => {
                     ToolGatewayError::NotStarted(message)
                 }
-                ProposalHostExperimentWorkerError::Rejected(message) => {
-                    ToolGatewayError::Rejected(message)
-                }
-                ProposalHostExperimentWorkerError::Ambiguous(message) => {
-                    ToolGatewayError::Ambiguous(message)
-                }
+                WorkflowToolWorkerError::Rejected(message) => ToolGatewayError::Rejected(message),
+                WorkflowToolWorkerError::Ambiguous(message) => ToolGatewayError::Ambiguous(message),
             })?;
         if observed.dispatch
             != self
@@ -673,9 +665,9 @@ impl<W: ProposalHostExperimentWorker> ToolGateway for WorkerGateway<'_, W> {
             ));
         }
         let controller =
-            ProposalHostControllerObservationV1::from_worker(self.dispatch.clone(), observed)
+            WorkflowToolControllerObservationV1::from_worker(self.dispatch.clone(), observed)
                 .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
-        let executed = project_observation(self.host_request, controller)
+        let executed = project_observation(self.workflow_request, controller)
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
         let envelope = ProvenanceBearingObservationV1::new(executed.clone())
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
@@ -688,14 +680,14 @@ impl<W: ProposalHostExperimentWorker> ToolGateway for WorkerGateway<'_, W> {
 }
 
 fn project_observation(
-    host_request: &ProposalHostRequestV1,
-    controller: ProposalHostControllerObservationV1,
-) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError> {
-    let (oracle_payload, oracle_observation) = match host_request.role() {
-        ProposalHostRoleRequestV1::OracleStrategy { work_item, run, .. } => {
+    workflow_request: &ProposalStepRequestV1,
+    controller: WorkflowToolControllerObservationV1,
+) -> Result<WorkflowToolExecutedObservationV1, WorkflowToolError> {
+    let (oracle_payload, oracle_observation) = match workflow_request.role() {
+        ProposalStepRoleRequestV1::OracleStrategy { work_item, run, .. } => {
             let source = controller.identity()?;
             let payload = OracleObservationPayloadV1::new(source, controller.observation().clone());
-            let observation = OracleExplorationObservationV1::proposal_host_effect(
+            let observation = OracleExplorationObservationV1::workflow_tool(
                 work_item.identity().map_err(agent_error)?,
                 run.identity().map_err(agent_error)?,
                 source,
@@ -706,7 +698,7 @@ fn project_observation(
         }
         _ => (None, None),
     };
-    let executed = ProposalHostExecutedObservationV1 {
+    let executed = WorkflowToolExecutedObservationV1 {
         controller,
         oracle_payload,
         oracle_observation,
@@ -718,8 +710,8 @@ fn project_observation(
 fn recover_executed_observation<C: ContentStore>(
     content: &C,
     result: ContentId<OperationResult>,
-    host_request: &ProposalHostRequestV1,
-) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError> {
+    workflow_request: &ProposalStepRequestV1,
+) -> Result<WorkflowToolExecutedObservationV1, WorkflowToolError> {
     let mut bytes = Vec::new();
     content.write_to(&result, &mut bytes).map_err(agent_error)?;
     let envelope: ProvenanceBearingObservationV1 =
@@ -728,9 +720,9 @@ fn recover_executed_observation<C: ContentStore>(
         return invalid("persisted effect result is not canonical current V1");
     }
     let executed = envelope.validate()?;
-    let expected = project_observation(host_request, executed.controller.clone())?;
+    let expected = project_observation(workflow_request, executed.controller.clone())?;
     if executed != expected {
-        return invalid("persisted effect result changed its Host role projection");
+        return invalid("persisted effect result changed its workflow role projection");
     }
     Ok(executed)
 }
@@ -739,31 +731,31 @@ fn schema_v1() -> SchemaVersion {
     SchemaVersion::new(1).expect("schema version one is valid")
 }
 
-fn observed_now() -> Result<ObservedAtUnixMillis, ProposalHostExperimentError> {
+fn observed_now() -> Result<ObservedAtUnixMillis, WorkflowToolError> {
     let milliseconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(agent_error)?
         .as_millis();
     Ok(ObservedAtUnixMillis::new(
         i64::try_from(milliseconds)
-            .map_err(|_| ProposalHostExperimentError::Agent("wall clock overflow".into()))?,
+            .map_err(|_| WorkflowToolError::Agent("wall clock overflow".into()))?,
     ))
 }
 
-fn invalid<T>(message: &str) -> Result<T, ProposalHostExperimentError> {
-    Err(ProposalHostExperimentError::Invalid(message.into()))
+fn invalid<T>(message: &str) -> Result<T, WorkflowToolError> {
+    Err(WorkflowToolError::Invalid(message.into()))
 }
 
-fn codec_error(error: impl std::fmt::Display) -> ProposalHostExperimentError {
-    ProposalHostExperimentError::Codec(error.to_string())
+fn codec_error(error: impl std::fmt::Display) -> WorkflowToolError {
+    WorkflowToolError::Codec(error.to_string())
 }
 
-fn agent_error(error: impl std::fmt::Display) -> ProposalHostExperimentError {
-    ProposalHostExperimentError::Agent(error.to_string())
+fn agent_error(error: impl std::fmt::Display) -> WorkflowToolError {
+    WorkflowToolError::Agent(error.to_string())
 }
 
-fn worker_error(error: &ProposalHostExperimentWorkerError) -> ProposalHostExperimentError {
-    ProposalHostExperimentError::Agent(error.to_string())
+fn worker_error(error: &WorkflowToolWorkerError) -> WorkflowToolError {
+    WorkflowToolError::Agent(error.to_string())
 }
 
 #[cfg(test)]
@@ -779,7 +771,7 @@ mod tests {
     }
 
     fn receipt(
-        binding: &ProposalHostWorkerBindingV1,
+        binding: &WorkflowToolWorkerBindingV1,
     ) -> (ContentId<ExecutionReceiptArtifact>, ExecutionReceipt) {
         let bytes = cairn_codec::to_vec(&serde_json::json!({
             "schema_version":1,
@@ -804,20 +796,20 @@ mod tests {
 
     #[test]
     fn worker_observation_binds_dispatch_job_attempt_contract_and_receipt() {
-        let binding = ProposalHostWorkerBindingV1::new(
+        let binding = WorkflowToolWorkerBindingV1::new(
             JobId::new(),
             AttemptId::new(),
             id::<JobContractArtifact>(b"contract"),
         );
-        let dispatch = ProposalHostExperimentDispatchV1 {
+        let dispatch = WorkflowToolDispatchV1 {
             schema_version: schema_v1(),
-            experiment: id::<ProposalHostExperimentRequestArtifact>(b"experiment"),
+            worker_request: id::<WorkflowToolRequestArtifact>(b"worker_request"),
             operation_id: OperationId::new(),
             tool_attempt_id: AttemptId::new(),
             worker: binding.clone(),
         };
         let (receipt_id, receipt) = receipt(&binding);
-        ProposalHostWorkerObservationV1::new(
+        WorkflowToolWorkerObservationV1::new(
             &dispatch,
             receipt_id,
             receipt.clone(),
@@ -828,23 +820,23 @@ mod tests {
         let mut non_v1 = serde_json::to_value(&dispatch).expect("dispatch value");
         non_v1["schema_version"] = serde_json::json!(2);
         assert!(
-            cairn_codec::from_slice::<ProposalHostExperimentDispatchV1>(
+            cairn_codec::from_slice::<WorkflowToolDispatchV1>(
                 &cairn_codec::to_vec(&non_v1).expect("non-v1 bytes")
             )
             .is_err()
         );
 
-        let changed = ProposalHostWorkerBindingV1::new(
+        let changed = WorkflowToolWorkerBindingV1::new(
             JobId::new(),
             binding.attempt_id(),
             binding.contract_id(),
         );
-        let changed_dispatch = ProposalHostExperimentDispatchV1 {
+        let changed_dispatch = WorkflowToolDispatchV1 {
             worker: changed,
             ..dispatch
         };
         assert!(
-            ProposalHostWorkerObservationV1::new(
+            WorkflowToolWorkerObservationV1::new(
                 &changed_dispatch,
                 receipt_id,
                 receipt,

@@ -41,7 +41,6 @@ cairn/
 │   ├── cairn-verification/          # 经证明可共享的 admission mechanics
 │   ├── cairn-cuda-ascend/           # 唯一 CUDA→Ascend C 产品领域与应用层
 │   ├── cairn-server/                # Controller composition root / App Server
-│   ├── cairn-proposal-host/         # SIR/Oracle/Planner/Candidate role-scoped episode process
 │   ├── cairn-admission/             # 独立 Admission authority process
 │   ├── cairn-worker/                # 通用 managed execution worker
 │   ├── cairn-observability/         # 进程日志初始化与字段政策
@@ -59,12 +58,12 @@ cairn/
 └── release/
 ```
 
-只有 `cairn-proposal-host` 和 `cairn-admission` 是新架构明确要求增加的进程 crate。
+只有 `cairn-admission` 是新架构明确要求增加的 authority 进程 crate。
 Hardware、Knowledge、Feedback、Intent、Oracle、Candidate 首期都先放在产品 crate 的独立 module；出现
 第二种实现、无法接受的编译依赖或独立部署需求后再决定拆 crate。
 
-DEV-008的`cairn-sir`曾是one-shot typed ingress/capability proof，并非目标树的一部分；DEV-022的通用
-Proposal Host接管production SIR后已直接删除该crate/path，没有alias、dual launcher或compatibility adapter。
+历史 proposal one-shot crate 不是目标树的一部分；current V1 已删除该路径，没有 alias、dual launcher
+或 compatibility adapter。
 
 ## 3. Crate 责任
 
@@ -116,15 +115,12 @@ reduction fixture 而迫使新架构继承错误抽象。
 | Crate | 进程责任 | 允许依赖 |
 | --- | --- | --- |
 | `cairn-server` | Controller、API、process manager、scheduler、public stores、adapter composition | 产品层及所有必要基础 ports/adapters |
-| `cairn-proposal-host` | 运行 SIR、Oracle synthesis/adversarial、typed Planner、Candidate 等 durable proposal episode | 产品 proposal protocol、`cairn-agent`、严格 capability client |
 | `cairn-admission` | restricted store、typed gates、public outcome/diagnostic surface | 产品 admission types、verification mechanics、execution/public-read clients |
 | `cairn-worker` | 认证连接、执行 opaque authorized job、回传 worker evidence | execution/control transport/adapters，不依赖产品 crate |
 
-`cairn-proposal-host` 是运行载体，不是把所有 role 混成一个 session。一个 process instance 只可承载
-具有相同 OS/external capability boundary 的 episode；每个 episode 仍有独立 `EpisodeRole`、typed
-profile、capability grant、artifact namespace 和 private continuation。边界不同或需执行不可信 tool
-时按 policy 拆 process instance。Admission gate 不链接 model provider adapter；需要推理的 typed
-Planner 在 proposal host 中运行。
+SIR、Oracle、Candidate 与 typed planning 是 `cairn-server` 主 workflow 中的 distinct typed step；
+领域 profile 位于产品 crate，通用 model/tool runtime 位于 `cairn-agent`。Admission gate 不链接 model
+provider adapter；任何申请代码或设备 effect 都通过 `cairn-worker` 执行。
 
 ## 4. 产品 crate 内部结构
 
@@ -262,46 +258,12 @@ crates/cairn-server/src/
 当前 `cairn-server/src/lib.rs` 的 composition/state 代码在相应实施 slice 中逐步移入上述模块。不要先做
 无行为变化的大爆炸重排；也不要继续把新的 product process manager 写入巨型 `lib.rs`。
 
-### 5.2 Proposal Host 与历史 SIR ingress
+### 5.2 主 workflow proposal steps
 
-下列目录是target organization，不是一次性重排清单。首个DeepSeek-backed SIR proof复用现有
-`cairn-agent`形成真实episode；DEV-008的one-shot `cairn-sir`只是一项历史typed ingress/capability proof。
-DEV-022已创建最小`cairn-proposal-host`并承载现有SIR/Candidate role-scoped lifecycle；Oracle role仍须等待
-真实consumer，不能按目录草图预建空实现。DEV-024又删除SIR/Candidate各自复制的runner主体与旁路测试；领域
-profile adapter现在只负责context/tool/submission schema，统一进入`cairn-migration::proposal_loop`。
-DEV-025在`cairn-server::controller_workflow`中新增完整typed composition skeleton。这里的“空”仅指stage trait
-port尚无concrete implementation；没有no-op body、伪artifact或persisted schema。后续仍不得按目录草图预建各
-role runtime，实现必须逐个绑定真实consumer。
-
-```text
-crates/cairn-proposal-host/src/
-├── main.rs
-├── host.rs
-├── role_manifest.rs
-├── context_projection.rs
-├── tool_gateway.rs
-├── artifact_submission.rs
-└── roles/
-    ├── sir.rs
-    ├── oracle_synthesis.rs
-    ├── oracle_adversarial.rs
-    ├── admission/
-    │   ├── intent.rs
-    │   ├── oracle.rs
-    │   ├── hardware.rs
-    │   ├── performance.rs
-    │   ├── candidate.rs
-    │   ├── knowledge.rs
-    │   └── skill.rs
-    └── candidate_search.rs
-```
-
-`roles/` 只适配产品侧 profile 的 instruction/template、tool menu 和 proposal schema，不拥有独立
-authority，也不在 Host 内定义第二份 role catalog。产品侧 Agent catalog、调用和交互规则见
-[`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)；Admission planning 的 type-specific profile 和 plan
-schema 归属见 [`ADMISSION_ARCHITECTURE.md`](ADMISSION_ARCHITECTURE.md)。若某 role
-未来不使用模型或依赖完全不同，可由 process protocol 支持另一实现；不要在 host 中增加 runtime
-plugin ABI。
+SIR、Oracle、Candidate 与 typed planning 的领域 input、prompt projection、tool menu 和 submission schema
+位于产品 crate；`cairn-agent`只承载领域中立的 model turn/tool operation runtime；`cairn-server`负责把这些
+步骤组合进同一个 Controller workflow。不存在 proposal process crate、role launcher、process protocol、
+私有 episode database 或 runtime plugin ABI。需要外部能力的 tool request 进入统一 Worker 调度路径。
 
 ### 5.3 Admission
 
@@ -415,7 +377,6 @@ flowchart TD
     sqlite["cairn-store-sqlite"]
     transport["cairn-control-transport"]
     server["cairn-server"]
-    proposal["cairn-proposal-host"]
     admission["cairn-admission"]
     worker["cairn-worker"]
 
@@ -438,8 +399,6 @@ flowchart TD
     server --> execution
     server --> sqlite
     server --> transport
-    proposal --> product
-    proposal --> agent
     admission --> product
     admission --> verification
     admission --> execution
@@ -451,7 +410,7 @@ flowchart TD
 
 - `cairn-agent`、`cairn-execution`、`cairn-worker` 依赖产品 crate；
 - product crate 依赖 `cairn-server`、SQLite、Docker、具体 provider；
-- proposal process 依赖 restricted store adapter；
+- Controller proposal-step module 依赖 restricted store adapter；
 - Controller 依赖 restricted admission storage implementation；
 - Admission gate 依赖 model transport；
 - 任意 crate 使用 sibling repository path dependency。
@@ -467,7 +426,7 @@ flowchart TD
 | Docker executor/device probe | `cairn-worker` 或 execution adapter module |
 | model provider HTTP/native protocol | `cairn-agent` |
 | Controller external API | `cairn-server` |
-| SIR/Oracle/Candidate model and analysis composition | `cairn-proposal-host` role adapter；执行 effect 仍由 Worker |
+| SIR/Oracle/Candidate model and analysis composition | 产品 profile + `cairn-server` workflow composition；执行 effect 由 Worker |
 | hidden corpus/restricted CAS | `cairn-admission` private adapter |
 | CUDA/Ascend build/run/profiler job assembler | 产品 crate定义 contract，Controller/Admission adapter 组装 job |
 
@@ -488,7 +447,7 @@ Profiler parser 若影响 verdict，解析规则本身属于需要 qualification
 每个 port 有复用 contract suite，所有 adapter 都必须运行：
 
 - event/CAS integrity、restart 和 corruption；
-- Proposal Host/Admission process protocol；
+- proposal step/Admission process protocol；
 - model provider continuation；
 - worker/job/evidence capture；
 - knowledge/skill loader 和 hidden-index exclusion；
@@ -516,7 +475,7 @@ Profiler parser 若影响 verdict，解析规则本身属于需要 qualification
 - 当前 schema 只有 V1，且无 migration/compatibility reader；
 - public/restricted content IDs 不能跨 port 调用；
 - Agent profile catalog 数量由当前 typed entries 派生，不能硬编码为 protocol/process 常量；
-- 同 Host episode 只能经冻结 artifact/typed event 建立交互边，private continuation/context 不可串流；
+- 不同 Agent step 只能经冻结 artifact/typed event 建立交互边，private continuation/context 不可串流；
 - superseded `cairn-migration` 名称在完成替换后不存在。
 
 ## 10. 当前到目标的代码归宿

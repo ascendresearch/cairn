@@ -1,4 +1,7 @@
-# DEV-029 implementation — Controller-authorized Proposal Host experiment round trip
+# DEV-029 implementation — Controller-authorized proposal step experiment round trip
+
+> Amended by D-044/DEV-036: the exact Worker observation lineage remains; the private process
+> journal/yield protocol described below was replaced by `WorkflowTool*` in the main workflow.
 
 - 状态：`Accepted`
 - 日期：2026-08-29
@@ -8,7 +11,7 @@
 
 ## 1. Objective
 
-补齐所有Proposal Loop共同需要的真实控制面接缝：Agent提出external-effect tool call后，Proposal Host不执行、
+补齐所有Proposal Loop共同需要的真实控制面接缝：Agent提出external-effect tool call后，proposal step不执行、
 不报成不可恢复错误，也不重开episode；它返回request/episode/step/model-attempt/operation/implementation/effect/
 exact arguments绑定的current-V1 durable yield。Controller重新验证Host journal，先提交operation start authority，
 再允许选定的Worker adapter执行；receipt-bound observation归档后，同一个episode从原native continuation继续。
@@ -25,21 +28,21 @@ open or recover durable episode
 → advance or complete
 ```
 
-`execute_proposal_host_experiments`只表达：validate exact yield → recover durable bindings → prepare
+`execute_workflow_tools`只表达：validate exact yield → recover durable bindings → prepare
 Worker binding → commit tool-operation authorization/start → execute Worker adapter → archive canonical observation。
 每一步继续由小函数和distinct strong types承载，不把恢复、权限或provenance塞回一个大函数。
 
 ## 3. Current-V1 contracts与authority
 
-- `ProposalHostOutcomeV1`直接取代terminal-only stdout contract，只允许`Terminal`或
+- `ProposalStepOutcomeV1`直接取代terminal-only stdout contract，只允许`Terminal`或
   `AwaitingController`；没有legacy reader、双写或版本升级；
-- `ProposalHostExperimentRequestV1`绑定Host request、episode、step、model attempt和非空unique operations；
+- `WorkflowToolRequestV1`绑定Host request、episode、step、model attempt和非空unique operations；
 - 每个operation绑定`OperationId`、`ToolName`、`ToolImplementationVersion`、trusted
   `ToolEffectClass`、`ContentId<ToolArguments>`及exact canonical arguments；pure/read-only不能伪装成experiment；
-- `ProposalHostExperimentDispatchV1`把Host operation与Controller选定的Worker job/attempt/contract绑定；
-- `ProposalHostWorkerObservationV1`要求canonical `ExecutionReceipt`的job/attempt/contract及content identity与
+- `WorkflowToolDispatchV1`把Host operation与Controller选定的Worker job/attempt/contract绑定；
+- `WorkflowToolWorkerObservationV1`要求canonical `ExecutionReceipt`的job/attempt/contract及content identity与
   dispatch完全一致；模型可见`OperationResult`同时包含dispatch和完整receipt provenance；
-- Proposal Host仍只有pure/read-only gateway authority。`authorize_tool_operation`和
+- proposal step仍只有pure/read-only gateway authority。`authorize_tool_operation`和
   `begin_tool_operation`的durable facts在Worker adapter调用之前提交，Host和模型都不能制造start authority。
 
 ## 4. Same-episode resume与进程边界
@@ -49,14 +52,14 @@ Proposal Loop入口先调用`recover_agent_episode`。在external-effect safe po
 `OperationResult`追加到continuation，再推进新step。不会重发提出experiment的model turn，也不会生成替代
 episode/operation identity。
 
-`cairn-proposal-host`对子进程yield和terminal都重开SQLite/CAS验证。只有terminal outcome写入terminal checkpoint；
+`cairn-proposal-step`对子进程yield和terminal都重开SQLite/CAS验证。只有terminal outcome写入terminal checkpoint；
 yield保持episode可继续。Controller supervisor公开同一state directory上的验证/执行入口；Controller和Candidate
 manager把yield报告成typed waiting/blocked状态，不再误分类为Host process failure。
 
 ## 5. 替代与删除的旧路径
 
 - 删除`ProposalLoopError::ExternalEffectRequiresController(String)`硬错误路径；
-- 删除terminal-only Proposal Host stdout解码假设，直接修改current V1为`ProposalHostOutcomeV1`；
+- 删除terminal-only proposal step stdout解码假设，直接修改current V1为`ProposalStepOutcomeV1`；
 - 删除Host restart必然要求completed episode的假设，改为分别验证terminal或bound-operation safe point；
 - external effect不再经过Host-local `ToolGateway`，也没有fallback执行、generic-ID alias、兼容codec或隐式新episode。
 

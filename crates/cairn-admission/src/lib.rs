@@ -1,22 +1,14 @@
-//! Deterministic Intent Admission types, promotion gate, and first contract-only Oracle consumer.
+//! Deterministic, task-generic Intent Admission types and promotion gate.
 
-use std::{fmt, io::Cursor, str::FromStr};
+use std::{fmt, str::FromStr};
 
 use cairn_migration::{
-    AdmittedCollectionOracleClaimArtifact, AdmittedCollectionOracleClaimV1,
-    AssembledCollectionF32OracleCaseInput, AuthoritativeIntentClaimV1,
-    CollectionOracleAdmissionGateArtifact, CollectionOracleClaimProposalArtifact,
-    CollectionOracleQualificationExecution, CollectionOracleQualificationReceiptArtifact,
-    CollectionOutputComparisonEvidenceArtifact, CollectionOutputOracleDecisionV1,
-    CollectionOutputOraclePolicyV1, CollectionOutputOrderContractV1, IntentHypothesisSetProposalV1,
-    IntentRecoveryInputArtifact, IntentRecoveryInputV1, MigrationIntentContractArtifact,
-    PreparedAdmittedCollectionOracleClaim, SirCallerClaimId, SirHypothesisId,
+    AuthoritativeIntentClaimV1, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
+    IntentRecoveryInputV1, MigrationIntentContractArtifact, SirCallerClaimId, SirHypothesisId,
     SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
-    UserIntentDecisionRequestV1, collection_oracle_admission_gate_id,
-    derive_user_intent_decision_requests,
+    UserIntentDecisionRequestV1, derive_user_intent_decision_requests,
 };
 use cairn_protocol::{ContentId, ContentType, SchemaVersion, TaskId};
-use cairn_record::ContentStore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
@@ -157,10 +149,55 @@ impl<'de> Deserialize<'de> for TaskIntentAuthoritySubject {
 }
 
 /// Claim-scoped authority granted by the Controller after authenticating the task authority.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum UserIntentAuthorityScopeV1 {
-    CollectionOutput { selection_claim: SirCallerClaimId },
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UserIntentAuthorityScopeV1 {
+    claims: Vec<SirCallerClaimId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserIntentAuthorityScopeWire {
+    claims: Vec<SirCallerClaimId>,
+}
+
+impl UserIntentAuthorityScopeV1 {
+    /// Creates a bounded, sorted set of caller-authoritative claims.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty, oversized, unsorted, or duplicate claim set.
+    pub fn new(claims: Vec<SirCallerClaimId>) -> Result<Self, IntentPromotionError> {
+        if claims.is_empty()
+            || claims.len() > 16
+            || claims.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(IntentPromotionError::InvalidStructure(
+                "user intent authority claim order",
+            ));
+        }
+        Ok(Self { claims })
+    }
+
+    #[must_use]
+    pub fn claims(&self) -> &[SirCallerClaimId] {
+        &self.claims
+    }
+}
+
+impl TryFrom<UserIntentAuthorityScopeWire> for UserIntentAuthorityScopeV1 {
+    type Error = IntentPromotionError;
+
+    fn try_from(wire: UserIntentAuthorityScopeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.claims)
+    }
+}
+
+impl<'de> Deserialize<'de> for UserIntentAuthorityScopeV1 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        UserIntentAuthorityScopeWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
 }
 
 /// Exact Controller-published authority grant.
@@ -246,14 +283,48 @@ impl<'de> Deserialize<'de> for UserIntentAuthorityGrantV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum UserIntentDecisionResponseV1 {
-    SelectHypothesis {
-        hypothesis: SirHypothesisId,
-        authoritative_claim: AuthoritativeIntentClaimV1,
-    },
+    SelectHypothesis { hypothesis: SirHypothesisId },
     KeepUnknown,
-    ProvideAuthoritativeClaim {
-        authoritative_claim: AuthoritativeIntentClaimV1,
-    },
+    ProvideAuthoritativeClaim { claim: UserProvidedIntentClaimV1 },
+}
+
+/// Task-authority semantics supplied when none of the proposed hypotheses is acceptable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserProvidedIntentClaimV1 {
+    layer: cairn_migration::SirIntentLayer,
+    semantics: cairn_migration::SirHypothesisClaim,
+    domain: cairn_migration::SirIntentDomain,
+}
+
+impl UserProvidedIntentClaimV1 {
+    #[must_use]
+    pub const fn new(
+        layer: cairn_migration::SirIntentLayer,
+        semantics: cairn_migration::SirHypothesisClaim,
+        domain: cairn_migration::SirIntentDomain,
+    ) -> Self {
+        Self {
+            layer,
+            semantics,
+            domain,
+        }
+    }
+
+    #[must_use]
+    pub const fn layer(&self) -> cairn_migration::SirIntentLayer {
+        self.layer
+    }
+
+    #[must_use]
+    pub const fn semantics(&self) -> &cairn_migration::SirHypothesisClaim {
+        &self.semantics
+    }
+
+    #[must_use]
+    pub const fn domain(&self) -> &cairn_migration::SirIntentDomain {
+        &self.domain
+    }
 }
 
 /// User answer bound to an exact request and Controller authority grant.
@@ -306,6 +377,11 @@ impl UserIntentDecisionV1 {
     #[must_use]
     pub const fn authority_grant(&self) -> ContentId<UserIntentAuthorityGrantArtifact> {
         self.authority_grant
+    }
+
+    #[must_use]
+    pub const fn response(&self) -> &UserIntentDecisionResponseV1 {
+        &self.response
     }
 }
 
@@ -656,10 +732,7 @@ pub fn promote_user_intent(
     }
 
     let (selected_hypothesis, admitted_claim) = match &decision.response {
-        UserIntentDecisionResponseV1::SelectHypothesis {
-            hypothesis,
-            authoritative_claim,
-        } => {
+        UserIntentDecisionResponseV1::SelectHypothesis { hypothesis } => {
             if !request
                 .options()
                 .iter()
@@ -667,11 +740,35 @@ pub fn promote_user_intent(
             {
                 return Err(IntentPromotionError::UnofferedHypothesis);
             }
-            (Some(hypothesis.clone()), authoritative_claim.clone())
+            let selected = proposal
+                .submission()
+                .hypotheses()
+                .iter()
+                .find(|candidate| candidate.id() == hypothesis)
+                .ok_or(IntentPromotionError::UnofferedHypothesis)?;
+            let caller_claims = scoped_caller_claims(grant, recovery_input)?;
+            let operation = cairn_migration::OperationIntentV1::new(
+                caller_claims,
+                selected.layer(),
+                selected.claim().clone(),
+                selected.domain().clone(),
+            )
+            .map_err(|error| IntentPromotionError::Migration(error.to_string()))?;
+            (
+                Some(hypothesis.clone()),
+                AuthoritativeIntentClaimV1::new(operation),
+            )
         }
-        UserIntentDecisionResponseV1::ProvideAuthoritativeClaim {
-            authoritative_claim,
-        } => (None, authoritative_claim.clone()),
+        UserIntentDecisionResponseV1::ProvideAuthoritativeClaim { claim } => {
+            let operation = cairn_migration::OperationIntentV1::new(
+                scoped_caller_claims(grant, recovery_input)?,
+                claim.layer(),
+                claim.semantics().clone(),
+                claim.domain().clone(),
+            )
+            .map_err(|error| IntentPromotionError::Migration(error.to_string()))?;
+            (None, AuthoritativeIntentClaimV1::new(operation))
+        }
         UserIntentDecisionResponseV1::KeepUnknown => {
             return Err(IntentPromotionError::KeptUnknown);
         }
@@ -707,22 +804,48 @@ pub fn promote_user_intent(
     })
 }
 
+fn scoped_caller_claims(
+    grant: &UserIntentAuthorityGrantV1,
+    recovery_input: &IntentRecoveryInputV1,
+) -> Result<Vec<cairn_migration::SirCallerClaimV1>, IntentPromotionError> {
+    grant
+        .scope()
+        .claims()
+        .iter()
+        .map(|authority_claim| {
+            recovery_input
+                .request()
+                .caller()
+                .claims()
+                .iter()
+                .find(|claim| claim.id() == authority_claim)
+                .cloned()
+                .ok_or(IntentPromotionError::AuthorityScope)
+        })
+        .collect()
+}
+
 fn validate_authority_scope(
     grant: &UserIntentAuthorityGrantV1,
     recovery_input: &IntentRecoveryInputV1,
     admitted_claim: &AuthoritativeIntentClaimV1,
 ) -> Result<(), IntentPromotionError> {
-    let (
-        UserIntentAuthorityScopeV1::CollectionOutput { selection_claim },
-        AuthoritativeIntentClaimV1::CollectionOutput(contract),
-    ) = (&grant.scope, admitted_claim);
-    if selection_claim != contract.selection_claim()
-        || !recovery_input
-            .request()
-            .caller()
+    let admitted_caller_claims = admitted_claim.operation().caller_claims();
+    if grant.scope.claims().len() != admitted_caller_claims.len()
+        || !grant
+            .scope
             .claims()
             .iter()
-            .any(|claim| claim.id() == selection_claim)
+            .zip(admitted_caller_claims)
+            .all(|(authority_claim, admitted)| authority_claim == admitted.id())
+        || !grant.scope.claims().iter().all(|authority_claim| {
+            recovery_input
+                .request()
+                .caller()
+                .claims()
+                .iter()
+                .any(|claim| claim.id() == authority_claim)
+        })
     {
         return Err(IntentPromotionError::AuthorityScope);
     }
@@ -738,406 +861,6 @@ pub fn intent_user_decision_gate_id()
 -> Result<ContentId<IntentUserDecisionGateArtifact>, IntentPromotionError> {
     ContentId::derive(INTENT_USER_DECISION_GATE_V1)
         .map_err(|error| IntentPromotionError::Codec(error.to_string()))
-}
-
-/// Derives the first real Oracle comparator decision only from a public admitted outcome.
-///
-/// A proposal cannot be substituted for the admitted outcome.
-///
-/// ```compile_fail
-/// use cairn_admission::derive_collection_output_oracle_decision;
-/// use cairn_migration::IntentHypothesisSetProposalV1;
-/// fn invalid(proposal: &IntentHypothesisSetProposalV1) {
-///     let _ = derive_collection_output_oracle_decision(proposal);
-/// }
-/// ```
-///
-/// # Errors
-///
-/// Rejects a malformed outcome or a contract without collection-output semantics.
-pub fn derive_collection_output_oracle_decision(
-    outcome: &IntentAdmissionPublicOutcomeV1,
-) -> Result<CollectionOutputOracleDecisionV1, IntentPromotionError> {
-    if outcome.schema_version != schema_v1() {
-        return Err(IntentPromotionError::InvalidStructure(
-            "intent admission public outcome",
-        ));
-    }
-    let AuthoritativeIntentClaimV1::CollectionOutput(contract) = &outcome.contract.admitted_claim;
-    let policy = match contract.order() {
-        CollectionOutputOrderContractV1::UnspecifiedPermutation => {
-            CollectionOutputOraclePolicyV1::ExactMultisetAndCount
-        }
-        CollectionOutputOrderContractV1::StableInputRelative => {
-            CollectionOutputOraclePolicyV1::ExactSequenceAndCount
-        }
-    };
-    Ok(CollectionOutputOracleDecisionV1::new(
-        outcome.contract.identity()?,
-        contract.selection_claim().clone(),
-        policy,
-    ))
-}
-
-/// Exact restricted Oracle Admission decision committed before its public outcome.
-pub enum RestrictedCollectionOracleAdmissionDecisionArtifact {}
-
-impl ContentType for RestrictedCollectionOracleAdmissionDecisionArtifact {
-    const DOMAIN: &'static str = "migration.oracle-collection-admission-decision-restricted.v1";
-}
-
-/// Restricted decision binding the exact admitted intent and qualified local claim.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RestrictedCollectionOracleAdmissionDecisionV1 {
-    schema_version: SchemaVersion,
-    gate: ContentId<CollectionOracleAdmissionGateArtifact>,
-    intent_restricted_decision: ContentId<RestrictedIntentAdmissionDecisionArtifact>,
-    qualification_receipt: ContentId<CollectionOracleQualificationReceiptArtifact>,
-    claim: ContentId<AdmittedCollectionOracleClaimArtifact>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RestrictedCollectionOracleAdmissionDecisionWire {
-    schema_version: SchemaVersion,
-    gate: ContentId<CollectionOracleAdmissionGateArtifact>,
-    intent_restricted_decision: ContentId<RestrictedIntentAdmissionDecisionArtifact>,
-    qualification_receipt: ContentId<CollectionOracleQualificationReceiptArtifact>,
-    claim: ContentId<AdmittedCollectionOracleClaimArtifact>,
-}
-
-impl RestrictedCollectionOracleAdmissionDecisionV1 {
-    fn validate(&self) -> Result<(), IntentPromotionError> {
-        if self.schema_version != schema_v1()
-            || self.gate != collection_oracle_admission_gate_id().map_err(migration_error)?
-        {
-            return Err(IntentPromotionError::InvalidStructure(
-                "restricted collection Oracle admission decision",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Derives the exact restricted decision identity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects non-V1, stale-gate, codec, or identity material.
-    pub fn identity(
-        &self,
-    ) -> Result<ContentId<RestrictedCollectionOracleAdmissionDecisionArtifact>, IntentPromotionError>
-    {
-        self.validate()?;
-        derive_id(self)
-    }
-}
-
-impl TryFrom<RestrictedCollectionOracleAdmissionDecisionWire>
-    for RestrictedCollectionOracleAdmissionDecisionV1
-{
-    type Error = IntentPromotionError;
-
-    fn try_from(
-        wire: RestrictedCollectionOracleAdmissionDecisionWire,
-    ) -> Result<Self, Self::Error> {
-        let value = Self {
-            schema_version: wire.schema_version,
-            gate: wire.gate,
-            intent_restricted_decision: wire.intent_restricted_decision,
-            qualification_receipt: wire.qualification_receipt,
-            claim: wire.claim,
-        };
-        value.validate()?;
-        Ok(value)
-    }
-}
-
-impl<'de> Deserialize<'de> for RestrictedCollectionOracleAdmissionDecisionV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        RestrictedCollectionOracleAdmissionDecisionWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-/// Minimal public outcome for one published local Oracle claim.
-pub enum CollectionOracleAdmissionPublicOutcomeArtifact {}
-
-impl ContentType for CollectionOracleAdmissionPublicOutcomeArtifact {
-    const DOMAIN: &'static str = "admission.collection-oracle-public-outcome.v1";
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct CollectionOracleAdmissionPublicOutcomeV1 {
-    schema_version: SchemaVersion,
-    intent_contract: MigrationIntentContractV1,
-    claim: AdmittedCollectionOracleClaimV1,
-    restricted_decision: ContentId<RestrictedCollectionOracleAdmissionDecisionArtifact>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CollectionOracleAdmissionPublicOutcomeWire {
-    schema_version: SchemaVersion,
-    intent_contract: MigrationIntentContractV1,
-    claim: AdmittedCollectionOracleClaimV1,
-    restricted_decision: ContentId<RestrictedCollectionOracleAdmissionDecisionArtifact>,
-}
-
-impl CollectionOracleAdmissionPublicOutcomeV1 {
-    fn validate(&self) -> Result<(), IntentPromotionError> {
-        if self.schema_version != schema_v1()
-            || self.claim.contract() != self.intent_contract.identity()?
-        {
-            return Err(IntentPromotionError::InvalidStructure(
-                "collection Oracle admission public outcome",
-            ));
-        }
-        Ok(())
-    }
-
-    #[must_use]
-    pub const fn task_id(&self) -> TaskId {
-        self.intent_contract.task_id()
-    }
-
-    #[must_use]
-    pub const fn recovery_input(&self) -> ContentId<IntentRecoveryInputArtifact> {
-        self.intent_contract.recovery_input()
-    }
-
-    #[must_use]
-    pub const fn intent_contract(&self) -> &MigrationIntentContractV1 {
-        &self.intent_contract
-    }
-
-    /// Derives the exact admitted intent contract identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the embedded public contract is invalid.
-    pub fn intent_contract_id(
-        &self,
-    ) -> Result<ContentId<MigrationIntentContractArtifact>, IntentPromotionError> {
-        self.intent_contract.identity()
-    }
-
-    #[must_use]
-    pub const fn claim(&self) -> &AdmittedCollectionOracleClaimV1 {
-        &self.claim
-    }
-
-    #[must_use]
-    pub const fn restricted_decision(
-        &self,
-    ) -> ContentId<RestrictedCollectionOracleAdmissionDecisionArtifact> {
-        self.restricted_decision
-    }
-
-    /// Derives the exact public outcome identity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid bindings or codec/identity material.
-    pub fn identity(
-        &self,
-    ) -> Result<ContentId<CollectionOracleAdmissionPublicOutcomeArtifact>, IntentPromotionError>
-    {
-        self.validate()?;
-        derive_id(self)
-    }
-}
-
-impl TryFrom<CollectionOracleAdmissionPublicOutcomeWire>
-    for CollectionOracleAdmissionPublicOutcomeV1
-{
-    type Error = IntentPromotionError;
-
-    fn try_from(wire: CollectionOracleAdmissionPublicOutcomeWire) -> Result<Self, Self::Error> {
-        let value = Self {
-            schema_version: wire.schema_version,
-            intent_contract: wire.intent_contract,
-            claim: wire.claim,
-            restricted_decision: wire.restricted_decision,
-        };
-        value.validate()?;
-        Ok(value)
-    }
-}
-
-impl<'de> Deserialize<'de> for CollectionOracleAdmissionPublicOutcomeV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        CollectionOracleAdmissionPublicOutcomeWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
-
-/// Prepared local Oracle admission. Its public outcome must not be published before commit.
-pub struct PreparedCollectionOracleAdmissionV1 {
-    claim: PreparedAdmittedCollectionOracleClaim,
-    restricted_decision: RestrictedCollectionOracleAdmissionDecisionV1,
-    restricted_decision_bytes: Vec<u8>,
-    restricted_decision_id: ContentId<RestrictedCollectionOracleAdmissionDecisionArtifact>,
-    public_outcome: CollectionOracleAdmissionPublicOutcomeV1,
-}
-
-impl PreparedCollectionOracleAdmissionV1 {
-    #[must_use]
-    pub const fn claim_material(&self) -> &PreparedAdmittedCollectionOracleClaim {
-        &self.claim
-    }
-
-    #[must_use]
-    pub const fn restricted_decision(&self) -> &RestrictedCollectionOracleAdmissionDecisionV1 {
-        &self.restricted_decision
-    }
-
-    #[must_use]
-    pub const fn restricted_decision_id(
-        &self,
-    ) -> ContentId<RestrictedCollectionOracleAdmissionDecisionArtifact> {
-        self.restricted_decision_id
-    }
-}
-
-/// Freezes the first local Oracle claim only from an already admitted public intent outcome and
-/// independently validated honest/fault execution controls.
-///
-/// A local proposal cannot substitute for the admitted intent outcome.
-///
-/// ```compile_fail
-/// use cairn_admission::admit_collection_oracle_claim;
-/// use cairn_migration::{
-///     AssembledCollectionF32OracleCaseInput, CollectionOracleClaimProposalV1,
-///     CollectionOracleQualificationExecution,
-/// };
-/// use cairn_record::ContentStore;
-/// fn invalid<C1: ContentStore, C2: ContentStore>(
-///     proposal: &CollectionOracleClaimProposalV1,
-///     case: &AssembledCollectionF32OracleCaseInput,
-///     honest: &CollectionOracleQualificationExecution<'_, C1>,
-///     fault: &CollectionOracleQualificationExecution<'_, C2>,
-/// ) {
-///     let _ = admit_collection_oracle_claim(proposal, case, honest, fault);
-/// }
-/// ```
-///
-/// Constructing the returned value does not publish authority. Call
-/// [`commit_collection_oracle_admission`] before exposing its public outcome.
-///
-/// # Errors
-///
-/// Rejects a malformed admitted outcome or any failed qualification/binding control.
-pub fn admit_collection_oracle_claim<C1: ContentStore, C2: ContentStore>(
-    outcome: &IntentAdmissionPublicOutcomeV1,
-    case: &AssembledCollectionF32OracleCaseInput,
-    honest: &CollectionOracleQualificationExecution<'_, C1>,
-    fault: &CollectionOracleQualificationExecution<'_, C2>,
-) -> Result<PreparedCollectionOracleAdmissionV1, IntentPromotionError> {
-    let decision = derive_collection_output_oracle_decision(outcome)?;
-    let claim =
-        cairn_migration::prepare_admitted_collection_oracle_claim(&decision, case, honest, fault)
-            .map_err(migration_error)?;
-    let contract_id = outcome.contract().identity()?;
-    if claim.claim().contract() != contract_id
-        || claim.claim().decision() != decision.identity().map_err(migration_error)?
-        || claim.claim().selection_claim() != decision.selection_claim()
-    {
-        return Err(IntentPromotionError::Binding(
-            "qualified Oracle claim does not match admitted intent",
-        ));
-    }
-    let restricted_decision = RestrictedCollectionOracleAdmissionDecisionV1 {
-        schema_version: schema_v1(),
-        gate: collection_oracle_admission_gate_id().map_err(migration_error)?,
-        intent_restricted_decision: outcome.restricted_decision(),
-        qualification_receipt: claim.receipt_id(),
-        claim: claim.claim_id(),
-    };
-    let restricted_decision_bytes = cairn_codec::to_vec(&restricted_decision)?;
-    let restricted_decision_id = restricted_decision.identity()?;
-    let public_outcome = CollectionOracleAdmissionPublicOutcomeV1 {
-        schema_version: schema_v1(),
-        intent_contract: outcome.contract().clone(),
-        claim: claim.claim().clone(),
-        restricted_decision: restricted_decision_id,
-    };
-    public_outcome.validate()?;
-    Ok(PreparedCollectionOracleAdmissionV1 {
-        claim,
-        restricted_decision,
-        restricted_decision_bytes,
-        restricted_decision_id,
-        public_outcome,
-    })
-}
-
-/// Commits every restricted artifact before returning the public Oracle outcome.
-///
-/// A raw local claim cannot substitute for the prepared Admission result.
-///
-/// ```compile_fail
-/// use cairn_admission::commit_collection_oracle_admission;
-/// use cairn_migration::AdmittedCollectionOracleClaimV1;
-/// use cairn_record::ContentStore;
-/// fn invalid<C: ContentStore>(store: &mut C, claim: &AdmittedCollectionOracleClaimV1) {
-///     let _ = commit_collection_oracle_admission(store, claim);
-/// }
-/// ```
-///
-/// # Errors
-///
-/// Returns no public outcome if any restricted write or exact identity check fails.
-pub fn commit_collection_oracle_admission<C: ContentStore>(
-    restricted: &mut C,
-    prepared: &PreparedCollectionOracleAdmissionV1,
-) -> Result<CollectionOracleAdmissionPublicOutcomeV1, IntentPromotionError> {
-    let claim = prepared.claim_material();
-    archive_exact::<CollectionOracleClaimProposalArtifact>(
-        restricted,
-        claim.proposal_bytes(),
-        claim.proposal_id(),
-        "collection Oracle claim proposal",
-    )?;
-    archive_exact::<CollectionOutputComparisonEvidenceArtifact>(
-        restricted,
-        claim.honest_comparison().bytes(),
-        claim.honest_comparison().id(),
-        "honest collection Oracle comparison",
-    )?;
-    archive_exact::<CollectionOutputComparisonEvidenceArtifact>(
-        restricted,
-        claim.fault_comparison().bytes(),
-        claim.fault_comparison().id(),
-        "fault collection Oracle comparison",
-    )?;
-    archive_exact::<CollectionOracleQualificationReceiptArtifact>(
-        restricted,
-        claim.receipt_bytes(),
-        claim.receipt_id(),
-        "collection Oracle qualification receipt",
-    )?;
-    archive_exact::<AdmittedCollectionOracleClaimArtifact>(
-        restricted,
-        claim.claim_bytes(),
-        claim.claim_id(),
-        "admitted collection Oracle claim",
-    )?;
-    archive_exact::<RestrictedCollectionOracleAdmissionDecisionArtifact>(
-        restricted,
-        &prepared.restricted_decision_bytes,
-        prepared.restricted_decision_id,
-        "restricted collection Oracle admission decision",
-    )?;
-    prepared.public_outcome.validate()?;
-    Ok(prepared.public_outcome.clone())
 }
 
 /// Fail-closed errors from typed user decision promotion.
@@ -1189,418 +912,6 @@ fn require_identity<T: ContentType>(
     Ok(())
 }
 
-fn archive_exact<T: ContentType>(
-    store: &mut impl ContentStore,
-    bytes: &[u8],
-    expected: ContentId<T>,
-    name: &'static str,
-) -> Result<(), IntentPromotionError> {
-    let archived = store
-        .put::<T>(&mut Cursor::new(bytes))
-        .map_err(|error| IntentPromotionError::Storage(error.to_string()))?
-        .content_id;
-    require_identity(archived, expected, name)
-}
-
 fn migration_error(error: impl fmt::Display) -> IntentPromotionError {
     IntentPromotionError::Migration(error.to_string())
-}
-
-#[cfg(test)]
-mod oracle_publication_tests {
-    use std::io::{Read, Write};
-
-    use super::*;
-    use cairn_execution::{
-        CapturedOutput, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionCapture,
-        ExecutionCompletion, ExecutionElapsedMillis, ExecutionEnvironmentArtifact, ExecutionInput,
-        ExecutionOutcome, InputBundleArtifact, OutputByteLimit, ResolvedProgramIdentity,
-        ScriptedExecutor, TrustedExecutionEvidence, authorize_execution_attempt,
-        begin_execution_attempt, execute_execution_attempt, prepare_execution_job,
-    };
-    use cairn_migration::{
-        CallAdapterCaptureLimits, CallAdapterCompletionV1, CallAdapterExecutableByteLimit,
-        CallAdapterObservedOutputV1, CallAdapterResultV1, CollectionF32Bits,
-        CollectionOracleQualificationExecution, CollectionOutputIntentV1, MigrationExecutionNeed,
-        MigrationValidationTier, PreparedCallAdapterInput, PreparedCallAdapterJob,
-        ValidatedCallAdapterExecution, assemble_collection_f32_oracle_case,
-        compose_call_adapter_job, prepare_collection_output_call_adapter_input,
-        validate_collection_output_call_adapter_receipt,
-    };
-    use cairn_protocol::{AttemptId, CommandId, JobId, ObservedAtUnixMillis};
-    use cairn_record::{ContentDescriptor, ContentStoreError};
-    use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-
-    const TEST_BACKEND: &str = "synthetic-collection-publication-v1";
-
-    struct CompletedControl {
-        _directory: tempfile::TempDir,
-        content: SqliteContentStore,
-        adapter: PreparedCallAdapterInput,
-        execution: ValidatedCallAdapterExecution,
-    }
-
-    fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
-        ContentId::derive(label).expect("content identity")
-    }
-
-    fn intent_outcome() -> IntentAdmissionPublicOutcomeV1 {
-        let selection_claim = SirCallerClaimId::new("copies-strictly-above").expect("claim");
-        let contract = MigrationIntentContractV1 {
-            schema_version: schema_v1(),
-            task_id: TaskId::new(),
-            recovery_input: id::<IntentRecoveryInputArtifact>(b"recovery input"),
-            proposal: id::<SirIntentHypothesisSetProposalArtifact>(b"proposal"),
-            request: id::<UserIntentDecisionRequestArtifact>(b"request"),
-            authority_grant: id::<UserIntentAuthorityGrantArtifact>(b"grant"),
-            user_decision: id::<UserIntentDecisionArtifact>(b"decision"),
-            selected_hypothesis: None,
-            admitted_claim: AuthoritativeIntentClaimV1::CollectionOutput(
-                CollectionOutputIntentV1::exact_selected_occurrences(
-                    selection_claim,
-                    CollectionOutputOrderContractV1::UnspecifiedPermutation,
-                ),
-            ),
-        };
-        IntentAdmissionPublicOutcomeV1 {
-            schema_version: schema_v1(),
-            contract,
-            restricted_decision: id::<RestrictedIntentAdmissionDecisionArtifact>(
-                b"restricted intent decision",
-            ),
-        }
-    }
-
-    fn f32_bits(value: f32) -> CollectionF32Bits {
-        CollectionF32Bits::new(value.to_bits()).expect("finite normal non-zero f32")
-    }
-
-    fn complete_control(
-        case: &AssembledCollectionF32OracleCaseInput,
-        executable: &[u8],
-        selected: &[f32],
-    ) -> CompletedControl {
-        let adapter = prepare_collection_output_call_adapter_input(
-            case,
-            executable,
-            CallAdapterExecutableByteLimit::new(
-                u64::try_from(executable.len()).expect("executable length"),
-            )
-            .expect("executable limit"),
-        )
-        .expect("adapter input");
-        let directory = tempfile::tempdir().expect("execution state");
-        let mut content = SqliteContentStore::open(
-            directory.path().join("content.db"),
-            directory.path().join("cas"),
-        )
-        .expect("content store");
-        let mut events =
-            SqliteEventStore::open(directory.path().join("events.db")).expect("event store");
-        assert_eq!(
-            content
-                .put::<InputBundleArtifact>(&mut Cursor::new(adapter.input_bundle_bytes()))
-                .expect("input bundle")
-                .content_id,
-            adapter.input_bundle_id()
-        );
-        let environment = content
-            .put::<ExecutionEnvironmentArtifact>(&mut Cursor::new(b"host environment"))
-            .expect("environment")
-            .content_id;
-        let need = MigrationExecutionNeed::new(
-            MigrationValidationTier::V0Cpu,
-            ExecutionBackend::new(TEST_BACKEND).expect("backend"),
-            cairn_execution::ExecutionTimeoutMillis::new(5_000).expect("timeout"),
-            None,
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-        )
-        .expect("execution need");
-        let job = compose_call_adapter_job(
-            JobId::new(),
-            &adapter,
-            environment,
-            &need,
-            CallAdapterCaptureLimits {
-                stdout: OutputByteLimit::new(1_024).expect("stdout"),
-                stderr: OutputByteLimit::new(1_024).expect("stderr"),
-                result: OutputByteLimit::new(4_096).expect("result"),
-                diagnostic: DiagnosticByteLimit::new(1_024).expect("diagnostic"),
-                evidence: EvidenceByteLimit::new(4_096).expect("evidence"),
-            },
-        )
-        .expect("adapter job");
-        let prepared = prepare_execution_job(&mut content, job.contract()).expect("prepared job");
-        let authority = authorize_execution_attempt(
-            &mut events,
-            prepared,
-            AttemptId::new(),
-            &CommandId::new(),
-            ObservedAtUnixMillis::new(1),
-        )
-        .expect("execution authority");
-        let started = begin_execution_attempt(
-            &mut events,
-            authority,
-            &CommandId::new(),
-            ObservedAtUnixMillis::new(2),
-        )
-        .expect("started execution");
-
-        let capture = synthetic_capture(case, &adapter, &job, environment, selected);
-        let mut executor =
-            ScriptedExecutor::new(move |_input: &ExecutionInput<'_>| Ok(capture.clone()));
-        let ExecutionCompletion::Completed {
-            receipt_id,
-            receipt,
-        } = execute_execution_attempt(
-            &mut events,
-            &mut content,
-            &mut executor,
-            started,
-            &CommandId::new(),
-            ObservedAtUnixMillis::new(3),
-        )
-        .expect("execution completion")
-        else {
-            panic!("expected completed execution");
-        };
-        let execution = validate_collection_output_call_adapter_receipt(
-            case, &adapter, &job, receipt_id, &receipt, &content,
-        )
-        .expect("validated receipt");
-        CompletedControl {
-            _directory: directory,
-            content,
-            adapter,
-            execution,
-        }
-    }
-
-    fn synthetic_capture(
-        case: &AssembledCollectionF32OracleCaseInput,
-        adapter: &PreparedCallAdapterInput,
-        job: &PreparedCallAdapterJob,
-        environment: ContentId<ExecutionEnvironmentArtifact>,
-        selected: &[f32],
-    ) -> ExecutionCapture {
-        let mut values = vec![
-            0_u8;
-            usize::try_from(case.invocation().values_output().byte_length().get())
-                .expect("values capacity")
-        ];
-        for (destination, value) in values.chunks_exact_mut(4).zip(selected) {
-            destination.copy_from_slice(&value.to_bits().to_le_bytes());
-        }
-        let count = u32::try_from(selected.len())
-            .expect("selected count")
-            .to_le_bytes()
-            .to_vec();
-        let output_bytes = [values, count];
-        let mut observed = adapter
-            .request()
-            .expected_outputs()
-            .iter()
-            .zip(&output_bytes)
-            .map(|(expected, bytes)| {
-                CallAdapterObservedOutputV1::from_bytes(
-                    expected.argument_index(),
-                    expected.buffer().clone(),
-                    bytes,
-                )
-                .expect("observed ABI output")
-            })
-            .collect::<Vec<_>>();
-        observed.sort_by_key(CallAdapterObservedOutputV1::argument_index);
-        let result = CallAdapterResultV1::new(
-            adapter.request_id(),
-            adapter.request().invocation(),
-            CallAdapterCompletionV1::InvokedVoid,
-            observed,
-        )
-        .expect("adapter result");
-        let result_bytes = cairn_codec::to_vec(&result).expect("result bytes");
-        let captured = job
-            .contract()
-            .capture()
-            .expected_outputs()
-            .iter()
-            .map(|declared| {
-                let bytes = if declared.path == *adapter.request().result_path() {
-                    result_bytes.clone()
-                } else {
-                    let position = adapter
-                        .request()
-                        .expected_outputs()
-                        .iter()
-                        .position(|expected| expected.path() == &declared.path)
-                        .expect("declared ABI output");
-                    output_bytes[position].clone()
-                };
-                CapturedOutput {
-                    name: declared.name.clone(),
-                    bytes,
-                }
-            })
-            .collect::<Vec<_>>();
-        let evidence = TrustedExecutionEvidence::new(
-            ExecutionBackend::new(TEST_BACKEND).expect("backend"),
-            environment,
-            ResolvedProgramIdentity::new(adapter.request().executable().to_wire())
-                .expect("program identity"),
-            Vec::new(),
-        )
-        .expect("execution evidence");
-        ExecutionCapture::new(
-            ExecutionOutcome::Succeeded,
-            Some(0),
-            ExecutionElapsedMillis::new(1),
-            Vec::new(),
-            Vec::new(),
-            captured,
-            evidence,
-        )
-    }
-
-    #[test]
-    fn restricted_commit_precedes_public_local_oracle_outcome() {
-        let intent = intent_outcome();
-        let decision = derive_collection_output_oracle_decision(&intent).expect("decision");
-        let case = assemble_collection_f32_oracle_case(
-            &decision,
-            &[f32_bits(1.0), f32_bits(4.0), f32_bits(3.0)],
-            f32_bits(2.0),
-        )
-        .expect("collection case");
-        let honest = complete_control(&case, b"honest implementation", &[3.0, 4.0]);
-        let fault = complete_control(&case, b"missing implementation", &[3.0]);
-        let prepared = admit_collection_oracle_claim(
-            &intent,
-            &case,
-            &CollectionOracleQualificationExecution {
-                adapter_input: &honest.adapter,
-                execution: &honest.execution,
-                content: &honest.content,
-            },
-            &CollectionOracleQualificationExecution {
-                adapter_input: &fault.adapter,
-                execution: &fault.execution,
-                content: &fault.content,
-            },
-        )
-        .expect("prepared Oracle admission");
-
-        let restricted_state = tempfile::tempdir().expect("restricted state");
-        let mut restricted = SqliteContentStore::open(
-            restricted_state.path().join("content.db"),
-            restricted_state.path().join("cas"),
-        )
-        .expect("restricted store");
-        let published =
-            commit_collection_oracle_admission(&mut restricted, &prepared).expect("commit");
-        assert_eq!(published, prepared.public_outcome);
-        assert_eq!(published.task_id(), intent.contract().task_id());
-        assert_eq!(published.intent_contract(), intent.contract());
-        assert_eq!(
-            published.intent_contract_id().expect("contract"),
-            intent.contract().identity().expect("contract")
-        );
-        assert_eq!(
-            published.claim().identity().expect("claim"),
-            prepared.claim_material().claim_id()
-        );
-
-        assert_restricted_artifacts(&restricted, &published, &prepared);
-        assert_public_candidate_boundaries(&published);
-
-        let mut failing = FailingContentStore;
-        assert!(matches!(
-            commit_collection_oracle_admission(&mut failing, &prepared),
-            Err(IntentPromotionError::Storage(_))
-        ));
-    }
-
-    fn assert_restricted_artifacts(
-        restricted: &SqliteContentStore,
-        published: &CollectionOracleAdmissionPublicOutcomeV1,
-        prepared: &PreparedCollectionOracleAdmissionV1,
-    ) {
-        let mut archived = Vec::new();
-        restricted
-            .write_to(&published.restricted_decision(), &mut archived)
-            .expect("restricted decision");
-        let decoded: RestrictedCollectionOracleAdmissionDecisionV1 =
-            cairn_codec::from_slice(&archived).expect("strict restricted decision");
-        assert_eq!(decoded, *prepared.restricted_decision());
-        archived.clear();
-        restricted
-            .write_to(&prepared.claim_material().receipt_id(), &mut archived)
-            .expect("qualification receipt");
-        let _: cairn_migration::CollectionOracleQualificationReceiptV1 =
-            cairn_codec::from_slice(&archived).expect("strict qualification receipt");
-    }
-
-    fn assert_public_candidate_boundaries(published: &CollectionOracleAdmissionPublicOutcomeV1) {
-        let public_bytes = cairn_codec::to_vec(published).expect("public bytes");
-        let decoded: CollectionOracleAdmissionPublicOutcomeV1 =
-            cairn_codec::from_slice(&public_bytes).expect("strict public outcome");
-        assert_eq!(
-            decoded.identity().expect("public identity"),
-            published.identity().expect("id")
-        );
-        let public_text = String::from_utf8(public_bytes).expect("public JSON");
-        for forbidden in [
-            "honest_reordered",
-            "missing_occurrence",
-            "comparison_evidence",
-            "execution_receipt",
-            "limitations",
-            "requalification_triggers",
-        ] {
-            assert!(!public_text.contains(forbidden), "leaked {forbidden}");
-        }
-        let mut invalid = serde_json::to_value(published).expect("public outcome JSON");
-        invalid["schema_version"] = serde_json::json!(2);
-        assert!(
-            serde_json::from_value::<CollectionOracleAdmissionPublicOutcomeV1>(invalid).is_err()
-        );
-        let mut invalid = serde_json::to_value(published).expect("public outcome JSON");
-        invalid["legacy_portfolio"] = serde_json::json!(true);
-        assert!(
-            serde_json::from_value::<CollectionOracleAdmissionPublicOutcomeV1>(invalid).is_err()
-        );
-        let mut invalid = serde_json::to_value(published).expect("public outcome JSON");
-        invalid["intent_contract"]["recovery_input"] =
-            serde_json::to_value(id::<IntentRecoveryInputArtifact>(b"changed recovery input"))
-                .expect("recovery input JSON");
-        assert!(
-            serde_json::from_value::<CollectionOracleAdmissionPublicOutcomeV1>(invalid).is_err()
-        );
-    }
-
-    struct FailingContentStore;
-
-    impl ContentStore for FailingContentStore {
-        fn put<T: ContentType>(
-            &mut self,
-            _reader: &mut dyn Read,
-        ) -> Result<ContentDescriptor<T>, ContentStoreError> {
-            Err(ContentStoreError::Metadata {
-                message: "injected restricted commit failure".to_owned(),
-            })
-        }
-
-        fn write_to<T: ContentType>(
-            &self,
-            content_id: &ContentId<T>,
-            _writer: &mut dyn Write,
-        ) -> Result<ContentDescriptor<T>, ContentStoreError> {
-            Err(ContentStoreError::NotFound {
-                content_id: content_id.to_wire(),
-            })
-        }
-    }
 }

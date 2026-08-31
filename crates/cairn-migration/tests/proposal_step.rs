@@ -13,26 +13,27 @@ use cairn_execution::{
 use cairn_migration::{
     AgentResolvedRuntimeModelArtifact, AuthoritativeIntentClaimV1, CandidateOracleContractV1,
     CandidateOracleElementMaterialV1, CandidateOracleMaterialV1, CandidateOracleMaterialsV1,
-    CandidateWorkspaceV1, CollectionOutputIntentV1, CollectionOutputOrderContractV1,
-    MigrationIntentContractArtifact, OracleAdmissionOutcomeArtifact, OracleAdversarialPolicyV1,
-    OracleBuildTestSnapshotArtifact, OracleClaimName, OracleClaimV1, OracleConcernV1,
-    OracleCoveragePolicyV1, OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact,
-    OracleExperimentLimit, OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
+    CandidateWorkspaceV1, MigrationIntentContractArtifact, OperationIntentV1,
+    OracleAdmissionOutcomeArtifact, OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact,
+    OracleClaimName, OracleClaimV1, OracleConcernV1, OracleCoveragePolicyV1,
+    OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
+    OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
     OracleExplorationCapabilityGrantArtifact, OracleKnowledgeSnapshotArtifact,
     OraclePortfolioElementKindV1, OraclePortfolioElementV1, OraclePortfolioProposalArtifact,
     OracleResearchToolCatalogArtifact, OracleSourceSnapshotArtifact, OracleStrategyCatalogV1,
     OracleStrategyExecutorV1, OracleStrategyKindV1, OracleStrategyName,
     OracleStrategyRegistrationV1, OracleStrategyRoleV1, OracleStrategyRunArtifact,
     OracleStrategyRunLimit, OracleStrategyRunV1, OracleStrategyToolCatalogV1,
-    OracleWorkspaceArtifact, OracleWorkspaceInput, OracleWorkspaceV1, ProposalHostBinaryIdentity,
-    ProposalHostExperimentDispatchV1, ProposalHostExperimentOperationV1,
-    ProposalHostExperimentWorker, ProposalHostExperimentWorkerError,
-    ProposalHostOracleBuildTestsV1, ProposalHostOracleDocumentationV1,
-    ProposalHostOracleKnowledgeV1, ProposalHostOracleMaterialsV1, ProposalHostPublicationV1,
-    ProposalHostRequestV1, ProposalHostRoleRequestV1, ProposalHostRuntimeV1,
-    ProposalHostTaskSnapshotV1, ProposalHostWorkerBindingV1, ProposalHostWorkerObservationV1,
-    SirCallerClaimId, SirTaskLimits, SirTaskWorkspace, derive_oracle_claims,
-    derive_oracle_work_items, execute_proposal_host_experiments, run_proposal_host_episode,
+    OracleWorkspaceArtifact, OracleWorkspaceInput, OracleWorkspaceV1,
+    ProposalStepOracleBuildTestsV1, ProposalStepOracleDocumentationV1,
+    ProposalStepOracleKnowledgeV1, ProposalStepOracleMaterialsV1, ProposalStepPublicationV1,
+    ProposalStepRequestV1, ProposalStepRoleRequestV1, ProposalStepRuntimeV1,
+    ProposalStepTaskSnapshotV1, SirCallerClaimId, SirCallerClaimStatement, SirCallerClaimV1,
+    SirHypothesisClaim, SirIntentDomain, SirIntentLayer, SirTaskLimits, SirTaskWorkspace,
+    WorkflowToolDispatchV1, WorkflowToolOperationV1, WorkflowToolWorker,
+    WorkflowToolWorkerBindingV1, WorkflowToolWorkerError, WorkflowToolWorkerObservationV1,
+    derive_oracle_claims, derive_oracle_work_items, execute_workflow_tools,
+    run_proposal_step_episode,
 };
 use cairn_protocol::{AttemptId, ContentId, ContentType, EpisodeId, JobId, TaskId};
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
@@ -51,11 +52,9 @@ fn codec() -> cairn_agent::NativeProtocolCodec {
     .expect("native codec")
 }
 
-fn runtime(episode_id: EpisodeId, label: &[u8]) -> ProposalHostRuntimeV1 {
-    ProposalHostRuntimeV1::new(
+fn runtime(episode_id: EpisodeId, label: &[u8]) -> ProposalStepRuntimeV1 {
+    ProposalStepRuntimeV1::new(
         episode_id,
-        ProposalHostBinaryIdentity::new(format!("sha256:{}", "1".repeat(64)))
-            .expect("Host binary identity"),
         id::<AgentResolvedRuntimeModelArtifact>(label),
         ModelSelection {
             provider: ProviderName::new("recorded").expect("provider"),
@@ -84,9 +83,9 @@ fn write_candidate_task(root: &Path) {
 }
 
 fn run_with_responses(
-    request: ProposalHostRequestV1,
+    request: ProposalStepRequestV1,
     responses: Vec<Vec<u8>>,
-) -> cairn_migration::ProposalHostTerminalV1 {
+) -> cairn_migration::ProposalStepTerminalV1 {
     let state = tempfile::tempdir().expect("state");
     let mut content =
         SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
@@ -100,32 +99,32 @@ fn run_with_responses(
             Ok(ModelTransportResponse::without_usage(response))
         },
     );
-    match run_proposal_host_episode(&mut events, &mut content, &mut transport, codec(), request)
-        .expect("Host episode")
+    match run_proposal_step_episode(&mut events, &mut content, &mut transport, codec(), request)
+        .expect("Agent step")
     {
-        cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } => *terminal,
-        cairn_migration::ProposalHostOutcomeV1::AwaitingController { .. } => {
-            panic!("recorded local-tool profile unexpectedly requested a Controller experiment")
+        cairn_migration::ProposalStepOutcomeV1::Terminal { terminal } => *terminal,
+        cairn_migration::ProposalStepOutcomeV1::WorkerRequest { .. } => {
+            panic!("recorded local-tool profile unexpectedly requested Worker execution")
         }
     }
 }
 
 struct RecordedOracleEffectWorker {
-    binding: ProposalHostWorkerBindingV1,
+    binding: WorkflowToolWorkerBindingV1,
 }
 
-impl ProposalHostExperimentWorker for RecordedOracleEffectWorker {
+impl WorkflowToolWorker for RecordedOracleEffectWorker {
     fn prepare(
         &mut self,
-        _operation: &ProposalHostExperimentOperationV1,
-    ) -> Result<ProposalHostWorkerBindingV1, ProposalHostExperimentWorkerError> {
+        _operation: &WorkflowToolOperationV1,
+    ) -> Result<WorkflowToolWorkerBindingV1, WorkflowToolWorkerError> {
         Ok(self.binding.clone())
     }
 
     fn execute(
         &mut self,
-        dispatch: &ProposalHostExperimentDispatchV1,
-    ) -> Result<ProposalHostWorkerObservationV1, ProposalHostExperimentWorkerError> {
+        dispatch: &WorkflowToolDispatchV1,
+    ) -> Result<WorkflowToolWorkerObservationV1, WorkflowToolWorkerError> {
         let bytes = cairn_codec::to_vec(&json!({
             "schema_version":1,
             "job_id":self.binding.job_id(),
@@ -143,22 +142,22 @@ impl ProposalHostExperimentWorker for RecordedOracleEffectWorker {
         let receipt: ExecutionReceipt = cairn_codec::from_slice(&bytes).expect("recorded receipt");
         let receipt_id =
             ContentId::<ExecutionReceiptArtifact>::derive(&bytes).expect("receipt identity");
-        ProposalHostWorkerObservationV1::new(
+        WorkflowToolWorkerObservationV1::new(
             dispatch,
             receipt_id,
             receipt,
             json!({"matches":[],"query":"task-generic edge cases"}),
         )
-        .map_err(|error| ProposalHostExperimentWorkerError::Rejected(error.to_string()))
+        .map_err(|error| WorkflowToolWorkerError::Rejected(error.to_string()))
     }
 }
 
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "the integration control keeps one exact Host journal across yield, effect, and resume"
+    reason = "the integration control keeps one exact Agent runtime state across Worker request, observation, and resume"
 )]
-fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unknown() {
+fn oracle_proposal_step_is_bound_to_one_structured_claim_cell_and_preserves_unknown() {
     let task_root = tempfile::tempdir().expect("Oracle task");
     write_candidate_task(task_root.path());
     let task = SirTaskWorkspace::load(task_root.path(), SirTaskLimits::default())
@@ -166,11 +165,23 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
     let task_id = TaskId::new();
     let runtime = runtime(EpisodeId::new(), b"Oracle runtime");
     let contract = id::<MigrationIntentContractArtifact>(b"admitted intent");
-    let specification = AuthoritativeIntentClaimV1::CollectionOutput(
-        CollectionOutputIntentV1::exact_selected_occurrences(
-            SirCallerClaimId::new("copies-strictly-above").expect("claim"),
-            CollectionOutputOrderContractV1::UnspecifiedPermutation,
-        ),
+    let specification = AuthoritativeIntentClaimV1::new(
+        OperationIntentV1::new(
+            vec![
+                SirCallerClaimV1::new(
+                    SirCallerClaimId::new("copies-strictly-above").expect("claim"),
+                    SirIntentLayer::ObservableContract,
+                    SirCallerClaimStatement::new("copy values strictly above the threshold")
+                        .expect("caller claim statement"),
+                    vec![],
+                )
+                .expect("caller claim"),
+            ],
+            SirIntentLayer::ObservableContract,
+            SirHypothesisClaim::new("copy values strictly above the threshold").expect("semantics"),
+            SirIntentDomain::new("caller-authorized finite inputs").expect("domain"),
+        )
+        .expect("operation intent"),
     );
     let claim = derive_oracle_claims(task_id, contract, &specification)
         .into_iter()
@@ -184,7 +195,7 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
         OracleStrategyRegistrationV1::new(
             OracleStrategyName::new("model-synthesis").expect("strategy"),
             OracleStrategyKindV1::ModelBackedSynthesis,
-            OracleStrategyExecutorV1::AgentEpisode {
+            OracleStrategyExecutorV1::AgentStep {
                 authorship_model: id::<ModelConfigurationArtifact>(b"Oracle authorship model"),
                 invocation: runtime.identity().expect("Oracle invocation"),
                 tools: OracleStrategyToolCatalogV1::standard()
@@ -229,38 +240,38 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
         &catalog,
     )
     .expect("strategy run");
-    let materials = ProposalHostOracleMaterialsV1::new(
-        ProposalHostOracleDocumentationV1::new(
+    let materials = ProposalStepOracleMaterialsV1::new(
+        ProposalStepOracleDocumentationV1::new(
             workspace.documentation(),
             "Public API documentation.".into(),
         )
         .expect("documentation"),
-        ProposalHostOracleBuildTestsV1::new(
+        ProposalStepOracleBuildTestsV1::new(
             workspace.build_and_tests(),
             "Build and test manifest.".into(),
         )
         .expect("build/test"),
-        ProposalHostOracleKnowledgeV1::new(
+        ProposalStepOracleKnowledgeV1::new(
             workspace.knowledge(),
             "No additional knowledge.".into(),
         )
         .expect("knowledge"),
     );
-    let request = ProposalHostRequestV1::new(
+    let request = ProposalStepRequestV1::new(
         runtime,
-        ProposalHostRoleRequestV1::OracleStrategy {
+        ProposalStepRoleRequestV1::OracleStrategy {
             workspace,
             claim,
             work_item: item,
             run,
-            task: ProposalHostTaskSnapshotV1::from_workspace(&task),
+            task: ProposalStepTaskSnapshotV1::from_workspace(&task),
             materials,
         },
     )
     .expect("one-cell Oracle request");
     let mut drifted = serde_json::to_value(&request).expect("request value");
     drifted["role"]["work_item"]["concern"] = json!("allowed-result-relations");
-    assert!(serde_json::from_value::<ProposalHostRequestV1>(drifted).is_err());
+    assert!(serde_json::from_value::<ProposalStepRequestV1>(drifted).is_err());
 
     let research = serde_json::to_string(&json!({
         "schema_version": 1,
@@ -269,7 +280,7 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
         "max_results": 2
     }))
     .expect("research arguments");
-    let state = tempfile::tempdir().expect("Oracle Host state");
+    let state = tempfile::tempdir().expect("Oracle proposal step state");
     let mut content =
         SqliteContentStore::open(state.path().join("content.db"), state.path().join("cas"))
             .expect("content");
@@ -286,50 +297,51 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
             ))
         },
     );
-    let cairn_migration::ProposalHostOutcomeV1::AwaitingController { experiment } =
-        run_proposal_host_episode(
-            &mut events,
-            &mut content,
-            &mut first_transport,
-            codec(),
-            request.clone(),
-        )
-        .expect("Oracle Host yield")
+    let cairn_migration::ProposalStepOutcomeV1::WorkerRequest {
+        request: worker_request,
+    } = run_proposal_step_episode(
+        &mut events,
+        &mut content,
+        &mut first_transport,
+        codec(),
+        request.clone(),
+    )
+    .expect("Oracle proposal step Worker request")
     else {
-        panic!("external Oracle research must yield to Controller authority");
+        panic!("external Oracle research must request Controller-authorized Worker execution");
     };
-    assert_eq!(experiment.operations().len(), 1);
+    assert_eq!(worker_request.operations().len(), 1);
     assert_eq!(
-        experiment.operations()[0].tool().as_str(),
+        worker_request.operations()[0].tool().as_str(),
         "oracle_search_external_tests"
     );
     assert_eq!(
-        experiment.operations()[0].effect(),
+        worker_request.operations()[0].effect(),
         ToolEffectClass::Idempotent
     );
 
     let mut worker = RecordedOracleEffectWorker {
-        binding: ProposalHostWorkerBindingV1::new(
+        binding: WorkflowToolWorkerBindingV1::new(
             JobId::new(),
             AttemptId::new(),
             id::<JobContractArtifact>(b"research contract"),
         ),
     };
-    let executed = execute_proposal_host_experiments(
+    let executed = execute_workflow_tools(
         &mut events,
         &mut content,
         &request,
-        &experiment,
+        &worker_request,
         &mut worker,
     )
     .expect("Controller-authorized research");
     assert_eq!(executed.len(), 1);
     assert_eq!(
-        execute_proposal_host_experiments(
+        execute_workflow_tools(
             &mut events,
             &mut content,
             &request,
-            &experiment,
+            &worker_request,
             &mut worker,
         )
         .expect("exact effect replay"),
@@ -339,7 +351,7 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
         .oracle_observation()
         .expect("Oracle-domain projection");
     let observation_id = oracle_observation.identity().expect("observation id");
-    let ProposalHostRoleRequestV1::OracleStrategy { run, work_item, .. } = request.role() else {
+    let ProposalStepRoleRequestV1::OracleStrategy { run, work_item, .. } = request.role() else {
         unreachable!()
     };
     assert_eq!(
@@ -376,7 +388,7 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
             Ok(ModelTransportResponse::without_usage(response))
         },
     );
-    let cairn_migration::ProposalHostOutcomeV1::Terminal { terminal } = run_proposal_host_episode(
+    let cairn_migration::ProposalStepOutcomeV1::Terminal { terminal } = run_proposal_step_episode(
         &mut events,
         &mut content,
         &mut resumed_transport,
@@ -386,7 +398,7 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
     .expect("same Oracle episode resume") else {
         panic!("resumed Oracle episode must terminate");
     };
-    let ProposalHostPublicationV1::OracleStrategy { submission, .. } = terminal.publication()
+    let ProposalStepPublicationV1::OracleStrategy { submission, .. } = terminal.publication()
     else {
         panic!("expected Oracle strategy publication");
     };
@@ -402,9 +414,10 @@ fn oracle_host_episode_is_bound_to_one_structured_claim_cell_and_preserves_unkno
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "one integration control keeps exact admitted material, Host request, and typed publication visible"
+    reason = "one integration control keeps exact admitted material, proposal-step request, and typed publication visible"
 )]
-fn task_generic_candidate_host_consumes_exact_admitted_material_and_publishes_typed_source() {
+fn task_generic_candidate_proposal_step_consumes_exact_admitted_material_and_publishes_typed_source()
+ {
     let task_root = tempfile::tempdir().expect("Candidate task");
     fs::write(
         task_root.path().join("scatter.cu"),
@@ -419,11 +432,24 @@ fn task_generic_candidate_host_consumes_exact_admitted_material_and_publishes_ty
         task_id,
         admitted_intent,
         OracleClaimName::new("scatter-observable-output").expect("claim name"),
-        AuthoritativeIntentClaimV1::CollectionOutput(
-            CollectionOutputIntentV1::exact_selected_occurrences(
-                SirCallerClaimId::new("writes-indexed-values").expect("caller claim"),
-                CollectionOutputOrderContractV1::StableInputRelative,
-            ),
+        AuthoritativeIntentClaimV1::new(
+            OperationIntentV1::new(
+                vec![
+                    SirCallerClaimV1::new(
+                        SirCallerClaimId::new("writes-indexed-values").expect("caller claim"),
+                        SirIntentLayer::ObservableContract,
+                        SirCallerClaimStatement::new("write each value to its indexed output")
+                            .expect("caller claim statement"),
+                        vec![],
+                    )
+                    .expect("caller claim"),
+                ],
+                SirIntentLayer::ObservableContract,
+                SirHypothesisClaim::new("write each input value at its indexed output location")
+                    .expect("semantics"),
+                SirIntentDomain::new("valid in-bounds index mappings").expect("domain"),
+            )
+            .expect("operation intent"),
         ),
     );
     let claim_id = claim.identity().expect("claim id");
@@ -504,19 +530,19 @@ fn task_generic_candidate_host_consumes_exact_admitted_material_and_publishes_ty
     }))
     .expect("Candidate workspace");
     let runtime = runtime(EpisodeId::new(), b"generic Candidate runtime");
-    let request = ProposalHostRequestV1::new(
+    let request = ProposalStepRequestV1::new(
         runtime,
-        ProposalHostRoleRequestV1::CandidateStrategy {
+        ProposalStepRoleRequestV1::CandidateStrategy {
             workspace,
             contract,
             oracle_materials,
-            task: ProposalHostTaskSnapshotV1::from_workspace(&task),
-            public_materials: ProposalHostOracleMaterialsV1::new(
-                ProposalHostOracleDocumentationV1::new(documentation, documentation_text.into())
+            task: ProposalStepTaskSnapshotV1::from_workspace(&task),
+            public_materials: ProposalStepOracleMaterialsV1::new(
+                ProposalStepOracleDocumentationV1::new(documentation, documentation_text.into())
                     .expect("documentation"),
-                ProposalHostOracleBuildTestsV1::new(build_and_tests, build_text.into())
+                ProposalStepOracleBuildTestsV1::new(build_and_tests, build_text.into())
                     .expect("build/tests"),
-                ProposalHostOracleKnowledgeV1::new(knowledge, knowledge_text.into())
+                ProposalStepOracleKnowledgeV1::new(knowledge, knowledge_text.into())
                     .expect("knowledge"),
             ),
         },
@@ -524,7 +550,7 @@ fn task_generic_candidate_host_consumes_exact_admitted_material_and_publishes_ty
     .expect("task-generic Candidate request");
     let mut drifted = serde_json::to_value(&request).expect("request value");
     drifted["role"]["oracle_materials"]["elements"][0]["material"]["bytes"][0] = json!(0);
-    assert!(serde_json::from_value::<ProposalHostRequestV1>(drifted).is_err());
+    assert!(serde_json::from_value::<ProposalStepRequestV1>(drifted).is_err());
 
     let submit = serde_json::to_string(&json!({
         "schema_version": 1,
@@ -555,7 +581,7 @@ fn task_generic_candidate_host_consumes_exact_admitted_material_and_publishes_ty
     terminal
         .validate_against(&request)
         .expect("Candidate terminal binding");
-    let ProposalHostPublicationV1::CandidateStrategy { proposal, .. } = terminal.publication()
+    let ProposalStepPublicationV1::CandidateStrategy { proposal, .. } = terminal.publication()
     else {
         panic!("expected generic Candidate publication");
     };

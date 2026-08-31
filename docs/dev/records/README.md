@@ -29,9 +29,9 @@
 | DEV-019 | Accepted | [`explicit repeatable native repair episode`](DEV-019-IMPLEMENTATION.md) | DEV-018 exact linker receipt进入新的isolated DeepSeek episode并提交typed repair；没有自动续轮或build |
 | DEV-020 | Accepted | [`exact native repair remote ASC build`](DEV-020-IMPLEMENTATION.md) | DEV-019 exact repair经同一product-owned native ASC gate取得真实`SubjectFailed` receipt |
 | DEV-021 | Accepted | [`Controller-owned Candidate workflow spine`](DEV-021-IMPLEMENTATION.md) | current-V1 aggregate固化native build/diagnostic/follow-up/repair transition；recorded consumer、restart/replay与旧手工入口删除闭合 |
-| DEV-022 | Accepted | [`generic role-scoped Proposal Host`](DEV-022-IMPLEMENTATION.md) | 同一Host承载SIR与Candidate role profile；workflow request consumer、process restart replay与专用launcher删除闭合 |
+| DEV-022 | Accepted | [`generic role-scoped proposal step`](DEV-022-IMPLEMENTATION.md) | 同一Host承载SIR与Candidate role profile；workflow request consumer、process restart replay与专用launcher删除闭合 |
 | DEV-023 | Accepted | [`Controller-owned Candidate process manager`](DEV-023-IMPLEMENTATION.md) | 单个已存在Task的durable next action连接generic Host supervision、scheduler recovery与typed receipt折回；blocked state不换ID |
-| DEV-024 | Accepted | [`unified Proposal Host request lifecycle`](DEV-024-IMPLEMENTATION.md) | 删除SIR/Candidate role-specific runner与旁路测试；冻结request/profile/capability并统一durable loop、observation、strict repair和terminal |
+| DEV-024 | Accepted | [`unified proposal step request lifecycle`](DEV-024-IMPLEMENTATION.md) | 删除SIR/Candidate role-specific runner与旁路测试；冻结request/profile/capability并统一durable loop、observation、strict repair和terminal |
 | DEV-025 | Accepted | [`readable Controller workflow skeleton`](DEV-025-IMPLEMENTATION.md) | 完整十阶段typed composition skeleton；未实现stage无default且fail closed；真实Candidate suffix收敛为recover/select/execute |
 | DEV-026 | Accepted | [`durable Controller SIR-to-user-decision prefix`](DEV-026-IMPLEMENTATION.md) | exact SIR request/start authority/proposal observation/decision requests进入task-owned aggregate，并明确停在user authority；shared Host supervision闭合 |
 

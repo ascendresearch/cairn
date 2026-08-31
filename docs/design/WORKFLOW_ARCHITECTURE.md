@@ -70,18 +70,24 @@ Admission 也不靠模型 summary 决定结果。
 用户只在 desired semantics、风险或政策确实需要 authority 时进入流程。用户不是常规 lint reviewer，也
 不替 Agent 或 Gate 做可机械验证的工作。
 
-## 4. Agent Loop 的统一运行模型
+客户入口由typed SDK contract定义，reference CLI与后续TUI只是adapter。提交、状态、取消、可重连进度和
+SIR review都读写同一个Controller aggregate；客户端不能提交内部event、伪造Admission grant或自报认证主体。
+确认某个hypothesis时只发送exact request、option与caller-claim scope；补充语义使用distinct strong type，
+两者都由independent Intent Admission与exact caller declarations机械组合。service log与TUI progress只是
+read model，不能成为replay input或transition authority。
 
-SIR、Oracle synthesis/adversarial、Candidate Search 和可选 Admission Planner 都使用同一种逻辑运行
-模型：
+## 4. 主工作流中的 Agent step
+
+SIR、Oracle synthesis/adversarial、Candidate Search 和可选 planning 都是 Controller 主 workflow 中
+有各自 typed input/output 的 Agent step：
 
 1. Controller 冻结 exact input、profile、模型、知识快照、tool catalog、预算和 capability grant；
-2. Proposal Host 打开独立 durable episode；
-3. Agent 可以读取获准材料、查询知识或提出实验请求；
-4. 每个外部 effect 在执行前由 Controller 验证并获得 durable start authority；
-5. 结果先成为带 provenance 的 observation，再投影回当前 episode；
+2. Controller 在当前 workflow transition 中驱动模型与只读/纯工具；
+3. Agent 可以读取获准材料、查询知识或提出 typed tool request；
+4. 需要编译、运行、Docker、host adapter 或设备能力的 request 转换为 Worker `JobContract`，并在调度前获得 durable authority；
+5. Worker 结果先成为带 exact job/attempt/contract lineage 的 observation，再投影回当前 Agent step；
 6. Agent 提交 strict typed proposal；无效提交原子拒绝，并可在预算内修复；
-7. Controller 保存 terminal outcome，并把冻结 artifact 交给下一个 Gate 或 Loop。
+7. Controller 直接保存领域 proposal，并把冻结 artifact 交给下一个 Gate 或 step。
 
 DEV-025把上述跨角色顺序直接固化为`cairn-server::controller_workflow::run_controller_workflow`的可读业务
 骨架；DEV-026又把用户authority边界显式展开为：freeze → SIR → derive intent decision requests → await user
@@ -92,21 +98,11 @@ DEV-027现已把actual typed user decision、Admission durable start authority�
 outcome observation接入同一task-owned aggregate，并明确停在`AwaitOracleExplorationWorkspace`。Controller不会替用户决定、
 读取restricted artifacts或自动越过Oracle边界。
 
-逻辑 role 不映射为专用 binary。通用 `cairn-proposal-host` 承载 capability-equivalent episode；不同数据
-可见性、外部凭据、工具或 OS sandbox 才要求不同 Host instance。每个 episode 的 continuation、context、
-budget、tool result、write namespace 和 capability grant 始终隔离。
-
-DEV-008 的 `cairn-sir` one-shot process曾用于首个 authority consumer的typed ingress/capability proof。
-DEV-022已由通用 Proposal Host接管production SIR episode并直接删除该专用路径，没有双路径或兼容adapter。
-DEV-024又删除了遗留的`run_sir_episode`及Candidate同类role-specific runner与旁路测试。当前
-`run_proposal_host_episode`只编排freeze request、drive frozen episode、freeze outcome；所有现有role profile
-都进入同一个durable Proposal Loop。`run_proposal_loop`自身只表达open、dispatch、settle、admit、authorized
-execute、observation projection和advance步骤；每一步由独立函数和不可互换的内部typestate实现。共同loop只执行
-获准的pure/read-only Host tool，先归档observation再投影continuation。DEV-029已将external effect改为exact
-durable yield：Controller验证request/episode/step/operation和capability binding，提交start fact后才调用Worker
-adapter，receipt-bound observation进入原operation stream，Proposal Host随后恢复同一episode/native continuation。
-它没有新增某个领域experiment tool或声称recorded adapter等于真实远端Worker运行。
-实现其异步yield/resume协议。
+逻辑 role 不映射为专用 binary、service instance 或 OS sandbox。不同 Agent step 的 continuation、
+context、budget 和 tool result 由强类型 workflow binding 防止混用，而不是由进程隔离赋予 authority。
+`cairn-agent` 只提供领域中立的 model turn/tool-operation recovery；迁移 workflow 不再拥有 proposal 私有 journal、
+request/terminal process protocol 或 binary invocation identity。外部 tool request 统一通过 Controller→Worker
+调度路径执行，recorded adapter 不能冒充真实 Worker observation。
 
 ## 5. SIR 的自主研究能力
 
@@ -201,7 +197,7 @@ sequenceDiagram
     C-->>A: typed public observation / diagnostic
 ```
 
-“本地实验”只是调度到了 Controller 所在实验室中的 CPU/host/Docker Worker，不是 Proposal Host
+“本地实验”只是调度到了 Controller 所在实验室中的 CPU/host/Docker Worker，不是 proposal step
 获得本地 shell。CUDA、Ascend build、NPU、sanitizer、reference 和 model-integration 使用同一
 Controller/Worker control-plane contract，仅 capability 与 job adapter 不同。
 
@@ -242,28 +238,32 @@ build 仍为 `SubjectFailed`，因此它证明了跨主机执行和反馈闭环�
 correctness、Oracle portfolio adequacy 或最终 MigrationVerdict。
 
 DEV-021已把Candidate native suffix固化进Controller-owned state machine，DEV-022已实现最小generic
-Proposal Host并接通persisted Candidate episode request。DEV-023又实现一个active Controller内的单任务process
-manager，把durable next action连接到exact Host binary/start marker、existing Worker scheduler/reconciliation与typed
-receipt折回。它只监管配置中一个已存在Task，不代表task intake、global catalog或Host pool已经实现；后续仍须保留
+proposal step并接通persisted Candidate episode request。DEV-023又实现一个active Controller内的单任务process
+manager，把durable next action连接到 existing Worker scheduler/reconciliation 与 typed receipt 折回。它只监管
+配置中一个已存在Task，不代表task intake或global catalog已经实现；后续仍须保留
 现有V1强类型和receipts，不得为尚无consumer的Agent、reviewer、service或compatibility path预建结构。
-DEV-024把现有SIR/Candidate profile的duplicated runner收敛为一个request-bound durable Proposal Loop，并删除旧入口
-与测试。
+DEV-024曾把现有SIR/Candidate profile的duplicated runner收敛为一个进程私有组合层；D-044/DEV-036已删除该
+进程边界，Controller现在以共享的domain-neutral Agent episode primitives直接驱动typed proposal step。
 DEV-025进一步冻结完整Controller业务骨架，并把现有Candidate manager turn改为recover/select/execute子骨架。
-DEV-026将exact SIR Host request/recovery input、durable episode start authority、SIR terminal/proposal observation
+DEV-026将exact SIR request/recovery input、durable model start authority与SIR proposal observation
 和model-free user decision requests接入新的task-owned `ControllerWorkflowV1`；DEV-027把该aggregate移动到拥有
 Controller composition的`cairn-server`，继续接入actual typed user decision、独立Intent Admission executable/
 restricted-store start authority和public outcome observation。active driver仍只表达recover/select/execute；
 DEV-030又让它从`AwaitOracleExplorationWorkspace`接收并归档exact Oracle authority，Controller重算initial ledger。
 DEV-031已接入逐cell strategy consumer：完整admitted claim机械展开为claim × concern × role obligation，catalog为每个
-cell选择deterministic或Agent executor；Agent使用同一generic Host但只获得一个cell的冻结材料。fixed Blue/Red/
+cell选择deterministic或Agent executor；Agent step只获得一个cell的冻结材料。fixed Blue/Red/
 model-debate implementation、example与测试路径已经删除，synthesis/adversarial只是logical strategy kind。
 DEV-032已把terminal ledger、exact portfolio/strict policy freeze、qualified mechanism inventory、机械item × control
 attempt、trusted evidence和model-free claim outcome接入同一个连续aggregate。DEV-033又把admitted-only Candidate
-contract/workspace、exact public Oracle material bodies、generic Candidate Proposal Host、product-owned build authority、
+contract/workspace、exact public Oracle material bodies、generic Candidate proposal step、product-owned build authority、
 Worker receipt observation、机械claim × item × plane controls、independent Candidate Admission与terminal接入同一aggregate；
 旧`MigrationWorkflowV1`和collection/native Candidate suffix已经删除。
-DEV-029又把原external-effect硬错误替换为request-bound durable yield、Controller start authority、Worker receipt
-provenance与same-episode resume。DEV-031的Oracle consumer进一步把effect result重算为Controller observation、
+DEV-034把Oracle Admission的整体receipt注入口替换为qualified runner lifecycle：catalog registration冻结
+mechanism/runner/qualification，Controller为每个obligation先提交runner-bound run/dispatch authority，再只从exact
+job/attempt/contract/content-bound Worker observation机械投影receipt；Admission reducer不读取日志或模型结论。
+DEV-029建立的Worker receipt provenance与same-episode resume仍保留，但process-specific external-effect yield已由
+D-044/DEV-036删除；current边界是typed `WorkflowToolRequest`和Controller Worker authority。DEV-031的Oracle
+consumer进一步把effect result重算为Controller observation、
 Oracle payload和exact run-bound observation，并先持久化到ledger再恢复同一episode；具体GitHub/NPU adapter仍由
 policy与真实operation选择，不把任何strategy或experiment设为产品必经路径。
 

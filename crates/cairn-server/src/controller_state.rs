@@ -31,26 +31,30 @@ use cairn_migration::{
     OracleAdmissionAttemptV1, OracleAdmissionEvidenceArtifact, OracleAdmissionEvidenceV1,
     OracleAdmissionMechanismCatalogArtifact, OracleAdmissionMechanismCatalogV1,
     OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1, OracleAdmissionPolicyArtifact,
-    OracleAdmissionPolicyV1, OracleClaimV1, OracleCoveragePolicyArtifact, OracleCoveragePolicyV1,
-    OracleExplorationLedgerArtifact, OracleExplorationLedgerV1, OracleExplorationObservationV1,
-    OracleExplorationRevision, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleStrategyCatalogArtifact, OracleStrategyCatalogV1, OracleStrategyExecutorV1,
-    OracleStrategyImplementationArtifact, OracleStrategyRunArtifact, OracleStrategyRunV1,
-    OracleStrategySubmissionV1, OracleWorkspaceArtifact, OracleWorkspaceV1,
-    ProposalHostPublicationV1, ProposalHostRequestArtifact, ProposalHostRequestV1,
-    ProposalHostRoleRequestV1, ProposalHostTerminalArtifact, ProposalHostTerminalV1,
-    SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
+    OracleAdmissionPolicyV1, OracleClaimV1, OracleControlDispatchArtifact, OracleControlDispatchV1,
+    OracleControlReceiptV1, OracleControlRunArtifact, OracleControlRunV1,
+    OracleCoveragePolicyArtifact, OracleCoveragePolicyV1, OracleExplorationLedgerArtifact,
+    OracleExplorationLedgerV1, OracleExplorationObservationV1, OracleExplorationRevision,
+    OraclePortfolioProposalArtifact, OraclePortfolioProposalV1, OracleStrategyCatalogArtifact,
+    OracleStrategyCatalogV1, OracleStrategyExecutorV1, OracleStrategyImplementationArtifact,
+    OracleStrategyRunArtifact, OracleStrategyRunV1, OracleStrategySubmissionV1,
+    OracleWorkspaceArtifact, OracleWorkspaceV1, ProposalStepPublicationV1,
+    ProposalStepRequestArtifact, ProposalStepRequestV1, ProposalStepRoleRequestV1,
+    ProposalStepTerminalArtifact, ProposalStepTerminalV1, SirIntentHypothesisSetProposalArtifact,
+    TrustedOracleControlObservationV1, UserIntentDecisionRequestArtifact,
     UserIntentDecisionRequestV1, derive_oracle_claims, derive_oracle_work_items,
     recompute_candidate_admission, recompute_oracle_admission,
 };
 
 const WORKFLOW_FROZEN: &str = "migration.controller-workflow-frozen";
+const WORKFLOW_CANCELLED: &str = "migration.controller-workflow-cancelled";
 const SIR_EPISODE_AUTHORIZED: &str = "migration.controller-sir-episode-authorized";
 const SIR_PROPOSAL_RECORDED: &str = "migration.controller-sir-proposal-recorded";
 const INTENT_DECISION_REQUESTS_RECORDED: &str =
     "migration.controller-intent-decision-requests-recorded";
 const USER_INTENT_DECISION_RECORDED: &str = "migration.controller-user-intent-decision-recorded";
 const INTENT_ADMISSION_AUTHORIZED: &str = "migration.controller-intent-admission-authorized";
+const INTENT_ADMISSION_BLOCKED: &str = "migration.controller-intent-admission-blocked";
 const ADMITTED_INTENT_RECORDED: &str = "migration.controller-admitted-intent-recorded";
 const ORACLE_EXPLORATION_OPENED: &str = "migration.controller-oracle-exploration-opened";
 const ORACLE_STRATEGY_AUTHORIZED: &str = "migration.controller-oracle-strategy-authorized";
@@ -60,6 +64,8 @@ const ORACLE_STRATEGY_SUBMISSION_RECORDED: &str =
     "migration.controller-oracle-strategy-submission-recorded";
 const ORACLE_PORTFOLIO_FROZEN: &str = "migration.controller-oracle-portfolio-frozen";
 const ORACLE_ADMISSION_AUTHORIZED: &str = "migration.controller-oracle-admission-authorized";
+const ORACLE_CONTROL_AUTHORIZED: &str = "migration.controller-oracle-control-authorized";
+const ORACLE_CONTROL_OBSERVED: &str = "migration.controller-oracle-control-observed";
 const ORACLE_ADMISSION_RECORDED: &str = "migration.controller-oracle-admission-recorded";
 const CANDIDATE_ORACLE_CONTRACT_FROZEN: &str =
     "migration.controller-candidate-oracle-contract-frozen";
@@ -74,16 +80,16 @@ const CANDIDATE_BUILD_OBSERVED: &str = "migration.controller-candidate-build-obs
 const CANDIDATE_ADMISSION_AUTHORIZED: &str = "migration.controller-candidate-admission-authorized";
 const CANDIDATE_ADMISSION_RECORDED: &str = "migration.controller-candidate-admission-recorded";
 
-/// Exact SIR authority frozen before the Controller may start the Proposal Host effect.
+/// Exact SIR authority frozen before the Controller may start the Proposal step effect.
 ///
-/// A SIR proposal identity cannot be substituted for the exact Host request authority.
+/// A SIR proposal identity cannot be substituted for the exact proposal-step request authority.
 ///
 /// ```compile_fail
 /// use cairn_migration::SirIntentHypothesisSetProposalArtifact;
 /// use cairn_server::FrozenSirAuthorityV1;
 /// use cairn_protocol::ContentId;
 /// fn require_request(authority: &FrozenSirAuthorityV1, proposal: ContentId<SirIntentHypothesisSetProposalArtifact>) {
-///     let _: cairn_protocol::ContentId<cairn_migration::ProposalHostRequestArtifact> = proposal;
+///     let _: cairn_protocol::ContentId<cairn_migration::ProposalStepRequestArtifact> = proposal;
 ///     let _ = authority;
 /// }
 /// ```
@@ -91,7 +97,7 @@ const CANDIDATE_ADMISSION_RECORDED: &str = "migration.controller-candidate-admis
 #[serde(deny_unknown_fields)]
 pub struct FrozenSirAuthorityV1 {
     task_id: TaskId,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     episode_id: cairn_protocol::EpisodeId,
 }
@@ -103,7 +109,7 @@ impl FrozenSirAuthorityV1 {
     }
 
     #[must_use]
-    pub const fn request(&self) -> ContentId<ProposalHostRequestArtifact> {
+    pub const fn request(&self) -> ContentId<ProposalStepRequestArtifact> {
         self.request
     }
 
@@ -295,6 +301,8 @@ pub struct FrozenOracleAdmissionAuthorityV1 {
     portfolio: FrozenOraclePortfolioAuthorityV1,
     mechanisms: ContentId<OracleAdmissionMechanismCatalogArtifact>,
     attempt: ContentId<OracleAdmissionAttemptArtifact>,
+    mechanism_catalog: Box<OracleAdmissionMechanismCatalogV1>,
+    admission_attempt: Box<OracleAdmissionAttemptV1>,
 }
 
 impl FrozenOracleAdmissionAuthorityV1 {
@@ -311,6 +319,32 @@ impl FrozenOracleAdmissionAuthorityV1 {
     #[must_use]
     pub const fn attempt(&self) -> ContentId<OracleAdmissionAttemptArtifact> {
         self.attempt
+    }
+}
+
+/// Durable start authority for one exact qualified Oracle control execution.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenOracleControlAuthorityV1 {
+    admission: FrozenOracleAdmissionAuthorityV1,
+    run: ContentId<OracleControlRunArtifact>,
+    dispatch: ContentId<OracleControlDispatchArtifact>,
+}
+
+impl FrozenOracleControlAuthorityV1 {
+    #[must_use]
+    pub const fn admission(&self) -> &FrozenOracleAdmissionAuthorityV1 {
+        &self.admission
+    }
+
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleControlRunArtifact> {
+        self.run
+    }
+
+    #[must_use]
+    pub const fn dispatch(&self) -> ContentId<OracleControlDispatchArtifact> {
+        self.dispatch
     }
 }
 
@@ -352,12 +386,12 @@ impl FrozenCandidateOracleAuthorityV1 {
     }
 }
 
-/// Exact Candidate Host request frozen before any model effect may start.
+/// Exact Candidate proposal step request frozen before any model effect may start.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrozenCandidateProposalAuthorityV1 {
     candidate: FrozenCandidateOracleAuthorityV1,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     episode_id: cairn_protocol::EpisodeId,
 }
 
@@ -368,7 +402,7 @@ impl FrozenCandidateProposalAuthorityV1 {
     }
 
     #[must_use]
-    pub const fn request(&self) -> ContentId<ProposalHostRequestArtifact> {
+    pub const fn request(&self) -> ContentId<ProposalStepRequestArtifact> {
         self.request
     }
 
@@ -383,7 +417,7 @@ impl FrozenCandidateProposalAuthorityV1 {
 #[serde(deny_unknown_fields)]
 pub struct FrozenCandidateBuildAuthorityV1 {
     candidate: FrozenCandidateProposalAuthorityV1,
-    terminal: ContentId<ProposalHostTerminalArtifact>,
+    terminal: ContentId<ProposalStepTerminalArtifact>,
     proposal: ContentId<CandidateProposalArtifact>,
     plan: ContentId<CandidateBuildPlanArtifact>,
     request: ContentId<CandidateBuildRequestArtifact>,
@@ -454,11 +488,11 @@ pub enum OracleStrategyCompletionV1 {
         implementation: ContentId<OracleStrategyImplementationArtifact>,
         submission: OracleStrategySubmissionV1,
     },
-    AgentEpisode {
-        request_id: ContentId<ProposalHostRequestArtifact>,
-        request: Box<ProposalHostRequestV1>,
-        terminal_id: ContentId<ProposalHostTerminalArtifact>,
-        terminal: Box<ProposalHostTerminalV1>,
+    AgentStep {
+        request_id: ContentId<ProposalStepRequestArtifact>,
+        request: Box<ProposalStepRequestV1>,
+        terminal_id: ContentId<ProposalStepTerminalArtifact>,
+        terminal: Box<ProposalStepTerminalV1>,
     },
 }
 
@@ -481,7 +515,7 @@ impl OracleStrategyCompletionV1 {
                 }
                 submission
             }
-            Self::AgentEpisode {
+            Self::AgentStep {
                 request_id,
                 request,
                 terminal_id,
@@ -493,13 +527,13 @@ impl OracleStrategyCompletionV1 {
                 {
                     return Err(ControllerWorkflowError::BindingMismatch);
                 }
-                let ProposalHostRoleRequestV1::OracleStrategy {
+                let ProposalStepRoleRequestV1::OracleStrategy {
                     run: requested_run, ..
                 } = request.role()
                 else {
                     return Err(ControllerWorkflowError::BindingMismatch);
                 };
-                let ProposalHostPublicationV1::OracleStrategy { submission, .. } =
+                let ProposalStepPublicationV1::OracleStrategy { submission, .. } =
                     terminal.publication()
                 else {
                     return Err(ControllerWorkflowError::BindingMismatch);
@@ -523,22 +557,23 @@ impl OracleStrategyCompletionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControllerWorkflowStateV1 {
     NotFound,
+    Cancelled,
     Frozen(FrozenSirAuthorityV1),
     SirEpisodeAuthorized(FrozenSirAuthorityV1),
     SirProposed {
         authority: FrozenSirAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
     },
     AwaitingUserIntentDecision {
         authority: FrozenSirAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
     },
     UserIntentDecisionRecorded {
         authority: FrozenSirAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
         request: ContentId<UserIntentDecisionRequestArtifact>,
@@ -547,7 +582,7 @@ pub enum ControllerWorkflowStateV1 {
     },
     IntentAdmissionAuthorized {
         authority: FrozenSirAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
         request: ContentId<UserIntentDecisionRequestArtifact>,
@@ -556,9 +591,21 @@ pub enum ControllerWorkflowStateV1 {
         executable: ContentId<IntentAdmissionExecutableArtifact>,
         restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
     },
+    IntentAdmissionBlocked {
+        authority: FrozenSirAuthorityV1,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
+        proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
+        requests: ContentId<IntentDecisionRequestBatchArtifact>,
+        request: ContentId<UserIntentDecisionRequestArtifact>,
+        authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
+        decision: ContentId<UserIntentDecisionArtifact>,
+        executable: ContentId<IntentAdmissionExecutableArtifact>,
+        restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+        reason: IntentAdmissionBlockReasonV1,
+    },
     AdmittedIntent {
         authority: FrozenSirAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
         requests: ContentId<IntentDecisionRequestBatchArtifact>,
         request: ContentId<UserIntentDecisionRequestArtifact>,
@@ -574,6 +621,14 @@ pub enum ControllerWorkflowStateV1 {
     OracleStrategyAuthorized(FrozenOracleStrategyAuthorityV1),
     OraclePortfolioFrozen(FrozenOraclePortfolioAuthorityV1),
     OracleAdmissionAuthorized(FrozenOracleAdmissionAuthorityV1),
+    OracleControlAuthorized {
+        authority: FrozenOracleControlAuthorityV1,
+        previous_receipts: Vec<OracleControlReceiptV1>,
+    },
+    OracleControlsObserved {
+        authority: FrozenOracleAdmissionAuthorityV1,
+        receipts: Vec<OracleControlReceiptV1>,
+    },
     OracleAdmitted {
         authority: FrozenOracleAdmissionAuthorityV1,
         evidence: ContentId<OracleAdmissionEvidenceArtifact>,
@@ -584,7 +639,7 @@ pub enum ControllerWorkflowStateV1 {
     CandidateProposalEpisodeAuthorized(FrozenCandidateProposalAuthorityV1),
     CandidateProposed {
         authority: FrozenCandidateProposalAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<CandidateProposalArtifact>,
     },
     CandidateBuildFrozen(FrozenCandidateBuildAuthorityV1),
@@ -611,7 +666,7 @@ pub enum ControllerWorkflowNextActionV1 {
     RunSirEpisode(FrozenSirAuthorityV1),
     DeriveIntentDecisionRequests {
         authority: FrozenSirAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
     },
     AwaitUserIntentDecision {
@@ -633,7 +688,14 @@ pub enum ControllerWorkflowNextActionV1 {
     RunOracleExploration(FrozenOracleExplorationAuthorityV1),
     RunOracleStrategy(FrozenOracleStrategyAuthorityV1),
     AwaitOracleAdmissionMechanisms(FrozenOraclePortfolioAuthorityV1),
-    AwaitOracleControlReceipts(FrozenOracleAdmissionAuthorityV1),
+    RunOracleAdmissionControls {
+        authority: FrozenOracleAdmissionAuthorityV1,
+        receipts: Vec<OracleControlReceiptV1>,
+    },
+    ExecuteOracleAdmissionControl {
+        authority: FrozenOracleControlAuthorityV1,
+        previous_receipts: Vec<OracleControlReceiptV1>,
+    },
     PrepareCandidateOracleContract {
         authority: FrozenOracleAdmissionAuthorityV1,
         evidence: ContentId<OracleAdmissionEvidenceArtifact>,
@@ -644,7 +706,7 @@ pub enum ControllerWorkflowNextActionV1 {
     RunCandidateProposalEpisode(FrozenCandidateProposalAuthorityV1),
     AwaitCandidateBuild {
         authority: FrozenCandidateProposalAuthorityV1,
-        terminal: ContentId<ProposalHostTerminalArtifact>,
+        terminal: ContentId<ProposalStepTerminalArtifact>,
         proposal: ContentId<CandidateProposalArtifact>,
     },
     AuthorizeCandidateBuild(FrozenCandidateBuildAuthorityV1),
@@ -667,7 +729,10 @@ impl ControllerWorkflowStateV1 {
     #[allow(clippy::too_many_lines)]
     pub fn next_action(&self) -> ControllerWorkflowNextActionV1 {
         match self {
-            Self::NotFound => ControllerWorkflowNextActionV1::None,
+            Self::NotFound
+            | Self::Cancelled
+            | Self::IntentAdmissionBlocked { .. }
+            | Self::OracleAdmitted { .. } => ControllerWorkflowNextActionV1::None,
             Self::Frozen(authority) => {
                 ControllerWorkflowNextActionV1::AuthorizeSirEpisode(authority.clone())
             }
@@ -720,16 +785,24 @@ impl ControllerWorkflowStateV1 {
                 ControllerWorkflowNextActionV1::AwaitOracleAdmissionMechanisms(authority.clone())
             }
             Self::OracleAdmissionAuthorized(authority) => {
-                ControllerWorkflowNextActionV1::AwaitOracleControlReceipts(authority.clone())
+                ControllerWorkflowNextActionV1::RunOracleAdmissionControls {
+                    authority: authority.clone(),
+                    receipts: Vec::new(),
+                }
             }
-            Self::OracleAdmitted {
+            Self::OracleControlAuthorized {
                 authority,
-                evidence,
-                outcome,
-            } => ControllerWorkflowNextActionV1::PrepareCandidateOracleContract {
+                previous_receipts,
+            } => ControllerWorkflowNextActionV1::ExecuteOracleAdmissionControl {
                 authority: authority.clone(),
-                evidence: *evidence,
-                outcome: *outcome,
+                previous_receipts: previous_receipts.clone(),
+            },
+            Self::OracleControlsObserved {
+                authority,
+                receipts,
+            } => ControllerWorkflowNextActionV1::RunOracleAdmissionControls {
+                authority: authority.clone(),
+                receipts: receipts.clone(),
             },
             Self::CandidateOracleContractFrozen(authority) => {
                 ControllerWorkflowNextActionV1::AwaitCandidateProposalLoop(authority.clone())
@@ -816,14 +889,18 @@ struct WorkflowFrozenPayload {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct WorkflowCancelledPayload {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct SirEpisodeAuthorizedPayload {
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SirProposalRecordedPayload {
-    terminal: ContentId<ProposalHostTerminalArtifact>,
+    terminal: ContentId<ProposalStepTerminalArtifact>,
     proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
 }
 
@@ -847,6 +924,27 @@ struct IntentAdmissionAuthorizedPayload {
     decision: ContentId<UserIntentDecisionArtifact>,
     executable: ContentId<IntentAdmissionExecutableArtifact>,
     restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+}
+
+/// Durable, non-diagnostic classification of an independently authorized Admission failure.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntentAdmissionBlockReasonV1 {
+    InvocationDrift,
+    TimedOut,
+    ExitFailure,
+    StdoutLimitExceeded,
+    StderrLimitExceeded,
+    InvalidOutcome,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IntentAdmissionBlockedPayload {
+    decision: ContentId<UserIntentDecisionArtifact>,
+    executable: ContentId<IntentAdmissionExecutableArtifact>,
+    restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+    reason: IntentAdmissionBlockReasonV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -911,6 +1009,22 @@ struct OracleAdmissionAuthorizedPayload {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct OracleControlAuthorizedPayload {
+    run: OracleControlRunV1,
+    dispatch: OracleControlDispatchV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleControlObservedPayload {
+    run: OracleControlRunV1,
+    dispatch: OracleControlDispatchV1,
+    observation: TrustedOracleControlObservationV1,
+    receipt: OracleControlReceiptV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct OracleAdmissionRecordedPayload {
     proposal: OraclePortfolioProposalV1,
     policy: OracleAdmissionPolicyV1,
@@ -933,23 +1047,23 @@ struct CandidateOracleContractFrozenPayload {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CandidateProposalRequestFrozenPayload {
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: Box<ProposalHostRequestV1>,
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: Box<ProposalStepRequestV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CandidateProposalEpisodeAuthorizedPayload {
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CandidateProposalRecordedPayload {
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: Box<ProposalHostRequestV1>,
-    terminal_id: ContentId<ProposalHostTerminalArtifact>,
-    terminal: Box<ProposalHostTerminalV1>,
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: Box<ProposalStepRequestV1>,
+    terminal_id: ContentId<ProposalStepTerminalArtifact>,
+    terminal: Box<ProposalStepTerminalV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1000,7 +1114,7 @@ struct Projection {
     history: Vec<EventEnvelope>,
 }
 
-/// Freezes the exact task, Host request, input, model, tool/capability and episode authority.
+/// Freezes the exact task, proposal-step request, input, model, tool/capability and episode authority.
 ///
 /// # Errors
 ///
@@ -1013,8 +1127,8 @@ struct Projection {
 pub fn freeze_controller_workflow<E: EventStore>(
     events: &mut E,
     workflow: &ControllerWorkflowV1,
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: &ProposalHostRequestV1,
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: &ProposalStepRequestV1,
     recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
     recovery_input: &IntentRecoveryInputV1,
     command_id: &CommandId,
@@ -1061,7 +1175,49 @@ pub fn freeze_controller_workflow<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
-/// Commits durable start authority before the external Proposal Host effect may run.
+/// Durably cancels a task aggregate without deleting its history.
+///
+/// Oracle-admitted and Candidate-terminal tasks are already terminal and cannot be relabelled.
+/// Reusing the same command identity is an idempotent replay.
+pub fn cancel_controller_workflow<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let projection = project(events, workflow)?;
+    let payload = WorkflowCancelledPayload {};
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        WORKFLOW_CANCELLED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    if matches!(
+        projection.state,
+        ControllerWorkflowStateV1::NotFound
+            | ControllerWorkflowStateV1::Cancelled
+            | ControllerWorkflowStateV1::OracleAdmitted { .. }
+            | ControllerWorkflowStateV1::Terminal { .. }
+    ) {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        WORKFLOW_CANCELLED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Commits durable start authority before the external Proposal step effect may run.
 ///
 /// # Errors
 ///
@@ -1069,7 +1225,7 @@ pub fn freeze_controller_workflow<E: EventStore>(
 pub fn authorize_sir_episode<E: EventStore>(
     events: &mut E,
     workflow: &ControllerWorkflowV1,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
@@ -1102,7 +1258,7 @@ pub fn authorize_sir_episode<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
-/// Records a strictly validated SIR Host terminal as the proposal observation.
+/// Records a strictly validated SIR proposal step terminal as the proposal observation.
 ///
 /// # Errors
 ///
@@ -1112,9 +1268,9 @@ pub fn authorize_sir_episode<E: EventStore>(
 pub fn record_sir_proposal<E: EventStore>(
     events: &mut E,
     workflow: &ControllerWorkflowV1,
-    request: &ProposalHostRequestV1,
-    terminal_id: ContentId<ProposalHostTerminalArtifact>,
-    terminal: &ProposalHostTerminalV1,
+    request: &ProposalStepRequestV1,
+    terminal_id: ContentId<ProposalStepTerminalArtifact>,
+    terminal: &ProposalStepTerminalV1,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
@@ -1123,7 +1279,7 @@ pub fn record_sir_proposal<E: EventStore>(
     if terminal.identity().map_err(binding_error)? != terminal_id {
         return Err(ControllerWorkflowError::BindingMismatch);
     }
-    let ProposalHostPublicationV1::Sir { proposal_id, .. } = terminal.publication() else {
+    let ProposalStepPublicationV1::Sir { proposal_id, .. } = terminal.publication() else {
         return Err(ControllerWorkflowError::BindingMismatch);
     };
     let payload = SirProposalRecordedPayload {
@@ -1320,6 +1476,118 @@ pub fn authorize_intent_admission<E: EventStore>(
         return Ok(state);
     }
     let ControllerWorkflowStateV1::UserIntentDecisionRecorded {
+        decision: recorded, ..
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if *recorded != decision {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        INTENT_ADMISSION_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Records that the exact authorized Intent Admission effect failed before publication.
+///
+/// # Errors
+///
+/// Rejects authority drift, illegal transitions, replay conflicts, or persistence failures.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the event records every distinct frozen Intent Admission authority identity"
+)]
+pub fn record_intent_admission_blocked<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    decision: ContentId<UserIntentDecisionArtifact>,
+    executable: ContentId<IntentAdmissionExecutableArtifact>,
+    restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+    reason: IntentAdmissionBlockReasonV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let projection = project(events, workflow)?;
+    let payload = IntentAdmissionBlockedPayload {
+        decision,
+        executable,
+        restricted_store,
+        reason,
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        INTENT_ADMISSION_BLOCKED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::IntentAdmissionAuthorized {
+        decision: recorded_decision,
+        executable: recorded_executable,
+        restricted_store: recorded_store,
+        ..
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if *recorded_decision != decision
+        || *recorded_executable != executable
+        || *recorded_store != restricted_store
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        INTENT_ADMISSION_BLOCKED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Reauthorizes a blocked Intent Admission operation against a newly frozen executable/store.
+///
+/// # Errors
+///
+/// Rejects decision drift, non-blocked state, replay conflicts, or persistence failures.
+pub fn reauthorize_intent_admission<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    decision: ContentId<UserIntentDecisionArtifact>,
+    executable: ContentId<IntentAdmissionExecutableArtifact>,
+    restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let projection = project(events, workflow)?;
+    let payload = IntentAdmissionAuthorizedPayload {
+        decision,
+        executable,
+        restricted_store,
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        INTENT_ADMISSION_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::IntentAdmissionBlocked {
         decision: recorded, ..
     } = &projection.state
     else {
@@ -1821,6 +2089,152 @@ pub fn authorize_oracle_admission<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
+/// Commits durable start authority for one exact qualified Oracle control.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the event keeps the exact Admission, runner, prior evidence, and dispatch binding"
+)]
+pub(crate) fn authorize_oracle_control<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    mechanisms: &OracleAdmissionMechanismCatalogV1,
+    attempt: &OracleAdmissionAttemptV1,
+    previous_receipts: &[OracleControlReceiptV1],
+    run: &OracleControlRunV1,
+    dispatch: &OracleControlDispatchV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    dispatch.validate_against(run).map_err(binding_error)?;
+    if run.attempt() != attempt.identity().map_err(binding_error)?
+        || dispatch.run() != run.identity().map_err(binding_error)?
+        || run
+            != &OracleControlRunV1::new(attempt, mechanisms, run.obligation().clone())
+                .map_err(binding_error)?
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let _ = OracleAdmissionEvidenceV1::new(attempt, previous_receipts.to_vec())
+        .map_err(binding_error)?;
+    let payload = OracleControlAuthorizedPayload {
+        run: run.clone(),
+        dispatch: dispatch.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_CONTROL_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let authority = match &projection.state {
+        ControllerWorkflowStateV1::OracleAdmissionAuthorized(authority)
+            if previous_receipts.is_empty() =>
+        {
+            authority
+        }
+        ControllerWorkflowStateV1::OracleControlsObserved {
+            authority,
+            receipts,
+        } if receipts == previous_receipts => authority,
+        _ => return Err(ControllerWorkflowError::InvalidTransition),
+    };
+    if mechanisms.identity().map_err(binding_error)? != authority.mechanisms
+        || attempt.identity().map_err(binding_error)? != authority.attempt
+        || mechanisms != authority.mechanism_catalog.as_ref()
+        || attempt != authority.admission_attempt.as_ref()
+        || previous_receipts.iter().any(|receipt| {
+            receipt.item() == run.obligation().item()
+                && receipt.control() == run.obligation().control()
+        })
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_CONTROL_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Records the trusted observation produced by the exact authorized Oracle control dispatch.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the observation commit retains run, dispatch, receipt, and command authority"
+)]
+pub(crate) fn record_oracle_control_observation<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    run: &OracleControlRunV1,
+    dispatch: &OracleControlDispatchV1,
+    observation: &TrustedOracleControlObservationV1,
+    receipt: &OracleControlReceiptV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    dispatch.validate_against(run).map_err(binding_error)?;
+    observation
+        .validate_against(dispatch)
+        .map_err(binding_error)?;
+    let payload = OracleControlObservedPayload {
+        run: run.clone(),
+        dispatch: dispatch.clone(),
+        observation: observation.clone(),
+        receipt: receipt.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_CONTROL_OBSERVED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleControlAuthorized {
+        authority,
+        previous_receipts,
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if authority.run != run.identity().map_err(binding_error)?
+        || authority.dispatch != dispatch.identity().map_err(binding_error)?
+        || receipt.proposal() != authority.admission.portfolio.proposal
+        || receipt
+            != &OracleControlReceiptV1::from_trusted_observation(
+                authority.admission.portfolio.proposal,
+                run,
+                observation,
+            )
+            .map_err(binding_error)?
+        || previous_receipts
+            .iter()
+            .any(|prior| prior.item() == receipt.item() && prior.control() == receipt.control())
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_CONTROL_OBSERVED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
 /// Records trusted control evidence and the independently recomputed terminal claim portfolio.
 ///
 /// # Errors
@@ -1866,13 +2280,18 @@ pub fn record_oracle_admission_outcome<E: EventStore>(
     )? {
         return Ok(state);
     }
-    let ControllerWorkflowStateV1::OracleAdmissionAuthorized(authority) = &projection.state else {
+    let ControllerWorkflowStateV1::OracleControlsObserved {
+        authority,
+        receipts,
+    } = &projection.state
+    else {
         return Err(ControllerWorkflowError::InvalidTransition);
     };
     if proposal.identity().map_err(binding_error)? != authority.portfolio.proposal
         || policy.identity().map_err(binding_error)? != authority.portfolio.policy
         || mechanisms.identity().map_err(binding_error)? != authority.mechanisms
         || attempt.identity().map_err(binding_error)? != authority.attempt
+        || evidence.receipts() != receipts
     {
         return Err(ControllerWorkflowError::BindingMismatch);
     }
@@ -1962,7 +2381,7 @@ pub fn freeze_candidate_oracle_contract<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
-/// Freezes the exact Candidate Host request before a model effect may be authorized.
+/// Freezes the exact Candidate proposal step request before a model effect may be authorized.
 ///
 /// # Errors
 ///
@@ -1970,8 +2389,8 @@ pub fn freeze_candidate_oracle_contract<E: EventStore>(
 pub fn freeze_candidate_proposal_request<E: EventStore>(
     events: &mut E,
     workflow: &ControllerWorkflowV1,
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: &ProposalHostRequestV1,
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: &ProposalStepRequestV1,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
@@ -2009,7 +2428,7 @@ pub fn freeze_candidate_proposal_request<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
-/// Commits Candidate Proposal Host start authority before its external model effect.
+/// Commits Candidate Proposal step start authority before its external model effect.
 ///
 /// # Errors
 ///
@@ -2017,7 +2436,7 @@ pub fn freeze_candidate_proposal_request<E: EventStore>(
 pub fn authorize_candidate_proposal_episode<E: EventStore>(
     events: &mut E,
     workflow: &ControllerWorkflowV1,
-    request: ContentId<ProposalHostRequestArtifact>,
+    request: ContentId<ProposalStepRequestArtifact>,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
@@ -2051,7 +2470,7 @@ pub fn authorize_candidate_proposal_episode<E: EventStore>(
     recover_controller_workflow(events, workflow)
 }
 
-/// Records one strict task-generic Candidate proposal returned by the authorized Host episode.
+/// Records one strict task-generic Candidate proposal returned by the authorized Agent episode.
 ///
 /// # Errors
 ///
@@ -2060,10 +2479,10 @@ pub fn authorize_candidate_proposal_episode<E: EventStore>(
 pub fn record_candidate_proposal<E: EventStore>(
     events: &mut E,
     workflow: &ControllerWorkflowV1,
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: &ProposalHostRequestV1,
-    terminal_id: ContentId<ProposalHostTerminalArtifact>,
-    terminal: &ProposalHostTerminalV1,
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: &ProposalStepRequestV1,
+    terminal_id: ContentId<ProposalStepTerminalArtifact>,
+    terminal: &ProposalStepTerminalV1,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
@@ -2073,7 +2492,7 @@ pub fn record_candidate_proposal<E: EventStore>(
     {
         return Err(ControllerWorkflowError::BindingMismatch);
     }
-    let ProposalHostPublicationV1::CandidateStrategy { .. } = terminal.publication() else {
+    let ProposalStepPublicationV1::CandidateStrategy { .. } = terminal.publication() else {
         return Err(ControllerWorkflowError::BindingMismatch);
     };
     let projection = project(events, workflow)?;
@@ -2371,9 +2790,9 @@ pub fn record_candidate_admission_outcome<E: EventStore>(
 fn validate_candidate_request(
     workflow: &ControllerWorkflowV1,
     authority: &FrozenCandidateOracleAuthorityV1,
-    request: &ProposalHostRequestV1,
+    request: &ProposalStepRequestV1,
 ) -> Result<(), ControllerWorkflowError> {
-    let ProposalHostRoleRequestV1::CandidateStrategy {
+    let ProposalStepRoleRequestV1::CandidateStrategy {
         workspace,
         contract,
         oracle_materials,
@@ -2407,8 +2826,8 @@ pub fn recover_controller_workflow<E: EventStore>(
 
 fn validate_frozen_material(
     workflow: &ControllerWorkflowV1,
-    request_id: ContentId<ProposalHostRequestArtifact>,
-    request: &ProposalHostRequestV1,
+    request_id: ContentId<ProposalStepRequestArtifact>,
+    request: &ProposalStepRequestV1,
     recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
     recovery_input: &IntentRecoveryInputV1,
 ) -> Result<(), ControllerWorkflowError> {
@@ -2425,9 +2844,9 @@ fn validate_frozen_material(
 
 fn validate_terminal(
     authority: &FrozenSirAuthorityV1,
-    request: &ProposalHostRequestV1,
-    terminal_id: ContentId<ProposalHostTerminalArtifact>,
-    terminal: &ProposalHostTerminalV1,
+    request: &ProposalStepRequestV1,
+    terminal_id: ContentId<ProposalStepTerminalArtifact>,
+    terminal: &ProposalStepTerminalV1,
 ) -> Result<(), ControllerWorkflowError> {
     terminal.validate_against(request).map_err(binding_error)?;
     if request.identity().map_err(binding_error)? != authority.request
@@ -2442,7 +2861,7 @@ fn validate_terminal(
     {
         return Err(ControllerWorkflowError::BindingMismatch);
     }
-    let ProposalHostPublicationV1::Sir { proposal, .. } = terminal.publication() else {
+    let ProposalStepPublicationV1::Sir { proposal, .. } = terminal.publication() else {
         return Err(ControllerWorkflowError::BindingMismatch);
     };
     if proposal.recovery_input() != authority.recovery_input
@@ -2498,6 +2917,18 @@ fn apply(
     bytes: &[u8],
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
     match (state, schema) {
+        (state, WORKFLOW_CANCELLED)
+            if !matches!(
+                state,
+                ControllerWorkflowStateV1::NotFound
+                    | ControllerWorkflowStateV1::Cancelled
+                    | ControllerWorkflowStateV1::OracleAdmitted { .. }
+                    | ControllerWorkflowStateV1::Terminal { .. }
+            ) =>
+        {
+            let _: WorkflowCancelledPayload = decode(bytes)?;
+            Ok(ControllerWorkflowStateV1::Cancelled)
+        }
         (ControllerWorkflowStateV1::NotFound, WORKFLOW_FROZEN) => {
             let authority = decode::<WorkflowFrozenPayload>(bytes)?.authority;
             if authority.task_id != task_id {
@@ -2568,6 +2999,73 @@ fn apply(
             let payload: IntentAdmissionAuthorizedPayload = decode(bytes)?;
             if payload.decision != decision {
                 return Err(invalid_history("Intent Admission decision changed"));
+            }
+            Ok(ControllerWorkflowStateV1::IntentAdmissionAuthorized {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                executable: payload.executable,
+                restricted_store: payload.restricted_store,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::IntentAdmissionAuthorized {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                executable,
+                restricted_store,
+            },
+            INTENT_ADMISSION_BLOCKED,
+        ) => {
+            let payload: IntentAdmissionBlockedPayload = decode(bytes)?;
+            if payload.decision != decision
+                || payload.executable != executable
+                || payload.restricted_store != restricted_store
+            {
+                return Err(invalid_history(
+                    "Intent Admission blocked authority changed",
+                ));
+            }
+            Ok(ControllerWorkflowStateV1::IntentAdmissionBlocked {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                executable,
+                restricted_store,
+                reason: payload.reason,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::IntentAdmissionBlocked {
+                authority,
+                terminal,
+                proposal,
+                requests,
+                request,
+                authority_grant,
+                decision,
+                ..
+            },
+            INTENT_ADMISSION_AUTHORIZED,
+        ) => {
+            let payload: IntentAdmissionAuthorizedPayload = decode(bytes)?;
+            if payload.decision != decision {
+                return Err(invalid_history(
+                    "Intent Admission reauthorization changed decision",
+                ));
             }
             Ok(ControllerWorkflowStateV1::IntentAdmissionAuthorized {
                 authority,
@@ -2838,15 +3336,71 @@ fn apply(
                 FrozenOracleAdmissionAuthorityV1 {
                     portfolio,
                     mechanisms: mechanism_id,
-                    attempt: payload
-                        .attempt
-                        .identity()
-                        .map_err(|error| invalid_history(error.to_string()))?,
+                    attempt: payload.attempt.identity().map_err(binding_error)?,
+                    mechanism_catalog: Box::new(payload.mechanisms),
+                    admission_attempt: Box::new(payload.attempt),
                 },
             ))
         }
         (
             ControllerWorkflowStateV1::OracleAdmissionAuthorized(authority),
+            ORACLE_CONTROL_AUTHORIZED,
+        ) => apply_oracle_control_authorized(authority, Vec::new(), bytes),
+        (
+            ControllerWorkflowStateV1::OracleControlsObserved {
+                authority,
+                receipts,
+            },
+            ORACLE_CONTROL_AUTHORIZED,
+        ) => apply_oracle_control_authorized(authority, receipts, bytes),
+        (
+            ControllerWorkflowStateV1::OracleControlAuthorized {
+                authority,
+                previous_receipts,
+            },
+            ORACLE_CONTROL_OBSERVED,
+        ) => {
+            let payload: OracleControlObservedPayload = decode(bytes)?;
+            payload
+                .dispatch
+                .validate_against(&payload.run)
+                .map_err(binding_error)?;
+            payload
+                .observation
+                .validate_against(&payload.dispatch)
+                .map_err(binding_error)?;
+            let expected_receipt = OracleControlReceiptV1::from_trusted_observation(
+                authority.admission.portfolio.proposal,
+                &payload.run,
+                &payload.observation,
+            )
+            .map_err(binding_error)?;
+            if payload.run.identity().map_err(binding_error)? != authority.run
+                || payload.dispatch.identity().map_err(binding_error)? != authority.dispatch
+                || payload.receipt != expected_receipt
+                || previous_receipts.iter().any(|receipt| {
+                    receipt.item() == payload.receipt.item()
+                        && receipt.control() == payload.receipt.control()
+                })
+            {
+                return Err(invalid_history("Oracle control observation changed"));
+            }
+            let mut receipts = previous_receipts;
+            receipts.push(payload.receipt);
+            let attempt = payload.run.attempt();
+            if attempt != authority.admission.attempt {
+                return Err(invalid_history("Oracle control attempt changed"));
+            }
+            Ok(ControllerWorkflowStateV1::OracleControlsObserved {
+                authority: authority.admission,
+                receipts,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::OracleControlsObserved {
+                authority,
+                receipts,
+            },
             ORACLE_ADMISSION_RECORDED,
         ) => {
             let payload: OracleAdmissionRecordedPayload = decode(bytes)?;
@@ -2878,6 +3432,7 @@ fn apply(
                 || policy_id != authority.portfolio.policy
                 || mechanisms_id != authority.mechanisms
                 || attempt_id != authority.attempt
+                || payload.evidence.receipts() != receipts
                 || payload.outcome != expected_outcome
             {
                 return Err(invalid_history("Oracle Admission outcome changed"));
@@ -2953,7 +3508,9 @@ fn apply(
         ) => {
             let payload: CandidateProposalRequestFrozenPayload = decode(bytes)?;
             if payload.request.identity().map_err(binding_error)? != payload.request_id {
-                return Err(invalid_history("Candidate Host request identity changed"));
+                return Err(invalid_history(
+                    "Candidate proposal step request identity changed",
+                ));
             }
             let workflow = ControllerWorkflowV1::new(task_id)?;
             validate_candidate_request(&workflow, &candidate, &payload.request)?;
@@ -2986,14 +3543,16 @@ fn apply(
                 || payload.terminal.validate_against(&payload.request).is_err()
                 || payload.terminal.episode_id() != authority.episode_id
             {
-                return Err(invalid_history("Candidate Host terminal changed"));
+                return Err(invalid_history("Candidate proposal step terminal changed"));
             }
             let workflow = ControllerWorkflowV1::new(task_id)?;
             validate_candidate_request(&workflow, &authority.candidate, &payload.request)?;
-            let ProposalHostPublicationV1::CandidateStrategy { proposal_id, .. } =
+            let ProposalStepPublicationV1::CandidateStrategy { proposal_id, .. } =
                 payload.terminal.publication()
             else {
-                return Err(invalid_history("Candidate Host returned another role"));
+                return Err(invalid_history(
+                    "Candidate proposal step returned another role",
+                ));
             };
             Ok(ControllerWorkflowStateV1::CandidateProposed {
                 authority,
@@ -3127,6 +3686,39 @@ fn apply(
     }
 }
 
+fn apply_oracle_control_authorized(
+    authority: FrozenOracleAdmissionAuthorityV1,
+    current_receipts: Vec<OracleControlReceiptV1>,
+    bytes: &[u8],
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let payload: OracleControlAuthorizedPayload = decode(bytes)?;
+    let run_id = payload.run.identity().map_err(binding_error)?;
+    let dispatch_id = payload.dispatch.identity().map_err(binding_error)?;
+    let expected_run = OracleControlRunV1::new(
+        &authority.admission_attempt,
+        &authority.mechanism_catalog,
+        payload.run.obligation().clone(),
+    )
+    .map_err(binding_error)?;
+    payload
+        .dispatch
+        .validate_against(&payload.run)
+        .map_err(binding_error)?;
+    let _ = OracleAdmissionEvidenceV1::new(&authority.admission_attempt, current_receipts.clone())
+        .map_err(binding_error)?;
+    if payload.run != expected_run || payload.dispatch.run() != run_id {
+        return Err(invalid_history("Oracle control start authority changed"));
+    }
+    Ok(ControllerWorkflowStateV1::OracleControlAuthorized {
+        authority: FrozenOracleControlAuthorityV1 {
+            admission: authority,
+            run: run_id,
+            dispatch: dispatch_id,
+        },
+        previous_receipts: current_receipts,
+    })
+}
+
 fn terminal_status(outcome: &CandidateAdmissionOutcomeV1) -> MigrationTerminalStatusV1 {
     if outcome
         .claims()
@@ -3180,7 +3772,7 @@ fn append_transition<E: EventStore, P: Serialize>(
     parent_event_id: Option<EventId>,
     payload: &P,
 ) -> Result<(), ControllerWorkflowError> {
-    events.append(
+    let outcome = events.append(
         &workflow.stream,
         expected,
         command_id,
@@ -3193,6 +3785,25 @@ fn append_transition<E: EventStore, P: Serialize>(
             payload: cairn_codec::to_vec(payload).map_err(codec)?,
         }],
     )?;
+    let event_id = outcome
+        .event_ids
+        .first()
+        .copied()
+        .ok_or_else(|| invalid_history("event store returned an empty append outcome"))?;
+    let sequence = outcome.first_sequence;
+    let sequence_number = sequence.get();
+    let was_replay = outcome.was_replay;
+    tracing::info!(
+        target: "cairn.server.controller-workflow",
+        event = "controller_workflow_event_committed",
+        task_id = %workflow.task_id,
+        command_id = %command_id,
+        event_id = %event_id,
+        sequence = sequence_number,
+        schema,
+        was_replay,
+        "Controller workflow transition committed"
+    );
     Ok(())
 }
 
@@ -3274,11 +3885,11 @@ mod tests {
     };
     use cairn_execution::{
         CapabilityName, CapabilityRequirement, CapabilityValue, CapturePolicy, DiagnosticByteLimit,
-        DockerImageId, EvidenceByteLimit, ExecutionEvidenceArtifact, ExecutionReceipt,
-        ExecutionStderrArtifact, ExecutionStdoutArtifact, ExecutionTimeoutMillis, NetworkPolicy,
-        OutputByteLimit, WorkerPoolName,
+        DockerImageId, EvidenceByteLimit, ExecutionElapsedMillis, ExecutionEvidenceArtifact,
+        ExecutionReceipt, ExecutionStderrArtifact, ExecutionStdoutArtifact, ExecutionTimeoutMillis,
+        JobContractArtifact, NetworkPolicy, OutputByteLimit, WorkerPoolName,
     };
-    use cairn_protocol::{ContentType, EpisodeId};
+    use cairn_protocol::{AttemptId, ContentType, EpisodeId, JobId};
     use cairn_store_sqlite::SqliteEventStore;
     use cairn_verification::ReferenceArtifact;
     use serde_json::{Value, json};
@@ -3290,31 +3901,30 @@ mod tests {
         UserIntentDecisionV1, promote_user_intent,
     };
     use cairn_migration::{
-        AgentResolvedRuntimeModelArtifact, AuthoritativeIntentClaimV1, CandidateBuildPlanV1,
-        CandidateControlFamilyV1, CandidateControlImplementationArtifact,
-        CandidateControlReceiptV1, CandidateControlResultV1, CandidateMechanismCatalogV1,
-        CandidateMechanismProvenanceV1, CandidateOracleElementMaterialV1,
-        CandidateOracleMaterialV1, CandidateOracleMaterialsV1, CandidateProposalSubmissionV1,
-        CandidateProposalV1, CandidateQualifiedMechanismV1, CollectionOutputIntentV1,
-        CollectionOutputOrderContractV1, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
-        OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact, OracleControlFamilyV1,
-        OracleControlReceiptV1, OracleControlResultV1, OracleCoverageProfileV1,
+        AgentResolvedRuntimeModelArtifact, CandidateBuildPlanV1, CandidateControlFamilyV1,
+        CandidateControlImplementationArtifact, CandidateControlReceiptV1,
+        CandidateControlResultV1, CandidateMechanismCatalogV1, CandidateMechanismProvenanceV1,
+        CandidateOracleElementMaterialV1, CandidateOracleMaterialV1, CandidateOracleMaterialsV1,
+        CandidateProposalSubmissionV1, CandidateProposalV1, CandidateQualifiedMechanismV1,
+        IntentHypothesisSetProposalV1, IntentRecoveryRequestV1, OracleAdversarialPolicyV1,
+        OracleBuildTestSnapshotArtifact, OracleControlFamilyV1, OracleControlReceiptV1,
+        OracleControlResultV1, OracleControlRunnerArtifact, OracleCoverageProfileV1,
         OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
         OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
         OracleExplorationCapabilityGrantArtifact, OracleKnowledgeSnapshotArtifact,
-        OracleObservationPayloadV1, OraclePortfolioElementKindV1, OraclePortfolioElementV1,
-        OracleQualifiedMechanismArtifact, OracleQualifiedMechanismRegistrationV1,
-        OracleResearchToolCatalogArtifact, OracleSourceSnapshotArtifact, OracleStrategyExecutorV1,
+        OracleMechanismQualificationReceiptArtifact, OracleObservationPayloadV1,
+        OraclePortfolioElementKindV1, OraclePortfolioElementV1, OracleQualifiedMechanismArtifact,
+        OracleQualifiedMechanismRegistrationV1, OracleResearchToolCatalogArtifact,
+        OracleSourceSnapshotArtifact, OracleStrategyExecutorV1,
         OracleStrategyImplementationArtifact, OracleStrategyKindV1, OracleStrategyName,
         OracleStrategyRegistrationV1, OracleStrategyRoleV1, OracleStrategyRunLimit,
         OracleStrategySubmissionOutcomeV1, OracleStrategySubmissionV1, OracleWorkspaceInput,
-        ProposalHostBinaryIdentity, ProposalHostControllerObservationArtifact,
-        ProposalHostOracleBuildTestsV1, ProposalHostOracleDocumentationV1,
-        ProposalHostOracleKnowledgeV1, ProposalHostOracleMaterialsV1, ProposalHostRoleRequestV1,
-        ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
+        ProposalStepOracleBuildTestsV1, ProposalStepOracleDocumentationV1,
+        ProposalStepOracleKnowledgeV1, ProposalStepOracleMaterialsV1, ProposalStepRoleRequestV1,
+        ProposalStepRuntimeV1, ProposalStepTaskSnapshotV1, ProposalStepTaskSourceV1,
         SirCallerClaimId, SirHypothesisId, SirSourceLineCount, SirTaskArtifactBytes,
         SirTaskArtifactPath, SirTaskArtifactV1, SirTaskBundleV1, SirTaskLimits,
-        TrustedCandidateControlReceiptArtifact, TrustedOracleControlReceiptArtifact,
+        TrustedCandidateControlReceiptArtifact, WorkflowToolControllerObservationArtifact,
         derive_user_intent_decision_requests, prepare_generic_candidate_build_job,
     };
 
@@ -3322,7 +3932,45 @@ mod tests {
         ContentId::derive(label).expect("content identity")
     }
 
-    fn request(task_id: TaskId) -> (ProposalHostRequestV1, IntentRecoveryInputV1) {
+    #[derive(Serialize)]
+    struct ExecutionReceiptWire {
+        schema_version: u16,
+        job_id: JobId,
+        attempt_id: AttemptId,
+        contract_id: ContentId<JobContractArtifact>,
+        outcome: ExecutionOutcome,
+        exit_code: Option<i32>,
+        elapsed_ms: ExecutionElapsedMillis,
+        stdout_id: ContentId<ExecutionStdoutArtifact>,
+        stderr_id: ContentId<ExecutionStderrArtifact>,
+        evidence_id: ContentId<ExecutionEvidenceArtifact>,
+        outputs: Vec<cairn_execution::ArchivedOutput>,
+    }
+
+    fn execution_receipt(
+        job_id: JobId,
+        attempt_id: AttemptId,
+        contract_id: ContentId<JobContractArtifact>,
+        label: &[u8],
+    ) -> ExecutionReceipt {
+        let wire = ExecutionReceiptWire {
+            schema_version: 1,
+            job_id,
+            attempt_id,
+            contract_id,
+            outcome: ExecutionOutcome::Succeeded,
+            exit_code: Some(0),
+            elapsed_ms: ExecutionElapsedMillis::new(1),
+            stdout_id: id(label),
+            stderr_id: id(label),
+            evidence_id: id(label),
+            outputs: Vec::new(),
+        };
+        cairn_codec::from_slice(&cairn_codec::to_vec(&wire).expect("encode receipt"))
+            .expect("decode receipt")
+    }
+
+    fn request(task_id: TaskId) -> (ProposalStepRequestV1, IntentRecoveryInputV1) {
         let source = "// generic source line\n".repeat(24);
         let path = SirTaskArtifactPath::new("src/compact_above.cu").expect("path");
         let artifact: SirTaskArtifactV1 = serde_json::from_value(json!({
@@ -3340,9 +3988,8 @@ mod tests {
             "../../../fixtures/cuda-ascend/sir/compact-above-f32/v1/caller-intent.json"
         ))
         .expect("caller intent");
-        let runtime = ProposalHostRuntimeV1::new(
+        let runtime = ProposalStepRuntimeV1::new(
             EpisodeId::new(),
-            ProposalHostBinaryIdentity::new(format!("sha256:{}", "a".repeat(64))).expect("binary"),
             id::<AgentResolvedRuntimeModelArtifact>(b"generic model"),
             ModelSelection {
                 provider: ProviderName::new("recorded").expect("provider"),
@@ -3360,14 +4007,14 @@ mod tests {
             ModelOutputTokenLimit::new(4_096).expect("output"),
             SirTaskLimits::default(),
         );
-        let request = ProposalHostRequestV1::new(
+        let request = ProposalStepRequestV1::new(
             runtime,
-            ProposalHostRoleRequestV1::Sir {
+            ProposalStepRoleRequestV1::Sir {
                 task_id,
                 recovery_request,
-                task: ProposalHostTaskSnapshotV1::new(
+                task: ProposalStepTaskSnapshotV1::new(
                     bundle,
-                    vec![ProposalHostTaskSourceV1::new(path, source)],
+                    vec![ProposalStepTaskSourceV1::new(path, source)],
                 ),
             },
         )
@@ -3513,7 +4160,7 @@ mod tests {
             id::<AgentResolvedRuntimeModelArtifact>(b"drifted model"),
         );
         let drifted_proposal_id = drifted_proposal.identity().expect("proposal id");
-        let drifted_terminal: ProposalHostTerminalV1 = serde_json::from_value(json!({
+        let drifted_terminal: ProposalStepTerminalV1 = serde_json::from_value(json!({
             "schema_version":1,
             "request":request_id,
             "episode_id":request.runtime().episode_id(),
@@ -3545,7 +4192,7 @@ mod tests {
             request.runtime().model_configuration(),
         );
         let proposal_id = proposal.identity().expect("proposal id");
-        let terminal: ProposalHostTerminalV1 = serde_json::from_value(json!({
+        let terminal: ProposalStepTerminalV1 = serde_json::from_value(json!({
             "schema_version":1,
             "request":request_id,
             "episode_id":request.runtime().episode_id(),
@@ -3578,7 +4225,7 @@ mod tests {
         let batch = derive_user_intent_decision_requests(
             proposal_id,
             match terminal.publication() {
-                ProposalHostPublicationV1::Sir { proposal, .. } => proposal,
+                ProposalStepPublicationV1::Sir { proposal, .. } => proposal,
                 _ => unreachable!(),
             },
             recovery_input_id,
@@ -3638,9 +4285,7 @@ mod tests {
         let cross_task_grant = UserIntentAuthorityGrantV1::new(
             TaskId::new(),
             TaskIntentAuthoritySubject::new("task-authority:cross-task").expect("subject"),
-            UserIntentAuthorityScopeV1::CollectionOutput {
-                selection_claim: selection_claim.clone(),
-            },
+            UserIntentAuthorityScopeV1::new(vec![selection_claim.clone()]).expect("scope"),
         );
         let cross_task_grant_id = cross_task_grant.identity().expect("cross-task grant id");
         let cross_task_decision = UserIntentDecisionV1::new(
@@ -3648,12 +4293,6 @@ mod tests {
             cross_task_grant_id,
             UserIntentDecisionResponseV1::SelectHypothesis {
                 hypothesis: SirHypothesisId::new("order-unspecified").expect("hypothesis"),
-                authoritative_claim: AuthoritativeIntentClaimV1::CollectionOutput(
-                    CollectionOutputIntentV1::exact_selected_occurrences(
-                        selection_claim.clone(),
-                        CollectionOutputOrderContractV1::UnspecifiedPermutation,
-                    ),
-                ),
             },
         );
         assert!(matches!(
@@ -3678,9 +4317,7 @@ mod tests {
         let grant = UserIntentAuthorityGrantV1::new(
             task_id,
             TaskIntentAuthoritySubject::new("task-authority:user").expect("subject"),
-            UserIntentAuthorityScopeV1::CollectionOutput {
-                selection_claim: selection_claim.clone(),
-            },
+            UserIntentAuthorityScopeV1::new(vec![selection_claim.clone()]).expect("scope"),
         );
         let grant_id = grant.identity().expect("grant id");
         let decision = UserIntentDecisionV1::new(
@@ -3688,12 +4325,6 @@ mod tests {
             grant_id,
             UserIntentDecisionResponseV1::SelectHypothesis {
                 hypothesis: SirHypothesisId::new("order-unspecified").expect("hypothesis"),
-                authoritative_claim: AuthoritativeIntentClaimV1::CollectionOutput(
-                    CollectionOutputIntentV1::exact_selected_occurrences(
-                        selection_claim,
-                        CollectionOutputOrderContractV1::UnspecifiedPermutation,
-                    ),
-                ),
             },
         );
         let decision_id = decision.identity().expect("decision id");
@@ -3757,11 +4388,54 @@ mod tests {
             .expect("exact Admission authority replay"),
             state
         );
+        assert!(matches!(
+            reauthorize_intent_admission(
+                &mut events,
+                &workflow,
+                decision_id,
+                id::<IntentAdmissionExecutableArtifact>(b"new executable"),
+                restricted_store,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(6),
+            ),
+            Err(ControllerWorkflowError::InvalidTransition)
+        ));
+        let state = record_intent_admission_blocked(
+            &mut events,
+            &workflow,
+            decision_id,
+            executable,
+            restricted_store,
+            IntentAdmissionBlockReasonV1::InvocationDrift,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(6),
+        )
+        .expect("record blocked Admission");
+        assert_eq!(state.next_action(), ControllerWorkflowNextActionV1::None);
+        let executable = id::<IntentAdmissionExecutableArtifact>(b"new executable");
+        let state = reauthorize_intent_admission(
+            &mut events,
+            &workflow,
+            decision_id,
+            executable,
+            restricted_store,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(6),
+        )
+        .expect("reauthorize blocked Admission");
+        assert_eq!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::RunIntentAdmission {
+                decision: decision_id,
+                executable,
+                restricted_store,
+            }
+        );
 
         let admitted = promote_user_intent(
             proposal_id,
             match terminal.publication() {
-                ProposalHostPublicationV1::Sir { proposal, .. } => proposal,
+                ProposalStepPublicationV1::Sir { proposal, .. } => proposal,
                 _ => unreachable!(),
             },
             recovery_input_id,
@@ -3952,12 +4626,12 @@ mod tests {
             .start_strategy(&run, &catalog, workspace.budget())
             .expect("started ledger");
         let controller_observation =
-            id::<ProposalHostControllerObservationArtifact>(b"Controller observation");
+            id::<WorkflowToolControllerObservationArtifact>(b"Controller observation");
         let payload = OracleObservationPayloadV1::new(
             controller_observation,
             json!({"observed": "typed effect result"}),
         );
-        let observation = OracleExplorationObservationV1::proposal_host_effect(
+        let observation = OracleExplorationObservationV1::workflow_tool(
             run.item(),
             run.identity().expect("run id"),
             controller_observation,
@@ -4213,6 +4887,8 @@ mod tests {
                     OracleQualifiedMechanismRegistrationV1::new(
                         *control,
                         id::<OracleQualifiedMechanismArtifact>(label),
+                        id::<OracleControlRunnerArtifact>(label),
+                        id::<OracleMechanismQualificationReceiptArtifact>(label),
                     )
                 })
                 .collect(),
@@ -4234,7 +4910,8 @@ mod tests {
         .expect("authorize independent Admission");
         assert!(matches!(
             state.next_action(),
-            ControllerWorkflowNextActionV1::AwaitOracleControlReceipts(_)
+            ControllerWorkflowNextActionV1::RunOracleAdmissionControls { receipts, .. }
+                if receipts.is_empty()
         ));
         assert_eq!(
             recover_controller_workflow(&events, &workflow).expect("attempt restart"),
@@ -4243,25 +4920,84 @@ mod tests {
         observed_millis += 1;
 
         let proposal_id = portfolio.identity().expect("proposal id");
-        let receipts = attempt
-            .required_controls()
-            .iter()
-            .map(|obligation| {
-                let receipt_label =
-                    format!("{}:{:?}", obligation.item().to_wire(), obligation.control());
-                OracleControlReceiptV1::new(
-                    proposal_id,
-                    obligation.item(),
-                    obligation.control(),
-                    obligation.mechanism(),
-                    ContentId::<TrustedOracleControlReceiptArtifact>::derive(
-                        receipt_label.as_bytes(),
-                    )
-                    .expect("trusted receipt id"),
-                    OracleControlResultV1::Passed,
-                )
-            })
-            .collect();
+        assert!(!attempt.required_controls().is_empty());
+        let mut receipts = Vec::new();
+        for obligation in attempt.required_controls() {
+            let run = OracleControlRunV1::new(&attempt, &mechanisms, obligation.clone())
+                .expect("qualified control run");
+            let receipt_label =
+                format!("{}:{:?}", obligation.item().to_wire(), obligation.control());
+            let job_id = JobId::new();
+            let worker_attempt_id = AttemptId::new();
+            let contract_id = id::<JobContractArtifact>(receipt_label.as_bytes());
+            let dispatch = OracleControlDispatchV1::new(
+                &run,
+                cairn_migration::OracleControlWorkerBindingV1::new(
+                    job_id,
+                    worker_attempt_id,
+                    contract_id,
+                ),
+            )
+            .expect("qualified control dispatch");
+            let state = authorize_oracle_control(
+                &mut events,
+                &workflow,
+                &mechanisms,
+                &attempt,
+                &receipts,
+                &run,
+                &dispatch,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("commit control start authority");
+            assert!(matches!(
+                state.next_action(),
+                ControllerWorkflowNextActionV1::ExecuteOracleAdmissionControl { .. }
+            ));
+            observed_millis += 1;
+
+            let execution_receipt = execution_receipt(
+                job_id,
+                worker_attempt_id,
+                contract_id,
+                receipt_label.as_bytes(),
+            );
+            let execution_receipt_id = ContentId::<ExecutionReceiptArtifact>::derive(
+                &cairn_codec::to_vec(&execution_receipt).expect("encode trusted receipt"),
+            )
+            .expect("trusted execution receipt id");
+            let observation = TrustedOracleControlObservationV1::new(
+                &dispatch,
+                execution_receipt_id,
+                execution_receipt,
+                OracleControlResultV1::Passed,
+            )
+            .expect("trusted control observation");
+            let receipt =
+                OracleControlReceiptV1::from_trusted_observation(proposal_id, &run, &observation)
+                    .expect("mechanical Admission receipt");
+            let state = record_oracle_control_observation(
+                &mut events,
+                &workflow,
+                &run,
+                &dispatch,
+                &observation,
+                &receipt,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("record trusted control observation");
+            observed_millis += 1;
+            receipts.push(receipt);
+            assert!(matches!(
+                state.next_action(),
+                ControllerWorkflowNextActionV1::RunOracleAdmissionControls {
+                    receipts: durable,
+                    ..
+                } if durable == receipts
+            ));
+        }
         let evidence =
             OracleAdmissionEvidenceV1::new(&attempt, receipts).expect("complete control receipts");
         let admission_outcome = recompute_oracle_admission(
@@ -4286,10 +5022,7 @@ mod tests {
             ObservedAtUnixMillis::new(observed_millis),
         )
         .expect("record independent Admission outcome");
-        assert!(matches!(
-            state.next_action(),
-            ControllerWorkflowNextActionV1::PrepareCandidateOracleContract { .. }
-        ));
+        assert_eq!(state.next_action(), ControllerWorkflowNextActionV1::None);
         assert_eq!(
             recover_controller_workflow(&events, &workflow).expect("Admission outcome restart"),
             state
@@ -4396,15 +5129,13 @@ mod tests {
                 .collect(),
         )
         .expect("complete Candidate Oracle bodies");
-        let ProposalHostRoleRequestV1::Sir { task, .. } = request.role() else {
+        let ProposalStepRoleRequestV1::Sir { task, .. } = request.role() else {
             unreachable!()
         };
         let candidate_episode = EpisodeId::new();
         let candidate_model = id::<AgentResolvedRuntimeModelArtifact>(b"Candidate model");
-        let candidate_runtime = ProposalHostRuntimeV1::new(
+        let candidate_runtime = ProposalStepRuntimeV1::new(
             candidate_episode,
-            ProposalHostBinaryIdentity::new(format!("sha256:{}", "b".repeat(64)))
-                .expect("Candidate Host binary"),
             candidate_model,
             ModelSelection {
                 provider: ProviderName::new("recorded").expect("provider"),
@@ -4422,25 +5153,25 @@ mod tests {
             ModelOutputTokenLimit::new(4_096).expect("output"),
             SirTaskLimits::default(),
         );
-        let candidate_request = ProposalHostRequestV1::new(
+        let candidate_request = ProposalStepRequestV1::new(
             candidate_runtime,
-            ProposalHostRoleRequestV1::CandidateStrategy {
+            ProposalStepRoleRequestV1::CandidateStrategy {
                 workspace: candidate_workspace.clone(),
                 contract: candidate_contract.clone(),
                 oracle_materials: candidate_materials,
                 task: task.clone(),
-                public_materials: ProposalHostOracleMaterialsV1::new(
-                    ProposalHostOracleDocumentationV1::new(
+                public_materials: ProposalStepOracleMaterialsV1::new(
+                    ProposalStepOracleDocumentationV1::new(
                         workspace.documentation(),
                         "documentation snapshot".into(),
                     )
                     .expect("Candidate documentation"),
-                    ProposalHostOracleBuildTestsV1::new(
+                    ProposalStepOracleBuildTestsV1::new(
                         workspace.build_and_tests(),
                         "build and tests snapshot".into(),
                     )
                     .expect("Candidate build/tests"),
-                    ProposalHostOracleKnowledgeV1::new(
+                    ProposalStepOracleKnowledgeV1::new(
                         workspace.knowledge(),
                         "knowledge snapshot".into(),
                     )
@@ -4448,7 +5179,7 @@ mod tests {
                 ),
             },
         )
-        .expect("Candidate Host request");
+        .expect("Candidate proposal step request");
         let candidate_request_id = candidate_request.identity().expect("Candidate request id");
         let freeze_request_command = CommandId::new();
         let state = freeze_candidate_proposal_request(
@@ -4506,7 +5237,7 @@ mod tests {
         let candidate_proposal_id = candidate_proposal
             .identity()
             .expect("Candidate proposal id");
-        let candidate_terminal: ProposalHostTerminalV1 = serde_json::from_value(json!({
+        let candidate_terminal: ProposalStepTerminalV1 = serde_json::from_value(json!({
             "schema_version": 1,
             "request": candidate_request_id,
             "episode_id": candidate_episode,

@@ -413,7 +413,7 @@ impl<'de> Deserialize<'de> for CandidateProposalSubmissionV1 {
     }
 }
 
-/// Immutable non-authoritative Candidate proposal with trusted Host provenance.
+/// Immutable non-authoritative Candidate proposal with exact Agent-runtime provenance.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CandidateProposalV1 {
     schema_version: u16,
