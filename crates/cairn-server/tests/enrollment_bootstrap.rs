@@ -623,7 +623,6 @@ fn server_config(
             content_database: content_database.to_path_buf(),
             content_directory: content_directory.to_path_buf(),
         },
-        app_api: None,
         protocol_version: WorkerProtocolVersion::new(1)?,
         session_timeout_ms: WorkerSessionTimeoutMillis::new(10_000)?,
         scheduler: None,

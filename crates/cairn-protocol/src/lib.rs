@@ -11,7 +11,7 @@ use thiserror::Error;
 mod identity;
 
 pub use identity::{
-    AssignmentId, AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType,
+    AgentLoopId, AssignmentId, AttemptId, BlobDigest, BranchId, CommandId, ContentId, ContentType,
     ControlConnectionId, ControlMessageId, CredentialId, DerivedId, EnrollmentId, EpisodeId,
     EventId, HashAlgorithm, IdentityError, IdentityReadError, JobId, LeaseId, MeteredActionId,
     ModelAttemptId, OperationId, PlacementId, ReservationId, SirRunId, StepId, TaskId, WorkerId,

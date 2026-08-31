@@ -1349,7 +1349,12 @@ impl SirProposalSubmissionV1 {
     }
 
     #[cfg(feature = "agent-runtime")]
-    pub(crate) fn validate_against(
+    /// Revalidates this submission against exact task-source and recovery-input lineage.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid internal references, citations, or caller-input bindings.
+    pub fn validate_against(
         &self,
         workspace: &SirTaskWorkspace,
         input: &IntentRecoveryInputV1,
@@ -1426,7 +1431,8 @@ struct IntentHypothesisSetProposalWire {
 
 impl IntentHypothesisSetProposalV1 {
     #[cfg(feature = "agent-runtime")]
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         recovery_input: ContentId<IntentRecoveryInputArtifact>,
         episode_id: EpisodeId,
         model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,

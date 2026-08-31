@@ -7,18 +7,29 @@ use cairn_record::{ContentStore, ContentStoreError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod agent_loop;
 mod dispatch;
 mod episode;
+mod episode_driver;
 mod http_transport;
 mod metering;
 mod native_protocol;
 mod operation;
 mod provider_catalog;
-mod runtime_loop;
 mod semantic;
 mod step;
 mod step_operation;
 
+pub use agent_loop::{
+    AgentContextExposureV1, AgentLoopCheckpointV1, AgentLoopContext, AgentLoopDirectiveV1,
+    AgentLoopHooks, AgentLoopInitializationV1, AgentLoopRegistryError, AgentLoopRunError,
+    AgentLoopRunOutcomeV1, AgentLoopStartV1, AgentLoopStatusV1, AgentLoopStepExecutionV1,
+    AgentLoopStepExecutor, AgentLoopStepLimit, AgentRegistries, AgentStepAccessV1,
+    InitializedAgentLoopV1, KnowledgeIndexEntryV1, KnowledgeIndexViewV1, KnowledgeReadGrantV1,
+    KnowledgeRegistrationV1, KnowledgeRegistry, SkillActivationGrantV1, SkillIndexEntryV1,
+    SkillIndexViewV1, SkillRegistrationV1, SkillRegistry, ToolIndexEntryV1, ToolIndexViewV1,
+    ToolInvocationGrantV1, ToolRegistry, initialize_agent_loop, resume_agent_loop, run_agent_loop,
+};
 pub use dispatch::{
     DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
     ReceivedModelResponse, StartedDispatch, authorize_model_request, begin_model_dispatch,
@@ -32,6 +43,11 @@ pub use episode::{
     EpisodeStepAuthority, EpisodeStepLimit, EpisodeToolOperationLimit, EpisodeValueError,
     admit_episode_operations, advance_agent_episode, open_agent_episode, prepare_episode_step,
     prepare_native_episode_step, recover_agent_episode,
+};
+pub use episode_driver::{
+    AgentEpisodeDriverCompletionV1, AgentEpisodeDriverError, AgentEpisodeDriverOutcomeV1,
+    AgentProfileEpisodeOutcomeV1, AgentStepCapabilityGrantV1, AgentWorkerOperationRequestV1,
+    AgentWorkerRequestV1, FrozenAgentEpisodeDriverV1, drive_agent_episode,
 };
 pub use http_transport::{HttpModelTransport, HttpTransportConfigError};
 pub use metering::{
@@ -64,11 +80,6 @@ pub use provider_catalog::{
     ResolvedRuntimeModel, ResponsesReasoningReplay, RuntimeModelCatalog, RuntimeModelConfig,
     SamplingTemperatureMillis, SecretFilePath, ToolSchemaDialect, TransportByteLimit,
     TransportTimeoutMillis,
-};
-pub use runtime_loop::{
-    AgentLoopCapabilityGrantV1, AgentLoopCompletionV1, AgentLoopError, AgentLoopOutcomeV1,
-    AgentProfileOutcomeV1, AgentWorkerOperationRequestV1, AgentWorkerRequestV1, FrozenAgentLoopV1,
-    run_agent_loop,
 };
 pub use semantic::{
     AdapterModelTurn, AdapterOutputItem, DecodeCoordinatorError, DecodedModelTurn, ModelAdapter,
@@ -123,6 +134,12 @@ macro_rules! label_type {
             }
         }
 
+        impl std::fmt::Display for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(&self.0)
+            }
+        }
+
         impl TryFrom<String> for $name {
             type Error = InputTypeError;
 
@@ -164,6 +181,20 @@ label_type!(/// Provider-native tool-call correlation identity.
 ProviderToolCallId);
 label_type!(/// Server-enforced role scope selected for one agent episode.
 AgentRoleName);
+label_type!(/// Versioned hook-set name selected for one role-scoped Agent Loop.
+AgentHookProfileName);
+label_type!(/// Hook implementation version pinned for one Agent Loop.
+AgentHookProfileVersion);
+label_type!(/// Registered skill identity.
+SkillName);
+label_type!(/// Registered skill implementation version.
+SkillImplementationVersion);
+label_type!(/// Registered knowledge-source identity.
+KnowledgeSourceName);
+label_type!(/// Immutable knowledge snapshot version.
+KnowledgeSnapshotVersion);
+label_type!(/// Durable reason why an Agent Loop yielded before completion.
+AgentLoopSuspensionReason);
 label_type!(/// Unit namespace for an externally metered capability.
 ExternalMeterName);
 label_type!(/// Provider-native correlation reference for an external metering receipt.
@@ -208,6 +239,10 @@ content_type!(
     "agent.resolved-runtime-model.v1"
 );
 content_type!(ModelTemplateArtifact, "agent.model-template.v1");
+content_type!(ToolDescriptorArtifact, "agent.tool-descriptor.v1");
+content_type!(SkillDefinitionArtifact, "agent.skill-definition.v1");
+content_type!(KnowledgeIndexArtifact, "agent.knowledge-index.v1");
+content_type!(AgentLoopContextArtifact, "agent.loop-context.v1");
 
 /// Pinned provider/model/adapter selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

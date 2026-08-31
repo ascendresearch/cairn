@@ -609,6 +609,17 @@ macro_rules! lifecycle_id {
 
 lifecycle_id!(/// Task aggregate lifecycle identity.
 TaskId, "task");
+lifecycle_id!(/// One role-scoped Agent Loop lifecycle identity.
+///
+/// A loop may contain multiple durable model/tool steps. Its identity is deliberately distinct
+/// from the lower-level episode used to execute those steps:
+///
+/// ```compile_fail
+/// use cairn_protocol::{AgentLoopId, EpisodeId};
+/// fn require_loop(_: AgentLoopId) {}
+/// require_loop(EpisodeId::new());
+/// ```
+AgentLoopId, "agent-loop");
 lifecycle_id!(/// Agent episode lifecycle identity.
 EpisodeId, "episode");
 lifecycle_id!(/// One isolated semantic-intent-recovery process run.

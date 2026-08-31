@@ -45,9 +45,9 @@ macro_rules! artifact {
 }
 
 artifact!(
-    /// Exact complete Proposal step runtime invocation cited by an Agent-backed Oracle strategy.
-    AgentRuntimeBindingArtifact,
-    "agent.runtime-binding.v1"
+    /// Exact role-scoped Agent Loop runtime binding cited by an Agent-backed Oracle strategy.
+    AgentLoopRuntimeBindingArtifact,
+    "agent.loop-runtime-binding.v1"
 );
 
 artifact!(OracleClaimArtifact, "migration.oracle-claim.v1");
@@ -565,11 +565,11 @@ pub enum OracleStrategyExecutorV1 {
     Deterministic {
         implementation: ContentId<OracleStrategyImplementationArtifact>,
     },
-    AgentStep {
+    AgentLoop {
         /// Verification-domain authorship identity retained on proposed Oracle material.
         authorship_model: ContentId<ModelConfigurationArtifact>,
-        /// Exact resolved model, budget and transport invocation consumed by Proposal step.
-        invocation: ContentId<AgentRuntimeBindingArtifact>,
+        /// Exact resolved model, hook profile, budget, and transport binding consumed by the loop.
+        invocation: ContentId<AgentLoopRuntimeBindingArtifact>,
         tools: ContentId<OracleStrategyToolCatalogArtifact>,
     },
 }
@@ -584,7 +584,7 @@ pub enum OracleStrategyToolV1 {
     SubmitCellResult,
 }
 
-/// Canonical current-V1 Proposal step tool surface for one Oracle strategy cell.
+/// Canonical current-V1 tool surface exposed to one Oracle strategy Agent Loop.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleStrategyToolCatalogV1 {
     schema_version: u16,
@@ -679,7 +679,7 @@ impl OracleStrategyRegistrationV1 {
         validate_strict(&concerns, "strategy concerns")?;
         match (&executor, kind) {
             (
-                OracleStrategyExecutorV1::AgentStep { .. },
+                OracleStrategyExecutorV1::AgentLoop { .. },
                 OracleStrategyKindV1::DeterministicAnalyzer,
             )
             | (
@@ -1713,25 +1713,6 @@ impl OracleExplorationObservationV1 {
     #[must_use]
     pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
         self.run
-    }
-
-    #[cfg(feature = "agent-runtime")]
-    pub(crate) fn validates_workflow_tool(
-        &self,
-        item: ContentId<OracleWorkItemArtifact>,
-        run: ContentId<OracleStrategyRunArtifact>,
-        source: ContentId<WorkflowToolControllerObservationArtifact>,
-        payload: &OracleObservationPayloadV1,
-    ) -> Result<bool, OracleFrameworkError> {
-        Ok(self.item == item
-            && self.run == run
-            && self.payload == payload.identity()?
-            && payload.source() == source
-            && matches!(
-                self.provenance,
-                OracleObservationProvenanceV1::WorkflowTool { observation }
-                    if observation == source
-            ))
     }
 
     fn validates_worker_binding(

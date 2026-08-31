@@ -282,18 +282,14 @@ dependencies = [
 name = "cairn-server"
 version = "0.1.0"
 dependencies = [
- "cairn-admission",
  "cairn-agent",
  "cairn-codec",
  "cairn-control-transport",
  "cairn-execution",
- "cairn-migration",
  "cairn-observability",
  "cairn-protocol",
  "cairn-record",
- "cairn-sdk",
  "cairn-store-sqlite",
- "cairn-verification",
  "cairn-worker",
  "getrandom 0.3.4",
  "rcgen",

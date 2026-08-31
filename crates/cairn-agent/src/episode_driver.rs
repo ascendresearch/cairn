@@ -1,4 +1,4 @@
-//! One task-generic durable Agent Loop used by every Agent profile.
+//! One task-generic durable Agent episode driver used by every Agent profile.
 
 use crate::{
     AgentEpisode, AgentEpisodeState, AgentRoleName, AgentStep, AgentStepState, DispatchCompletion,
@@ -22,17 +22,17 @@ use thiserror::Error;
 
 /// Exact trusted tool implementations and effect classes granted to one Agent episode.
 #[derive(Debug)]
-pub struct AgentLoopCapabilityGrantV1(Vec<ToolRegistration>);
+pub struct AgentStepCapabilityGrantV1(Vec<ToolRegistration>);
 
-impl AgentLoopCapabilityGrantV1 {
+impl AgentStepCapabilityGrantV1 {
     /// Constructs the exact non-empty tool capability set for one Agent step.
     ///
     /// # Errors
     ///
     /// Rejects an empty set or duplicate tool names.
-    pub fn new(registrations: Vec<ToolRegistration>) -> Result<Self, AgentLoopError> {
+    pub fn new(registrations: Vec<ToolRegistration>) -> Result<Self, AgentEpisodeDriverError> {
         if registrations.is_empty() {
-            return Err(AgentLoopError::InvalidCapabilityGrant(
+            return Err(AgentEpisodeDriverError::InvalidCapabilityGrant(
                 "capability grant has no tools".into(),
             ));
         }
@@ -41,25 +41,25 @@ impl AgentLoopCapabilityGrantV1 {
             .iter()
             .any(|registration| !names.insert(registration.name().as_str()))
         {
-            return Err(AgentLoopError::InvalidCapabilityGrant(
+            return Err(AgentEpisodeDriverError::InvalidCapabilityGrant(
                 "capability grant repeats a tool name".into(),
             ));
         }
         Ok(Self(registrations))
     }
 
-    fn registration(&self, name: &ToolName) -> Result<ToolRegistration, AgentLoopError> {
+    fn registration(&self, name: &ToolName) -> Result<ToolRegistration, AgentEpisodeDriverError> {
         self.0
             .iter()
             .find(|registration| registration.name() == name)
             .cloned()
-            .ok_or_else(|| AgentLoopError::UnavailableTool(name.as_str().to_owned()))
+            .ok_or_else(|| AgentEpisodeDriverError::UnavailableTool(name.as_str().to_owned()))
     }
 }
 
 /// Exact model-visible input, profile, tool catalog, budget, and capability registrations frozen
 /// before one Agent episode is opened.
-pub struct FrozenAgentLoopV1 {
+pub struct FrozenAgentEpisodeDriverV1 {
     pub task_id: TaskId,
     pub episode_id: EpisodeId,
     pub role: AgentRoleName,
@@ -72,10 +72,10 @@ pub struct FrozenAgentLoopV1 {
     pub history: ContentId<HistoryItem>,
     pub context: ContentId<crate::ContextBlock>,
     pub policy: ContentId<PolicyDocument>,
-    pub capability_grant: AgentLoopCapabilityGrantV1,
+    pub capability_grant: AgentStepCapabilityGrantV1,
 }
 
-impl FrozenAgentLoopV1 {
+impl FrozenAgentEpisodeDriverV1 {
     fn turn_input_decision(
         &self,
         pending_results: Vec<ContentId<OperationResult>>,
@@ -92,9 +92,9 @@ impl FrozenAgentLoopV1 {
     }
 }
 
-/// Durable terminal position reached by the common Agent Loop before domain submission freezing.
+/// Durable terminal position reached by the common episode driver before domain submission freezing.
 #[derive(Debug)]
-pub struct AgentLoopCompletionV1 {
+pub struct AgentEpisodeDriverCompletionV1 {
     pub reason: EpisodeCompletionReason,
     pub steps_started: u32,
 }
@@ -120,20 +120,20 @@ pub struct AgentWorkerRequestV1 {
 }
 
 #[derive(Debug)]
-pub enum AgentLoopOutcomeV1 {
-    Complete(AgentLoopCompletionV1),
+pub enum AgentEpisodeDriverOutcomeV1 {
+    Complete(AgentEpisodeDriverCompletionV1),
     WorkerRequest(AgentWorkerRequestV1),
 }
 
-pub enum AgentProfileOutcomeV1<T> {
+pub enum AgentProfileEpisodeOutcomeV1<T> {
     Complete(T),
     WorkerRequest(AgentWorkerRequestV1),
 }
 
-/// Failure while driving the common Agent Loop.
+/// Failure while driving the common episode driver.
 #[derive(Debug, Error)]
-pub enum AgentLoopError {
-    #[error("Agent Loop failed: {0}")]
+pub enum AgentEpisodeDriverError {
+    #[error("Agent episode driver failed: {0}")]
     Agent(String),
     #[error("Agent profile does not grant tool {0}")]
     UnavailableTool(String),
@@ -183,29 +183,29 @@ struct ProjectedAgentTurnV1 {
     pending_results: Vec<ContentId<OperationResult>>,
 }
 
-enum AgentLoopStageV1<T> {
+enum AgentEpisodeDriverStageV1<T> {
     Active(T),
-    Complete(AgentLoopCompletionV1),
+    Complete(AgentEpisodeDriverCompletionV1),
 }
 
-enum AgentLoopAdvanceV1 {
+enum AgentEpisodeDriverAdvanceV1 {
     Continue(OpenedAgentEpisodeV1),
-    Complete(AgentLoopCompletionV1),
+    Complete(AgentEpisodeDriverCompletionV1),
 }
 
-enum AgentLoopPositionV1 {
+enum AgentEpisodeDriverPositionV1 {
     ReadyForAgent(OpenedAgentEpisodeV1),
     ReadyForOperations(AdmittedAgentTurnV1),
     ReadyForProjection(ObservedAgentTurnV1),
-    Complete(AgentLoopCompletionV1),
+    Complete(AgentEpisodeDriverCompletionV1),
 }
 
-enum AgentWorkerTransitionV1 {
+enum AgentEpisodeWorkerTransitionV1 {
     Observed(ObservedAgentTurnV1),
     WorkerRequest(AgentWorkerRequestV1),
 }
 
-/// Opens and drives one durable Agent Loop from only the frozen profile and capability surface.
+/// Opens and drives one durable Agent episode driver from only the frozen profile and capability surface.
 ///
 /// Model dispatch and every workflow-local tool operation receive durable start authority before their
 /// effect. Canonical tool results are archived as provenance-bearing `OperationResult` artifacts
@@ -216,14 +216,14 @@ enum AgentWorkerTransitionV1 {
 ///
 /// Returns an error when the episode cannot be recovered, persisted, dispatched, decoded, or
 /// advanced through its granted tool surface.
-pub fn run_agent_loop<E, C, T, G>(
+pub fn drive_agent_episode<E, C, T, G>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
     codec: NativeProtocolCodec,
-    frozen: &FrozenAgentLoopV1,
+    frozen: &FrozenAgentEpisodeDriverV1,
     gateway: &mut G,
-) -> Result<AgentLoopOutcomeV1, AgentLoopError>
+) -> Result<AgentEpisodeDriverOutcomeV1, AgentEpisodeDriverError>
 where
     E: EventStore,
     C: ContentStore,
@@ -234,24 +234,24 @@ where
 
     loop {
         position = match position {
-            AgentLoopPositionV1::ReadyForAgent(opened) => {
+            AgentEpisodeDriverPositionV1::ReadyForAgent(opened) => {
                 prepare_agent_operations(events, content, transport, codec, frozen, opened)?
             }
-            AgentLoopPositionV1::ReadyForOperations(admitted) => {
+            AgentEpisodeDriverPositionV1::ReadyForOperations(admitted) => {
                 match execute_or_request_worker_operations(events, content, gateway, admitted)? {
-                    AgentWorkerTransitionV1::Observed(observed) => {
-                        AgentLoopPositionV1::ReadyForProjection(observed)
+                    AgentEpisodeWorkerTransitionV1::Observed(observed) => {
+                        AgentEpisodeDriverPositionV1::ReadyForProjection(observed)
                     }
-                    AgentWorkerTransitionV1::WorkerRequest(request) => {
-                        return Ok(AgentLoopOutcomeV1::WorkerRequest(request));
+                    AgentEpisodeWorkerTransitionV1::WorkerRequest(request) => {
+                        return Ok(AgentEpisodeDriverOutcomeV1::WorkerRequest(request));
                     }
                 }
             }
-            AgentLoopPositionV1::ReadyForProjection(observed) => {
+            AgentEpisodeDriverPositionV1::ReadyForProjection(observed) => {
                 project_and_advance(events, content, codec, frozen, observed)?
             }
-            AgentLoopPositionV1::Complete(completion) => {
-                return Ok(AgentLoopOutcomeV1::Complete(completion));
+            AgentEpisodeDriverPositionV1::Complete(completion) => {
+                return Ok(AgentEpisodeDriverOutcomeV1::Complete(completion));
             }
         };
     }
@@ -262,9 +262,9 @@ fn prepare_agent_operations<E, C, T>(
     content: &mut C,
     transport: &mut T,
     codec: NativeProtocolCodec,
-    frozen: &FrozenAgentLoopV1,
+    frozen: &FrozenAgentEpisodeDriverV1,
     opened: OpenedAgentEpisodeV1,
-) -> Result<AgentLoopPositionV1, AgentLoopError>
+) -> Result<AgentEpisodeDriverPositionV1, AgentEpisodeDriverError>
 where
     E: EventStore,
     C: ContentStore,
@@ -274,8 +274,12 @@ where
     let settled = settle_agent_turn(events, content, codec, dispatched)?;
     let admitted = admit_agent_operations(events, content, frozen, settled)?;
     Ok(match admitted {
-        AgentLoopStageV1::Active(admitted) => AgentLoopPositionV1::ReadyForOperations(admitted),
-        AgentLoopStageV1::Complete(completion) => AgentLoopPositionV1::Complete(completion),
+        AgentEpisodeDriverStageV1::Active(admitted) => {
+            AgentEpisodeDriverPositionV1::ReadyForOperations(admitted)
+        }
+        AgentEpisodeDriverStageV1::Complete(completion) => {
+            AgentEpisodeDriverPositionV1::Complete(completion)
+        }
     })
 }
 
@@ -283,19 +287,23 @@ fn project_and_advance<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    frozen: &FrozenAgentLoopV1,
+    frozen: &FrozenAgentEpisodeDriverV1,
     observed: ObservedAgentTurnV1,
-) -> Result<AgentLoopPositionV1, AgentLoopError> {
+) -> Result<AgentEpisodeDriverPositionV1, AgentEpisodeDriverError> {
     let projected = project_operation_observations(
         events,
         content,
         codec,
         frozen,
-        AgentLoopStageV1::Active(observed),
+        AgentEpisodeDriverStageV1::Active(observed),
     )?;
     Ok(match advance_runtime_episode(events, content, projected)? {
-        AgentLoopAdvanceV1::Continue(next) => AgentLoopPositionV1::ReadyForAgent(next),
-        AgentLoopAdvanceV1::Complete(completion) => AgentLoopPositionV1::Complete(completion),
+        AgentEpisodeDriverAdvanceV1::Continue(next) => {
+            AgentEpisodeDriverPositionV1::ReadyForAgent(next)
+        }
+        AgentEpisodeDriverAdvanceV1::Complete(completion) => {
+            AgentEpisodeDriverPositionV1::Complete(completion)
+        }
     })
 }
 
@@ -303,12 +311,12 @@ fn open_or_recover_agent_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    frozen: &FrozenAgentLoopV1,
-) -> Result<AgentLoopPositionV1, AgentLoopError> {
+    frozen: &FrozenAgentEpisodeDriverV1,
+) -> Result<AgentEpisodeDriverPositionV1, AgentEpisodeDriverError> {
     let episode = AgentEpisode::new(frozen.episode_id).map_err(agent_error)?;
     match recover_agent_episode(events, content, &episode).map_err(agent_error)? {
         AgentEpisodeState::NotFound => open_new_runtime_episode(events, codec, frozen, episode)
-            .map(AgentLoopPositionV1::ReadyForAgent),
+            .map(AgentEpisodeDriverPositionV1::ReadyForAgent),
         AgentEpisodeState::Active {
             step,
             model_attempt_id,
@@ -325,11 +333,13 @@ fn open_or_recover_agent_episode<E: EventStore, C: ContentStore>(
         AgentEpisodeState::Completed {
             reason,
             steps_started,
-        } => Ok(AgentLoopPositionV1::Complete(AgentLoopCompletionV1 {
-            reason,
-            steps_started,
-        })),
-        AgentEpisodeState::ReadyToPrepare(_) => Err(AgentLoopError::Agent(
+        } => Ok(AgentEpisodeDriverPositionV1::Complete(
+            AgentEpisodeDriverCompletionV1 {
+                reason,
+                steps_started,
+            },
+        )),
+        AgentEpisodeState::ReadyToPrepare(_) => Err(AgentEpisodeDriverError::Agent(
             "Agent recovery stopped between episode advance and model preparation".into(),
         )),
     }
@@ -338,9 +348,9 @@ fn open_or_recover_agent_episode<E: EventStore, C: ContentStore>(
 fn open_new_runtime_episode<E: EventStore>(
     events: &mut E,
     codec: NativeProtocolCodec,
-    frozen: &FrozenAgentLoopV1,
+    frozen: &FrozenAgentEpisodeDriverV1,
     episode: AgentEpisode,
-) -> Result<OpenedAgentEpisodeV1, AgentLoopError> {
+) -> Result<OpenedAgentEpisodeV1, AgentEpisodeDriverError> {
     let authority = open_agent_episode(
         events,
         &episode,
@@ -372,12 +382,12 @@ fn recover_active_runtime_episode<E: EventStore, C: ContentStore>(
     step: AgentStep,
     attempt_id: ModelAttemptId,
     step_state: AgentStepState,
-) -> Result<AgentLoopPositionV1, AgentLoopError> {
+) -> Result<AgentEpisodeDriverPositionV1, AgentEpisodeDriverError> {
     match step_state {
         AgentStepState::OperationsBound(bound) => {
             let continuation =
                 recover_native_continuation(events, content, codec, &step, attempt_id)?;
-            Ok(AgentLoopPositionV1::ReadyForOperations(
+            Ok(AgentEpisodeDriverPositionV1::ReadyForOperations(
                 AdmittedAgentTurnV1 {
                     episode,
                     step,
@@ -390,7 +400,7 @@ fn recover_active_runtime_episode<E: EventStore, C: ContentStore>(
         AgentStepState::ReadyForNextStep { .. } => {
             let continuation =
                 recover_native_continuation(events, content, codec, &step, attempt_id)?;
-            Ok(AgentLoopPositionV1::ReadyForProjection(
+            Ok(AgentEpisodeDriverPositionV1::ReadyForProjection(
                 ObservedAgentTurnV1 {
                     episode,
                     step,
@@ -400,9 +410,9 @@ fn recover_active_runtime_episode<E: EventStore, C: ContentStore>(
             ))
         }
         AgentStepState::Yielded { .. } => {
-            complete_episode(events, content, &episode).map(AgentLoopPositionV1::Complete)
+            complete_episode(events, content, &episode).map(AgentEpisodeDriverPositionV1::Complete)
         }
-        _ => Err(AgentLoopError::Agent(
+        _ => Err(AgentEpisodeDriverError::Agent(
             "Agent episode is not at a recoverable external-effect safe point".into(),
         )),
     }
@@ -414,13 +424,15 @@ fn recover_native_continuation<E: EventStore, C: ContentStore>(
     codec: NativeProtocolCodec,
     step: &AgentStep,
     attempt_id: ModelAttemptId,
-) -> Result<NativeContinuation, AgentLoopError> {
+) -> Result<NativeContinuation, AgentEpisodeDriverError> {
     codec
         .recover_recorded(events, content, step.stream_id(), attempt_id)
         .map_err(agent_error)?
         .map(|(_, continuation)| continuation)
         .ok_or_else(|| {
-            AgentLoopError::Agent("active Agent step has no durable native continuation".into())
+            AgentEpisodeDriverError::Agent(
+                "active Agent step has no durable native continuation".into(),
+            )
         })
 }
 
@@ -428,9 +440,9 @@ fn dispatch_agent_turn<E, C, T>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
-    frozen: &FrozenAgentLoopV1,
+    frozen: &FrozenAgentEpisodeDriverV1,
     opened: OpenedAgentEpisodeV1,
-) -> Result<DispatchedAgentTurnV1, AgentLoopError>
+) -> Result<DispatchedAgentTurnV1, AgentEpisodeDriverError>
 where
     E: EventStore,
     C: ContentStore,
@@ -474,7 +486,9 @@ where
         }),
         DispatchCompletion::NotSent { diagnostic }
         | DispatchCompletion::Rejected { diagnostic }
-        | DispatchCompletion::Ambiguous { diagnostic } => Err(AgentLoopError::Agent(diagnostic)),
+        | DispatchCompletion::Ambiguous { diagnostic } => {
+            Err(AgentEpisodeDriverError::Agent(diagnostic))
+        }
     }
 }
 
@@ -483,7 +497,7 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
     content: &mut C,
     codec: NativeProtocolCodec,
     dispatched: DispatchedAgentTurnV1,
-) -> Result<AgentLoopStageV1<SettledAgentTurnV1>, AgentLoopError> {
+) -> Result<AgentEpisodeDriverStageV1<SettledAgentTurnV1>, AgentEpisodeDriverError> {
     let DispatchedAgentTurnV1 {
         episode,
         step,
@@ -492,7 +506,7 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
     let AgentStepState::ReadyToDecode(received) =
         recover_agent_step(events, content, &step, attempt_id).map_err(agent_error)?
     else {
-        return Err(AgentLoopError::Agent(
+        return Err(AgentEpisodeDriverError::Agent(
             "model response did not recover at the decode boundary".into(),
         ));
     };
@@ -523,9 +537,10 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?;
     if matches!(settled, SettledAgentStep::Yielded { .. }) {
-        return complete_episode(events, content, &episode).map(AgentLoopStageV1::Complete);
+        return complete_episode(events, content, &episode)
+            .map(AgentEpisodeDriverStageV1::Complete);
     }
-    Ok(AgentLoopStageV1::Active(SettledAgentTurnV1 {
+    Ok(AgentEpisodeDriverStageV1::Active(SettledAgentTurnV1 {
         episode,
         step,
         attempt_id,
@@ -537,13 +552,13 @@ fn settle_agent_turn<E: EventStore, C: ContentStore>(
 fn admit_agent_operations<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
-    frozen: &FrozenAgentLoopV1,
-    settled: AgentLoopStageV1<SettledAgentTurnV1>,
-) -> Result<AgentLoopStageV1<AdmittedAgentTurnV1>, AgentLoopError> {
+    frozen: &FrozenAgentEpisodeDriverV1,
+    settled: AgentEpisodeDriverStageV1<SettledAgentTurnV1>,
+) -> Result<AgentEpisodeDriverStageV1<AdmittedAgentTurnV1>, AgentEpisodeDriverError> {
     let settled = match settled {
-        AgentLoopStageV1::Active(settled) => settled,
-        AgentLoopStageV1::Complete(completion) => {
-            return Ok(AgentLoopStageV1::Complete(completion));
+        AgentEpisodeDriverStageV1::Active(settled) => settled,
+        AgentEpisodeDriverStageV1::Complete(completion) => {
+            return Ok(AgentEpisodeDriverStageV1::Complete(completion));
         }
     };
     let SettledAgentTurnV1 {
@@ -561,7 +576,7 @@ fn admit_agent_operations<E: EventStore, C: ContentStore>(
                 frozen.capability_grant.registration(name)?,
             ))
         })
-        .collect::<Result<Vec<_>, AgentLoopError>>()?;
+        .collect::<Result<Vec<_>, AgentEpisodeDriverError>>()?;
     match admit_episode_operations(
         events,
         content,
@@ -574,7 +589,7 @@ fn admit_agent_operations<E: EventStore, C: ContentStore>(
     .map_err(agent_error)?
     {
         EpisodeOperationAdmissionOutcome::Admitted(admission) => {
-            Ok(AgentLoopStageV1::Active(AdmittedAgentTurnV1 {
+            Ok(AgentEpisodeDriverStageV1::Active(AdmittedAgentTurnV1 {
                 episode,
                 step,
                 attempt_id,
@@ -585,10 +600,12 @@ fn admit_agent_operations<E: EventStore, C: ContentStore>(
         EpisodeOperationAdmissionOutcome::Completed {
             reason,
             steps_started,
-        } => Ok(AgentLoopStageV1::Complete(AgentLoopCompletionV1 {
-            reason,
-            steps_started,
-        })),
+        } => Ok(AgentEpisodeDriverStageV1::Complete(
+            AgentEpisodeDriverCompletionV1 {
+                reason,
+                steps_started,
+            },
+        )),
     }
 }
 
@@ -597,7 +614,7 @@ fn execute_or_request_worker_operations<E, C, G>(
     content: &mut C,
     gateway: &mut G,
     admitted: AdmittedAgentTurnV1,
-) -> Result<AgentWorkerTransitionV1, AgentLoopError>
+) -> Result<AgentEpisodeWorkerTransitionV1, AgentEpisodeDriverError>
 where
     E: EventStore,
     C: ContentStore,
@@ -627,7 +644,7 @@ where
             continue;
         }
         if !matches!(state, ToolOperationState::NotFound) {
-            return Err(AgentLoopError::Agent(
+            return Err(AgentEpisodeDriverError::Agent(
                 "workflow-local tool operation requires explicit reconciliation".into(),
             ));
         }
@@ -653,7 +670,7 @@ where
         .map_err(agent_error)?;
     }
     if !external.is_empty() {
-        return Ok(AgentWorkerTransitionV1::WorkerRequest(
+        return Ok(AgentEpisodeWorkerTransitionV1::WorkerRequest(
             AgentWorkerRequestV1 {
                 episode_id: episode.episode_id(),
                 step_id: step.step_id(),
@@ -662,17 +679,19 @@ where
             },
         ));
     }
-    Ok(AgentWorkerTransitionV1::Observed(ObservedAgentTurnV1 {
-        episode,
-        step,
-        attempt_id,
-        continuation,
-    }))
+    Ok(AgentEpisodeWorkerTransitionV1::Observed(
+        ObservedAgentTurnV1 {
+            episode,
+            step,
+            attempt_id,
+            continuation,
+        },
+    ))
 }
 
 fn worker_operation_request(
     operation: &PreparedToolOperation,
-) -> Result<AgentWorkerOperationRequestV1, AgentLoopError> {
+) -> Result<AgentWorkerOperationRequestV1, AgentEpisodeDriverError> {
     let arguments = cairn_codec::from_slice(operation.argument_bytes()).map_err(agent_error)?;
     Ok(AgentWorkerOperationRequestV1 {
         operation_id: operation.operation_id(),
@@ -688,13 +707,13 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     codec: NativeProtocolCodec,
-    frozen: &FrozenAgentLoopV1,
-    observed: AgentLoopStageV1<ObservedAgentTurnV1>,
-) -> Result<AgentLoopStageV1<ProjectedAgentTurnV1>, AgentLoopError> {
+    frozen: &FrozenAgentEpisodeDriverV1,
+    observed: AgentEpisodeDriverStageV1<ObservedAgentTurnV1>,
+) -> Result<AgentEpisodeDriverStageV1<ProjectedAgentTurnV1>, AgentEpisodeDriverError> {
     let observed = match observed {
-        AgentLoopStageV1::Active(observed) => observed,
-        AgentLoopStageV1::Complete(completion) => {
-            return Ok(AgentLoopStageV1::Complete(completion));
+        AgentEpisodeDriverStageV1::Active(observed) => observed,
+        AgentEpisodeDriverStageV1::Complete(completion) => {
+            return Ok(AgentEpisodeDriverStageV1::Complete(completion));
         }
     };
     let ObservedAgentTurnV1 {
@@ -716,7 +735,7 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?
     else {
-        return Err(AgentLoopError::Agent(
+        return Err(AgentEpisodeDriverError::Agent(
             "tool operation requires explicit reconciliation".into(),
         ));
     };
@@ -726,7 +745,7 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
     let native = codec
         .prepare_continuation(&frozen.native_spec, &continuation)
         .map_err(agent_error)?;
-    Ok(AgentLoopStageV1::Active(ProjectedAgentTurnV1 {
+    Ok(AgentEpisodeDriverStageV1::Active(ProjectedAgentTurnV1 {
         episode,
         native,
         pending_results: results,
@@ -736,12 +755,12 @@ fn project_operation_observations<E: EventStore, C: ContentStore>(
 fn advance_runtime_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
-    projected: AgentLoopStageV1<ProjectedAgentTurnV1>,
-) -> Result<AgentLoopAdvanceV1, AgentLoopError> {
+    projected: AgentEpisodeDriverStageV1<ProjectedAgentTurnV1>,
+) -> Result<AgentEpisodeDriverAdvanceV1, AgentEpisodeDriverError> {
     let projected = match projected {
-        AgentLoopStageV1::Active(projected) => projected,
-        AgentLoopStageV1::Complete(completion) => {
-            return Ok(AgentLoopAdvanceV1::Complete(completion));
+        AgentEpisodeDriverStageV1::Active(projected) => projected,
+        AgentEpisodeDriverStageV1::Complete(completion) => {
+            return Ok(AgentEpisodeDriverAdvanceV1::Complete(completion));
         }
     };
     let ProjectedAgentTurnV1 {
@@ -760,21 +779,23 @@ fn advance_runtime_episode<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?
     {
-        EpisodeAdvance::NextStep(authority) => {
-            Ok(AgentLoopAdvanceV1::Continue(OpenedAgentEpisodeV1 {
+        EpisodeAdvance::NextStep(authority) => Ok(AgentEpisodeDriverAdvanceV1::Continue(
+            OpenedAgentEpisodeV1 {
                 episode,
                 authority,
                 native,
                 pending_results,
-            }))
-        }
+            },
+        )),
         EpisodeAdvance::Completed {
             reason,
             steps_started,
-        } => Ok(AgentLoopAdvanceV1::Complete(AgentLoopCompletionV1 {
-            reason,
-            steps_started,
-        })),
+        } => Ok(AgentEpisodeDriverAdvanceV1::Complete(
+            AgentEpisodeDriverCompletionV1 {
+                reason,
+                steps_started,
+            },
+        )),
     }
 }
 
@@ -782,7 +803,7 @@ fn complete_episode<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &mut C,
     episode: &AgentEpisode,
-) -> Result<AgentLoopCompletionV1, AgentLoopError> {
+) -> Result<AgentEpisodeDriverCompletionV1, AgentEpisodeDriverError> {
     let EpisodeAdvance::Completed {
         reason,
         steps_started,
@@ -797,28 +818,28 @@ fn complete_episode<E: EventStore, C: ContentStore>(
     )
     .map_err(agent_error)?
     else {
-        return Err(AgentLoopError::Agent(
+        return Err(AgentEpisodeDriverError::Agent(
             "yielded step unexpectedly advanced".into(),
         ));
     };
-    Ok(AgentLoopCompletionV1 {
+    Ok(AgentEpisodeDriverCompletionV1 {
         reason,
         steps_started,
     })
 }
 
-fn observed_now() -> Result<ObservedAtUnixMillis, AgentLoopError> {
+fn observed_now() -> Result<ObservedAtUnixMillis, AgentEpisodeDriverError> {
     let milliseconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(agent_error)?
         .as_millis();
     let milliseconds = i64::try_from(milliseconds)
-        .map_err(|_| AgentLoopError::Agent("wall clock overflow".into()))?;
+        .map_err(|_| AgentEpisodeDriverError::Agent("wall clock overflow".into()))?;
     Ok(ObservedAtUnixMillis::new(milliseconds))
 }
 
-fn agent_error(error: impl std::fmt::Display) -> AgentLoopError {
-    AgentLoopError::Agent(error.to_string())
+fn agent_error(error: impl std::fmt::Display) -> AgentEpisodeDriverError {
+    AgentEpisodeDriverError::Agent(error.to_string())
 }
 
 #[cfg(test)]
@@ -860,12 +881,12 @@ mod tests {
             ToolEffectClass::ReadOnly,
         );
 
-        let error = AgentLoopCapabilityGrantV1::new(vec![registration.clone(), registration])
+        let error = AgentStepCapabilityGrantV1::new(vec![registration.clone(), registration])
             .expect_err("duplicate semantic capability must be rejected");
 
         assert!(matches!(
             error,
-            AgentLoopError::InvalidCapabilityGrant(message)
+            AgentEpisodeDriverError::InvalidCapabilityGrant(message)
                 if message == "capability grant repeats a tool name"
         ));
     }
@@ -882,7 +903,7 @@ mod tests {
         let mut events =
             SqliteEventStore::open(temporary.path().join("events.db")).expect("events");
         let tool = ToolName::new("request_external_probe").expect("tool");
-        let frozen = FrozenAgentLoopV1 {
+        let frozen = FrozenAgentEpisodeDriverV1 {
             task_id: TaskId::new(),
             episode_id: EpisodeId::new(),
             role: AgentRoleName::new("generic-effect-control").expect("role"),
@@ -936,7 +957,7 @@ mod tests {
                 &mut content,
                 &serde_json::json!({"schema_version":1,"external_effect":"controller-only"}),
             ),
-            capability_grant: AgentLoopCapabilityGrantV1::new(vec![ToolRegistration::new(
+            capability_grant: AgentStepCapabilityGrantV1::new(vec![ToolRegistration::new(
                 tool,
                 ToolImplementationVersion::new("external-probe-v1").expect("version"),
                 ToolEffectClass::Idempotent,
@@ -990,7 +1011,7 @@ mod tests {
         })
         .expect("codec");
 
-        let outcome = run_agent_loop(
+        let outcome = drive_agent_episode(
             &mut events,
             &mut content,
             &mut transport,
@@ -999,7 +1020,7 @@ mod tests {
             &mut gateway,
         )
         .expect("workflow must return a Worker request before external authority");
-        let AgentLoopOutcomeV1::WorkerRequest(request) = outcome else {
+        let AgentEpisodeDriverOutcomeV1::WorkerRequest(request) = outcome else {
             panic!("external effect must produce a Worker request")
         };
         assert_eq!(request.episode_id, frozen.episode_id);
@@ -1058,7 +1079,7 @@ mod tests {
         .expect("Controller records observation");
         assert!(controller_invoked.load(std::sync::atomic::Ordering::SeqCst));
 
-        let resumed = run_agent_loop(
+        let resumed = drive_agent_episode(
             &mut events,
             &mut content,
             &mut transport,
@@ -1067,7 +1088,7 @@ mod tests {
             &mut gateway,
         )
         .expect("resume exact episode");
-        let AgentLoopOutcomeV1::Complete(completion) = resumed else {
+        let AgentEpisodeDriverOutcomeV1::Complete(completion) = resumed else {
             panic!("recorded observation must resume to terminal")
         };
         assert_eq!(completion.reason, EpisodeCompletionReason::Yielded);
