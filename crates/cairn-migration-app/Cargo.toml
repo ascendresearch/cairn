@@ -1,19 +1,21 @@
 [package]
-name = "cairn-cli"
-description = "Reference Cairn task client and terminal progress interface"
+name = "cairn-migration-app"
+description = "CUDA migration product composition for the domain-neutral Cairn host"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cairn-agent.workspace = true
 cairn-codec.workspace = true
 cairn-migration = { workspace = true, features = ["agent-runtime"] }
 cairn-protocol.workspace = true
-cairn-sdk.workspace = true
+cairn-server.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

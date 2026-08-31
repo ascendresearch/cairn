@@ -6,10 +6,9 @@ use std::{
     time::Duration,
 };
 
-use cairn_admission::{UserIntentAuthorityScopeV1, UserProvidedIntentClaimV1};
 use cairn_migration::{
     IntentRecoveryRequestV1, SirCallerClaimId, SirHypothesisId, SirTaskArtifactPath,
-    UserIntentDecisionRequestArtifact,
+    UserIntentAuthorityScopeV1, UserIntentDecisionRequestArtifact, UserProvidedIntentClaimV1,
 };
 use cairn_protocol::{CommandId, ContentId, EventSequence, TaskId};
 use cairn_sdk::{

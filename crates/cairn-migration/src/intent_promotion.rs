@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr};
 
-use cairn_migration::{
+use crate::{
     AuthoritativeIntentClaimV1, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
     IntentRecoveryInputV1, MigrationIntentContractArtifact, SirCallerClaimId, SirHypothesisId,
     SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 const MAX_AUTHORITY_SUBJECT_BYTES: usize = 128;
-const INTENT_USER_DECISION_GATE_V1: &[u8] = include_bytes!("lib.rs");
+const INTENT_USER_DECISION_GATE_V1: &[u8] = include_bytes!("intent_promotion.rs");
 
 /// Controller-published grant proving who may decide one exact intent scope.
 pub enum UserIntentAuthorityGrantArtifact {}
@@ -27,8 +27,7 @@ impl ContentType for UserIntentAuthorityGrantArtifact {
 /// A request identity cannot substitute for an authority decision identity.
 ///
 /// ```compile_fail
-/// use cairn_admission::UserIntentDecisionArtifact;
-/// use cairn_migration::UserIntentDecisionRequestArtifact;
+/// use cairn_migration::{UserIntentDecisionArtifact, UserIntentDecisionRequestArtifact};
 /// use cairn_protocol::ContentId;
 /// fn require_decision(_: ContentId<UserIntentDecisionArtifact>) {}
 /// let request = ContentId::<UserIntentDecisionRequestArtifact>::derive(b"request").unwrap();
@@ -54,31 +53,7 @@ impl ContentType for RestrictedIntentAdmissionDecisionArtifact {
     const DOMAIN: &'static str = "admission.intent-decision-restricted.v1";
 }
 
-/// Exact independent Admission executable authorized for one Controller operation.
-pub enum IntentAdmissionExecutableArtifact {}
-
-impl ContentType for IntentAdmissionExecutableArtifact {
-    const DOMAIN: &'static str = "admission.intent-admission-executable.v1";
-}
-
-/// Exact restricted-store target authorized for one independent Admission operation.
-///
-/// ```compile_fail
-/// use cairn_admission::{
-///     IntentAdmissionExecutableArtifact, IntentAdmissionRestrictedStoreArtifact,
-/// };
-/// use cairn_protocol::ContentId;
-/// fn require_store(_: ContentId<IntentAdmissionRestrictedStoreArtifact>) {}
-/// let executable = ContentId::<IntentAdmissionExecutableArtifact>::derive(b"binary").unwrap();
-/// require_store(executable);
-/// ```
-pub enum IntentAdmissionRestrictedStoreArtifact {}
-
-impl ContentType for IntentAdmissionRestrictedStoreArtifact {
-    const DOMAIN: &'static str = "admission.intent-admission-restricted-store.v1";
-}
-
-/// Public outcome returned only after the independent Admission process commits restricted state.
+/// Public outcome returned only after product composition commits restricted state.
 pub enum IntentAdmissionPublicOutcomeArtifact {}
 
 impl ContentType for IntentAdmissionPublicOutcomeArtifact {
@@ -292,17 +267,17 @@ pub enum UserIntentDecisionResponseV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UserProvidedIntentClaimV1 {
-    layer: cairn_migration::SirIntentLayer,
-    semantics: cairn_migration::SirHypothesisClaim,
-    domain: cairn_migration::SirIntentDomain,
+    layer: crate::SirIntentLayer,
+    semantics: crate::SirHypothesisClaim,
+    domain: crate::SirIntentDomain,
 }
 
 impl UserProvidedIntentClaimV1 {
     #[must_use]
     pub const fn new(
-        layer: cairn_migration::SirIntentLayer,
-        semantics: cairn_migration::SirHypothesisClaim,
-        domain: cairn_migration::SirIntentDomain,
+        layer: crate::SirIntentLayer,
+        semantics: crate::SirHypothesisClaim,
+        domain: crate::SirIntentDomain,
     ) -> Self {
         Self {
             layer,
@@ -312,17 +287,17 @@ impl UserProvidedIntentClaimV1 {
     }
 
     #[must_use]
-    pub const fn layer(&self) -> cairn_migration::SirIntentLayer {
+    pub const fn layer(&self) -> crate::SirIntentLayer {
         self.layer
     }
 
     #[must_use]
-    pub const fn semantics(&self) -> &cairn_migration::SirHypothesisClaim {
+    pub const fn semantics(&self) -> &crate::SirHypothesisClaim {
         &self.semantics
     }
 
     #[must_use]
-    pub const fn domain(&self) -> &cairn_migration::SirIntentDomain {
+    pub const fn domain(&self) -> &crate::SirIntentDomain {
         &self.domain
     }
 }
@@ -663,8 +638,8 @@ impl<'de> Deserialize<'de> for IntentAdmissionPublicOutcomeV1 {
     }
 }
 
-/// Prepared deterministic gate result; the process must archive the restricted decision before
-/// publishing `public_outcome`.
+/// Prepared deterministic gate result; product composition must archive the restricted decision
+/// before publishing `public_outcome`.
 pub struct PreparedIntentAdmissionV1 {
     restricted_decision: RestrictedIntentAdmissionDecisionV1,
     public_outcome: IntentAdmissionPublicOutcomeV1,
@@ -747,7 +722,7 @@ pub fn promote_user_intent(
                 .find(|candidate| candidate.id() == hypothesis)
                 .ok_or(IntentPromotionError::UnofferedHypothesis)?;
             let caller_claims = scoped_caller_claims(grant, recovery_input)?;
-            let operation = cairn_migration::OperationIntentV1::new(
+            let operation = crate::OperationIntentV1::new(
                 caller_claims,
                 selected.layer(),
                 selected.claim().clone(),
@@ -760,7 +735,7 @@ pub fn promote_user_intent(
             )
         }
         UserIntentDecisionResponseV1::ProvideAuthoritativeClaim { claim } => {
-            let operation = cairn_migration::OperationIntentV1::new(
+            let operation = crate::OperationIntentV1::new(
                 scoped_caller_claims(grant, recovery_input)?,
                 claim.layer(),
                 claim.semantics().clone(),
@@ -807,7 +782,7 @@ pub fn promote_user_intent(
 fn scoped_caller_claims(
     grant: &UserIntentAuthorityGrantV1,
     recovery_input: &IntentRecoveryInputV1,
-) -> Result<Vec<cairn_migration::SirCallerClaimV1>, IntentPromotionError> {
+) -> Result<Vec<crate::SirCallerClaimV1>, IntentPromotionError> {
     grant
         .scope()
         .claims()

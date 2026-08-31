@@ -7,7 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-cairn-admission.workspace = true
 cairn-codec.workspace = true
 cairn-migration = { workspace = true, features = ["agent-runtime"] }
 cairn-protocol.workspace = true

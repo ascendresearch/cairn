@@ -262,7 +262,7 @@ pub enum CollectionOutputComparisonV1 {
 }
 
 /// Contract-bound Oracle decision. Its constructor does not grant admission authority; only the
-/// Admission process may publish it from an admitted contract.
+/// Product composition may publish it from an admitted contract after mechanical Admission.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CollectionOutputOracleDecisionV1 {
     schema_version: SchemaVersion,

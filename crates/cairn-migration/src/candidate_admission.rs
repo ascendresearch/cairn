@@ -702,7 +702,7 @@ impl<'de> Deserialize<'de> for CandidateAdmissionOutcomeV1 {
     }
 }
 
-/// Independently recomputes per-claim Candidate status. Any failed control rejects its item;
+/// Mechanically recomputes per-claim Candidate status. Any failed control rejects its item;
 /// absent/unavailable controls remain explicit partial evidence.
 pub fn recompute_candidate_admission(
     contract: &CandidateOracleContractV1,

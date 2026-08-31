@@ -20,6 +20,7 @@ mod historical;
 mod input_values;
 mod intent_admission;
 mod intent_claim;
+mod intent_promotion;
 mod materialize;
 mod memory_surface;
 mod oracle_control;
@@ -28,6 +29,8 @@ mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
 mod reduction_mutation;
+#[cfg(feature = "agent-runtime")]
+mod role_agent;
 mod sir;
 mod sir_contract;
 mod variant_execution;
@@ -175,6 +178,15 @@ pub use intent_admission::{
     derive_user_intent_decision_requests,
 };
 pub use intent_claim::{AuthoritativeIntentClaimV1, OperationIntentV1};
+pub use intent_promotion::{
+    IntentAdmissionPublicOutcomeArtifact, IntentAdmissionPublicOutcomeV1, IntentPromotionError,
+    IntentUserDecisionGateArtifact, MigrationIntentContractV1, PreparedIntentAdmissionV1,
+    RestrictedIntentAdmissionDecisionArtifact, RestrictedIntentAdmissionDecisionV1,
+    TaskIntentAuthoritySubject, UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1,
+    UserIntentAuthorityScopeV1, UserIntentDecisionArtifact, UserIntentDecisionResponseV1,
+    UserIntentDecisionV1, UserProvidedIntentClaimV1, intent_user_decision_gate_id,
+    promote_user_intent,
+};
 pub use materialize::{
     CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount,
     CorpusMaterializationError, MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
@@ -269,6 +281,15 @@ pub use reduction_mutation::{
     HistoricalReductionMutationInputs, HistoricalReductionMutationKind,
     HistoricalReductionMutationVariantEvidence, PreparedHistoricalReductionMutationGrid,
     compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
+};
+#[cfg(feature = "agent-runtime")]
+pub use role_agent::{
+    CandidateExplorationAgentContextV1, CandidateExplorationRoleHooksV1,
+    CandidateReviewAgentContextV1, CandidateReviewRoleHooksV1, CandidateRevisionAgentContextV1,
+    CandidateRevisionRoleHooksV1, MigrationAgentRoleError, MigrationAgentToolV1,
+    MigrationRoleHooksV1, MigrationRoleStepObservationV1, OracleExplorationAgentContextV1,
+    OracleExplorationRoleHooksV1, OracleReviewAgentContextV1, OracleReviewRoleHooksV1,
+    OracleRevisionAgentContextV1, OracleRevisionRoleHooksV1, SirAgentContextV1, SirRoleHooksV1,
 };
 #[cfg(feature = "agent-runtime")]
 pub use sir::SirTaskWorkspace;

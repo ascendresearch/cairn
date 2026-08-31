@@ -610,7 +610,7 @@ struct CandidateOracleContractWire {
 }
 
 impl CandidateOracleContractV1 {
-    /// Projects only admitted claims from one exact independently recomputed Oracle outcome.
+    /// Projects only admitted claims from one exact mechanically recomputed Oracle outcome.
     ///
     /// # Errors
     ///

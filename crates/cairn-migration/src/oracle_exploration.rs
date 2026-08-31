@@ -3126,7 +3126,7 @@ impl OracleControlObligationV1 {
     }
 }
 
-/// Frozen independent Admission authority derived from one exact portfolio.
+/// Frozen mechanical Admission authority derived from one exact portfolio.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleAdmissionAttemptV1 {
     schema_version: u16,
@@ -3666,7 +3666,7 @@ type AdmissionBuckets = (
     Vec<ContentId<OracleWorkItemArtifact>>,
 );
 
-/// Independently recomputes admitted/partial/rejected claims. Missing controls remain partial.
+/// Mechanically recomputes admitted/partial/rejected claims. Missing controls remain partial.
 pub fn recompute_oracle_admission(
     proposal: &OraclePortfolioProposalV1,
     policy: &OracleAdmissionPolicyV1,

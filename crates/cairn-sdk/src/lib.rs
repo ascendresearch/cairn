@@ -2,11 +2,11 @@
 
 use std::{future::Future, path::PathBuf};
 
-use cairn_admission::{UserIntentAuthorityScopeV1, UserProvidedIntentClaimV1};
 use cairn_migration::{
     IntentDecisionRequestBatchArtifact, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
     SirHypothesisId, SirIntentHypothesisSetProposalArtifact, SirTaskArtifactPath,
-    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
+    UserIntentAuthorityScopeV1, UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
+    UserProvidedIntentClaimV1,
 };
 use cairn_protocol::{CommandId, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
 use serde::{Deserialize, Deserializer, Serialize, de};
