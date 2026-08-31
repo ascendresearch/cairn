@@ -2,7 +2,6 @@ use std::{
     ffi::OsString, fs, io::Cursor, os::unix::fs::PermissionsExt as _, path::Path, process::Command,
 };
 
-use cairn_agent::{ContextBlock, EpisodeBudget, InstructionBlock, ResolvedRuntimeModelArtifact};
 use cairn_execution::{
     CapturedOutput, DiagnosticByteLimit, EvidenceByteLimit, ExecutionBackend, ExecutionCapture,
     ExecutionCompletion, ExecutionElapsedMillis, ExecutionEnvironmentArtifact, ExecutionInput,
@@ -27,9 +26,7 @@ use cairn_migration::{
     HistoricalReductionWrongVariantEvidence, HistoricalReproductionArtifact,
     HistoricalValidationStage, InputValueDomainV1, MemoryConditionDisposition,
     MigrationDomainContractInput, MigrationDomainContractV1, MigrationDomainFamilyName,
-    MigrationExecutionNeed, MigrationValidationTier, OracleDebateAttackInput,
-    OracleDebateEpisodeInput, OracleDebateEpisodeV1, OracleDebateStrategy,
-    OracleFailureMechanismName, OracleModelDebatePlanInput, OracleModelDebatePlanV1,
+    MigrationExecutionNeed, MigrationValidationTier, OracleFailureMechanismName,
     PointerAlignmentContractV1, PreparedHistoricalReductionJob,
     PreparedHistoricalReductionMutationGrid, RequestedSemanticsArtifact, SemanticClaimKind,
     ValidatedHistoricalReductionRun, ValidatedVariantBuild, VariantBuildCaptureLimits,
@@ -38,10 +35,8 @@ use cairn_migration::{
     compose_historical_reduction_control, compose_historical_reduction_mutation_grid,
     prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
     prepare_historical_reduction_mutant_set, prepare_historical_reduction_reference_job,
-    prepare_historical_reduction_variant_job, prepare_oracle_debate_attack,
-    prepare_oracle_debate_episode, prepare_oracle_debate_proposal_revision,
-    prepare_variant_build_job, validate_historical_reduction_receipt,
-    validate_variant_build_receipt,
+    prepare_historical_reduction_variant_job, prepare_variant_build_job,
+    validate_historical_reduction_receipt, validate_variant_build_receipt,
 };
 use cairn_protocol::{
     AttemptId, CommandId, ContentId, ContentType, EpisodeId, JobId, ObservedAtUnixMillis, TaskId,
@@ -92,11 +87,6 @@ struct WrongControl {
     completed: CompletedRun,
 }
 
-struct OracleActors {
-    synthesis: OracleDebateEpisodeV1,
-    adversarial: OracleDebateEpisodeV1,
-}
-
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -105,7 +95,6 @@ struct OracleActors {
 fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_spot() {
     let domain = reduction_domain();
     let declared = declared_domain(&domain);
-    let actors = oracle_actors();
     let historical = historical_record();
     let obligation = HistoricalFailureObligationV1::from_record(
         &historical,
@@ -124,7 +113,7 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         HistoricalReductionAlgorithm::Sequential,
         env!("CARGO_BIN_EXE_cairn-reduction-sequential-fixture"),
         &corpus,
-        &model_authorship(&actors.adversarial),
+        &model_authorship(),
     );
     let tree = execute_correct(
         "tree-order",
@@ -132,28 +121,28 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
         HistoricalReductionAlgorithm::BalancedTree,
         env!("CARGO_BIN_EXE_cairn-reduction-tree-fixture"),
         &corpus,
-        &model_authorship(&actors.adversarial),
+        &model_authorship(),
     );
     let zero = execute_wrong(
         "zero-output",
         HistoricalReductionAlgorithm::ZeroOutput,
         env!("CARGO_BIN_EXE_cairn-reduction-zero-fixture"),
         &corpus,
-        &model_authorship(&actors.adversarial),
+        &model_authorship(),
     );
     let dropped = execute_wrong(
         "drop-last",
         HistoricalReductionAlgorithm::DropLast,
         env!("CARGO_BIN_EXE_cairn-reduction-drop-last-fixture"),
         &corpus,
-        &model_authorship(&actors.adversarial),
+        &model_authorship(),
     );
     let offset = execute_wrong(
         "unit-offset",
         HistoricalReductionAlgorithm::UnitOffset,
         env!("CARGO_BIN_EXE_cairn-reduction-offset-fixture"),
         &corpus,
-        &model_authorship(&actors.adversarial),
+        &model_authorship(),
     );
 
     let allowance = measured_allowance(&corpus);
@@ -269,33 +258,12 @@ fn historical_reduction_control_recomputes_false_reject_family_spread_and_blind_
             run: &offset.completed.run,
         },
     ];
-    let debate_plan = oracle_model_debate_plan(&declared, &policy_mutation.policy, actors);
     let proposal = oracle_proposal(
         &declared,
         &corpus_proposal,
         reference_id,
-        model_authorship(debate_plan.synthesis()),
+        model_authorship(),
     );
-    let proposal_revision =
-        prepare_oracle_debate_proposal_revision(&debate_plan, None, proposal.clone(), Vec::new())
-            .expect("model-authored synthesis proposal revision");
-    let attack = prepare_oracle_debate_attack(
-        &debate_plan,
-        &proposal_revision,
-        OracleDebateAttackInput {
-            correct_variants: vec![sequential.variant.clone(), tree.variant.clone()],
-            wrong_variants: vec![
-                zero.variant.clone(),
-                dropped.variant.clone(),
-                offset.variant.clone(),
-            ],
-            adversarial_cases: Vec::new(),
-        },
-    )
-    .expect("model-authored adversarial attack");
-    assert_eq!(proposal_revision.proposal(), &proposal);
-    assert_eq!(attack.body().correct_variants().len(), 2);
-    assert_eq!(attack.body().wrong_variants().len(), 3);
     let prepared = compose_historical_reduction_control(
         &domain,
         &declared,
@@ -1406,70 +1374,14 @@ fn assert_asserted_allowance_and_passed_tampering_fail(
     );
 }
 
-fn oracle_actors() -> OracleActors {
-    let synthesis = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
-        strategy: OracleDebateStrategy::Synthesis,
-        episode_id: EpisodeId::new(),
-        model_configuration: id::<ResolvedRuntimeModelArtifact>(
-            b"recorded synthesis runtime model",
-        ),
-        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded synthesis model"),
-        strategy_instruction: id::<InstructionBlock>(b"synthesis historical reduction strategy"),
-        private_context: Vec::new(),
-        budget: EpisodeBudget::default(),
-    })
-    .expect("synthesis actor");
-    let adversarial = prepare_oracle_debate_episode(OracleDebateEpisodeInput {
-        strategy: OracleDebateStrategy::Adversarial,
-        episode_id: EpisodeId::new(),
-        model_configuration: id::<ResolvedRuntimeModelArtifact>(
-            b"recorded adversarial runtime model",
-        ),
-        authorship_configuration: id::<ModelConfigurationArtifact>(b"recorded adversarial model"),
-        strategy_instruction: id::<InstructionBlock>(b"adversarial historical reduction strategy"),
-        private_context: Vec::new(),
-        budget: EpisodeBudget::default(),
-    })
-    .expect("adversarial actor");
-    OracleActors {
-        synthesis,
-        adversarial,
-    }
-}
-
-fn oracle_model_debate_plan(
-    declared: &DeclaredDomainV1,
-    policy: &AdmissionPolicyV1,
-    actors: OracleActors,
-) -> OracleModelDebatePlanV1 {
-    let declared_bytes = cairn_codec::to_vec(declared).expect("declared bytes");
-    let policy_bytes = cairn_codec::to_vec(policy).expect("policy bytes");
-    OracleModelDebatePlanV1::new(OracleModelDebatePlanInput {
-        task_id: declared.task_id(),
-        task_inputs: id::<OracleTaskInputArtifact>(b"historical reduction task inputs"),
-        declared_domain: ContentId::derive(&declared_bytes).expect("declared identity"),
-        admission_policy: ContentId::derive(&policy_bytes).expect("policy identity"),
-        common_instructions: vec![id::<InstructionBlock>(b"oracle search common rules")],
-        shared_context: vec![
-            id::<ContextBlock>(b"historical reduction caller contract"),
-            id::<ContextBlock>(b"historical reduction source snapshot"),
-        ],
-        synthesis: actors.synthesis,
-        adversarial: actors.adversarial,
-    })
-    .expect("oracle search plan")
-}
-
-fn model_authorship(strategy: &OracleDebateEpisodeV1) -> ArtifactAuthorshipV1 {
+fn model_authorship() -> ArtifactAuthorshipV1 {
     ArtifactAuthorshipV1::new(
         AuthorshipOrigin::Model,
-        ArtifactAuthorId::new(match strategy.strategy() {
-            OracleDebateStrategy::Synthesis => "recorded-synthesis-oracle-agent",
-            OracleDebateStrategy::Adversarial => "recorded-adversarial-oracle-agent",
-        })
-        .expect("author"),
-        Some(strategy.episode_id()),
-        Some(strategy.authorship_configuration()),
+        ArtifactAuthorId::new("recorded-oracle-strategy").expect("author"),
+        Some(EpisodeId::new()),
+        Some(id::<ModelConfigurationArtifact>(
+            b"recorded Oracle strategy model",
+        )),
     )
     .expect("authorship")
 }

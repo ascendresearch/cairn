@@ -293,9 +293,10 @@ Admission 可以通过 Controller 的 execution port 请求资源，但 Controll
 
 ## 9. Oracle 流程细化
 
-Oracle Explorer 从 admitted intent 计算 `RequiredOracleClaimSet`，再由 synthesis strategies 提案、
-adversarial strategies 攻击并产生新 revision。每次 revision 是不可变 artifact；不同 episode/strategy
-仅通过 Controller 提供的冻结 artifact/typed diagnostic 交流。当前 Blue/Red 只是模型驱动实现之一。
+Oracle Explorer 从 admitted intent 计算required claim set，再机械展开claim × concern × role work items，由
+synthesis、adversarial、analyzer、generator、mutation、property、fuzz或counterexample strategies逐cell推进。
+每次 revision 是不可变 artifact；不同 episode/strategy仅通过 Controller 提供的冻结 artifact/typed
+observation交流。fixed Blue/Red实现已经删除，模型只是catalog可选executor之一。
 这类交互不共享 continuation、草稿或可变上下文，也不把 Agent 共识当作 evidence；统一规则见
 [`AGENT_ARCHITECTURE.md`](AGENT_ARCHITECTURE.md)。
 

@@ -4,18 +4,16 @@ use std::{fmt, io::Cursor, str::FromStr};
 
 use cairn_migration::{
     AdmittedCollectionOracleClaimArtifact, AdmittedCollectionOracleClaimV1,
-    AssembledCollectionF32OracleCaseInput, CollectionCandidateSearchAuthorityInput,
-    CollectionOracleAdmissionGateArtifact, CollectionOracleAdmissionPublicOutcomeArtifact,
-    CollectionOracleClaimProposalArtifact, CollectionOracleQualificationExecution,
-    CollectionOracleQualificationReceiptArtifact, CollectionOutputComparisonEvidenceArtifact,
-    CollectionOutputOracleDecisionV1, CollectionOutputOraclePolicyV1,
-    IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact, IntentRecoveryInputV1,
-    MigrationIntentContractArtifact, PreparedAdmittedCollectionOracleClaim,
-    PreparedCollectionCandidateSearchInput, SirCallerClaimId, SirHypothesisId,
+    AssembledCollectionF32OracleCaseInput, AuthoritativeIntentClaimV1,
+    CollectionOracleAdmissionGateArtifact, CollectionOracleClaimProposalArtifact,
+    CollectionOracleQualificationExecution, CollectionOracleQualificationReceiptArtifact,
+    CollectionOutputComparisonEvidenceArtifact, CollectionOutputOracleDecisionV1,
+    CollectionOutputOraclePolicyV1, CollectionOutputOrderContractV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputArtifact, IntentRecoveryInputV1, MigrationIntentContractArtifact,
+    PreparedAdmittedCollectionOracleClaim, SirCallerClaimId, SirHypothesisId,
     SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
     UserIntentDecisionRequestV1, collection_oracle_admission_gate_id,
     derive_user_intent_decision_requests,
-    prepare_collection_candidate_search_input as prepare_candidate_input_mechanically,
 };
 use cairn_protocol::{ContentId, ContentType, SchemaVersion, TaskId};
 use cairn_record::ContentStore;
@@ -244,60 +242,6 @@ impl<'de> Deserialize<'de> for UserIntentAuthorityGrantV1 {
     }
 }
 
-/// Membership requirement for collection-like outputs.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CollectionMembershipContractV1 {
-    ExactSelectedOccurrences,
-}
-
-/// Reported cardinality requirement for collection-like outputs.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CollectionReportedCountContractV1 {
-    ExactSelectedOccurrenceCount,
-}
-
-/// Whether sequence position is part of a collection-output contract.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CollectionOutputOrderContractV1 {
-    UnspecifiedPermutation,
-    StableInputRelative,
-}
-
-/// Machine-readable desired semantics supplied by the actual task authority.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CollectionOutputIntentV1 {
-    selection_claim: SirCallerClaimId,
-    membership: CollectionMembershipContractV1,
-    reported_count: CollectionReportedCountContractV1,
-    order: CollectionOutputOrderContractV1,
-}
-
-impl CollectionOutputIntentV1 {
-    #[must_use]
-    pub const fn exact_selected_occurrences(
-        selection_claim: SirCallerClaimId,
-        order: CollectionOutputOrderContractV1,
-    ) -> Self {
-        Self {
-            selection_claim,
-            membership: CollectionMembershipContractV1::ExactSelectedOccurrences,
-            reported_count: CollectionReportedCountContractV1::ExactSelectedOccurrenceCount,
-            order,
-        }
-    }
-}
-
-/// Current claim families that an actual task authority may state directly.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "contract", rename_all = "kebab-case")]
-pub enum AuthoritativeIntentClaimV1 {
-    CollectionOutput(CollectionOutputIntentV1),
-}
-
 /// Exact response to one scoped user-decision request.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -466,6 +410,11 @@ impl MigrationIntentContractV1 {
     #[must_use]
     pub const fn user_decision(&self) -> ContentId<UserIntentDecisionArtifact> {
         self.user_decision
+    }
+
+    #[must_use]
+    pub const fn admitted_claim(&self) -> &AuthoritativeIntentClaimV1 {
+        &self.admitted_claim
     }
 }
 
@@ -767,7 +716,7 @@ fn validate_authority_scope(
         UserIntentAuthorityScopeV1::CollectionOutput { selection_claim },
         AuthoritativeIntentClaimV1::CollectionOutput(contract),
     ) = (&grant.scope, admitted_claim);
-    if selection_claim != &contract.selection_claim
+    if selection_claim != contract.selection_claim()
         || !recovery_input
             .request()
             .caller()
@@ -815,7 +764,7 @@ pub fn derive_collection_output_oracle_decision(
         ));
     }
     let AuthoritativeIntentClaimV1::CollectionOutput(contract) = &outcome.contract.admitted_claim;
-    let policy = match contract.order {
+    let policy = match contract.order() {
         CollectionOutputOrderContractV1::UnspecifiedPermutation => {
             CollectionOutputOraclePolicyV1::ExactMultisetAndCount
         }
@@ -825,7 +774,7 @@ pub fn derive_collection_output_oracle_decision(
     };
     Ok(CollectionOutputOracleDecisionV1::new(
         outcome.contract.identity()?,
-        contract.selection_claim.clone(),
+        contract.selection_claim().clone(),
         policy,
     ))
 }
@@ -915,6 +864,12 @@ impl<'de> Deserialize<'de> for RestrictedCollectionOracleAdmissionDecisionV1 {
 }
 
 /// Minimal public outcome for one published local Oracle claim.
+pub enum CollectionOracleAdmissionPublicOutcomeArtifact {}
+
+impl ContentType for CollectionOracleAdmissionPublicOutcomeArtifact {
+    const DOMAIN: &'static str = "admission.collection-oracle-public-outcome.v1";
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CollectionOracleAdmissionPublicOutcomeV1 {
     schema_version: SchemaVersion,
@@ -1185,38 +1140,6 @@ pub fn commit_collection_oracle_admission<C: ContentStore>(
     Ok(prepared.public_outcome.clone())
 }
 
-/// Projects a committed public Oracle outcome into the first local-only Candidate search input.
-///
-/// A raw admitted claim cannot substitute for a public outcome returned after restricted commit.
-///
-/// ```compile_fail
-/// use cairn_admission::prepare_collection_candidate_search_input;
-/// use cairn_migration::AdmittedCollectionOracleClaimV1;
-/// fn invalid(claim: &AdmittedCollectionOracleClaimV1) {
-///     let _ = prepare_collection_candidate_search_input(claim);
-/// }
-/// ```
-///
-/// # Errors
-///
-/// Rejects an invalid public binding or canonical Candidate input failure.
-pub fn prepare_collection_candidate_search_input(
-    outcome: &CollectionOracleAdmissionPublicOutcomeV1,
-) -> Result<PreparedCollectionCandidateSearchInput, IntentPromotionError> {
-    outcome.validate()?;
-    let authority = CollectionCandidateSearchAuthorityInput::new(
-        outcome.task_id(),
-        outcome.recovery_input(),
-        outcome.intent_contract_id()?,
-        outcome.identity()?,
-        outcome.claim().identity().map_err(migration_error)?,
-        outcome.claim().selection_claim().clone(),
-        outcome.claim().domain(),
-        outcome.claim().strength(),
-    );
-    prepare_candidate_input_mechanically(&authority).map_err(migration_error)
-}
-
 /// Fail-closed errors from typed user decision promotion.
 #[derive(Debug, Error)]
 pub enum IntentPromotionError {
@@ -1298,10 +1221,10 @@ mod oracle_publication_tests {
     use cairn_migration::{
         CallAdapterCaptureLimits, CallAdapterCompletionV1, CallAdapterExecutableByteLimit,
         CallAdapterObservedOutputV1, CallAdapterResultV1, CollectionF32Bits,
-        CollectionOracleQualificationExecution, MigrationExecutionNeed, MigrationValidationTier,
-        PreparedCallAdapterInput, PreparedCallAdapterJob, ValidatedCallAdapterExecution,
-        assemble_collection_f32_oracle_case, compose_call_adapter_job,
-        prepare_collection_output_call_adapter_input,
+        CollectionOracleQualificationExecution, CollectionOutputIntentV1, MigrationExecutionNeed,
+        MigrationValidationTier, PreparedCallAdapterInput, PreparedCallAdapterJob,
+        ValidatedCallAdapterExecution, assemble_collection_f32_oracle_case,
+        compose_call_adapter_job, prepare_collection_output_call_adapter_input,
         validate_collection_output_call_adapter_receipt,
     };
     use cairn_protocol::{AttemptId, CommandId, JobId, ObservedAtUnixMillis};
@@ -1638,28 +1561,6 @@ mod oracle_publication_tests {
             "requalification_triggers",
         ] {
             assert!(!public_text.contains(forbidden), "leaked {forbidden}");
-        }
-        let candidate =
-            prepare_collection_candidate_search_input(published).expect("Candidate input");
-        assert_eq!(candidate.input().task_id(), published.task_id());
-        assert_eq!(
-            candidate.input().oracle_outcome(),
-            published.identity().expect("outcome identity")
-        );
-        assert_eq!(
-            candidate.input().oracle_claim(),
-            published.claim().identity().expect("claim identity")
-        );
-        let candidate_text =
-            String::from_utf8(candidate.bytes().to_vec()).expect("Candidate input JSON");
-        for forbidden in [
-            "qualification_receipt",
-            "comparison",
-            "execution_receipt",
-            "executable",
-            "expected",
-        ] {
-            assert!(!candidate_text.contains(forbidden), "leaked {forbidden}");
         }
         let mut invalid = serde_json::to_value(published).expect("public outcome JSON");
         invalid["schema_version"] = serde_json::json!(2);

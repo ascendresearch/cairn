@@ -1,4 +1,4 @@
-//! Bounded external-test research for the Oracle Agent blue role.
+//! Bounded external-test research for one Controller-authorized Oracle strategy cell.
 
 use std::{
     collections::{HashSet, VecDeque},
@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_V1: u16 = 1;
-const SEARCH_TOOL_NAME: &str = "oracle_model_debate_external_tests";
-const SEARCH_TOOL_VERSION: &str = "github-v1";
+const SEARCH_TOOL_NAME: &str = "oracle_search_external_tests";
+const SEARCH_TOOL_VERSION: &str = "oracle-cell-strategy-v1";
 const MAX_QUERY_BYTES: usize = 256;
 const MAX_REPOSITORIES: usize = 8;
 const MAX_RESULTS: u16 = 10;
@@ -987,7 +987,7 @@ impl<P: ExternalResearchProvider> ToolGateway for ExternalTestSearchGateway<P> {
     ) -> Result<CanonicalToolResult, ToolGatewayError> {
         if operation.tool().as_str() != SEARCH_TOOL_NAME
             || operation.implementation_version().as_str() != SEARCH_TOOL_VERSION
-            || operation.effect() != ToolEffectClass::ReadOnly
+            || operation.effect() != ToolEffectClass::Idempotent
         {
             return Err(ToolGatewayError::NotStarted(
                 "operation is not the trusted external-test search registration".to_owned(),
@@ -1045,7 +1045,7 @@ pub fn external_test_search_registration() -> Result<ToolRegistration, ExternalR
             .map_err(|_| ExternalResearchContractError::InvalidBuiltInRegistration)?,
         ToolImplementationVersion::new(SEARCH_TOOL_VERSION)
             .map_err(|_| ExternalResearchContractError::InvalidBuiltInRegistration)?,
-        ToolEffectClass::ReadOnly,
+        ToolEffectClass::Idempotent,
     ))
 }
 
@@ -1391,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn recorded_pytorch_search_runs_through_durable_read_only_operation() {
+    fn recorded_pytorch_search_runs_through_durable_controller_operation() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut content = SqliteContentStore::open(
             directory.path().join("content.db"),

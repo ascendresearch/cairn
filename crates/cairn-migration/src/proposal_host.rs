@@ -5,39 +5,30 @@ use cairn_agent::{
     NativeProtocolCodec, ToolArguments, ToolEffectClass, ToolImplementationVersion, ToolName,
 };
 use cairn_protocol::{
-    CommandId, ContentId, ContentType, EpisodeId, ModelAttemptId, ObservedAtUnixMillis,
-    OperationId, SchemaVersion, StepId, TaskId,
+    ContentId, ContentType, EpisodeId, ModelAttemptId, OperationId, SchemaVersion, StepId, TaskId,
 };
 use cairn_record::{ContentStore, EventStore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 use crate::{
-    AgentResolvedRuntimeModelArtifact, CandidateEpisodeKindV1, CandidateEpisodeRequestV1,
-    CandidateInitialProfileInput, CandidateNativeDiagnosticV1, CandidateNativeFollowupProfileInput,
-    CandidateNativePublicationV1, CandidateNativeRepairProfileInput, CandidateRevisionProfileInput,
-    CandidateWorkflowStateV1, CollectionCandidateBuildDiagnosticArtifact,
-    CollectionCandidateBuildDiagnosticV1, CollectionCandidateNativeBuildDiagnosticArtifact,
-    CollectionCandidateNativeBuildDiagnosticV1, CollectionCandidateNativeFollowupRevisionArtifact,
-    CollectionCandidateNativeFollowupRevisionV1,
-    CollectionCandidateNativeRepairBuildDiagnosticArtifact,
-    CollectionCandidateNativeRepairBuildDiagnosticV1,
-    CollectionCandidateNativeRepairRevisionArtifact, CollectionCandidateNativeRepairRevisionV1,
-    CollectionCandidateProposalArtifact, CollectionCandidateProposalV1,
-    CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
-    CollectionCandidateSearchInputV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
-    IntentRecoveryRequestV1, MigrationWorkflowV1, ProposalHostInvocationArtifact,
+    AgentResolvedRuntimeModelArtifact, CandidateOracleContractV1, CandidateOracleMaterialsV1,
+    CandidateProposalArtifact, CandidateProposalV1, CandidateStrategyProfileInput,
+    CandidateWorkspaceV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
+    IntentRecoveryRequestV1, OracleBuildTestSnapshotArtifact, OracleClaimV1,
+    OracleDocumentationSnapshotArtifact, OracleKnowledgeSnapshotArtifact, OracleStrategyExecutorV1,
+    OracleStrategyProfileInput, OracleStrategyRunV1, OracleStrategySubmissionArtifact,
+    OracleStrategySubmissionV1, OracleStrategyToolCatalogV1, OracleWorkItemV1, OracleWorkspaceV1,
     SirCapabilityManifestV1, SirIntentHypothesisSetProposalArtifact, SirProfileInput,
     SirTaskArtifactPath, SirTaskBundleV1, SirTaskLimits, SirTaskWorkspace,
-    record_candidate_native_followup, record_candidate_native_repair,
-    run_candidate_initial_profile, run_candidate_native_followup_profile,
-    run_candidate_native_repair_profile, run_candidate_revision_profile, run_sir_profile,
-    validate_archived_candidate_build_diagnostic,
-    validate_archived_candidate_native_build_diagnostic,
-    validate_archived_candidate_native_repair_build_diagnostic,
-    validate_archived_collection_candidate_proposal,
-    validate_archived_collection_candidate_search_input,
+    run_candidate_strategy_profile, run_oracle_strategy_profile, run_sir_profile,
 };
+
+/// Exact complete runtime invocation snapshot archived before an episode starts.
+pub enum ProposalHostInvocationArtifact {}
+impl ContentType for ProposalHostInvocationArtifact {
+    const DOMAIN: &'static str = "migration.proposal-host-invocation.v1";
+}
 
 /// Canonical request accepted by one generic Proposal Host episode.
 pub enum ProposalHostRequestArtifact {}
@@ -163,6 +154,132 @@ pub struct ProposalHostTaskSnapshotV1 {
     sources: Vec<ProposalHostTaskSourceV1>,
 }
 
+const ORACLE_HOST_TEXT_SNAPSHOT_LIMIT: usize = 512 * 1024;
+
+macro_rules! oracle_host_text_snapshot {
+    ($name:ident, $wire:ident, $artifact:ty, $label:literal) => {
+        #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+        pub struct $name {
+            identity: ContentId<$artifact>,
+            text: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct $wire {
+            identity: ContentId<$artifact>,
+            text: String,
+        }
+
+        impl $name {
+            /// Constructs one exact UTF-8 snapshot transferred into the Host process.
+            ///
+            /// # Errors
+            ///
+            /// Rejects empty/oversized text or identity drift from the frozen workspace edge.
+            pub fn new(
+                identity: ContentId<$artifact>,
+                text: String,
+            ) -> Result<Self, ProposalHostError> {
+                if text.is_empty()
+                    || text.len() > ORACLE_HOST_TEXT_SNAPSHOT_LIMIT
+                    || ContentId::<$artifact>::derive(text.as_bytes()).map_err(codec)? != identity
+                {
+                    return invalid(concat!($label, " snapshot identity or size changed"));
+                }
+                Ok(Self { identity, text })
+            }
+
+            #[must_use]
+            pub fn text(&self) -> &str {
+                &self.text
+            }
+
+            #[must_use]
+            pub const fn identity(&self) -> ContentId<$artifact> {
+                self.identity
+            }
+        }
+
+        impl TryFrom<$wire> for $name {
+            type Error = ProposalHostError;
+
+            fn try_from(wire: $wire) -> Result<Self, Self::Error> {
+                Self::new(wire.identity, wire.text)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                $wire::deserialize(deserializer)?
+                    .try_into()
+                    .map_err(de::Error::custom)
+            }
+        }
+    };
+}
+
+oracle_host_text_snapshot!(
+    ProposalHostOracleDocumentationV1,
+    ProposalHostOracleDocumentationWire,
+    OracleDocumentationSnapshotArtifact,
+    "Oracle documentation"
+);
+oracle_host_text_snapshot!(
+    ProposalHostOracleBuildTestsV1,
+    ProposalHostOracleBuildTestsWire,
+    OracleBuildTestSnapshotArtifact,
+    "Oracle build/test"
+);
+oracle_host_text_snapshot!(
+    ProposalHostOracleKnowledgeV1,
+    ProposalHostOracleKnowledgeWire,
+    OracleKnowledgeSnapshotArtifact,
+    "Oracle knowledge"
+);
+
+/// Exact human-readable public material projected into one Oracle strategy Host request.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposalHostOracleMaterialsV1 {
+    documentation: ProposalHostOracleDocumentationV1,
+    build_and_tests: ProposalHostOracleBuildTestsV1,
+    knowledge: ProposalHostOracleKnowledgeV1,
+}
+
+impl ProposalHostOracleMaterialsV1 {
+    #[must_use]
+    pub fn new(
+        documentation: ProposalHostOracleDocumentationV1,
+        build_and_tests: ProposalHostOracleBuildTestsV1,
+        knowledge: ProposalHostOracleKnowledgeV1,
+    ) -> Self {
+        Self {
+            documentation,
+            build_and_tests,
+            knowledge,
+        }
+    }
+
+    #[must_use]
+    pub const fn documentation(&self) -> &ProposalHostOracleDocumentationV1 {
+        &self.documentation
+    }
+
+    #[must_use]
+    pub const fn build_and_tests(&self) -> &ProposalHostOracleBuildTestsV1 {
+        &self.build_and_tests
+    }
+
+    #[must_use]
+    pub const fn knowledge(&self) -> &ProposalHostOracleKnowledgeV1 {
+        &self.knowledge
+    }
+}
+
 impl ProposalHostTaskSnapshotV1 {
     #[must_use]
     pub fn new(bundle: SirTaskBundleV1, sources: Vec<ProposalHostTaskSourceV1>) -> Self {
@@ -278,40 +395,27 @@ impl ProposalHostRuntimeV1 {
 /// Closed set of domain-specific role inputs currently consumed by the generic Host.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", tag = "role")]
+#[allow(clippy::large_enum_variant)]
 pub enum ProposalHostRoleRequestV1 {
     Sir {
         task_id: TaskId,
         recovery_request: IntentRecoveryRequestV1,
         task: ProposalHostTaskSnapshotV1,
     },
-    CandidateInitial {
-        recovery_input: IntentRecoveryInputV1,
-        search_input: CollectionCandidateSearchInputV1,
+    OracleStrategy {
+        workspace: OracleWorkspaceV1,
+        claim: OracleClaimV1,
+        work_item: OracleWorkItemV1,
+        run: OracleStrategyRunV1,
         task: ProposalHostTaskSnapshotV1,
+        materials: ProposalHostOracleMaterialsV1,
     },
-    CandidateRevision {
-        recovery_input: IntentRecoveryInputV1,
-        search_input: CollectionCandidateSearchInputV1,
+    CandidateStrategy {
+        workspace: CandidateWorkspaceV1,
+        contract: CandidateOracleContractV1,
+        oracle_materials: CandidateOracleMaterialsV1,
         task: ProposalHostTaskSnapshotV1,
-        parent: CollectionCandidateProposalV1,
-        diagnostic: CollectionCandidateBuildDiagnosticV1,
-    },
-    CandidateNativeFollowup {
-        workflow_request: CandidateEpisodeRequestV1,
-        recovery_input: IntentRecoveryInputV1,
-        search_input: CollectionCandidateSearchInputV1,
-        task: ProposalHostTaskSnapshotV1,
-        previous_revision: CollectionCandidateRevisionV1,
-        diagnostic: CollectionCandidateNativeBuildDiagnosticV1,
-    },
-    CandidateNativeRepair {
-        workflow_request: CandidateEpisodeRequestV1,
-        recovery_input: IntentRecoveryInputV1,
-        search_input: CollectionCandidateSearchInputV1,
-        task: ProposalHostTaskSnapshotV1,
-        root_followup: CollectionCandidateNativeFollowupRevisionV1,
-        parent_repair: Option<Box<CollectionCandidateNativeRepairRevisionV1>>,
-        diagnostic: CollectionCandidateNativeRepairBuildDiagnosticV1,
+        public_materials: ProposalHostOracleMaterialsV1,
     },
 }
 
@@ -402,108 +506,77 @@ impl ProposalHostRequestV1 {
         }
         let workspace = match &self.role {
             ProposalHostRoleRequestV1::Sir { task, .. }
-            | ProposalHostRoleRequestV1::CandidateInitial { task, .. }
-            | ProposalHostRoleRequestV1::CandidateRevision { task, .. }
-            | ProposalHostRoleRequestV1::CandidateNativeFollowup { task, .. }
-            | ProposalHostRoleRequestV1::CandidateNativeRepair { task, .. } => {
+            | ProposalHostRoleRequestV1::OracleStrategy { task, .. }
+            | ProposalHostRoleRequestV1::CandidateStrategy { task, .. } => {
                 task.workspace(self.runtime.task_limits)?
             }
         };
         match &self.role {
             ProposalHostRoleRequestV1::Sir { .. } => Ok(()),
-            ProposalHostRoleRequestV1::CandidateInitial {
-                recovery_input,
-                search_input,
-                ..
-            } => validate_candidate_common(&workspace, recovery_input, search_input),
-            ProposalHostRoleRequestV1::CandidateRevision {
-                recovery_input,
-                search_input,
-                parent,
-                diagnostic,
-                ..
+            ProposalHostRoleRequestV1::OracleStrategy {
+                workspace,
+                claim,
+                work_item,
+                run,
+                task,
+                materials,
             } => {
-                validate_candidate_common(&workspace, recovery_input, search_input)?;
-                let parent_id = parent.identity().map_err(role_error)?;
-                let diagnostic_id = diagnostic_id(diagnostic)?;
-                if diagnostic.parent_proposal() != parent_id {
-                    return invalid("Candidate revision diagnostic changed its parent proposal");
-                }
-                validate_archived_collection_candidate_proposal(
-                    &cairn_codec::to_vec(parent).map_err(codec)?,
-                    parent_id,
-                )
-                .map_err(role_error)?;
-                validate_archived_candidate_build_diagnostic(
-                    &cairn_codec::to_vec(diagnostic).map_err(codec)?,
-                    diagnostic_id,
-                )
-                .map_err(role_error)?;
-                Ok(())
-            }
-            ProposalHostRoleRequestV1::CandidateNativeFollowup {
-                workflow_request,
-                recovery_input,
-                search_input,
-                previous_revision,
-                diagnostic,
-                ..
-            } => {
-                validate_candidate_common(&workspace, recovery_input, search_input)?;
-                let previous_id = previous_revision.identity().map_err(role_error)?;
-                let diagnostic_id = native_diagnostic_id(diagnostic)?;
-                if workflow_request.episode_id() != self.runtime.episode_id
-                    || workflow_request.invocation() != self.runtime.identity()?
-                    || workflow_request.kind() != CandidateEpisodeKindV1::NativeFollowup
-                    || workflow_request.authority().candidate_search_input()
-                        != search_input.identity().map_err(role_error)?
-                    || workflow_request.parent()
-                        != CandidateNativePublicationV1::Revision(previous_id)
-                    || workflow_request.diagnostic()
-                        != CandidateNativeDiagnosticV1::NativeFollowup(diagnostic_id)
-                    || diagnostic.previous_revision() != previous_id
+                if task.bundle.identity().map_err(role_error)? != workspace.sir_task_bundle()
+                    || claim.task_id() != workspace.task_id()
+                    || claim.admitted_intent() != workspace.admitted_intent()
+                    || work_item.claim() != claim.identity().map_err(role_error)?
+                    || run.workspace() != workspace.identity().map_err(role_error)?
+                    || run.item() != work_item.identity().map_err(role_error)?
+                    || materials.documentation.identity() != workspace.documentation()
+                    || materials.build_and_tests.identity() != workspace.build_and_tests()
+                    || materials.knowledge.identity() != workspace.knowledge()
                 {
-                    return invalid("Candidate native follow-up request binding changed");
+                    return invalid(
+                        "Oracle strategy request changed its workspace or cell binding",
+                    );
                 }
-                Ok(())
-            }
-            ProposalHostRoleRequestV1::CandidateNativeRepair {
-                workflow_request,
-                recovery_input,
-                search_input,
-                root_followup,
-                parent_repair,
-                diagnostic,
-                ..
-            } => {
-                validate_candidate_common(&workspace, recovery_input, search_input)?;
-                let root_id = root_followup.identity().map_err(role_error)?;
-                let diagnostic_id = repair_diagnostic_id(diagnostic)?;
-                let expected_parent = match (workflow_request.parent(), parent_repair) {
-                    (CandidateNativePublicationV1::NativeFollowup(id), None) if id == root_id => {
-                        crate::CandidateNativeRepairParentV1::RootFollowup(id)
-                    }
-                    (CandidateNativePublicationV1::NativeRepair(id), Some(parent))
-                        if parent.identity().map_err(role_error)? == id
-                            && parent.root_followup() == root_id =>
-                    {
-                        crate::CandidateNativeRepairParentV1::Repair(id)
-                    }
-                    _ => return invalid("Candidate native repair parent lineage changed"),
+                let OracleStrategyExecutorV1::AgentEpisode {
+                    invocation, tools, ..
+                } = run.executor()
+                else {
+                    return invalid("Oracle Proposal Host request names a non-Agent executor");
                 };
-                if workflow_request.episode_id() != self.runtime.episode_id
-                    || workflow_request.invocation() != self.runtime.identity()?
-                    || workflow_request.kind() != CandidateEpisodeKindV1::NativeRepair
-                    || workflow_request.authority().candidate_search_input()
-                        != search_input.identity().map_err(role_error)?
-                    || workflow_request.diagnostic()
-                        != CandidateNativeDiagnosticV1::NativeRepair(diagnostic_id)
-                    || root_followup.identity().map_err(role_error)? != root_id
-                    || diagnostic.parent() != expected_parent
+                if *invocation != self.runtime.identity()?
+                    || *tools
+                        != OracleStrategyToolCatalogV1::standard()
+                            .identity()
+                            .map_err(role_error)?
                 {
-                    return invalid("Candidate native repair request binding changed");
+                    return invalid(
+                        "Oracle strategy run changed its Proposal Host invocation or tool catalog",
+                    );
                 }
                 Ok(())
+            }
+            ProposalHostRoleRequestV1::CandidateStrategy {
+                workspace: candidate_workspace,
+                contract,
+                oracle_materials,
+                public_materials,
+                ..
+            } => {
+                if workspace.bundle().identity().map_err(role_error)?
+                    != candidate_workspace.task_bundle()
+                    || contract.identity().map_err(role_error)?
+                        != candidate_workspace.oracle_contract()
+                    || public_materials.documentation().identity()
+                        != candidate_workspace.documentation()
+                    || public_materials.build_and_tests().identity()
+                        != candidate_workspace.build_and_tests()
+                    || public_materials.knowledge().identity() != candidate_workspace.knowledge()
+                {
+                    return invalid(
+                        "Candidate strategy request changed its workspace or public material binding",
+                    );
+                }
+                oracle_materials
+                    .validate_against(contract)
+                    .map_err(role_error)
             }
         }
     }
@@ -786,21 +859,13 @@ pub enum ProposalHostPublicationV1 {
         proposal_id: ContentId<SirIntentHypothesisSetProposalArtifact>,
         proposal: IntentHypothesisSetProposalV1,
     },
-    CandidateInitial {
-        proposal_id: ContentId<CollectionCandidateProposalArtifact>,
-        proposal: CollectionCandidateProposalV1,
+    OracleStrategy {
+        submission_id: ContentId<OracleStrategySubmissionArtifact>,
+        submission: OracleStrategySubmissionV1,
     },
-    CandidateRevision {
-        revision_id: ContentId<CollectionCandidateRevisionArtifact>,
-        revision: CollectionCandidateRevisionV1,
-    },
-    CandidateNativeFollowup {
-        followup_id: ContentId<CollectionCandidateNativeFollowupRevisionArtifact>,
-        followup: CollectionCandidateNativeFollowupRevisionV1,
-    },
-    CandidateNativeRepair {
-        repair_id: ContentId<CollectionCandidateNativeRepairRevisionArtifact>,
-        repair: CollectionCandidateNativeRepairRevisionV1,
+    CandidateStrategy {
+        proposal_id: ContentId<CandidateProposalArtifact>,
+        proposal: CandidateProposalV1,
     },
 }
 
@@ -881,21 +946,39 @@ impl ProposalHostTerminalV1 {
                 ProposalHostRoleRequestV1::Sir { .. },
                 ProposalHostPublicationV1::Sir { .. }
             ) | (
-                ProposalHostRoleRequestV1::CandidateInitial { .. },
-                ProposalHostPublicationV1::CandidateInitial { .. }
+                ProposalHostRoleRequestV1::OracleStrategy { .. },
+                ProposalHostPublicationV1::OracleStrategy { .. }
             ) | (
-                ProposalHostRoleRequestV1::CandidateRevision { .. },
-                ProposalHostPublicationV1::CandidateRevision { .. }
-            ) | (
-                ProposalHostRoleRequestV1::CandidateNativeFollowup { .. },
-                ProposalHostPublicationV1::CandidateNativeFollowup { .. }
-            ) | (
-                ProposalHostRoleRequestV1::CandidateNativeRepair { .. },
-                ProposalHostPublicationV1::CandidateNativeRepair { .. }
+                ProposalHostRoleRequestV1::CandidateStrategy { .. },
+                ProposalHostPublicationV1::CandidateStrategy { .. }
             )
         );
         if !matching_role {
             return invalid("Proposal Host terminal changed its requested role");
+        }
+        if let (
+            ProposalHostRoleRequestV1::OracleStrategy { run, work_item, .. },
+            ProposalHostPublicationV1::OracleStrategy { submission, .. },
+        ) = (&request.role, &self.publication)
+        {
+            if submission.run() != run.identity().map_err(role_error)?
+                || submission.item() != work_item.identity().map_err(role_error)?
+            {
+                return invalid("Oracle strategy publication changed its run or work item");
+            }
+        }
+        if let (
+            ProposalHostRoleRequestV1::CandidateStrategy { contract, .. },
+            ProposalHostPublicationV1::CandidateStrategy { proposal, .. },
+        ) = (&request.role, &self.publication)
+        {
+            if proposal.oracle_contract() != contract.identity().map_err(role_error)?
+                || proposal.model_configuration() != request.runtime.model_configuration
+            {
+                return invalid(
+                    "Candidate strategy publication changed its Oracle or model binding",
+                );
+            }
         }
         Ok(())
     }
@@ -914,38 +997,23 @@ impl ProposalHostTerminalV1 {
                 }
                 proposal.episode_id()
             }
-            ProposalHostPublicationV1::CandidateInitial {
+            ProposalHostPublicationV1::OracleStrategy {
+                submission_id,
+                submission,
+            } => {
+                if submission.identity().map_err(role_error)? != *submission_id {
+                    return invalid("Oracle strategy submission identity changed");
+                }
+                self.episode_id
+            }
+            ProposalHostPublicationV1::CandidateStrategy {
                 proposal_id,
                 proposal,
             } => {
                 if proposal.identity().map_err(role_error)? != *proposal_id {
-                    return invalid("Candidate proposal identity changed");
+                    return invalid("Candidate strategy proposal identity changed");
                 }
                 proposal.episode_id()
-            }
-            ProposalHostPublicationV1::CandidateRevision {
-                revision_id,
-                revision,
-            } => {
-                if revision.identity().map_err(role_error)? != *revision_id {
-                    return invalid("Candidate revision identity changed");
-                }
-                revision.episode_id()
-            }
-            ProposalHostPublicationV1::CandidateNativeFollowup {
-                followup_id,
-                followup,
-            } => {
-                if followup.identity().map_err(role_error)? != *followup_id {
-                    return invalid("Candidate native follow-up identity changed");
-                }
-                followup.episode_id()
-            }
-            ProposalHostPublicationV1::CandidateNativeRepair { repair_id, repair } => {
-                if repair.identity().map_err(role_error)? != *repair_id {
-                    return invalid("Candidate native repair identity changed");
-                }
-                repair.episode_id()
             }
         };
         if episode_id != self.episode_id {
@@ -1042,10 +1110,8 @@ fn freeze_proposal_host_request(
     let runtime = request.runtime.clone();
     let workspace = match &request.role {
         ProposalHostRoleRequestV1::Sir { task, .. }
-        | ProposalHostRoleRequestV1::CandidateInitial { task, .. }
-        | ProposalHostRoleRequestV1::CandidateRevision { task, .. }
-        | ProposalHostRoleRequestV1::CandidateNativeFollowup { task, .. }
-        | ProposalHostRoleRequestV1::CandidateNativeRepair { task, .. } => {
+        | ProposalHostRoleRequestV1::OracleStrategy { task, .. }
+        | ProposalHostRoleRequestV1::CandidateStrategy { task, .. } => {
             task.workspace(runtime.task_limits)?
         }
     };
@@ -1113,23 +1179,27 @@ where
                 outcome.steps_started(),
             )
         }
-        ProposalHostRoleRequestV1::CandidateInitial {
-            recovery_input,
-            search_input,
+        ProposalHostRoleRequestV1::OracleStrategy {
+            workspace: oracle_workspace,
+            claim,
+            work_item,
+            run,
+            materials,
             ..
         } => {
-            let search = prepared_search(&search_input)?;
-            let outcome = run_candidate_initial_profile(
+            let outcome = run_oracle_strategy_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                CandidateInitialProfileInput {
-                    search_input: search,
-                    recovery_input,
+                OracleStrategyProfileInput {
+                    workspace: oracle_workspace,
+                    claim,
+                    item: work_item,
+                    run,
+                    materials,
                     episode_id: runtime.episode_id,
-                    model_configuration: runtime.model_configuration,
                     selection: runtime.selection,
                     budget: runtime.budget,
                     max_output_tokens: runtime.max_output_tokens,
@@ -1140,40 +1210,34 @@ where
             let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
                 return awaiting_controller(request_id, terminal_request, outcome);
             };
+            let submission = outcome.submission().clone();
             (
-                ProposalHostPublicationV1::CandidateInitial {
-                    proposal_id: outcome.proposal_id(),
-                    proposal: outcome.proposal().clone(),
+                ProposalHostPublicationV1::OracleStrategy {
+                    submission_id: submission.identity().map_err(role_error)?,
+                    submission,
                 },
                 outcome.completion_reason(),
                 outcome.steps_started(),
             )
         }
-        ProposalHostRoleRequestV1::CandidateRevision {
-            recovery_input,
-            search_input,
-            parent,
-            diagnostic,
+        ProposalHostRoleRequestV1::CandidateStrategy {
+            workspace: candidate_workspace,
+            contract,
+            oracle_materials,
+            public_materials,
             ..
         } => {
-            let parent_id = parent.identity().map_err(role_error)?;
-            let diagnostic_id = diagnostic_id(&diagnostic)?;
-            let outcome = run_candidate_revision_profile(
+            let outcome = run_candidate_strategy_profile(
                 events,
                 content,
                 transport,
                 protocol_codec,
                 workspace,
-                CandidateRevisionProfileInput {
-                    search_input: prepared_search(&search_input)?,
-                    recovery_input,
-                    parent,
-                    parent_id,
-                    build_diagnostic: validate_archived_candidate_build_diagnostic(
-                        &cairn_codec::to_vec(&diagnostic).map_err(codec)?,
-                        diagnostic_id,
-                    )
-                    .map_err(role_error)?,
+                &CandidateStrategyProfileInput {
+                    workspace: candidate_workspace,
+                    contract,
+                    oracle_materials,
+                    public_materials,
                     episode_id: runtime.episode_id,
                     model_configuration: runtime.model_configuration,
                     selection: runtime.selection,
@@ -1186,103 +1250,11 @@ where
             let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
                 return awaiting_controller(request_id, terminal_request, outcome);
             };
+            let proposal = outcome.proposal().clone();
             (
-                ProposalHostPublicationV1::CandidateRevision {
-                    revision_id: outcome.revision_id(),
-                    revision: outcome.revision().clone(),
-                },
-                outcome.completion_reason(),
-                outcome.steps_started(),
-            )
-        }
-        ProposalHostRoleRequestV1::CandidateNativeFollowup {
-            recovery_input,
-            search_input,
-            previous_revision,
-            diagnostic,
-            ..
-        } => {
-            let previous_revision_id = previous_revision.identity().map_err(role_error)?;
-            let diagnostic_id = native_diagnostic_id(&diagnostic)?;
-            let outcome = run_candidate_native_followup_profile(
-                events,
-                content,
-                transport,
-                protocol_codec,
-                workspace,
-                CandidateNativeFollowupProfileInput {
-                    search_input: prepared_search(&search_input)?,
-                    recovery_input,
-                    previous_revision,
-                    previous_revision_id,
-                    build_diagnostic: validate_archived_candidate_native_build_diagnostic(
-                        &cairn_codec::to_vec(&diagnostic).map_err(codec)?,
-                        diagnostic_id,
-                    )
-                    .map_err(role_error)?,
-                    episode_id: runtime.episode_id,
-                    model_configuration: runtime.model_configuration,
-                    selection: runtime.selection,
-                    budget: runtime.budget,
-                    max_output_tokens: runtime.max_output_tokens,
-                    task_limits: runtime.task_limits,
-                },
-            )
-            .map_err(role_error)?;
-            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
-                return awaiting_controller(request_id, terminal_request, outcome);
-            };
-            (
-                ProposalHostPublicationV1::CandidateNativeFollowup {
-                    followup_id: outcome.followup_id(),
-                    followup: outcome.followup().clone(),
-                },
-                outcome.completion_reason(),
-                outcome.steps_started(),
-            )
-        }
-        ProposalHostRoleRequestV1::CandidateNativeRepair {
-            recovery_input,
-            search_input,
-            root_followup,
-            parent_repair: _,
-            diagnostic,
-            ..
-        } => {
-            let root_followup_id = root_followup.identity().map_err(role_error)?;
-            let diagnostic_id = repair_diagnostic_id(&diagnostic)?;
-            let outcome = run_candidate_native_repair_profile(
-                events,
-                content,
-                transport,
-                protocol_codec,
-                workspace,
-                CandidateNativeRepairProfileInput {
-                    search_input: prepared_search(&search_input)?,
-                    recovery_input,
-                    root_followup,
-                    root_followup_id,
-                    build_diagnostic: validate_archived_candidate_native_repair_build_diagnostic(
-                        &cairn_codec::to_vec(&diagnostic).map_err(codec)?,
-                        diagnostic_id,
-                    )
-                    .map_err(role_error)?,
-                    episode_id: runtime.episode_id,
-                    model_configuration: runtime.model_configuration,
-                    selection: runtime.selection,
-                    budget: runtime.budget,
-                    max_output_tokens: runtime.max_output_tokens,
-                    task_limits: runtime.task_limits,
-                },
-            )
-            .map_err(role_error)?;
-            let crate::proposal_loop::ProposalProfileOutcomeV1::Complete(outcome) = outcome else {
-                return awaiting_controller(request_id, terminal_request, outcome);
-            };
-            (
-                ProposalHostPublicationV1::CandidateNativeRepair {
-                    repair_id: outcome.repair_id(),
-                    repair: outcome.repair().clone(),
+                ProposalHostPublicationV1::CandidateStrategy {
+                    proposal_id: proposal.identity().map_err(role_error)?,
+                    proposal,
                 },
                 outcome.completion_reason(),
                 outcome.steps_started(),
@@ -1369,108 +1341,6 @@ fn freeze_proposal_host_outcome(
     })
 }
 
-/// Records one validated Candidate Host publication into the exact task-owned workflow.
-///
-/// # Errors
-///
-/// Rejects non-Candidate roles, request/terminal drift, wrong publication kinds, or any workflow
-/// transition and persistence failure.
-pub fn record_candidate_proposal_host_terminal<E: EventStore>(
-    events: &mut E,
-    workflow: &MigrationWorkflowV1,
-    request: &ProposalHostRequestV1,
-    terminal: &ProposalHostTerminalV1,
-    command_id: &CommandId,
-    observed_at: ObservedAtUnixMillis,
-) -> Result<CandidateWorkflowStateV1, ProposalHostError> {
-    terminal.validate_against(request)?;
-    match (&request.role, &terminal.publication) {
-        (
-            ProposalHostRoleRequestV1::CandidateNativeFollowup {
-                workflow_request, ..
-            },
-            ProposalHostPublicationV1::CandidateNativeFollowup {
-                followup_id,
-                followup,
-            },
-        ) => {
-            if workflow_request.episode_id() != terminal.episode_id {
-                return invalid("Candidate follow-up terminal changed its workflow episode");
-            }
-            record_candidate_native_followup(
-                events,
-                workflow,
-                followup,
-                *followup_id,
-                command_id,
-                observed_at,
-            )
-            .map_err(workflow_error)
-        }
-        (
-            ProposalHostRoleRequestV1::CandidateNativeRepair {
-                workflow_request, ..
-            },
-            ProposalHostPublicationV1::CandidateNativeRepair { repair_id, repair },
-        ) => {
-            if workflow_request.episode_id() != terminal.episode_id {
-                return invalid("Candidate repair terminal changed its workflow episode");
-            }
-            record_candidate_native_repair(
-                events,
-                workflow,
-                repair,
-                *repair_id,
-                command_id,
-                observed_at,
-            )
-            .map_err(workflow_error)
-        }
-        _ => invalid("Proposal Host terminal is not a workflow Candidate publication"),
-    }
-}
-
-fn validate_candidate_common(
-    workspace: &SirTaskWorkspace,
-    recovery: &IntentRecoveryInputV1,
-    search: &CollectionCandidateSearchInputV1,
-) -> Result<(), ProposalHostError> {
-    if workspace.bundle().identity().map_err(role_error)? != recovery.task_bundle()
-        || recovery.identity().map_err(role_error)? != search.recovery_input()
-        || recovery.task_id() != search.task_id()
-    {
-        return invalid("Candidate task, recovery, and search input binding changed");
-    }
-    prepared_search(search)?;
-    Ok(())
-}
-
-fn prepared_search(
-    search: &CollectionCandidateSearchInputV1,
-) -> Result<crate::PreparedCollectionCandidateSearchInput, ProposalHostError> {
-    let bytes = cairn_codec::to_vec(search).map_err(codec)?;
-    let id = search.identity().map_err(role_error)?;
-    validate_archived_collection_candidate_search_input(&bytes, id).map_err(role_error)
-}
-
-fn diagnostic_id(
-    diagnostic: &CollectionCandidateBuildDiagnosticV1,
-) -> Result<ContentId<CollectionCandidateBuildDiagnosticArtifact>, ProposalHostError> {
-    ContentId::derive(&cairn_codec::to_vec(diagnostic).map_err(codec)?).map_err(codec)
-}
-
-fn native_diagnostic_id(
-    diagnostic: &CollectionCandidateNativeBuildDiagnosticV1,
-) -> Result<ContentId<CollectionCandidateNativeBuildDiagnosticArtifact>, ProposalHostError> {
-    ContentId::derive(&cairn_codec::to_vec(diagnostic).map_err(codec)?).map_err(codec)
-}
-
-fn repair_diagnostic_id(
-    diagnostic: &CollectionCandidateNativeRepairBuildDiagnosticV1,
-) -> Result<ContentId<CollectionCandidateNativeRepairBuildDiagnosticArtifact>, ProposalHostError> {
-    ContentId::derive(&cairn_codec::to_vec(diagnostic).map_err(codec)?).map_err(codec)
-}
-
 fn schema_v1() -> SchemaVersion {
     SchemaVersion::new(1).expect("current V1 is a valid schema version")
 }
@@ -1487,10 +1357,6 @@ fn role_error(error: impl std::fmt::Display) -> ProposalHostError {
     ProposalHostError::Role(error.to_string())
 }
 
-fn workflow_error(error: impl std::fmt::Display) -> ProposalHostError {
-    ProposalHostError::Workflow(error.to_string())
-}
-
 /// Failure at the generic Host boundary without erasing role-specific diagnostics.
 #[derive(Debug, Error)]
 pub enum ProposalHostError {
@@ -1500,8 +1366,6 @@ pub enum ProposalHostError {
     Codec(String),
     #[error("Proposal Host role episode failed: {0}")]
     Role(String),
-    #[error("Proposal Host workflow publication failed: {0}")]
-    Workflow(String),
 }
 
 #[cfg(test)]

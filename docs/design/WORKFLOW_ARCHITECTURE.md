@@ -253,14 +253,19 @@ DEV-026将exact SIR Host request/recovery input、durable episode start authorit
 和model-free user decision requests接入新的task-owned `ControllerWorkflowV1`；DEV-027把该aggregate移动到拥有
 Controller composition的`cairn-server`，继续接入actual typed user decision、独立Intent Admission executable/
 restricted-store start authority和public outcome observation。active driver仍只表达recover/select/execute；
-DEV-030又让它从`AwaitOracleExplorationWorkspace`接收并归档exact Oracle authority，Controller重算initial ledger
-后停在`RunOracleExploration`。通用Host supervision继续由SIR/Candidate共享，Admission仍是独立model-free process。
-Oracle strategy revisions、后续Admission和Candidate suffix尚未并入这个连续aggregate。DEV-028已把composition skeleton
-纠正为`Oracle Exploration → Oracle Admission`，并把原Blue/Red代码、示例和配置收窄命名为可选
-model-backed debate strategy；没有为尚无consumer的exploration portfolio预建persisted artifact。
+DEV-030又让它从`AwaitOracleExplorationWorkspace`接收并归档exact Oracle authority，Controller重算initial ledger。
+DEV-031已接入逐cell strategy consumer：完整admitted claim机械展开为claim × concern × role obligation，catalog为每个
+cell选择deterministic或Agent executor；Agent使用同一generic Host但只获得一个cell的冻结材料。fixed Blue/Red/
+model-debate implementation、example与测试路径已经删除，synthesis/adversarial只是logical strategy kind。
+DEV-032已把terminal ledger、exact portfolio/strict policy freeze、qualified mechanism inventory、机械item × control
+attempt、trusted evidence和model-free claim outcome接入同一个连续aggregate。DEV-033又把admitted-only Candidate
+contract/workspace、exact public Oracle material bodies、generic Candidate Proposal Host、product-owned build authority、
+Worker receipt observation、机械claim × item × plane controls、independent Candidate Admission与terminal接入同一aggregate；
+旧`MigrationWorkflowV1`和collection/native Candidate suffix已经删除。
 DEV-029又把原external-effect硬错误替换为request-bound durable yield、Controller start authority、Worker receipt
-provenance与same-episode resume；没有具体adapter时仍停在typed waiting boundary，不会由Host执行。该seam可由
-后续SIR/Oracle/Candidate consumer复用，但没有把任何strategy或experiment设为产品必经路径。
+provenance与same-episode resume。DEV-031的Oracle consumer进一步把effect result重算为Controller observation、
+Oracle payload和exact run-bound observation，并先持久化到ledger再恢复同一episode；具体GitHub/NPU adapter仍由
+policy与真实operation选择，不把任何strategy或experiment设为产品必经路径。
 
 ## 12. 被拒绝的方案
 

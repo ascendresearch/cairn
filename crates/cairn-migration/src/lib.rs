@@ -2,13 +2,11 @@
 
 mod assemble;
 mod call_adapter;
+mod candidate_admission;
 mod candidate_build;
-mod candidate_episode;
-mod candidate_native_followup;
-mod candidate_native_repair;
-mod candidate_revision;
-mod candidate_search;
-mod candidate_workflow;
+mod candidate_exploration;
+#[cfg(feature = "agent-runtime")]
+mod candidate_strategy_episode;
 mod collection_oracle;
 mod collection_oracle_admission;
 mod corpus_execution;
@@ -21,17 +19,12 @@ mod external_research;
 mod historical;
 mod input_values;
 mod intent_admission;
+mod intent_claim;
 mod materialize;
 mod memory_surface;
-#[cfg(feature = "agent-runtime")]
-mod oracle_debate_prompt;
-#[cfg(feature = "agent-runtime")]
-mod oracle_debate_tools;
-#[cfg(feature = "agent-runtime")]
-mod oracle_debate_workflow;
 mod oracle_exploration;
 #[cfg(feature = "agent-runtime")]
-mod oracle_model_debate;
+mod oracle_strategy_episode;
 #[cfg(feature = "agent-runtime")]
 mod proposal_experiment;
 #[cfg(feature = "agent-runtime")]
@@ -71,73 +64,31 @@ pub use call_adapter::{
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
     validate_memory_surface_call_adapter_receipt,
 };
-pub use candidate_build::{
-    CandidateBuildEnvironmentProfileV1, CandidateBuildError, PreparedCandidateBuildJob,
-    PreparedCandidateNativeFollowupBuildJob, PreparedCandidateNativeRepairBuildJob,
-    PreparedCandidateNativeRevisionBuildJob, PreparedCandidateRevisionBuildJob,
-    prepare_candidate_build_job, prepare_candidate_native_followup_build_job,
-    prepare_candidate_native_repair_build_job, prepare_candidate_native_revision_build_job,
-    prepare_candidate_revision_build_job,
+pub use candidate_admission::{
+    CandidateAdmissionAttemptArtifact, CandidateAdmissionAttemptV1, CandidateAdmissionError,
+    CandidateAdmissionEvidenceArtifact, CandidateAdmissionEvidenceV1,
+    CandidateAdmissionOutcomeArtifact, CandidateAdmissionOutcomeV1, CandidateClaimOutcomeV1,
+    CandidateClaimStatusV1, CandidateControlFamilyV1, CandidateControlImplementationArtifact,
+    CandidateControlObligationV1, CandidateControlReceiptV1, CandidateControlResultV1,
+    CandidateMechanismCatalogArtifact, CandidateMechanismCatalogV1, CandidateMechanismProvenanceV1,
+    CandidateQualifiedMechanismArtifact, CandidateQualifiedMechanismV1,
+    TrustedCandidateControlReceiptArtifact, recompute_candidate_admission,
 };
-pub use candidate_episode::{
-    CandidateEpisodeError, CollectionCandidateExplanation, CollectionCandidateProposalArtifact,
-    CollectionCandidateProposalSubmissionV1, CollectionCandidateProposalV1,
-    CollectionCandidateSourceFileV1, CollectionCandidateSourcePath, CollectionCandidateSourceText,
-    validate_archived_collection_candidate_proposal,
+pub use candidate_build::{
+    CandidateBuildError, CandidateBuildPlanArtifact, CandidateBuildPlanV1,
+    CandidateBuildRequestArtifact, CandidateBuildRequestV1, PreparedGenericCandidateBuildJob,
+    prepare_generic_candidate_build_job,
+};
+pub use candidate_exploration::{
+    CandidateAdmittedOracleClaimV1, CandidateExplanation, CandidateExplorationError,
+    CandidateOracleContractArtifact, CandidateOracleContractV1, CandidateOracleElementMaterialV1,
+    CandidateOracleMaterialV1, CandidateOracleMaterialsV1, CandidateProposalArtifact,
+    CandidateProposalSubmissionV1, CandidateProposalV1, CandidateSourceFileV1, CandidateSourcePath,
+    CandidateSourceText, CandidateWorkspaceArtifact, CandidateWorkspaceV1,
 };
 #[cfg(feature = "agent-runtime")]
-pub(crate) use candidate_episode::{
-    CandidateInitialProfileInput, CandidateNativeFollowupProfileInput,
-    CandidateNativeRepairProfileInput, CandidateRevisionProfileInput,
-    run_candidate_initial_profile, run_candidate_native_followup_profile,
-    run_candidate_native_repair_profile, run_candidate_revision_profile,
-};
-pub use candidate_native_followup::{
-    CandidateNativeFollowupError, CollectionCandidateNativeBuildDiagnosticArtifact,
-    CollectionCandidateNativeBuildDiagnosticV1, CollectionCandidateNativeFollowupRevisionArtifact,
-    CollectionCandidateNativeFollowupRevisionV1, PreparedCandidateNativeBuildDiagnostic,
-    PreparedCollectionCandidateNativeFollowupRevision, prepare_candidate_native_build_diagnostic,
-    prepare_collection_candidate_native_followup_revision,
-    validate_archived_candidate_native_build_diagnostic,
-    validate_archived_collection_candidate_native_followup_revision,
-};
-pub use candidate_native_repair::{
-    CandidateNativeRepairError, CandidateNativeRepairParentV1, CandidateNativeRepairPrevious,
-    CollectionCandidateNativeRepairBuildDiagnosticArtifact,
-    CollectionCandidateNativeRepairBuildDiagnosticV1,
-    CollectionCandidateNativeRepairRevisionArtifact, CollectionCandidateNativeRepairRevisionV1,
-    PreparedCandidateNativeRepairBuildDiagnostic, PreparedCollectionCandidateNativeRepairRevision,
-    prepare_candidate_native_repair_build_diagnostic,
-    prepare_candidate_native_repair_round_build_diagnostic,
-    prepare_collection_candidate_native_repair_revision,
-    validate_archived_candidate_native_repair_build_diagnostic,
-    validate_archived_collection_candidate_native_repair_revision,
-};
-pub use candidate_revision::{
-    CandidateBuildDiagnosticText, CandidateRevisionError,
-    CollectionCandidateBuildDiagnosticArtifact, CollectionCandidateBuildDiagnosticV1,
-    CollectionCandidateRevisionArtifact, CollectionCandidateRevisionV1,
-    PreparedCandidateBuildDiagnostic, PreparedCollectionCandidateRevision,
-    prepare_candidate_build_diagnostic, prepare_collection_candidate_revision,
-    validate_archived_candidate_build_diagnostic, validate_archived_collection_candidate_revision,
-};
-pub use candidate_search::{
-    CandidateSearchInputError, CollectionCandidateSearchAuthorityInput,
-    CollectionCandidateSearchInputArtifact, CollectionCandidateSearchInputV1,
-    CollectionCandidateSearchScopeV1, CollectionOracleAdmissionPublicOutcomeArtifact,
-    PreparedCollectionCandidateSearchInput, prepare_collection_candidate_search_input,
-    validate_archived_collection_candidate_search_input,
-};
-pub use candidate_workflow::{
-    CandidateEpisodeKindV1, CandidateEpisodeRequestV1, CandidateNativeBuildDispatchV1,
-    CandidateNativeBuildScheduleV1, CandidateNativeDiagnosticV1, CandidateNativePublicationV1,
-    CandidateRevisionRoundCount, CandidateRevisionRoundLimit, CandidateSubjectFailureStopV1,
-    CandidateWorkflowAuthorityV1, CandidateWorkflowError, CandidateWorkflowNextActionV1,
-    CandidateWorkflowStateV1, CandidateWorkflowTerminalV1, MigrationWorkflowV1,
-    ProposalHostInvocationArtifact, open_candidate_workflow, record_candidate_native_followup,
-    record_candidate_native_repair, record_candidate_native_subject_failure,
-    record_candidate_native_terminal, recover_candidate_workflow, request_candidate_episode,
-    request_candidate_native_build, require_candidate_native_build_reconciliation,
+pub(crate) use candidate_strategy_episode::{
+    CandidateStrategyProfileInput, run_candidate_strategy_profile,
 };
 pub use collection_oracle::{
     AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,
@@ -236,6 +187,10 @@ pub use intent_admission::{
     UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserIntentDecisionResponseKind,
     derive_user_intent_decision_requests,
 };
+pub use intent_claim::{
+    AuthoritativeIntentClaimV1, CollectionMembershipContractV1, CollectionOutputIntentV1,
+    CollectionOutputOrderContractV1, CollectionReportedCountContractV1,
+};
 pub use materialize::{
     CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount,
     CorpusMaterializationError, MaterializedCorpusBuffer, MaterializedCorpusBufferArtifact,
@@ -251,38 +206,15 @@ pub use memory_surface::{
     PartialOverlapOffsetBytes, PointerAlignmentContractV1, RequiredAlignmentBytes,
     derive_mandatory_memory_surface_cases,
 };
-#[cfg(feature = "agent-runtime")]
-pub use oracle_debate_prompt::{
-    MaterializedOracleDebatePrompt, OracleDebateInstructionSetV1, OracleDebatePromptArtifact,
-    OracleDebatePromptError, OracleDebatePromptInput, OracleDebatePromptV1,
-    archive_oracle_debate_prompt, archive_standard_oracle_debate_instructions,
-    materialize_oracle_debate_prompt, oracle_debate_common_instruction_text,
-    oracle_debate_instruction_text, prepare_oracle_debate_prompt,
-};
-#[cfg(feature = "agent-runtime")]
-pub use oracle_debate_tools::{
-    AdversarialSubmissionGateway, OracleDebateToolError, SynthesisDomainRefinementGateway,
-    SynthesisProposalGateway, SynthesisProposalSubmissionV1, adversarial_submission_registrations,
-    oracle_debate_native_tools, synthesis_domain_refinement_registration,
-    synthesis_proposal_registration,
-};
-#[cfg(feature = "agent-runtime")]
-pub use oracle_debate_workflow::{
-    OracleDebateAdmissionAttemptArtifact, OracleDebateAdmissionFeedbackArtifact,
-    OracleDebateAdmissionFeedbackV1, OracleDebateAttackArtifact, OracleDebateAttackInput,
-    OracleDebateAttackV1, OracleDebateDiagnosticEvidenceArtifact, OracleDebateDiagnosticKind,
-    OracleDebateDiagnosticV1, OracleDebateFeedbackTarget, OracleDebateProposalRevisionArtifact,
-    OracleDebateProposalRevisionV1, OracleDebateWorkflowError,
-    PreparedOracleDebateAdmissionFeedback, PreparedOracleDebateAttack,
-    PreparedOracleDebateProposalRevision, prepare_oracle_debate_admission_feedback,
-    prepare_oracle_debate_attack, prepare_oracle_debate_proposal_revision,
-};
 pub use oracle_exploration::{
-    IndependentOracleAdmissionStages, OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1,
-    OracleAdmissionPolicyArtifact, OracleAdmissionPolicyV1, OracleAdversarialPolicyV1,
-    OracleBuildTestSnapshotArtifact, OracleClaimAdmissionStatusV1, OracleClaimAdmissionV1,
-    OracleClaimArtifact, OracleClaimName, OracleClaimV1, OracleComparatorProposalArtifact,
-    OracleConcernV1, OracleControlFamilyV1, OracleControlReceiptV1, OracleControlResultV1,
+    IndependentOracleAdmissionStages, OracleAdmissionAttemptArtifact, OracleAdmissionAttemptV1,
+    OracleAdmissionEvidenceArtifact, OracleAdmissionEvidenceV1,
+    OracleAdmissionMechanismCatalogArtifact, OracleAdmissionMechanismCatalogV1,
+    OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1, OracleAdmissionPolicyArtifact,
+    OracleAdmissionPolicyV1, OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact,
+    OracleClaimAdmissionStatusV1, OracleClaimAdmissionV1, OracleClaimArtifact, OracleClaimName,
+    OracleClaimV1, OracleComparatorProposalArtifact, OracleConcernV1, OracleControlFamilyV1,
+    OracleControlObligationV1, OracleControlReceiptV1, OracleControlResultV1,
     OracleCoverageGapArtifact, OracleCoveragePolicyArtifact, OracleCoveragePolicyV1,
     OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact,
     OracleExecutionSafetyProposalArtifact, OracleExperimentArgumentsArtifact,
@@ -293,30 +225,30 @@ pub use oracle_exploration::{
     OracleExplorationObservationArtifact, OracleExplorationObservationV1,
     OracleExplorationRevision, OracleExplorationRunOutcomeV1, OracleExplorationStages,
     OracleFrameworkError, OracleKnowledgeSnapshotArtifact, OracleObligationEntryV1,
-    OracleObligationResolutionV1, OracleObservationPayloadArtifact, OracleObservationProvenanceV1,
-    OraclePlaneV1, OraclePortfolioElementArtifact, OraclePortfolioElementKindV1,
-    OraclePortfolioElementV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleQualifiedMechanismArtifact, OracleResearchExchangeArtifact,
+    OracleObligationResolutionV1, OracleObservationPayloadArtifact, OracleObservationPayloadV1,
+    OracleObservationProvenanceV1, OraclePlaneV1, OraclePortfolioElementArtifact,
+    OraclePortfolioElementKindV1, OraclePortfolioElementV1, OraclePortfolioProposalArtifact,
+    OraclePortfolioProposalV1, OracleQualifiedMechanismArtifact,
+    OracleQualifiedMechanismRegistrationV1, OracleResearchExchangeArtifact,
     OracleResearchToolCatalogArtifact, OracleSourceSnapshotArtifact, OracleStrategyCatalogArtifact,
     OracleStrategyCatalogV1, OracleStrategyExecutorV1, OracleStrategyImplementationArtifact,
     OracleStrategyKindV1, OracleStrategyName, OracleStrategyRegistrationV1, OracleStrategyRoleV1,
     OracleStrategyRunArtifact, OracleStrategyRunLimit, OracleStrategyRunV1,
-    OracleStrategyToolCatalogArtifact, OracleUnknownEvidenceArtifact,
-    OracleWaiverAuthorityArtifact, OracleWorkItemArtifact, OracleWorkItemV1,
+    OracleStrategySubmissionArtifact, OracleStrategySubmissionOutcomeV1,
+    OracleStrategySubmissionV1, OracleStrategyToolCatalogArtifact, OracleStrategyToolCatalogV1,
+    OracleStrategyToolV1, OracleUnknownEvidenceArtifact, OracleUnknownEvidenceV1,
+    OracleUnknownReason, OracleWaiverAuthorityArtifact, OracleWorkItemArtifact, OracleWorkItemV1,
     OracleWorkspaceArtifact, OracleWorkspaceInput, OracleWorkspaceV1,
-    TrustedOracleControlReceiptArtifact, TrustedOracleWorkerReceiptArtifact,
-    TrustedOracleWorkerReceiptV1, archive_oracle_framework_artifact, derive_oracle_work_items,
+    ProposalHostControllerObservationArtifact, TrustedOracleControlReceiptArtifact,
+    TrustedOracleWorkerReceiptArtifact, TrustedOracleWorkerReceiptV1,
+    archive_oracle_framework_artifact, derive_oracle_claims, derive_oracle_work_items,
     recompute_oracle_admission, run_independent_oracle_admission, run_oracle_exploration,
 };
 #[cfg(feature = "agent-runtime")]
-pub use oracle_model_debate::{
-    OracleDebateEpisodeInput, OracleDebateEpisodeV1, OracleDebateStrategy, OracleDebateTool,
-    OracleModelDebatePlanArtifact, OracleModelDebatePlanError, OracleModelDebatePlanInput,
-    OracleModelDebatePlanV1, archive_oracle_debate_tool_catalog, oracle_debate_tool_catalog_bytes,
-    oracle_debate_tool_catalog_id, prepare_oracle_debate_episode,
-};
+pub(crate) use oracle_strategy_episode::{OracleStrategyProfileInput, run_oracle_strategy_profile};
 #[cfg(feature = "agent-runtime")]
 pub use proposal_experiment::{
+    ProposalHostControllerObservationV1, ProposalHostExecutedObservationV1,
     ProposalHostExperimentDispatchArtifact, ProposalHostExperimentDispatchV1,
     ProposalHostExperimentError, ProposalHostExperimentWorker, ProposalHostExperimentWorkerError,
     ProposalHostWorkerBindingV1, ProposalHostWorkerObservationV1,
@@ -325,11 +257,13 @@ pub use proposal_experiment::{
 #[cfg(feature = "agent-runtime")]
 pub use proposal_host::{
     ProposalHostBinaryIdentity, ProposalHostError, ProposalHostExperimentOperationV1,
-    ProposalHostExperimentRequestArtifact, ProposalHostExperimentRequestV1, ProposalHostOutcomeV1,
-    ProposalHostPublicationV1, ProposalHostRequestArtifact, ProposalHostRequestV1,
-    ProposalHostRoleRequestV1, ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1,
-    ProposalHostTaskSourceV1, ProposalHostTerminalArtifact, ProposalHostTerminalV1,
-    record_candidate_proposal_host_terminal, run_proposal_host_episode,
+    ProposalHostExperimentRequestArtifact, ProposalHostExperimentRequestV1,
+    ProposalHostInvocationArtifact, ProposalHostOracleBuildTestsV1,
+    ProposalHostOracleDocumentationV1, ProposalHostOracleKnowledgeV1,
+    ProposalHostOracleMaterialsV1, ProposalHostOutcomeV1, ProposalHostPublicationV1,
+    ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostRoleRequestV1,
+    ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
+    ProposalHostTerminalArtifact, ProposalHostTerminalV1, run_proposal_host_episode,
 };
 pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,

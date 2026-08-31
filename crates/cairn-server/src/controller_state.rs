@@ -1,5 +1,7 @@
 //! Durable Controller workflow state from exact request freeze through admitted intent.
+#![allow(clippy::missing_errors_doc)]
 
+use cairn_execution::{ExecutionOutcome, ExecutionReceipt, ExecutionReceiptArtifact};
 use cairn_protocol::{
     AggregateId, AggregateKind, CommandId, ContentId, EventId, ObservedAtUnixMillis, SchemaName,
     SchemaVersion, StreamRevision, TaskId,
@@ -13,18 +15,33 @@ use thiserror::Error;
 use cairn_admission::{
     IntentAdmissionExecutableArtifact, IntentAdmissionPublicOutcomeArtifact,
     IntentAdmissionPublicOutcomeV1, IntentAdmissionRestrictedStoreArtifact,
-    UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1, UserIntentDecisionArtifact,
-    UserIntentDecisionV1,
+    MigrationIntentContractV1, UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1,
+    UserIntentDecisionArtifact, UserIntentDecisionV1,
 };
 use cairn_migration::{
+    CandidateAdmissionAttemptArtifact, CandidateAdmissionAttemptV1,
+    CandidateAdmissionEvidenceArtifact, CandidateAdmissionEvidenceV1,
+    CandidateAdmissionOutcomeArtifact, CandidateAdmissionOutcomeV1, CandidateBuildPlanArtifact,
+    CandidateBuildPlanV1, CandidateBuildRequestArtifact, CandidateBuildRequestV1,
+    CandidateClaimStatusV1, CandidateMechanismCatalogArtifact, CandidateMechanismCatalogV1,
+    CandidateOracleContractArtifact, CandidateOracleContractV1, CandidateProposalArtifact,
+    CandidateProposalV1, CandidateWorkspaceArtifact, CandidateWorkspaceV1,
     IntentDecisionRequestBatchArtifact, IntentDecisionRequestBatchV1, IntentRecoveryInputArtifact,
-    IntentRecoveryInputV1, MigrationIntentContractArtifact, OracleClaimArtifact, OracleClaimV1,
-    OracleCoveragePolicyArtifact, OracleCoveragePolicyV1, OracleExplorationLedgerArtifact,
-    OracleExplorationLedgerV1, OracleStrategyCatalogArtifact, OracleStrategyCatalogV1,
-    OracleWorkspaceArtifact, OracleWorkspaceV1, ProposalHostPublicationV1,
-    ProposalHostRequestArtifact, ProposalHostRequestV1, ProposalHostTerminalArtifact,
-    ProposalHostTerminalV1, SirIntentHypothesisSetProposalArtifact,
-    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, derive_oracle_work_items,
+    IntentRecoveryInputV1, MigrationIntentContractArtifact, OracleAdmissionAttemptArtifact,
+    OracleAdmissionAttemptV1, OracleAdmissionEvidenceArtifact, OracleAdmissionEvidenceV1,
+    OracleAdmissionMechanismCatalogArtifact, OracleAdmissionMechanismCatalogV1,
+    OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1, OracleAdmissionPolicyArtifact,
+    OracleAdmissionPolicyV1, OracleClaimV1, OracleCoveragePolicyArtifact, OracleCoveragePolicyV1,
+    OracleExplorationLedgerArtifact, OracleExplorationLedgerV1, OracleExplorationObservationV1,
+    OracleExplorationRevision, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
+    OracleStrategyCatalogArtifact, OracleStrategyCatalogV1, OracleStrategyExecutorV1,
+    OracleStrategyImplementationArtifact, OracleStrategyRunArtifact, OracleStrategyRunV1,
+    OracleStrategySubmissionV1, OracleWorkspaceArtifact, OracleWorkspaceV1,
+    ProposalHostPublicationV1, ProposalHostRequestArtifact, ProposalHostRequestV1,
+    ProposalHostRoleRequestV1, ProposalHostTerminalArtifact, ProposalHostTerminalV1,
+    SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
+    UserIntentDecisionRequestV1, derive_oracle_claims, derive_oracle_work_items,
+    recompute_candidate_admission, recompute_oracle_admission,
 };
 
 const WORKFLOW_FROZEN: &str = "migration.controller-workflow-frozen";
@@ -36,6 +53,26 @@ const USER_INTENT_DECISION_RECORDED: &str = "migration.controller-user-intent-de
 const INTENT_ADMISSION_AUTHORIZED: &str = "migration.controller-intent-admission-authorized";
 const ADMITTED_INTENT_RECORDED: &str = "migration.controller-admitted-intent-recorded";
 const ORACLE_EXPLORATION_OPENED: &str = "migration.controller-oracle-exploration-opened";
+const ORACLE_STRATEGY_AUTHORIZED: &str = "migration.controller-oracle-strategy-authorized";
+const ORACLE_STRATEGY_OBSERVATIONS_RECORDED: &str =
+    "migration.controller-oracle-strategy-observations-recorded";
+const ORACLE_STRATEGY_SUBMISSION_RECORDED: &str =
+    "migration.controller-oracle-strategy-submission-recorded";
+const ORACLE_PORTFOLIO_FROZEN: &str = "migration.controller-oracle-portfolio-frozen";
+const ORACLE_ADMISSION_AUTHORIZED: &str = "migration.controller-oracle-admission-authorized";
+const ORACLE_ADMISSION_RECORDED: &str = "migration.controller-oracle-admission-recorded";
+const CANDIDATE_ORACLE_CONTRACT_FROZEN: &str =
+    "migration.controller-candidate-oracle-contract-frozen";
+const CANDIDATE_PROPOSAL_REQUEST_FROZEN: &str =
+    "migration.controller-candidate-proposal-request-frozen";
+const CANDIDATE_PROPOSAL_EPISODE_AUTHORIZED: &str =
+    "migration.controller-candidate-proposal-episode-authorized";
+const CANDIDATE_PROPOSAL_RECORDED: &str = "migration.controller-candidate-proposal-recorded";
+const CANDIDATE_BUILD_FROZEN: &str = "migration.controller-candidate-build-frozen";
+const CANDIDATE_BUILD_AUTHORIZED: &str = "migration.controller-candidate-build-authorized";
+const CANDIDATE_BUILD_OBSERVED: &str = "migration.controller-candidate-build-observed";
+const CANDIDATE_ADMISSION_AUTHORIZED: &str = "migration.controller-candidate-admission-authorized";
+const CANDIDATE_ADMISSION_RECORDED: &str = "migration.controller-candidate-admission-recorded";
 
 /// Exact SIR authority frozen before the Controller may start the Proposal Host effect.
 ///
@@ -92,8 +129,9 @@ pub struct FrozenOracleExplorationAuthorityV1 {
     workspace: ContentId<OracleWorkspaceArtifact>,
     coverage_policy: ContentId<OracleCoveragePolicyArtifact>,
     strategy_catalog: ContentId<OracleStrategyCatalogArtifact>,
-    claims: Vec<ContentId<OracleClaimArtifact>>,
+    claims: Vec<OracleClaimV1>,
     ledger: ContentId<OracleExplorationLedgerArtifact>,
+    ledger_revision: OracleExplorationRevision,
 }
 
 #[derive(Deserialize)]
@@ -106,8 +144,9 @@ struct FrozenOracleExplorationAuthorityWire {
     workspace: ContentId<OracleWorkspaceArtifact>,
     coverage_policy: ContentId<OracleCoveragePolicyArtifact>,
     strategy_catalog: ContentId<OracleStrategyCatalogArtifact>,
-    claims: Vec<ContentId<OracleClaimArtifact>>,
+    claims: Vec<OracleClaimV1>,
     ledger: ContentId<OracleExplorationLedgerArtifact>,
+    ledger_revision: OracleExplorationRevision,
 }
 
 impl<'de> Deserialize<'de> for FrozenOracleExplorationAuthorityV1 {
@@ -116,9 +155,14 @@ impl<'de> Deserialize<'de> for FrozenOracleExplorationAuthorityV1 {
         D: serde::Deserializer<'de>,
     {
         let wire = FrozenOracleExplorationAuthorityWire::deserialize(deserializer)?;
-        if wire.claims.is_empty()
-            || wire
-                .claims
+        let identities = wire
+            .claims
+            .iter()
+            .map(OracleClaimV1::identity)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(de::Error::custom)?;
+        if identities.is_empty()
+            || identities
                 .windows(2)
                 .any(|pair| pair[0].to_wire() >= pair[1].to_wire())
         {
@@ -136,6 +180,7 @@ impl<'de> Deserialize<'de> for FrozenOracleExplorationAuthorityV1 {
             strategy_catalog: wire.strategy_catalog,
             claims: wire.claims,
             ledger: wire.ledger,
+            ledger_revision: wire.ledger_revision,
         })
     }
 }
@@ -170,12 +215,307 @@ impl FrozenOracleExplorationAuthorityV1 {
         self.strategy_catalog
     }
     #[must_use]
-    pub fn claims(&self) -> &[ContentId<OracleClaimArtifact>] {
+    pub fn claims(&self) -> &[OracleClaimV1] {
         &self.claims
     }
     #[must_use]
     pub const fn ledger(&self) -> ContentId<OracleExplorationLedgerArtifact> {
         self.ledger
+    }
+    #[must_use]
+    pub const fn ledger_revision(&self) -> OracleExplorationRevision {
+        self.ledger_revision
+    }
+}
+
+/// Durable start authority for one exact strategy run over one exact ledger revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenOracleStrategyAuthorityV1 {
+    exploration: FrozenOracleExplorationAuthorityV1,
+    previous_ledger: ContentId<OracleExplorationLedgerArtifact>,
+    run: ContentId<OracleStrategyRunArtifact>,
+}
+
+impl FrozenOracleStrategyAuthorityV1 {
+    #[must_use]
+    pub const fn exploration(&self) -> &FrozenOracleExplorationAuthorityV1 {
+        &self.exploration
+    }
+    #[must_use]
+    pub const fn previous_ledger(&self) -> ContentId<OracleExplorationLedgerArtifact> {
+        self.previous_ledger
+    }
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.run
+    }
+}
+
+/// Frozen portfolio and strict policy awaiting a qualified mechanism catalog.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenOraclePortfolioAuthorityV1 {
+    exploration: FrozenOracleExplorationAuthorityV1,
+    proposal: ContentId<OraclePortfolioProposalArtifact>,
+    policy: ContentId<OracleAdmissionPolicyArtifact>,
+}
+
+impl FrozenOraclePortfolioAuthorityV1 {
+    #[must_use]
+    pub const fn exploration(&self) -> &FrozenOracleExplorationAuthorityV1 {
+        &self.exploration
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn policy(&self) -> ContentId<OracleAdmissionPolicyArtifact> {
+        self.policy
+    }
+}
+
+/// Durable independent Admission authority over one exact portfolio/control inventory.
+///
+/// A portfolio identity cannot be substituted for its mechanically derived Admission attempt.
+///
+/// ```compile_fail
+/// use cairn_migration::{OracleAdmissionAttemptArtifact, OraclePortfolioProposalArtifact};
+/// use cairn_protocol::ContentId;
+/// fn require_attempt(proposal: ContentId<OraclePortfolioProposalArtifact>) {
+///     let _: ContentId<OracleAdmissionAttemptArtifact> = proposal;
+/// }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenOracleAdmissionAuthorityV1 {
+    portfolio: FrozenOraclePortfolioAuthorityV1,
+    mechanisms: ContentId<OracleAdmissionMechanismCatalogArtifact>,
+    attempt: ContentId<OracleAdmissionAttemptArtifact>,
+}
+
+impl FrozenOracleAdmissionAuthorityV1 {
+    #[must_use]
+    pub const fn portfolio(&self) -> &FrozenOraclePortfolioAuthorityV1 {
+        &self.portfolio
+    }
+
+    #[must_use]
+    pub const fn mechanisms(&self) -> ContentId<OracleAdmissionMechanismCatalogArtifact> {
+        self.mechanisms
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> ContentId<OracleAdmissionAttemptArtifact> {
+        self.attempt
+    }
+}
+
+/// Exact admitted Oracle subset authorized as the immutable Candidate input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenCandidateOracleAuthorityV1 {
+    oracle: FrozenOracleAdmissionAuthorityV1,
+    evidence: ContentId<OracleAdmissionEvidenceArtifact>,
+    outcome: ContentId<OracleAdmissionOutcomeArtifact>,
+    contract: ContentId<CandidateOracleContractArtifact>,
+    workspace: ContentId<CandidateWorkspaceArtifact>,
+}
+
+impl FrozenCandidateOracleAuthorityV1 {
+    #[must_use]
+    pub const fn oracle(&self) -> &FrozenOracleAdmissionAuthorityV1 {
+        &self.oracle
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> ContentId<OracleAdmissionEvidenceArtifact> {
+        self.evidence
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> ContentId<OracleAdmissionOutcomeArtifact> {
+        self.outcome
+    }
+
+    #[must_use]
+    pub const fn contract(&self) -> ContentId<CandidateOracleContractArtifact> {
+        self.contract
+    }
+
+    #[must_use]
+    pub const fn workspace(&self) -> ContentId<CandidateWorkspaceArtifact> {
+        self.workspace
+    }
+}
+
+/// Exact Candidate Host request frozen before any model effect may start.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenCandidateProposalAuthorityV1 {
+    candidate: FrozenCandidateOracleAuthorityV1,
+    request: ContentId<ProposalHostRequestArtifact>,
+    episode_id: cairn_protocol::EpisodeId,
+}
+
+impl FrozenCandidateProposalAuthorityV1 {
+    #[must_use]
+    pub const fn candidate(&self) -> &FrozenCandidateOracleAuthorityV1 {
+        &self.candidate
+    }
+
+    #[must_use]
+    pub const fn request(&self) -> ContentId<ProposalHostRequestArtifact> {
+        self.request
+    }
+
+    #[must_use]
+    pub const fn episode_id(&self) -> cairn_protocol::EpisodeId {
+        self.episode_id
+    }
+}
+
+/// Exact product-owned Candidate build operation frozen before any Worker effect.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenCandidateBuildAuthorityV1 {
+    candidate: FrozenCandidateProposalAuthorityV1,
+    terminal: ContentId<ProposalHostTerminalArtifact>,
+    proposal: ContentId<CandidateProposalArtifact>,
+    plan: ContentId<CandidateBuildPlanArtifact>,
+    request: ContentId<CandidateBuildRequestArtifact>,
+}
+
+impl FrozenCandidateBuildAuthorityV1 {
+    #[must_use]
+    pub const fn candidate(&self) -> &FrozenCandidateProposalAuthorityV1 {
+        &self.candidate
+    }
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<CandidateProposalArtifact> {
+        self.proposal
+    }
+    #[must_use]
+    pub const fn plan(&self) -> ContentId<CandidateBuildPlanArtifact> {
+        self.plan
+    }
+    #[must_use]
+    pub const fn request(&self) -> ContentId<CandidateBuildRequestArtifact> {
+        self.request
+    }
+}
+
+/// Exact build observation and complete Candidate Admission matrix authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenCandidateAdmissionAuthorityV1 {
+    build: FrozenCandidateBuildAuthorityV1,
+    receipt: ContentId<ExecutionReceiptArtifact>,
+    mechanisms: ContentId<CandidateMechanismCatalogArtifact>,
+    attempt: ContentId<CandidateAdmissionAttemptArtifact>,
+}
+
+impl FrozenCandidateAdmissionAuthorityV1 {
+    #[must_use]
+    pub const fn build(&self) -> &FrozenCandidateBuildAuthorityV1 {
+        &self.build
+    }
+    #[must_use]
+    pub const fn receipt(&self) -> ContentId<ExecutionReceiptArtifact> {
+        self.receipt
+    }
+    #[must_use]
+    pub const fn mechanisms(&self) -> ContentId<CandidateMechanismCatalogArtifact> {
+        self.mechanisms
+    }
+    #[must_use]
+    pub const fn attempt(&self) -> ContentId<CandidateAdmissionAttemptArtifact> {
+        self.attempt
+    }
+}
+
+/// Final task outcome; partial evidence is never promoted to success.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MigrationTerminalStatusV1 {
+    Admitted,
+    Partial,
+    Rejected,
+}
+
+/// Exact executor-specific completion evidence committed with one strategy submission.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "executor", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum OracleStrategyCompletionV1 {
+    Deterministic {
+        implementation: ContentId<OracleStrategyImplementationArtifact>,
+        submission: OracleStrategySubmissionV1,
+    },
+    AgentEpisode {
+        request_id: ContentId<ProposalHostRequestArtifact>,
+        request: Box<ProposalHostRequestV1>,
+        terminal_id: ContentId<ProposalHostTerminalArtifact>,
+        terminal: Box<ProposalHostTerminalV1>,
+    },
+}
+
+impl OracleStrategyCompletionV1 {
+    fn submission<'a>(
+        &'a self,
+        run: &OracleStrategyRunV1,
+    ) -> Result<&'a OracleStrategySubmissionV1, ControllerWorkflowError> {
+        let submission = match self {
+            Self::Deterministic {
+                implementation,
+                submission,
+            } => {
+                if run.executor()
+                    != &(OracleStrategyExecutorV1::Deterministic {
+                        implementation: *implementation,
+                    })
+                {
+                    return Err(ControllerWorkflowError::BindingMismatch);
+                }
+                submission
+            }
+            Self::AgentEpisode {
+                request_id,
+                request,
+                terminal_id,
+                terminal,
+            } => {
+                if request.identity().map_err(binding_error)? != *request_id
+                    || terminal.identity().map_err(binding_error)? != *terminal_id
+                    || terminal.validate_against(request).is_err()
+                {
+                    return Err(ControllerWorkflowError::BindingMismatch);
+                }
+                let ProposalHostRoleRequestV1::OracleStrategy {
+                    run: requested_run, ..
+                } = request.role()
+                else {
+                    return Err(ControllerWorkflowError::BindingMismatch);
+                };
+                let ProposalHostPublicationV1::OracleStrategy { submission, .. } =
+                    terminal.publication()
+                else {
+                    return Err(ControllerWorkflowError::BindingMismatch);
+                };
+                if requested_run != run {
+                    return Err(ControllerWorkflowError::BindingMismatch);
+                }
+                submission
+            }
+        };
+        if submission.run() != run.identity().map_err(binding_error)?
+            || submission.item() != run.item()
+        {
+            return Err(ControllerWorkflowError::BindingMismatch);
+        }
+        Ok(submission)
     }
 }
 
@@ -228,8 +568,39 @@ pub enum ControllerWorkflowStateV1 {
         restricted_store: ContentId<IntentAdmissionRestrictedStoreArtifact>,
         outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
         contract: ContentId<MigrationIntentContractArtifact>,
+        contract_body: Box<MigrationIntentContractV1>,
     },
     OracleExplorationOpened(FrozenOracleExplorationAuthorityV1),
+    OracleStrategyAuthorized(FrozenOracleStrategyAuthorityV1),
+    OraclePortfolioFrozen(FrozenOraclePortfolioAuthorityV1),
+    OracleAdmissionAuthorized(FrozenOracleAdmissionAuthorityV1),
+    OracleAdmitted {
+        authority: FrozenOracleAdmissionAuthorityV1,
+        evidence: ContentId<OracleAdmissionEvidenceArtifact>,
+        outcome: ContentId<OracleAdmissionOutcomeArtifact>,
+    },
+    CandidateOracleContractFrozen(FrozenCandidateOracleAuthorityV1),
+    CandidateProposalRequestFrozen(FrozenCandidateProposalAuthorityV1),
+    CandidateProposalEpisodeAuthorized(FrozenCandidateProposalAuthorityV1),
+    CandidateProposed {
+        authority: FrozenCandidateProposalAuthorityV1,
+        terminal: ContentId<ProposalHostTerminalArtifact>,
+        proposal: ContentId<CandidateProposalArtifact>,
+    },
+    CandidateBuildFrozen(FrozenCandidateBuildAuthorityV1),
+    CandidateBuildAuthorized(FrozenCandidateBuildAuthorityV1),
+    CandidateBuildObserved {
+        authority: FrozenCandidateBuildAuthorityV1,
+        receipt: ContentId<ExecutionReceiptArtifact>,
+        outcome: ExecutionOutcome,
+    },
+    CandidateAdmissionAuthorized(FrozenCandidateAdmissionAuthorityV1),
+    Terminal {
+        authority: FrozenCandidateAdmissionAuthorityV1,
+        evidence: ContentId<CandidateAdmissionEvidenceArtifact>,
+        outcome: ContentId<CandidateAdmissionOutcomeArtifact>,
+        status: MigrationTerminalStatusV1,
+    },
 }
 
 /// One business action selected from recovered durable Controller state.
@@ -260,11 +631,40 @@ pub enum ControllerWorkflowNextActionV1 {
         contract: ContentId<MigrationIntentContractArtifact>,
     },
     RunOracleExploration(FrozenOracleExplorationAuthorityV1),
+    RunOracleStrategy(FrozenOracleStrategyAuthorityV1),
+    AwaitOracleAdmissionMechanisms(FrozenOraclePortfolioAuthorityV1),
+    AwaitOracleControlReceipts(FrozenOracleAdmissionAuthorityV1),
+    PrepareCandidateOracleContract {
+        authority: FrozenOracleAdmissionAuthorityV1,
+        evidence: ContentId<OracleAdmissionEvidenceArtifact>,
+        outcome: ContentId<OracleAdmissionOutcomeArtifact>,
+    },
+    AwaitCandidateProposalLoop(FrozenCandidateOracleAuthorityV1),
+    AuthorizeCandidateProposalEpisode(FrozenCandidateProposalAuthorityV1),
+    RunCandidateProposalEpisode(FrozenCandidateProposalAuthorityV1),
+    AwaitCandidateBuild {
+        authority: FrozenCandidateProposalAuthorityV1,
+        terminal: ContentId<ProposalHostTerminalArtifact>,
+        proposal: ContentId<CandidateProposalArtifact>,
+    },
+    AuthorizeCandidateBuild(FrozenCandidateBuildAuthorityV1),
+    RunCandidateBuild(FrozenCandidateBuildAuthorityV1),
+    AwaitCandidateAdmissionMechanisms {
+        authority: FrozenCandidateBuildAuthorityV1,
+        receipt: ContentId<ExecutionReceiptArtifact>,
+        outcome: ExecutionOutcome,
+    },
+    AwaitCandidateControlReceipts(FrozenCandidateAdmissionAuthorityV1),
+    Terminal {
+        outcome: ContentId<CandidateAdmissionOutcomeArtifact>,
+        status: MigrationTerminalStatusV1,
+    },
 }
 
 impl ControllerWorkflowStateV1 {
     /// Selects the next architectural step without performing it.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn next_action(&self) -> ControllerWorkflowNextActionV1 {
         match self {
             Self::NotFound => ControllerWorkflowNextActionV1::None,
@@ -313,6 +713,66 @@ impl ControllerWorkflowStateV1 {
             Self::OracleExplorationOpened(authority) => {
                 ControllerWorkflowNextActionV1::RunOracleExploration(authority.clone())
             }
+            Self::OracleStrategyAuthorized(authority) => {
+                ControllerWorkflowNextActionV1::RunOracleStrategy(authority.clone())
+            }
+            Self::OraclePortfolioFrozen(authority) => {
+                ControllerWorkflowNextActionV1::AwaitOracleAdmissionMechanisms(authority.clone())
+            }
+            Self::OracleAdmissionAuthorized(authority) => {
+                ControllerWorkflowNextActionV1::AwaitOracleControlReceipts(authority.clone())
+            }
+            Self::OracleAdmitted {
+                authority,
+                evidence,
+                outcome,
+            } => ControllerWorkflowNextActionV1::PrepareCandidateOracleContract {
+                authority: authority.clone(),
+                evidence: *evidence,
+                outcome: *outcome,
+            },
+            Self::CandidateOracleContractFrozen(authority) => {
+                ControllerWorkflowNextActionV1::AwaitCandidateProposalLoop(authority.clone())
+            }
+            Self::CandidateProposalRequestFrozen(authority) => {
+                ControllerWorkflowNextActionV1::AuthorizeCandidateProposalEpisode(authority.clone())
+            }
+            Self::CandidateProposalEpisodeAuthorized(authority) => {
+                ControllerWorkflowNextActionV1::RunCandidateProposalEpisode(authority.clone())
+            }
+            Self::CandidateProposed {
+                authority,
+                terminal,
+                proposal,
+            } => ControllerWorkflowNextActionV1::AwaitCandidateBuild {
+                authority: authority.clone(),
+                terminal: *terminal,
+                proposal: *proposal,
+            },
+            Self::CandidateBuildFrozen(authority) => {
+                ControllerWorkflowNextActionV1::AuthorizeCandidateBuild(authority.clone())
+            }
+            Self::CandidateBuildAuthorized(authority) => {
+                ControllerWorkflowNextActionV1::RunCandidateBuild(authority.clone())
+            }
+            Self::CandidateBuildObserved {
+                authority,
+                receipt,
+                outcome,
+            } => ControllerWorkflowNextActionV1::AwaitCandidateAdmissionMechanisms {
+                authority: authority.clone(),
+                receipt: *receipt,
+                outcome: *outcome,
+            },
+            Self::CandidateAdmissionAuthorized(authority) => {
+                ControllerWorkflowNextActionV1::AwaitCandidateControlReceipts(authority.clone())
+            }
+            Self::Terminal {
+                outcome, status, ..
+            } => ControllerWorkflowNextActionV1::Terminal {
+                outcome: *outcome,
+                status: *status,
+            },
         }
     }
 }
@@ -394,12 +854,143 @@ struct IntentAdmissionAuthorizedPayload {
 struct AdmittedIntentRecordedPayload {
     outcome: ContentId<IntentAdmissionPublicOutcomeArtifact>,
     contract: ContentId<MigrationIntentContractArtifact>,
+    contract_body: MigrationIntentContractV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct OracleExplorationOpenedPayload {
     authority: FrozenOracleExplorationAuthorityV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleStrategyAuthorizedPayload {
+    workspace: OracleWorkspaceV1,
+    catalog: OracleStrategyCatalogV1,
+    previous_ledger: OracleExplorationLedgerV1,
+    run: OracleStrategyRunV1,
+    started_ledger: OracleExplorationLedgerV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleStrategySubmissionRecordedPayload {
+    workspace: OracleWorkspaceV1,
+    previous_ledger: OracleExplorationLedgerV1,
+    run: OracleStrategyRunV1,
+    completion: OracleStrategyCompletionV1,
+    next_ledger: OracleExplorationLedgerV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleStrategyObservationsRecordedPayload {
+    previous_ledger: OracleExplorationLedgerV1,
+    run: OracleStrategyRunV1,
+    observations: Vec<OracleExplorationObservationV1>,
+    next_ledger: OracleExplorationLedgerV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OraclePortfolioFrozenPayload {
+    ledger: OracleExplorationLedgerV1,
+    proposal: OraclePortfolioProposalV1,
+    policy: OracleAdmissionPolicyV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleAdmissionAuthorizedPayload {
+    proposal: OraclePortfolioProposalV1,
+    policy: OracleAdmissionPolicyV1,
+    mechanisms: OracleAdmissionMechanismCatalogV1,
+    attempt: OracleAdmissionAttemptV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleAdmissionRecordedPayload {
+    proposal: OraclePortfolioProposalV1,
+    policy: OracleAdmissionPolicyV1,
+    mechanisms: OracleAdmissionMechanismCatalogV1,
+    attempt: OracleAdmissionAttemptV1,
+    evidence: OracleAdmissionEvidenceV1,
+    outcome: OracleAdmissionOutcomeV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateOracleContractFrozenPayload {
+    oracle_workspace: OracleWorkspaceV1,
+    proposal: OraclePortfolioProposalV1,
+    outcome: OracleAdmissionOutcomeV1,
+    contract: CandidateOracleContractV1,
+    workspace: CandidateWorkspaceV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateProposalRequestFrozenPayload {
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: Box<ProposalHostRequestV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateProposalEpisodeAuthorizedPayload {
+    request: ContentId<ProposalHostRequestArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateProposalRecordedPayload {
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: Box<ProposalHostRequestV1>,
+    terminal_id: ContentId<ProposalHostTerminalArtifact>,
+    terminal: Box<ProposalHostTerminalV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateBuildFrozenPayload {
+    plan: CandidateBuildPlanV1,
+    request: CandidateBuildRequestV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateBuildAuthorizedPayload {
+    request: ContentId<CandidateBuildRequestArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateBuildObservedPayload {
+    request: CandidateBuildRequestV1,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: ExecutionReceipt,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateAdmissionAuthorizedPayload {
+    contract: Box<CandidateOracleContractV1>,
+    proposal: Box<CandidateProposalV1>,
+    mechanisms: CandidateMechanismCatalogV1,
+    attempt: CandidateAdmissionAttemptV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateAdmissionRecordedPayload {
+    contract: Box<CandidateOracleContractV1>,
+    proposal: Box<CandidateProposalV1>,
+    mechanisms: CandidateMechanismCatalogV1,
+    attempt: CandidateAdmissionAttemptV1,
+    evidence: CandidateAdmissionEvidenceV1,
+    outcome: CandidateAdmissionOutcomeV1,
 }
 
 struct Projection {
@@ -772,6 +1363,7 @@ pub fn record_admitted_intent<E: EventStore>(
     let payload = AdmittedIntentRecordedPayload {
         outcome: outcome_id,
         contract: contract_id,
+        contract_body: contract.clone(),
     };
     if let Some(state) = exact_replay(
         &projection,
@@ -835,23 +1427,29 @@ pub fn open_oracle_exploration<E: EventStore>(
     workspace: &OracleWorkspaceV1,
     policy: &OracleCoveragePolicyV1,
     catalog: &OracleStrategyCatalogV1,
-    claims: &[OracleClaimV1],
     ledger: &OracleExplorationLedgerV1,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
     let projection = project(events, workflow)?;
-    let (admitted_intent_outcome, admitted_intent, authorized_recovery_input) =
+    let (admitted_intent_outcome, admitted_intent, claims, authorized_recovery_input) =
         match &projection.state {
             ControllerWorkflowStateV1::AdmittedIntent {
                 authority,
                 outcome,
                 contract,
+                contract_body,
                 ..
-            } => (*outcome, *contract, authority.recovery_input),
+            } => (
+                *outcome,
+                *contract,
+                derive_oracle_claims(workflow.task_id, *contract, contract_body.admitted_claim()),
+                authority.recovery_input,
+            ),
             ControllerWorkflowStateV1::OracleExplorationOpened(authority) => (
                 authority.admitted_intent_outcome,
                 authority.admitted_intent,
+                authority.claims.clone(),
                 authority.recovery_input,
             ),
             _ => return Err(ControllerWorkflowError::InvalidTransition),
@@ -860,14 +1458,11 @@ pub fn open_oracle_exploration<E: EventStore>(
     let workspace_id = workspace.identity().map_err(binding_error)?;
     let policy_id = policy.identity().map_err(binding_error)?;
     let catalog_id = catalog.identity().map_err(binding_error)?;
-    let mut claim_ids = claims
+    let claim_ids = claims
         .iter()
         .map(|claim| claim.identity().map_err(binding_error))
         .collect::<Result<Vec<_>, _>>()?;
-    claim_ids.sort_by_key(ContentId::to_wire);
-    if claims.is_empty()
-        || claim_ids.windows(2).any(|pair| pair[0] == pair[1])
-        || recovery_input_id != authorized_recovery_input
+    if recovery_input_id != authorized_recovery_input
         || recovery_input.task_id() != workflow.task_id
         || workspace.task_id() != workflow.task_id
         || workspace.admitted_intent() != admitted_intent
@@ -875,9 +1470,6 @@ pub fn open_oracle_exploration<E: EventStore>(
         || workspace.sir_task_bundle() != recovery_input.task_bundle()
         || workspace.coverage_policy() != policy_id
         || workspace.strategy_catalog() != catalog_id
-        || claims.iter().any(|claim| {
-            claim.task_id() != workflow.task_id || claim.admitted_intent() != admitted_intent
-        })
     {
         return Err(ControllerWorkflowError::BindingMismatch);
     }
@@ -896,8 +1488,9 @@ pub fn open_oracle_exploration<E: EventStore>(
             workspace: workspace_id,
             coverage_policy: policy_id,
             strategy_catalog: catalog_id,
-            claims: claim_ids,
+            claims,
             ledger: ledger.identity().map_err(binding_error)?,
+            ledger_revision: ledger.revision(),
         },
     };
     if let Some(state) = exact_replay(
@@ -925,6 +1518,878 @@ pub fn open_oracle_exploration<E: EventStore>(
         &payload,
     )?;
     recover_controller_workflow(events, workflow)
+}
+
+/// Commits one exact cell-scoped strategy run and its running ledger revision before execution.
+///
+/// # Errors
+///
+/// Rejects workspace, catalog, ledger, item, strategy/executor, budget, replay, or persistence
+/// drift.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "workspace, catalog, ledger, run, and command authority remain explicit"
+)]
+pub fn authorize_oracle_strategy<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    workspace: &OracleWorkspaceV1,
+    catalog: &OracleStrategyCatalogV1,
+    ledger: &OracleExplorationLedgerV1,
+    run: &OracleStrategyRunV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let started_ledger = ledger
+        .start_strategy(run, catalog, workspace.budget())
+        .map_err(binding_error)?;
+    let payload = OracleStrategyAuthorizedPayload {
+        workspace: workspace.clone(),
+        catalog: catalog.clone(),
+        previous_ledger: ledger.clone(),
+        run: run.clone(),
+        started_ledger,
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_STRATEGY_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleExplorationOpened(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if workspace.identity().map_err(binding_error)? != authority.workspace
+        || catalog.identity().map_err(binding_error)? != authority.strategy_catalog
+        || ledger.identity().map_err(binding_error)? != authority.ledger
+        || ledger.revision() != authority.ledger_revision
+        || run.workspace() != authority.workspace
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_STRATEGY_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Durably projects Controller-produced effect observations into the active Oracle run.
+///
+/// # Errors
+///
+/// Rejects observation/run/ledger drift, illegal transitions, replay conflicts, or persistence
+/// failure.
+pub fn record_oracle_strategy_observations<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    ledger: &OracleExplorationLedgerV1,
+    run: &OracleStrategyRunV1,
+    observations: &[OracleExplorationObservationV1],
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let next_ledger = ledger
+        .record_strategy_observations(
+            run.item(),
+            run.identity().map_err(binding_error)?,
+            observations,
+        )
+        .map_err(binding_error)?;
+    let payload = OracleStrategyObservationsRecordedPayload {
+        previous_ledger: ledger.clone(),
+        run: run.clone(),
+        observations: observations.to_vec(),
+        next_ledger,
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_STRATEGY_OBSERVATIONS_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleStrategyAuthorized(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if ledger.identity().map_err(binding_error)? != authority.exploration.ledger
+        || ledger.revision() != authority.exploration.ledger_revision
+        || run.identity().map_err(binding_error)? != authority.run
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_STRATEGY_OBSERVATIONS_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Atomically records one strict strategy submission and the resulting ledger revision.
+///
+/// # Errors
+///
+/// Rejects run/submission/workspace/ledger lineage drift, an illegal transition, replay conflict,
+/// or persistence failure.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "exact active values and durable command authority remain explicit"
+)]
+pub fn record_oracle_strategy_completion<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    workspace: &OracleWorkspaceV1,
+    ledger: &OracleExplorationLedgerV1,
+    run: &OracleStrategyRunV1,
+    completion: &OracleStrategyCompletionV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let submission = completion.submission(run)?;
+    let next_ledger = ledger
+        .apply_strategy_submission(run, submission, workspace)
+        .map_err(binding_error)?;
+    let payload = OracleStrategySubmissionRecordedPayload {
+        workspace: workspace.clone(),
+        previous_ledger: ledger.clone(),
+        run: run.clone(),
+        completion: completion.clone(),
+        next_ledger,
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_STRATEGY_SUBMISSION_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleStrategyAuthorized(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if workspace.identity().map_err(binding_error)? != authority.exploration.workspace
+        || ledger.identity().map_err(binding_error)? != authority.exploration.ledger
+        || ledger.revision() != authority.exploration.ledger_revision
+        || run.identity().map_err(binding_error)? != authority.run
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_STRATEGY_SUBMISSION_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Freezes a terminal exploration ledger as the exact independent Admission candidate.
+///
+/// # Errors
+///
+/// Rejects incomplete/changed ledger lineage, proposal or policy drift, illegal transitions,
+/// replay conflicts, or persistence failure.
+pub fn freeze_oracle_portfolio<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    ledger: &OracleExplorationLedgerV1,
+    proposal: &OraclePortfolioProposalV1,
+    policy: &OracleAdmissionPolicyV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if proposal != &OraclePortfolioProposalV1::freeze(ledger).map_err(binding_error)?
+        || policy != &OracleAdmissionPolicyV1::strict()
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = OraclePortfolioFrozenPayload {
+        ledger: ledger.clone(),
+        proposal: proposal.clone(),
+        policy: policy.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_PORTFOLIO_FROZEN,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleExplorationOpened(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if ledger.identity().map_err(binding_error)? != authority.ledger
+        || ledger.revision() != authority.ledger_revision
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_PORTFOLIO_FROZEN,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Freezes the exact qualified mechanisms and mechanically derived control obligations.
+///
+/// # Errors
+///
+/// Rejects portfolio/policy/catalog/attempt drift, illegal transitions, replay conflicts, or
+/// persistence failure.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "all exact Admission authority bodies remain explicit at the durable boundary"
+)]
+pub fn authorize_oracle_admission<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    proposal: &OraclePortfolioProposalV1,
+    policy: &OracleAdmissionPolicyV1,
+    mechanisms: &OracleAdmissionMechanismCatalogV1,
+    attempt: &OracleAdmissionAttemptV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if attempt
+        != &OracleAdmissionAttemptV1::new(proposal, policy, mechanisms).map_err(binding_error)?
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = OracleAdmissionAuthorizedPayload {
+        proposal: proposal.clone(),
+        policy: policy.clone(),
+        mechanisms: mechanisms.clone(),
+        attempt: attempt.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_ADMISSION_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OraclePortfolioFrozen(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if proposal.identity().map_err(binding_error)? != authority.proposal
+        || policy.identity().map_err(binding_error)? != authority.policy
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_ADMISSION_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Records trusted control evidence and the independently recomputed terminal claim portfolio.
+///
+/// # Errors
+///
+/// Rejects attempt/evidence/outcome drift, unqualified mechanisms, illegal transitions, replay
+/// conflicts, or persistence failure.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "all exact Admission authority and evidence bodies remain explicit"
+)]
+pub fn record_oracle_admission_outcome<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    proposal: &OraclePortfolioProposalV1,
+    policy: &OracleAdmissionPolicyV1,
+    mechanisms: &OracleAdmissionMechanismCatalogV1,
+    attempt: &OracleAdmissionAttemptV1,
+    evidence: &OracleAdmissionEvidenceV1,
+    outcome: &OracleAdmissionOutcomeV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let expected = recompute_oracle_admission(proposal, policy, mechanisms, attempt, evidence)
+        .map_err(binding_error)?;
+    if outcome != &expected {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = OracleAdmissionRecordedPayload {
+        proposal: proposal.clone(),
+        policy: policy.clone(),
+        mechanisms: mechanisms.clone(),
+        attempt: attempt.clone(),
+        evidence: evidence.clone(),
+        outcome: outcome.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_ADMISSION_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleAdmissionAuthorized(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if proposal.identity().map_err(binding_error)? != authority.portfolio.proposal
+        || policy.identity().map_err(binding_error)? != authority.portfolio.policy
+        || mechanisms.identity().map_err(binding_error)? != authority.mechanisms
+        || attempt.identity().map_err(binding_error)? != authority.attempt
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        ORACLE_ADMISSION_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Freezes the exact admitted Oracle subset as immutable Candidate authority.
+///
+/// # Errors
+///
+/// Rejects partial/rejected claim promotion, proposal/outcome drift, illegal transitions, replay
+/// conflicts, or persistence failure.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "exact Oracle workspace, proposal, outcome, Candidate contract, workspace, and durable command remain explicit"
+)]
+pub fn freeze_candidate_oracle_contract<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    oracle_workspace: &OracleWorkspaceV1,
+    proposal: &OraclePortfolioProposalV1,
+    outcome: &OracleAdmissionOutcomeV1,
+    contract: &CandidateOracleContractV1,
+    workspace: &CandidateWorkspaceV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if contract != &CandidateOracleContractV1::derive(proposal, outcome).map_err(binding_error)? {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    if workspace
+        != &CandidateWorkspaceV1::derive(oracle_workspace, proposal, contract)
+            .map_err(binding_error)?
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = CandidateOracleContractFrozenPayload {
+        oracle_workspace: oracle_workspace.clone(),
+        proposal: proposal.clone(),
+        outcome: outcome.clone(),
+        contract: contract.clone(),
+        workspace: workspace.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_ORACLE_CONTRACT_FROZEN,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::OracleAdmitted {
+        authority,
+        evidence: _,
+        outcome: outcome_id,
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if proposal.identity().map_err(binding_error)? != authority.portfolio.proposal
+        || oracle_workspace.identity().map_err(binding_error)?
+            != authority.portfolio.exploration.workspace
+        || outcome.identity().map_err(binding_error)? != *outcome_id
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_ORACLE_CONTRACT_FROZEN,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Freezes the exact Candidate Host request before a model effect may be authorized.
+///
+/// # Errors
+///
+/// Rejects identity, role, task, admitted-material, replay, or transition drift.
+pub fn freeze_candidate_proposal_request<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: &ProposalHostRequestV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if request.identity().map_err(binding_error)? != request_id {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let projection = project(events, workflow)?;
+    let payload = CandidateProposalRequestFrozenPayload {
+        request_id,
+        request: Box::new(request.clone()),
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_PROPOSAL_REQUEST_FROZEN,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateOracleContractFrozen(authority) = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    validate_candidate_request(workflow, authority, request)?;
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_PROPOSAL_REQUEST_FROZEN,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Commits Candidate Proposal Host start authority before its external model effect.
+///
+/// # Errors
+///
+/// Rejects request drift, replay conflict, persistence failure, or an illegal transition.
+pub fn authorize_candidate_proposal_episode<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    request: ContentId<ProposalHostRequestArtifact>,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let projection = project(events, workflow)?;
+    let payload = CandidateProposalEpisodeAuthorizedPayload { request };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_PROPOSAL_EPISODE_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateProposalRequestFrozen(authority) = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if authority.request != request {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_PROPOSAL_EPISODE_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Records one strict task-generic Candidate proposal returned by the authorized Host episode.
+///
+/// # Errors
+///
+/// Rejects request, terminal, role, episode, model, Oracle, proposal, replay, or state drift.
+#[allow(clippy::too_many_arguments)]
+pub fn record_candidate_proposal<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    request_id: ContentId<ProposalHostRequestArtifact>,
+    request: &ProposalHostRequestV1,
+    terminal_id: ContentId<ProposalHostTerminalArtifact>,
+    terminal: &ProposalHostTerminalV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if request.identity().map_err(binding_error)? != request_id
+        || terminal.identity().map_err(binding_error)? != terminal_id
+        || terminal.validate_against(request).is_err()
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let ProposalHostPublicationV1::CandidateStrategy { .. } = terminal.publication() else {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    };
+    let projection = project(events, workflow)?;
+    let payload = CandidateProposalRecordedPayload {
+        request_id,
+        request: Box::new(request.clone()),
+        terminal_id,
+        terminal: Box::new(terminal.clone()),
+    };
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_PROPOSAL_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateProposalEpisodeAuthorized(authority) =
+        &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if authority.request != request_id || authority.episode_id != terminal.episode_id() {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    validate_candidate_request(workflow, &authority.candidate, request)?;
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_PROPOSAL_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Freezes the exact product-owned Candidate build operation before Worker authorization.
+#[allow(clippy::too_many_arguments)]
+pub fn freeze_candidate_build<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    proposal: &CandidateProposalV1,
+    plan: &CandidateBuildPlanV1,
+    request: &CandidateBuildRequestV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let proposal_id = proposal.identity().map_err(binding_error)?;
+    let plan_id = plan.identity().map_err(binding_error)?;
+    if request.proposal() != proposal_id || request.plan() != plan_id {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = CandidateBuildFrozenPayload {
+        plan: plan.clone(),
+        request: request.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_BUILD_FROZEN,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateProposed {
+        authority,
+        terminal,
+        proposal: expected,
+    } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if *expected != proposal_id || proposal.oracle_contract() != authority.candidate.contract {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let _ = terminal;
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_BUILD_FROZEN,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Commits durable start authority for one exact Candidate build effect.
+pub fn authorize_candidate_build<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    request: ContentId<CandidateBuildRequestArtifact>,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let payload = CandidateBuildAuthorizedPayload { request };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_BUILD_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateBuildFrozen(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if authority.request != request {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_BUILD_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Records a trusted Worker receipt as an observation; it is not itself an admission verdict.
+#[allow(clippy::too_many_arguments)]
+pub fn record_candidate_build_observation<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    request: &CandidateBuildRequestV1,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: &ExecutionReceipt,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    if ContentId::derive(&cairn_codec::to_vec(receipt).map_err(binding_error)?)
+        .map_err(binding_error)?
+        != receipt_id
+        || receipt.job_id() != request.job_id()
+        || receipt.contract_id() != request.contract()
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = CandidateBuildObservedPayload {
+        request: request.clone(),
+        receipt_id,
+        receipt: receipt.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_BUILD_OBSERVED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateBuildAuthorized(authority) = &projection.state else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if request.identity().map_err(binding_error)? != authority.request {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_BUILD_OBSERVED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Freezes the complete claim × item × plane control matrix before Candidate evaluation effects.
+#[allow(clippy::too_many_arguments)]
+pub fn authorize_candidate_admission<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    contract: &CandidateOracleContractV1,
+    proposal: &CandidateProposalV1,
+    mechanisms: &CandidateMechanismCatalogV1,
+    attempt: &CandidateAdmissionAttemptV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let expected =
+        CandidateAdmissionAttemptV1::new(contract, proposal, mechanisms).map_err(binding_error)?;
+    if attempt != &expected {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = CandidateAdmissionAuthorizedPayload {
+        contract: Box::new(contract.clone()),
+        proposal: Box::new(proposal.clone()),
+        mechanisms: mechanisms.clone(),
+        attempt: attempt.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_ADMISSION_AUTHORIZED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateBuildObserved { authority, .. } = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if authority.proposal != proposal.identity().map_err(binding_error)?
+        || authority.candidate.candidate.contract != contract.identity().map_err(binding_error)?
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_ADMISSION_AUTHORIZED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+/// Recomputes and records the terminal migration outcome from trusted Candidate controls.
+#[allow(clippy::too_many_arguments)]
+pub fn record_candidate_admission_outcome<E: EventStore>(
+    events: &mut E,
+    workflow: &ControllerWorkflowV1,
+    contract: &CandidateOracleContractV1,
+    proposal: &CandidateProposalV1,
+    mechanisms: &CandidateMechanismCatalogV1,
+    attempt: &CandidateAdmissionAttemptV1,
+    evidence: &CandidateAdmissionEvidenceV1,
+    outcome: &CandidateAdmissionOutcomeV1,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<ControllerWorkflowStateV1, ControllerWorkflowError> {
+    let expected = recompute_candidate_admission(contract, proposal, mechanisms, attempt, evidence)
+        .map_err(binding_error)?;
+    if outcome != &expected {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    let payload = CandidateAdmissionRecordedPayload {
+        contract: Box::new(contract.clone()),
+        proposal: Box::new(proposal.clone()),
+        mechanisms: mechanisms.clone(),
+        attempt: attempt.clone(),
+        evidence: evidence.clone(),
+        outcome: outcome.clone(),
+    };
+    let projection = project(events, workflow)?;
+    if let Some(state) = exact_replay(
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_ADMISSION_RECORDED,
+        &payload,
+    )? {
+        return Ok(state);
+    }
+    let ControllerWorkflowStateV1::CandidateAdmissionAuthorized(authority) = &projection.state
+    else {
+        return Err(ControllerWorkflowError::InvalidTransition);
+    };
+    if authority.mechanisms != mechanisms.identity().map_err(binding_error)?
+        || authority.attempt != attempt.identity().map_err(binding_error)?
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    append_current(
+        events,
+        workflow,
+        &projection,
+        command_id,
+        observed_at,
+        CANDIDATE_ADMISSION_RECORDED,
+        &payload,
+    )?;
+    recover_controller_workflow(events, workflow)
+}
+
+fn validate_candidate_request(
+    workflow: &ControllerWorkflowV1,
+    authority: &FrozenCandidateOracleAuthorityV1,
+    request: &ProposalHostRequestV1,
+) -> Result<(), ControllerWorkflowError> {
+    let ProposalHostRoleRequestV1::CandidateStrategy {
+        workspace,
+        contract,
+        oracle_materials,
+        ..
+    } = request.role()
+    else {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    };
+    if workspace.task_id() != workflow.task_id
+        || workspace.identity().map_err(binding_error)? != authority.workspace
+        || contract.identity().map_err(binding_error)? != authority.contract
+        || oracle_materials.validate_against(contract).is_err()
+    {
+        return Err(ControllerWorkflowError::BindingMismatch);
+    }
+    Ok(())
 }
 
 /// Recovers the exact current Controller state and rejects illegal/non-V1 history.
@@ -1143,6 +2608,7 @@ fn apply(
                 restricted_store,
                 outcome: payload.outcome,
                 contract: payload.contract,
+                contract_body: Box::new(payload.contract_body),
             })
         }
         (
@@ -1150,21 +2616,26 @@ fn apply(
                 authority,
                 outcome,
                 contract,
+                contract_body,
                 ..
             },
             ORACLE_EXPLORATION_OPENED,
         ) => {
             let payload: OracleExplorationOpenedPayload = decode(bytes)?;
             let oracle = payload.authority;
+            if contract_body.identity().map_err(binding_error)? != contract
+                || contract_body.task_id() != task_id
+            {
+                return Err(invalid_history("admitted intent contract body changed"));
+            }
+            let expected_claims =
+                derive_oracle_claims(task_id, contract, contract_body.admitted_claim());
             if oracle.task_id != task_id
                 || oracle.admitted_intent_outcome != outcome
                 || oracle.admitted_intent != contract
                 || oracle.recovery_input != authority.recovery_input
-                || oracle.claims.is_empty()
-                || oracle
-                    .claims
-                    .windows(2)
-                    .any(|pair| pair[0].to_wire() >= pair[1].to_wire())
+                || oracle.claims != expected_claims
+                || oracle.ledger_revision.get() != 1
             {
                 return Err(invalid_history(
                     "Oracle Exploration authority changed or is noncanonical",
@@ -1172,9 +2643,505 @@ fn apply(
             }
             Ok(ControllerWorkflowStateV1::OracleExplorationOpened(oracle))
         }
+        (
+            ControllerWorkflowStateV1::OracleExplorationOpened(mut authority),
+            ORACLE_STRATEGY_AUTHORIZED,
+        ) => {
+            let payload: OracleStrategyAuthorizedPayload = decode(bytes)?;
+            let workspace_id = payload
+                .workspace
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let catalog_id = payload
+                .catalog
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let previous_id = payload
+                .previous_ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let run_id = payload
+                .run
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected = payload
+                .previous_ledger
+                .start_strategy(&payload.run, &payload.catalog, payload.workspace.budget())
+                .map_err(|error| invalid_history(error.to_string()))?;
+            if workspace_id != authority.workspace
+                || catalog_id != authority.strategy_catalog
+                || previous_id != authority.ledger
+                || payload.previous_ledger.revision() != authority.ledger_revision
+                || payload.run.workspace() != authority.workspace
+                || payload.started_ledger != expected
+            {
+                return Err(invalid_history("Oracle strategy start authority changed"));
+            }
+            let started_id = payload
+                .started_ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let previous_ledger = authority.ledger;
+            authority.ledger = started_id;
+            authority.ledger_revision = payload.started_ledger.revision();
+            Ok(ControllerWorkflowStateV1::OracleStrategyAuthorized(
+                FrozenOracleStrategyAuthorityV1 {
+                    exploration: authority,
+                    previous_ledger,
+                    run: run_id,
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::OracleStrategyAuthorized(mut strategy_authority),
+            ORACLE_STRATEGY_OBSERVATIONS_RECORDED,
+        ) => {
+            let payload: OracleStrategyObservationsRecordedPayload = decode(bytes)?;
+            let previous_id = payload
+                .previous_ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let run_id = payload
+                .run
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected = payload
+                .previous_ledger
+                .record_strategy_observations(payload.run.item(), run_id, &payload.observations)
+                .map_err(|error| invalid_history(error.to_string()))?;
+            if previous_id != strategy_authority.exploration.ledger
+                || payload.previous_ledger.revision()
+                    != strategy_authority.exploration.ledger_revision
+                || run_id != strategy_authority.run
+                || payload.next_ledger != expected
+            {
+                return Err(invalid_history("Oracle strategy observations changed"));
+            }
+            strategy_authority.exploration.ledger = payload
+                .next_ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            strategy_authority.exploration.ledger_revision = payload.next_ledger.revision();
+            Ok(ControllerWorkflowStateV1::OracleStrategyAuthorized(
+                strategy_authority,
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::OracleStrategyAuthorized(strategy_authority),
+            ORACLE_STRATEGY_SUBMISSION_RECORDED,
+        ) => {
+            let payload: OracleStrategySubmissionRecordedPayload = decode(bytes)?;
+            let workspace_id = payload
+                .workspace
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let previous_id = payload
+                .previous_ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let run_id = payload
+                .run
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected = payload
+                .previous_ledger
+                .apply_strategy_submission(
+                    &payload.run,
+                    payload.completion.submission(&payload.run)?,
+                    &payload.workspace,
+                )
+                .map_err(|error| invalid_history(error.to_string()))?;
+            if workspace_id != strategy_authority.exploration.workspace
+                || previous_id != strategy_authority.exploration.ledger
+                || payload.previous_ledger.revision()
+                    != strategy_authority.exploration.ledger_revision
+                || run_id != strategy_authority.run
+                || payload.next_ledger != expected
+            {
+                return Err(invalid_history("Oracle strategy submission changed"));
+            }
+            let mut authority = strategy_authority.exploration;
+            authority.ledger = payload
+                .next_ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            authority.ledger_revision = payload.next_ledger.revision();
+            Ok(ControllerWorkflowStateV1::OracleExplorationOpened(
+                authority,
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::OracleExplorationOpened(exploration),
+            ORACLE_PORTFOLIO_FROZEN,
+        ) => {
+            let payload: OraclePortfolioFrozenPayload = decode(bytes)?;
+            let ledger_id = payload
+                .ledger
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected_proposal = OraclePortfolioProposalV1::freeze(&payload.ledger)
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected_policy = OracleAdmissionPolicyV1::strict();
+            if ledger_id != exploration.ledger
+                || payload.ledger.revision() != exploration.ledger_revision
+                || payload.proposal != expected_proposal
+                || payload.policy != expected_policy
+            {
+                return Err(invalid_history(
+                    "frozen Oracle portfolio or admission policy changed",
+                ));
+            }
+            Ok(ControllerWorkflowStateV1::OraclePortfolioFrozen(
+                FrozenOraclePortfolioAuthorityV1 {
+                    exploration,
+                    proposal: payload
+                        .proposal
+                        .identity()
+                        .map_err(|error| invalid_history(error.to_string()))?,
+                    policy: payload
+                        .policy
+                        .identity()
+                        .map_err(|error| invalid_history(error.to_string()))?,
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::OraclePortfolioFrozen(portfolio),
+            ORACLE_ADMISSION_AUTHORIZED,
+        ) => {
+            let payload: OracleAdmissionAuthorizedPayload = decode(bytes)?;
+            let proposal_id = payload
+                .proposal
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let policy_id = payload
+                .policy
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let mechanism_id = payload
+                .mechanisms
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected_attempt = OracleAdmissionAttemptV1::new(
+                &payload.proposal,
+                &payload.policy,
+                &payload.mechanisms,
+            )
+            .map_err(|error| invalid_history(error.to_string()))?;
+            if proposal_id != portfolio.proposal
+                || policy_id != portfolio.policy
+                || payload.attempt != expected_attempt
+            {
+                return Err(invalid_history("Oracle Admission start authority changed"));
+            }
+            Ok(ControllerWorkflowStateV1::OracleAdmissionAuthorized(
+                FrozenOracleAdmissionAuthorityV1 {
+                    portfolio,
+                    mechanisms: mechanism_id,
+                    attempt: payload
+                        .attempt
+                        .identity()
+                        .map_err(|error| invalid_history(error.to_string()))?,
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::OracleAdmissionAuthorized(authority),
+            ORACLE_ADMISSION_RECORDED,
+        ) => {
+            let payload: OracleAdmissionRecordedPayload = decode(bytes)?;
+            let proposal_id = payload
+                .proposal
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let policy_id = payload
+                .policy
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let mechanisms_id = payload
+                .mechanisms
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let attempt_id = payload
+                .attempt
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected_outcome = recompute_oracle_admission(
+                &payload.proposal,
+                &payload.policy,
+                &payload.mechanisms,
+                &payload.attempt,
+                &payload.evidence,
+            )
+            .map_err(|error| invalid_history(error.to_string()))?;
+            if proposal_id != authority.portfolio.proposal
+                || policy_id != authority.portfolio.policy
+                || mechanisms_id != authority.mechanisms
+                || attempt_id != authority.attempt
+                || payload.outcome != expected_outcome
+            {
+                return Err(invalid_history("Oracle Admission outcome changed"));
+            }
+            Ok(ControllerWorkflowStateV1::OracleAdmitted {
+                authority,
+                evidence: payload
+                    .evidence
+                    .identity()
+                    .map_err(|error| invalid_history(error.to_string()))?,
+                outcome: payload
+                    .outcome
+                    .identity()
+                    .map_err(|error| invalid_history(error.to_string()))?,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::OracleAdmitted {
+                authority,
+                evidence,
+                outcome,
+            },
+            CANDIDATE_ORACLE_CONTRACT_FROZEN,
+        ) => {
+            let payload: CandidateOracleContractFrozenPayload = decode(bytes)?;
+            let proposal_id = payload
+                .proposal
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let outcome_id = payload
+                .outcome
+                .identity()
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected = CandidateOracleContractV1::derive(&payload.proposal, &payload.outcome)
+                .map_err(|error| invalid_history(error.to_string()))?;
+            let expected_workspace = CandidateWorkspaceV1::derive(
+                &payload.oracle_workspace,
+                &payload.proposal,
+                &payload.contract,
+            )
+            .map_err(|error| invalid_history(error.to_string()))?;
+            if proposal_id != authority.portfolio.proposal
+                || payload
+                    .oracle_workspace
+                    .identity()
+                    .map_err(|error| invalid_history(error.to_string()))?
+                    != authority.portfolio.exploration.workspace
+                || outcome_id != outcome
+                || payload.contract != expected
+                || payload.workspace != expected_workspace
+            {
+                return Err(invalid_history("Candidate Oracle authority changed"));
+            }
+            Ok(ControllerWorkflowStateV1::CandidateOracleContractFrozen(
+                FrozenCandidateOracleAuthorityV1 {
+                    oracle: authority,
+                    evidence,
+                    outcome,
+                    contract: payload
+                        .contract
+                        .identity()
+                        .map_err(|error| invalid_history(error.to_string()))?,
+                    workspace: payload
+                        .workspace
+                        .identity()
+                        .map_err(|error| invalid_history(error.to_string()))?,
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::CandidateOracleContractFrozen(candidate),
+            CANDIDATE_PROPOSAL_REQUEST_FROZEN,
+        ) => {
+            let payload: CandidateProposalRequestFrozenPayload = decode(bytes)?;
+            if payload.request.identity().map_err(binding_error)? != payload.request_id {
+                return Err(invalid_history("Candidate Host request identity changed"));
+            }
+            let workflow = ControllerWorkflowV1::new(task_id)?;
+            validate_candidate_request(&workflow, &candidate, &payload.request)?;
+            Ok(ControllerWorkflowStateV1::CandidateProposalRequestFrozen(
+                FrozenCandidateProposalAuthorityV1 {
+                    candidate,
+                    request: payload.request_id,
+                    episode_id: payload.request.runtime().episode_id(),
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::CandidateProposalRequestFrozen(authority),
+            CANDIDATE_PROPOSAL_EPISODE_AUTHORIZED,
+        ) => {
+            let payload: CandidateProposalEpisodeAuthorizedPayload = decode(bytes)?;
+            if payload.request != authority.request {
+                return Err(invalid_history("authorized Candidate request changed"));
+            }
+            Ok(ControllerWorkflowStateV1::CandidateProposalEpisodeAuthorized(authority))
+        }
+        (
+            ControllerWorkflowStateV1::CandidateProposalEpisodeAuthorized(authority),
+            CANDIDATE_PROPOSAL_RECORDED,
+        ) => {
+            let payload: CandidateProposalRecordedPayload = decode(bytes)?;
+            if payload.request_id != authority.request
+                || payload.request.identity().map_err(binding_error)? != payload.request_id
+                || payload.terminal.identity().map_err(binding_error)? != payload.terminal_id
+                || payload.terminal.validate_against(&payload.request).is_err()
+                || payload.terminal.episode_id() != authority.episode_id
+            {
+                return Err(invalid_history("Candidate Host terminal changed"));
+            }
+            let workflow = ControllerWorkflowV1::new(task_id)?;
+            validate_candidate_request(&workflow, &authority.candidate, &payload.request)?;
+            let ProposalHostPublicationV1::CandidateStrategy { proposal_id, .. } =
+                payload.terminal.publication()
+            else {
+                return Err(invalid_history("Candidate Host returned another role"));
+            };
+            Ok(ControllerWorkflowStateV1::CandidateProposed {
+                authority,
+                terminal: payload.terminal_id,
+                proposal: *proposal_id,
+            })
+        }
+        (
+            ControllerWorkflowStateV1::CandidateProposed {
+                authority,
+                terminal,
+                proposal,
+            },
+            CANDIDATE_BUILD_FROZEN,
+        ) => {
+            let payload: CandidateBuildFrozenPayload = decode(bytes)?;
+            let plan = payload.plan.identity().map_err(binding_error)?;
+            let request = payload.request.identity().map_err(binding_error)?;
+            if payload.request.proposal() != proposal || payload.request.plan() != plan {
+                return Err(invalid_history("Candidate build authority changed"));
+            }
+            Ok(ControllerWorkflowStateV1::CandidateBuildFrozen(
+                FrozenCandidateBuildAuthorityV1 {
+                    candidate: authority,
+                    terminal,
+                    proposal,
+                    plan,
+                    request,
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::CandidateBuildFrozen(authority),
+            CANDIDATE_BUILD_AUTHORIZED,
+        ) => {
+            let payload: CandidateBuildAuthorizedPayload = decode(bytes)?;
+            if payload.request != authority.request {
+                return Err(invalid_history("authorized Candidate build changed"));
+            }
+            Ok(ControllerWorkflowStateV1::CandidateBuildAuthorized(
+                authority,
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::CandidateBuildAuthorized(authority),
+            CANDIDATE_BUILD_OBSERVED,
+        ) => {
+            let payload: CandidateBuildObservedPayload = decode(bytes)?;
+            let receipt: ContentId<ExecutionReceiptArtifact> =
+                ContentId::derive(&cairn_codec::to_vec(&payload.receipt).map_err(binding_error)?)
+                    .map_err(binding_error)?;
+            if payload.request.identity().map_err(binding_error)? != authority.request
+                || receipt != payload.receipt_id
+                || payload.receipt.job_id() != payload.request.job_id()
+                || payload.receipt.contract_id() != payload.request.contract()
+            {
+                return Err(invalid_history("Candidate build observation changed"));
+            }
+            Ok(ControllerWorkflowStateV1::CandidateBuildObserved {
+                authority,
+                receipt,
+                outcome: payload.receipt.outcome(),
+            })
+        }
+        (
+            ControllerWorkflowStateV1::CandidateBuildObserved {
+                authority, receipt, ..
+            },
+            CANDIDATE_ADMISSION_AUTHORIZED,
+        ) => {
+            let payload: CandidateAdmissionAuthorizedPayload = decode(bytes)?;
+            let expected_attempt = CandidateAdmissionAttemptV1::new(
+                &payload.contract,
+                &payload.proposal,
+                &payload.mechanisms,
+            )
+            .map_err(binding_error)?;
+            if payload.contract.identity().map_err(binding_error)?
+                != authority.candidate.candidate.contract
+                || payload.proposal.identity().map_err(binding_error)? != authority.proposal
+                || payload.attempt != expected_attempt
+                || payload.mechanisms.identity().map_err(binding_error)?
+                    != payload.attempt.mechanisms()
+            {
+                return Err(invalid_history("Candidate Admission authority changed"));
+            }
+            Ok(ControllerWorkflowStateV1::CandidateAdmissionAuthorized(
+                FrozenCandidateAdmissionAuthorityV1 {
+                    build: authority,
+                    receipt,
+                    mechanisms: payload.mechanisms.identity().map_err(binding_error)?,
+                    attempt: payload.attempt.identity().map_err(binding_error)?,
+                },
+            ))
+        }
+        (
+            ControllerWorkflowStateV1::CandidateAdmissionAuthorized(authority),
+            CANDIDATE_ADMISSION_RECORDED,
+        ) => {
+            let payload: CandidateAdmissionRecordedPayload = decode(bytes)?;
+            let expected_outcome = recompute_candidate_admission(
+                &payload.contract,
+                &payload.proposal,
+                &payload.mechanisms,
+                &payload.attempt,
+                &payload.evidence,
+            )
+            .map_err(binding_error)?;
+            if payload.contract.identity().map_err(binding_error)?
+                != authority.build.candidate.candidate.contract
+                || payload.proposal.identity().map_err(binding_error)? != authority.build.proposal
+                || payload.mechanisms.identity().map_err(binding_error)? != authority.mechanisms
+                || payload.attempt.identity().map_err(binding_error)? != authority.attempt
+                || payload.evidence.identity().map_err(binding_error)? != payload.outcome.evidence()
+                || payload.outcome.proposal() != authority.build.proposal
+                || payload.outcome != expected_outcome
+            {
+                return Err(invalid_history("Candidate Admission outcome changed"));
+            }
+            let status = terminal_status(&payload.outcome);
+            Ok(ControllerWorkflowStateV1::Terminal {
+                authority,
+                evidence: payload.evidence.identity().map_err(binding_error)?,
+                outcome: payload.outcome.identity().map_err(binding_error)?,
+                status,
+            })
+        }
         (_, _) => Err(invalid_history(
             "illegal Controller workflow event transition",
         )),
+    }
+}
+
+fn terminal_status(outcome: &CandidateAdmissionOutcomeV1) -> MigrationTerminalStatusV1 {
+    if outcome
+        .claims()
+        .iter()
+        .any(|claim| claim.status() == CandidateClaimStatusV1::Rejected)
+    {
+        MigrationTerminalStatusV1::Rejected
+    } else if outcome
+        .claims()
+        .iter()
+        .any(|claim| claim.status() == CandidateClaimStatusV1::Partial)
+    {
+        MigrationTerminalStatusV1::Partial
+    } else {
+        MigrationTerminalStatusV1::Admitted
     }
 }
 
@@ -1305,31 +3272,50 @@ mod tests {
         AdapterVersion, DeploymentName, EpisodeBudget, EpisodeCompletionReason, EpisodeStepLimit,
         EpisodeToolOperationLimit, ModelName, ModelOutputTokenLimit, ModelSelection, ProviderName,
     };
+    use cairn_execution::{
+        CapabilityName, CapabilityRequirement, CapabilityValue, CapturePolicy, DiagnosticByteLimit,
+        DockerImageId, EvidenceByteLimit, ExecutionEvidenceArtifact, ExecutionReceipt,
+        ExecutionStderrArtifact, ExecutionStdoutArtifact, ExecutionTimeoutMillis, NetworkPolicy,
+        OutputByteLimit, WorkerPoolName,
+    };
     use cairn_protocol::{ContentType, EpisodeId};
     use cairn_store_sqlite::SqliteEventStore;
+    use cairn_verification::ReferenceArtifact;
     use serde_json::{Value, json};
 
     use super::*;
     use cairn_admission::{
-        AuthoritativeIntentClaimV1, CollectionOutputIntentV1, CollectionOutputOrderContractV1,
         IntentAdmissionRestrictedStoreArtifact, TaskIntentAuthoritySubject,
         UserIntentAuthorityGrantV1, UserIntentAuthorityScopeV1, UserIntentDecisionResponseV1,
         UserIntentDecisionV1, promote_user_intent,
     };
     use cairn_migration::{
-        AgentResolvedRuntimeModelArtifact, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
-        OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact, OracleClaimName,
-        OracleCoverageProfileV1, OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
+        AgentResolvedRuntimeModelArtifact, AuthoritativeIntentClaimV1, CandidateBuildPlanV1,
+        CandidateControlFamilyV1, CandidateControlImplementationArtifact,
+        CandidateControlReceiptV1, CandidateControlResultV1, CandidateMechanismCatalogV1,
+        CandidateMechanismProvenanceV1, CandidateOracleElementMaterialV1,
+        CandidateOracleMaterialV1, CandidateOracleMaterialsV1, CandidateProposalSubmissionV1,
+        CandidateProposalV1, CandidateQualifiedMechanismV1, CollectionOutputIntentV1,
+        CollectionOutputOrderContractV1, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
+        OracleAdversarialPolicyV1, OracleBuildTestSnapshotArtifact, OracleControlFamilyV1,
+        OracleControlReceiptV1, OracleControlResultV1, OracleCoverageProfileV1,
+        OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
         OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
         OracleExplorationCapabilityGrantArtifact, OracleKnowledgeSnapshotArtifact,
+        OracleObservationPayloadV1, OraclePortfolioElementKindV1, OraclePortfolioElementV1,
+        OracleQualifiedMechanismArtifact, OracleQualifiedMechanismRegistrationV1,
         OracleResearchToolCatalogArtifact, OracleSourceSnapshotArtifact, OracleStrategyExecutorV1,
         OracleStrategyImplementationArtifact, OracleStrategyKindV1, OracleStrategyName,
         OracleStrategyRegistrationV1, OracleStrategyRoleV1, OracleStrategyRunLimit,
-        OracleWorkspaceInput, ProposalHostBinaryIdentity, ProposalHostRoleRequestV1,
+        OracleStrategySubmissionOutcomeV1, OracleStrategySubmissionV1, OracleWorkspaceInput,
+        ProposalHostBinaryIdentity, ProposalHostControllerObservationArtifact,
+        ProposalHostOracleBuildTestsV1, ProposalHostOracleDocumentationV1,
+        ProposalHostOracleKnowledgeV1, ProposalHostOracleMaterialsV1, ProposalHostRoleRequestV1,
         ProposalHostRuntimeV1, ProposalHostTaskSnapshotV1, ProposalHostTaskSourceV1,
         SirCallerClaimId, SirHypothesisId, SirSourceLineCount, SirTaskArtifactBytes,
         SirTaskArtifactPath, SirTaskArtifactV1, SirTaskBundleV1, SirTaskLimits,
-        derive_user_intent_decision_requests,
+        TrustedCandidateControlReceiptArtifact, TrustedOracleControlReceiptArtifact,
+        derive_user_intent_decision_requests, prepare_generic_candidate_build_job,
     };
 
     fn id<T: ContentType>(label: &[u8]) -> ContentId<T> {
@@ -1842,11 +3828,10 @@ mod tests {
         ])
         .expect("strategy catalog");
         let contract_id = outcome.contract().identity().expect("contract id");
-        let claim = OracleClaimV1::new(
-            task_id,
-            contract_id,
-            OracleClaimName::new("admitted-contract").expect("claim name"),
-        );
+        let claim = derive_oracle_claims(task_id, contract_id, outcome.contract().admitted_claim())
+            .into_iter()
+            .next()
+            .expect("current V1 admitted claim");
         let workspace = OracleWorkspaceV1::new(&OracleWorkspaceInput {
             task_id,
             admitted_intent: contract_id,
@@ -1874,26 +3859,6 @@ mod tests {
             &catalog,
         )
         .expect("initial ledger");
-        let drifted_claim = OracleClaimV1::new(
-            task_id,
-            contract_id,
-            OracleClaimName::new("drifted-claim").expect("claim name"),
-        );
-        assert!(matches!(
-            open_oracle_exploration(
-                &mut events,
-                &workflow,
-                &recovery_input,
-                &workspace,
-                &policy,
-                &catalog,
-                std::slice::from_ref(&drifted_claim),
-                &ledger,
-                &CommandId::new(),
-                ObservedAtUnixMillis::new(8),
-            ),
-            Err(ControllerWorkflowError::BindingMismatch)
-        ));
         let open_command = CommandId::new();
         let state = open_oracle_exploration(
             &mut events,
@@ -1902,7 +3867,6 @@ mod tests {
             &workspace,
             &policy,
             &catalog,
-            std::slice::from_ref(&claim),
             &ledger,
             &open_command,
             ObservedAtUnixMillis::new(8),
@@ -1918,7 +3882,7 @@ mod tests {
             workspace.identity().expect("workspace id")
         );
         assert_eq!(oracle.ledger(), ledger.identity().expect("ledger id"));
-        assert_eq!(oracle.claims(), &[claim_id]);
+        assert_eq!(oracle.claims(), std::slice::from_ref(&claim));
         assert_eq!(
             recover_controller_workflow(&events, &workflow).expect("Oracle restart recovery"),
             state
@@ -1931,12 +3895,842 @@ mod tests {
                 &workspace,
                 &policy,
                 &catalog,
-                std::slice::from_ref(&claim),
                 &ledger,
                 &open_command,
                 ObservedAtUnixMillis::new(8),
             )
             .expect("exact Oracle opening replay"),
+            state
+        );
+
+        let work_item = ledger.entries()[0].item().clone();
+        let run = OracleStrategyRunV1::new(
+            workspace.identity().expect("workspace id"),
+            &work_item,
+            OracleStrategyName::new("deterministic-synthesis").expect("strategy"),
+            &catalog,
+        )
+        .expect("strategy run");
+        let authorize_strategy_command = CommandId::new();
+        let state = authorize_oracle_strategy(
+            &mut events,
+            &workflow,
+            &workspace,
+            &catalog,
+            &ledger,
+            &run,
+            &authorize_strategy_command,
+            ObservedAtUnixMillis::new(9),
+        )
+        .expect("authorize Oracle strategy");
+        let ControllerWorkflowNextActionV1::RunOracleStrategy(strategy_authority) =
+            state.next_action()
+        else {
+            panic!("expected one authorized Oracle strategy run");
+        };
+        assert_eq!(strategy_authority.run(), run.identity().expect("run id"));
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("strategy restart recovery"),
+            state
+        );
+        assert_eq!(
+            authorize_oracle_strategy(
+                &mut events,
+                &workflow,
+                &workspace,
+                &catalog,
+                &ledger,
+                &run,
+                &authorize_strategy_command,
+                ObservedAtUnixMillis::new(9),
+            )
+            .expect("exact strategy authority replay"),
+            state
+        );
+
+        let started_ledger = ledger
+            .start_strategy(&run, &catalog, workspace.budget())
+            .expect("started ledger");
+        let controller_observation =
+            id::<ProposalHostControllerObservationArtifact>(b"Controller observation");
+        let payload = OracleObservationPayloadV1::new(
+            controller_observation,
+            json!({"observed": "typed effect result"}),
+        );
+        let observation = OracleExplorationObservationV1::proposal_host_effect(
+            run.item(),
+            run.identity().expect("run id"),
+            controller_observation,
+            &payload,
+        )
+        .expect("Oracle observation");
+        let observation_command = CommandId::new();
+        let state = record_oracle_strategy_observations(
+            &mut events,
+            &workflow,
+            &started_ledger,
+            &run,
+            std::slice::from_ref(&observation),
+            &observation_command,
+            ObservedAtUnixMillis::new(10),
+        )
+        .expect("record typed strategy observation");
+        assert!(matches!(
+            state,
+            ControllerWorkflowStateV1::OracleStrategyAuthorized(_)
+        ));
+        let observed_ledger = started_ledger
+            .record_strategy_observations(
+                run.item(),
+                run.identity().expect("run id"),
+                std::slice::from_ref(&observation),
+            )
+            .expect("observed ledger");
+        assert_eq!(
+            record_oracle_strategy_observations(
+                &mut events,
+                &workflow,
+                &started_ledger,
+                &run,
+                std::slice::from_ref(&observation),
+                &observation_command,
+                ObservedAtUnixMillis::new(10),
+            )
+            .expect("exact observation replay"),
+            state
+        );
+        let element = OraclePortfolioElementV1::new(
+            run.item(),
+            run.identity().expect("run id"),
+            OraclePortfolioElementKindV1::Reference(id::<ReferenceArtifact>(b"reference")),
+            vec![observation.identity().expect("observation id")],
+        )
+        .expect("portfolio element");
+        let mut candidate_elements = vec![element.clone()];
+        let submission = OracleStrategySubmissionV1::new(
+            &run,
+            OracleStrategySubmissionOutcomeV1::Contribute {
+                elements: vec![element],
+            },
+        )
+        .expect("strategy submission");
+        let OracleStrategyExecutorV1::Deterministic { implementation } = run.executor() else {
+            panic!("expected deterministic test strategy");
+        };
+        let completion = OracleStrategyCompletionV1::Deterministic {
+            implementation: *implementation,
+            submission,
+        };
+        let submission_command = CommandId::new();
+        let state = record_oracle_strategy_completion(
+            &mut events,
+            &workflow,
+            &workspace,
+            &observed_ledger,
+            &run,
+            &completion,
+            &submission_command,
+            ObservedAtUnixMillis::new(11),
+        )
+        .expect("record strategy submission");
+        let ControllerWorkflowNextActionV1::RunOracleExploration(oracle) = state.next_action()
+        else {
+            panic!("expected next Oracle cell selection");
+        };
+        assert_eq!(oracle.ledger_revision().get(), 4);
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("submission restart recovery"),
+            state
+        );
+        assert_eq!(
+            record_oracle_strategy_completion(
+                &mut events,
+                &workflow,
+                &workspace,
+                &observed_ledger,
+                &run,
+                &completion,
+                &submission_command,
+                ObservedAtUnixMillis::new(11),
+            )
+            .expect("exact strategy submission replay"),
+            state
+        );
+
+        let mut terminal_ledger = observed_ledger
+            .apply_strategy_submission(
+                &run,
+                completion.submission(&run).expect("first submission"),
+                &workspace,
+            )
+            .expect("first terminal cell");
+        let mut observed_millis = 12;
+        loop {
+            let next = terminal_ledger
+                .next_action(&catalog, workspace.budget())
+                .expect("select remaining Oracle work");
+            let cairn_migration::OracleExplorationNextActionV1::RunStrategy {
+                item,
+                eligible_strategies,
+            } = next
+            else {
+                assert_eq!(
+                    next,
+                    cairn_migration::OracleExplorationNextActionV1::FreezePortfolio
+                );
+                break;
+            };
+            let next_run = OracleStrategyRunV1::new(
+                workspace.identity().expect("workspace id"),
+                &item,
+                eligible_strategies[0].clone(),
+                &catalog,
+            )
+            .expect("remaining strategy run");
+            authorize_oracle_strategy(
+                &mut events,
+                &workflow,
+                &workspace,
+                &catalog,
+                &terminal_ledger,
+                &next_run,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("authorize remaining strategy");
+            observed_millis += 1;
+            let started = terminal_ledger
+                .start_strategy(&next_run, &catalog, workspace.budget())
+                .expect("start remaining strategy");
+            let gap = OraclePortfolioElementV1::new(
+                next_run.item(),
+                next_run.identity().expect("run id"),
+                OraclePortfolioElementKindV1::Reference(id::<ReferenceArtifact>(
+                    b"remaining reference",
+                )),
+                vec![],
+            )
+            .expect("remaining coverage gap");
+            candidate_elements.push(gap.clone());
+            let next_submission = OracleStrategySubmissionV1::new(
+                &next_run,
+                OracleStrategySubmissionOutcomeV1::Contribute {
+                    elements: vec![gap],
+                },
+            )
+            .expect("remaining submission");
+            let OracleStrategyExecutorV1::Deterministic { implementation } = next_run.executor()
+            else {
+                panic!("expected deterministic strategy");
+            };
+            let next_completion = OracleStrategyCompletionV1::Deterministic {
+                implementation: *implementation,
+                submission: next_submission,
+            };
+            let state = record_oracle_strategy_completion(
+                &mut events,
+                &workflow,
+                &workspace,
+                &started,
+                &next_run,
+                &next_completion,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("record remaining strategy");
+            observed_millis += 1;
+            assert!(matches!(
+                state,
+                ControllerWorkflowStateV1::OracleExplorationOpened(_)
+            ));
+            terminal_ledger = started
+                .apply_strategy_submission(
+                    &next_run,
+                    next_completion
+                        .submission(&next_run)
+                        .expect("remaining completion"),
+                    &workspace,
+                )
+                .expect("advance remaining ledger");
+        }
+
+        let portfolio =
+            OraclePortfolioProposalV1::freeze(&terminal_ledger).expect("freeze complete portfolio");
+        let admission_policy = OracleAdmissionPolicyV1::strict();
+        let freeze_portfolio_command = CommandId::new();
+        let state = freeze_oracle_portfolio(
+            &mut events,
+            &workflow,
+            &terminal_ledger,
+            &portfolio,
+            &admission_policy,
+            &freeze_portfolio_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("durably freeze portfolio");
+        let ControllerWorkflowNextActionV1::AwaitOracleAdmissionMechanisms(portfolio_authority) =
+            state.next_action()
+        else {
+            panic!("expected qualified Admission mechanisms");
+        };
+        assert_eq!(
+            portfolio_authority.proposal(),
+            portfolio.identity().expect("portfolio id")
+        );
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("portfolio restart"),
+            state
+        );
+        assert_eq!(
+            freeze_oracle_portfolio(
+                &mut events,
+                &workflow,
+                &terminal_ledger,
+                &portfolio,
+                &admission_policy,
+                &freeze_portfolio_command,
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("exact portfolio replay"),
+            state
+        );
+        observed_millis += 1;
+
+        let mechanisms = OracleAdmissionMechanismCatalogV1::new(
+            admission_policy
+                .required_controls()
+                .iter()
+                .map(|control| {
+                    let label = match control {
+                        OracleControlFamilyV1::MechanismQualification => {
+                            b"qualification".as_slice()
+                        }
+                        OracleControlFamilyV1::Honest => b"honest".as_slice(),
+                        OracleControlFamilyV1::Mutant => b"mutant".as_slice(),
+                        OracleControlFamilyV1::Hidden => b"hidden".as_slice(),
+                        OracleControlFamilyV1::Bypass => b"bypass".as_slice(),
+                    };
+                    OracleQualifiedMechanismRegistrationV1::new(
+                        *control,
+                        id::<OracleQualifiedMechanismArtifact>(label),
+                    )
+                })
+                .collect(),
+        )
+        .expect("qualified mechanisms");
+        let attempt = OracleAdmissionAttemptV1::new(&portfolio, &admission_policy, &mechanisms)
+            .expect("Admission attempt");
+        let authorize_admission_command = CommandId::new();
+        let state = authorize_oracle_admission(
+            &mut events,
+            &workflow,
+            &portfolio,
+            &admission_policy,
+            &mechanisms,
+            &attempt,
+            &authorize_admission_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("authorize independent Admission");
+        assert!(matches!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::AwaitOracleControlReceipts(_)
+        ));
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("attempt restart"),
+            state
+        );
+        observed_millis += 1;
+
+        let proposal_id = portfolio.identity().expect("proposal id");
+        let receipts = attempt
+            .required_controls()
+            .iter()
+            .map(|obligation| {
+                let receipt_label =
+                    format!("{}:{:?}", obligation.item().to_wire(), obligation.control());
+                OracleControlReceiptV1::new(
+                    proposal_id,
+                    obligation.item(),
+                    obligation.control(),
+                    obligation.mechanism(),
+                    ContentId::<TrustedOracleControlReceiptArtifact>::derive(
+                        receipt_label.as_bytes(),
+                    )
+                    .expect("trusted receipt id"),
+                    OracleControlResultV1::Passed,
+                )
+            })
+            .collect();
+        let evidence =
+            OracleAdmissionEvidenceV1::new(&attempt, receipts).expect("complete control receipts");
+        let admission_outcome = recompute_oracle_admission(
+            &portfolio,
+            &admission_policy,
+            &mechanisms,
+            &attempt,
+            &evidence,
+        )
+        .expect("independent recomputation");
+        let record_admission_command = CommandId::new();
+        let state = record_oracle_admission_outcome(
+            &mut events,
+            &workflow,
+            &portfolio,
+            &admission_policy,
+            &mechanisms,
+            &attempt,
+            &evidence,
+            &admission_outcome,
+            &record_admission_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("record independent Admission outcome");
+        assert!(matches!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::PrepareCandidateOracleContract { .. }
+        ));
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("Admission outcome restart"),
+            state
+        );
+        assert_eq!(
+            record_oracle_admission_outcome(
+                &mut events,
+                &workflow,
+                &portfolio,
+                &admission_policy,
+                &mechanisms,
+                &attempt,
+                &evidence,
+                &admission_outcome,
+                &record_admission_command,
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("exact Admission outcome replay"),
+            state
+        );
+        observed_millis += 1;
+
+        let candidate_contract = CandidateOracleContractV1::derive(&portfolio, &admission_outcome)
+            .expect("derive admitted Candidate authority");
+        let candidate_workspace =
+            CandidateWorkspaceV1::derive(&workspace, &portfolio, &candidate_contract)
+                .expect("derive Candidate workspace");
+        let freeze_candidate_command = CommandId::new();
+        let state = freeze_candidate_oracle_contract(
+            &mut events,
+            &workflow,
+            &workspace,
+            &portfolio,
+            &admission_outcome,
+            &candidate_contract,
+            &candidate_workspace,
+            &freeze_candidate_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("freeze Candidate Oracle contract");
+        let ControllerWorkflowNextActionV1::AwaitCandidateProposalLoop(candidate_authority) =
+            state.next_action()
+        else {
+            panic!("expected Candidate Proposal Loop boundary");
+        };
+        assert_eq!(
+            candidate_authority.contract(),
+            candidate_contract
+                .identity()
+                .expect("Candidate contract id")
+        );
+        assert_eq!(
+            candidate_authority.workspace(),
+            candidate_workspace
+                .identity()
+                .expect("Candidate workspace id")
+        );
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("Candidate authority restart"),
+            state
+        );
+        assert_eq!(
+            freeze_candidate_oracle_contract(
+                &mut events,
+                &workflow,
+                &workspace,
+                &portfolio,
+                &admission_outcome,
+                &candidate_contract,
+                &candidate_workspace,
+                &freeze_candidate_command,
+                ObservedAtUnixMillis::new(observed_millis),
+            )
+            .expect("exact Candidate authority replay"),
+            state
+        );
+        observed_millis += 1;
+
+        let candidate_materials = CandidateOracleMaterialsV1::new(
+            &candidate_contract,
+            vec![claim.clone()],
+            candidate_elements
+                .into_iter()
+                .map(|element| {
+                    let bytes = match element.kind() {
+                        OraclePortfolioElementKindV1::Reference(identity)
+                            if *identity == id::<ReferenceArtifact>(b"reference") =>
+                        {
+                            b"reference".to_vec()
+                        }
+                        OraclePortfolioElementKindV1::Reference(identity)
+                            if *identity == id::<ReferenceArtifact>(b"remaining reference") =>
+                        {
+                            b"remaining reference".to_vec()
+                        }
+                        _ => panic!("unexpected test Oracle material"),
+                    };
+                    let material =
+                        CandidateOracleMaterialV1::from_portfolio_kind(element.kind(), bytes)
+                            .expect("typed Candidate Oracle material");
+                    CandidateOracleElementMaterialV1::new(element, material)
+                        .expect("Candidate element material")
+                })
+                .collect(),
+        )
+        .expect("complete Candidate Oracle bodies");
+        let ProposalHostRoleRequestV1::Sir { task, .. } = request.role() else {
+            unreachable!()
+        };
+        let candidate_episode = EpisodeId::new();
+        let candidate_model = id::<AgentResolvedRuntimeModelArtifact>(b"Candidate model");
+        let candidate_runtime = ProposalHostRuntimeV1::new(
+            candidate_episode,
+            ProposalHostBinaryIdentity::new(format!("sha256:{}", "b".repeat(64)))
+                .expect("Candidate Host binary"),
+            candidate_model,
+            ModelSelection {
+                provider: ProviderName::new("recorded").expect("provider"),
+                model: ModelName::new("recorded-candidate-model").expect("model"),
+                deployment: DeploymentName::new("candidate-isolated").expect("deployment"),
+                adapter_version: AdapterVersion::new("native-protocol-v1").expect("adapter"),
+            },
+            EpisodeBudget {
+                step_limit: Some(EpisodeStepLimit::new(4).expect("steps")),
+                tool_operation_limit: Some(EpisodeToolOperationLimit::new(8)),
+                provider_token_limit: None,
+                deadline_unix_ms: None,
+                external_meter_limits: None,
+            },
+            ModelOutputTokenLimit::new(4_096).expect("output"),
+            SirTaskLimits::default(),
+        );
+        let candidate_request = ProposalHostRequestV1::new(
+            candidate_runtime,
+            ProposalHostRoleRequestV1::CandidateStrategy {
+                workspace: candidate_workspace.clone(),
+                contract: candidate_contract.clone(),
+                oracle_materials: candidate_materials,
+                task: task.clone(),
+                public_materials: ProposalHostOracleMaterialsV1::new(
+                    ProposalHostOracleDocumentationV1::new(
+                        workspace.documentation(),
+                        "documentation snapshot".into(),
+                    )
+                    .expect("Candidate documentation"),
+                    ProposalHostOracleBuildTestsV1::new(
+                        workspace.build_and_tests(),
+                        "build and tests snapshot".into(),
+                    )
+                    .expect("Candidate build/tests"),
+                    ProposalHostOracleKnowledgeV1::new(
+                        workspace.knowledge(),
+                        "knowledge snapshot".into(),
+                    )
+                    .expect("Candidate knowledge"),
+                ),
+            },
+        )
+        .expect("Candidate Host request");
+        let candidate_request_id = candidate_request.identity().expect("Candidate request id");
+        let freeze_request_command = CommandId::new();
+        let state = freeze_candidate_proposal_request(
+            &mut events,
+            &workflow,
+            candidate_request_id,
+            &candidate_request,
+            &freeze_request_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("freeze Candidate request");
+        let ControllerWorkflowNextActionV1::AuthorizeCandidateProposalEpisode(
+            candidate_proposal_authority,
+        ) = state.next_action()
+        else {
+            panic!("expected Candidate start authorization");
+        };
+        assert_eq!(candidate_proposal_authority.request(), candidate_request_id);
+        observed_millis += 1;
+
+        let authorize_candidate_command = CommandId::new();
+        let state = authorize_candidate_proposal_episode(
+            &mut events,
+            &workflow,
+            candidate_request_id,
+            &authorize_candidate_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("authorize Candidate episode");
+        assert!(matches!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::RunCandidateProposalEpisode(_)
+        ));
+        observed_millis += 1;
+
+        let candidate_submission: CandidateProposalSubmissionV1 = serde_json::from_value(json!({
+            "schema_version": 1,
+            "files": [{
+                "path": "src/operator.asc",
+                "source": "#include \"kernel_operator.h\"\nextern \"C\" __global__ __aicore__ void operator_kernel() {}\n"
+            }],
+            "primary_source": "src/operator.asc",
+            "explanation": "Complete proposal bound only to the frozen admitted portfolio."
+        }))
+        .expect("Candidate submission");
+        let candidate_proposal = CandidateProposalV1::new(
+            candidate_contract
+                .identity()
+                .expect("Candidate contract id"),
+            candidate_episode,
+            candidate_model,
+            candidate_submission,
+        )
+        .expect("Candidate proposal");
+        let candidate_proposal_id = candidate_proposal
+            .identity()
+            .expect("Candidate proposal id");
+        let candidate_terminal: ProposalHostTerminalV1 = serde_json::from_value(json!({
+            "schema_version": 1,
+            "request": candidate_request_id,
+            "episode_id": candidate_episode,
+            "publication": {
+                "role": "candidate-strategy",
+                "proposal_id": candidate_proposal_id,
+                "proposal": candidate_proposal,
+            },
+            "completion_reason": "yielded",
+            "steps_started": 2
+        }))
+        .expect("Candidate terminal");
+        let candidate_terminal_id = candidate_terminal
+            .identity()
+            .expect("Candidate terminal id");
+        let record_candidate_command = CommandId::new();
+        let state = record_candidate_proposal(
+            &mut events,
+            &workflow,
+            candidate_request_id,
+            &candidate_request,
+            candidate_terminal_id,
+            &candidate_terminal,
+            &record_candidate_command,
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("record Candidate proposal");
+        assert_eq!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::AwaitCandidateBuild {
+                authority: candidate_proposal_authority,
+                terminal: candidate_terminal_id,
+                proposal: candidate_proposal_id,
+            }
+        );
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("Candidate terminal restart"),
+            state
+        );
+
+        observed_millis += 1;
+        let plan = CandidateBuildPlanV1::new(
+            DockerImageId::new(format!("sha256:{}", "c".repeat(64))).expect("image"),
+            b"#!/bin/sh\nset -eu\ntrue\n".to_vec(),
+            vec![WorkerPoolName::new("generic-build").expect("pool")],
+            vec![CapabilityRequirement {
+                name: CapabilityName::new("execution.role").expect("capability"),
+                value: CapabilityValue::new("build").expect("value"),
+            }],
+            ExecutionTimeoutMillis::new(30_000).expect("timeout"),
+            CapturePolicy::new(
+                OutputByteLimit::new(4_096).expect("stdout"),
+                OutputByteLimit::new(4_096).expect("stderr"),
+                DiagnosticByteLimit::new(4_096).expect("diagnostic"),
+                EvidenceByteLimit::new(4_096).expect("evidence"),
+                Vec::new(),
+            )
+            .expect("capture"),
+            NetworkPolicy::Disabled,
+        )
+        .expect("generic build plan");
+        let proposal_bytes = cairn_codec::to_vec(&candidate_proposal).expect("proposal bytes");
+        let prepared = prepare_generic_candidate_build_job(
+            cairn_protocol::JobId::new(),
+            &proposal_bytes,
+            candidate_proposal_id,
+            plan.clone(),
+        )
+        .expect("generic build material");
+        let state = freeze_candidate_build(
+            &mut events,
+            &workflow,
+            &candidate_proposal,
+            &plan,
+            prepared.request(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("freeze build");
+        let ControllerWorkflowNextActionV1::AuthorizeCandidateBuild(build_authority) =
+            state.next_action()
+        else {
+            panic!("expected build authorization");
+        };
+        observed_millis += 1;
+        let state = authorize_candidate_build(
+            &mut events,
+            &workflow,
+            build_authority.request(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("authorize build");
+        assert!(matches!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::RunCandidateBuild(_)
+        ));
+
+        observed_millis += 1;
+        let receipt_value = json!({
+            "schema_version":1,
+            "job_id":prepared.request().job_id(),
+            "attempt_id":cairn_protocol::AttemptId::new(),
+            "contract_id":prepared.request().contract(),
+            "outcome":"succeeded",
+            "exit_code":0,
+            "elapsed_ms":10,
+            "stdout_id":id::<ExecutionStdoutArtifact>(b"candidate stdout"),
+            "stderr_id":id::<ExecutionStderrArtifact>(b"candidate stderr"),
+            "evidence_id":id::<ExecutionEvidenceArtifact>(b"candidate build evidence"),
+            "outputs":[]
+        });
+        let receipt_bytes = cairn_codec::to_vec(&receipt_value).expect("receipt bytes");
+        let receipt: ExecutionReceipt = cairn_codec::from_slice(&receipt_bytes).expect("receipt");
+        let receipt_id = ContentId::derive(&receipt_bytes).expect("receipt id");
+        let state = record_candidate_build_observation(
+            &mut events,
+            &workflow,
+            prepared.request(),
+            receipt_id,
+            &receipt,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("record build observation");
+        assert!(matches!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::AwaitCandidateAdmissionMechanisms { .. }
+        ));
+
+        let families = [
+            CandidateControlFamilyV1::SourceBuild,
+            CandidateControlFamilyV1::StaticAnalysis,
+            CandidateControlFamilyV1::ExecuteObservation,
+            CandidateControlFamilyV1::SemanticComparison,
+            CandidateControlFamilyV1::Safety,
+            CandidateControlFamilyV1::Performance,
+        ];
+        let mechanisms = CandidateMechanismCatalogV1::new(
+            families
+                .into_iter()
+                .map(|family| {
+                    CandidateQualifiedMechanismV1::new(
+                        family,
+                        id::<CandidateControlImplementationArtifact>(
+                            format!("{family:?}").as_bytes(),
+                        ),
+                        CandidateMechanismProvenanceV1::Worker,
+                    )
+                })
+                .collect(),
+        )
+        .expect("mechanisms");
+        let attempt =
+            CandidateAdmissionAttemptV1::new(&candidate_contract, &candidate_proposal, &mechanisms)
+                .expect("attempt");
+        observed_millis += 1;
+        let state = authorize_candidate_admission(
+            &mut events,
+            &workflow,
+            &candidate_contract,
+            &candidate_proposal,
+            &mechanisms,
+            &attempt,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("authorize Candidate Admission");
+        let ControllerWorkflowNextActionV1::AwaitCandidateControlReceipts(admission_authority) =
+            state.next_action()
+        else {
+            panic!("expected Candidate controls");
+        };
+        assert_eq!(admission_authority.receipt(), receipt_id);
+
+        let receipts = attempt
+            .obligations()
+            .iter()
+            .enumerate()
+            .map(|(index, obligation)| {
+                CandidateControlReceiptV1::new(
+                    obligation.item(),
+                    obligation.family(),
+                    obligation.mechanism(),
+                    id::<TrustedCandidateControlReceiptArtifact>(
+                        format!("candidate control {index}").as_bytes(),
+                    ),
+                    CandidateControlResultV1::Passed,
+                )
+            })
+            .collect();
+        let evidence =
+            CandidateAdmissionEvidenceV1::new(&attempt, receipts).expect("Candidate evidence");
+        let outcome = recompute_candidate_admission(
+            &candidate_contract,
+            &candidate_proposal,
+            &mechanisms,
+            &attempt,
+            &evidence,
+        )
+        .expect("Candidate outcome");
+        observed_millis += 1;
+        let state = record_candidate_admission_outcome(
+            &mut events,
+            &workflow,
+            &candidate_contract,
+            &candidate_proposal,
+            &mechanisms,
+            &attempt,
+            &evidence,
+            &outcome,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(observed_millis),
+        )
+        .expect("record Candidate outcome");
+        assert!(matches!(
+            state.next_action(),
+            ControllerWorkflowNextActionV1::Terminal {
+                status: MigrationTerminalStatusV1::Admitted,
+                ..
+            }
+        ));
+        assert_eq!(
+            recover_controller_workflow(&events, &workflow).expect("terminal restart"),
             state
         );
     }

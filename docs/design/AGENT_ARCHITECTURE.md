@@ -31,7 +31,7 @@
 3. “11”是当前设计清单的派生结果，不是 protocol 常量、并发数、进程数或发布要求；
 4. 功能必须存在不等于必须使用 LLM Agent；规则、静态分析、mutation、solver、search 和 deterministic
    recipe 可以实现同一 strategy contract；
-5. Blue/Red 是当前 model-backed synthesis/adversarial profiles，不是永久 Agent 类型；
+5. synthesis/adversarial是logical strategy role，不对应固定Blue/Red Agent类型或episode拓扑；
 6. 不存在万能 Admission Planner；每个 Admission kind 使用不同 typed profile，且 Planner 可以不运行；
 7. Agent 全部属于 Proposal authority，不能生成 admitted artifact、execution receipt 或最终 verdict；
 8. 多 Agent 交互只通过冻结 artifact、typed request/diagnostic 和 durable event，不共享私有 continuation
@@ -317,8 +317,8 @@ Episode A
 
 #### Synthesis → adversarial revision
 
-Synthesis 提交完整冻结 proposal，adversarial strategy 返回 attack findings，负责的 synthesis episode
-提交 changed revision。当前 Blue/Red loop 是该模式的一种实现。
+Synthesis 提交完整冻结 proposal，adversarial strategy 返回 attack findings，负责的 synthesis strategy可提交
+changed revision。每次执行仍只绑定一个exact cell；不存在固定Blue→Red loop。
 
 #### Independent proposal ensemble
 
@@ -765,14 +765,15 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 - domain-neutral `cairn-agent` 的 provider、continuation、tool、budget 和 durable episode 基础；
 - OpenAI Responses、Chat Completions、Anthropic Messages 的 native protocol paths；
 - model/template/deployment/protocol/credential 分层；
-- Blue/Red 当前 model-backed profiles、external-test research、artifact-mediated revision/dogfood；
+- generic Proposal Host逐cell Oracle Agent profile、external-effect durable yield、typed observation projection；
+- terminal portfolio到Independent Oracle Admission的durable authority/evidence/outcome aggregate；
 - recorded/scripted provider 和部分 replay/failure controls。
 
 ### 22.2 尚未实现
 
 - 产品侧完整 11-position profile catalog；
-- generic Proposal/Planning Host process；
-- production SIR profile 在 generic Host 中的 supervisor/lifecycle；
+- Candidate suffix接入已完成Oracle Admission的Controller aggregate；
+- 具体qualified Oracle control mechanism runner及其Worker adapters；
 - Oracle strategy 插件式组合政策（不采用 native dynamic plugin ABI）；
 - 七个 Admission Planner profiles；
 - Agent invocation/expected-information-gain policy；
@@ -781,8 +782,8 @@ model templates 继续与产品 profile 分离：前者描述模型/协议能力
 - 同 Host 多 episode isolation 和 capability-driven process split；
 - profile-specific evaluation dashboard/receipts。
 
-当前 Blue/Red dogfood 证明模型 episode、结构化提交和 revision loop 的部分机制，不证明完整 Agent
-architecture 已实现。
+当前recorded逐cell Oracle Host证明exact role input、结构化提交、effect observation和revision ledger机制，不证明
+live模型质量、完整Oracle portfolio或Admission closure。
 
 ## 23. 已完成的首期 proof 与下一边界
 

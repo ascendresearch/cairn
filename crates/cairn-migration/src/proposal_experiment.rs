@@ -1,9 +1,10 @@
 //! Controller-owned bridge from a Proposal Host durable yield to a managed Worker observation.
 
 use cairn_agent::{
-    AgentEpisode, AgentEpisodeState, AgentStepState, CanonicalToolResult, PreparedToolOperation,
-    ToolGateway, ToolGatewayError, ToolOperationState, authorize_tool_operation,
-    begin_tool_operation, execute_tool_operation, recover_agent_episode, recover_tool_operation,
+    AgentEpisode, AgentEpisodeState, AgentStepState, CanonicalToolResult, OperationResult,
+    PreparedToolOperation, ToolGateway, ToolGatewayError, ToolOperationState,
+    authorize_tool_operation, begin_tool_operation, execute_tool_operation, recover_agent_episode,
+    recover_tool_operation,
 };
 use cairn_execution::{ExecutionReceipt, ExecutionReceiptArtifact, JobContractArtifact};
 use cairn_protocol::{
@@ -15,8 +16,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    ProposalHostExperimentOperationV1, ProposalHostExperimentRequestArtifact,
-    ProposalHostExperimentRequestV1, ProposalHostRequestV1,
+    OracleExplorationObservationV1, OracleObservationPayloadV1,
+    ProposalHostControllerObservationArtifact, ProposalHostExperimentOperationV1,
+    ProposalHostExperimentRequestArtifact, ProposalHostExperimentRequestV1, ProposalHostRequestV1,
+    ProposalHostRoleRequestV1,
 };
 
 /// Identity of one exact Controller-authorized experiment dispatch.
@@ -24,6 +27,192 @@ pub enum ProposalHostExperimentDispatchArtifact {}
 
 impl ContentType for ProposalHostExperimentDispatchArtifact {
     const DOMAIN: &'static str = "migration.proposal-host-experiment-dispatch.v1";
+}
+
+/// Controller-recomputed effect observation returned to the same Host episode.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProposalHostControllerObservationV1 {
+    schema_version: SchemaVersion,
+    dispatch: ProposalHostExperimentDispatchV1,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: ExecutionReceipt,
+    observation: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalHostControllerObservationWire {
+    schema_version: SchemaVersion,
+    dispatch: ProposalHostExperimentDispatchV1,
+    receipt_id: ContentId<ExecutionReceiptArtifact>,
+    receipt: ExecutionReceipt,
+    observation: serde_json::Value,
+}
+
+impl ProposalHostControllerObservationV1 {
+    fn from_worker(
+        dispatch: ProposalHostExperimentDispatchV1,
+        observed: ProposalHostWorkerObservationV1,
+    ) -> Result<Self, ProposalHostExperimentError> {
+        let value = Self {
+            schema_version: schema_v1(),
+            dispatch,
+            receipt_id: observed.receipt_id,
+            receipt: observed.receipt,
+            observation: observed.observation,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn dispatch(&self) -> &ProposalHostExperimentDispatchV1 {
+        &self.dispatch
+    }
+
+    #[must_use]
+    pub const fn observation(&self) -> &serde_json::Value {
+        &self.observation
+    }
+
+    /// Derives the exact Controller observation identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects schema, dispatch, Worker receipt, or canonical codec drift.
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<ProposalHostControllerObservationArtifact>, ProposalHostExperimentError>
+    {
+        self.validate()?;
+        ContentId::derive(&cairn_codec::to_vec(self).map_err(codec_error)?).map_err(codec_error)
+    }
+
+    fn validate(&self) -> Result<(), ProposalHostExperimentError> {
+        if self.schema_version != schema_v1()
+            || self.receipt.job_id() != self.dispatch.worker.job_id
+            || self.receipt.attempt_id() != self.dispatch.worker.attempt_id
+            || self.receipt.contract_id() != self.dispatch.worker.contract_id
+        {
+            return invalid("Controller observation changed its authorized Worker binding");
+        }
+        let bytes = cairn_codec::to_vec(&self.receipt).map_err(codec_error)?;
+        if ContentId::<ExecutionReceiptArtifact>::derive(&bytes).map_err(codec_error)?
+            != self.receipt_id
+        {
+            return invalid("Controller observation changed its Worker receipt identity");
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<ProposalHostControllerObservationWire> for ProposalHostControllerObservationV1 {
+    type Error = ProposalHostExperimentError;
+
+    fn try_from(wire: ProposalHostControllerObservationWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            dispatch: wire.dispatch,
+            receipt_id: wire.receipt_id,
+            receipt: wire.receipt,
+            observation: wire.observation,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProposalHostControllerObservationV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        ProposalHostControllerObservationWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Exact Controller effect plus its optional Oracle-domain projection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProposalHostExecutedObservationV1 {
+    controller: ProposalHostControllerObservationV1,
+    oracle_payload: Option<OracleObservationPayloadV1>,
+    oracle_observation: Option<OracleExplorationObservationV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalHostExecutedObservationWire {
+    controller: ProposalHostControllerObservationV1,
+    oracle_payload: Option<OracleObservationPayloadV1>,
+    oracle_observation: Option<OracleExplorationObservationV1>,
+}
+
+impl ProposalHostExecutedObservationV1 {
+    #[must_use]
+    pub const fn controller(&self) -> &ProposalHostControllerObservationV1 {
+        &self.controller
+    }
+
+    #[must_use]
+    pub const fn oracle_payload(&self) -> Option<&OracleObservationPayloadV1> {
+        self.oracle_payload.as_ref()
+    }
+
+    #[must_use]
+    pub const fn oracle_observation(&self) -> Option<&OracleExplorationObservationV1> {
+        self.oracle_observation.as_ref()
+    }
+
+    fn validate(&self) -> Result<(), ProposalHostExperimentError> {
+        self.controller.validate()?;
+        match (&self.oracle_payload, &self.oracle_observation) {
+            (None, None) => Ok(()),
+            (Some(payload), Some(observation)) => {
+                let controller_id = self.controller.identity()?;
+                if payload.source() != controller_id
+                    || !observation
+                        .validates_proposal_host_effect(
+                            observation.item(),
+                            observation.run(),
+                            controller_id,
+                            payload,
+                        )
+                        .map_err(agent_error)?
+                {
+                    return invalid("Oracle effect projection changed its Controller source");
+                }
+                Ok(())
+            }
+            _ => invalid("Oracle effect projection is incomplete"),
+        }
+    }
+}
+
+impl TryFrom<ProposalHostExecutedObservationWire> for ProposalHostExecutedObservationV1 {
+    type Error = ProposalHostExperimentError;
+
+    fn try_from(wire: ProposalHostExecutedObservationWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            controller: wire.controller,
+            oracle_payload: wire.oracle_payload,
+            oracle_observation: wire.oracle_observation,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProposalHostExecutedObservationV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        ProposalHostExecutedObservationWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// Worker-side execution identity selected without performing the external effect.
@@ -241,14 +430,52 @@ pub enum ProposalHostExperimentError {
     Agent(String),
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ProvenanceBearingObservationV1<'a> {
+struct ProvenanceBearingObservationV1 {
     schema_version: SchemaVersion,
-    dispatch: ContentId<ProposalHostExperimentDispatchArtifact>,
-    receipt_id: ContentId<ExecutionReceiptArtifact>,
-    receipt: &'a ExecutionReceipt,
-    observation: &'a serde_json::Value,
+    controller_observation: ContentId<ProposalHostControllerObservationArtifact>,
+    oracle_observation: Option<ContentId<crate::OracleExplorationObservationArtifact>>,
+    executed: ProposalHostExecutedObservationV1,
+}
+
+impl ProvenanceBearingObservationV1 {
+    fn new(
+        executed: ProposalHostExecutedObservationV1,
+    ) -> Result<Self, ProposalHostExperimentError> {
+        executed.validate()?;
+        let controller_observation = executed.controller.identity()?;
+        let oracle_observation = executed
+            .oracle_observation
+            .as_ref()
+            .map(OracleExplorationObservationV1::identity)
+            .transpose()
+            .map_err(agent_error)?;
+        Ok(Self {
+            schema_version: schema_v1(),
+            controller_observation,
+            oracle_observation,
+            executed,
+        })
+    }
+
+    fn validate(self) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError> {
+        if self.schema_version != schema_v1()
+            || self.executed.controller.identity()? != self.controller_observation
+            || self
+                .executed
+                .oracle_observation
+                .as_ref()
+                .map(OracleExplorationObservationV1::identity)
+                .transpose()
+                .map_err(agent_error)?
+                != self.oracle_observation
+        {
+            return invalid("model-visible effect result changed its typed observation identity");
+        }
+        self.executed.validate()?;
+        Ok(self.executed)
+    }
 }
 
 /// Controller validates a Host yield, grants durable start authority, invokes the selected Worker,
@@ -267,7 +494,7 @@ pub fn execute_proposal_host_experiments<E, C, W>(
     host_request: &ProposalHostRequestV1,
     experiment: &ProposalHostExperimentRequestV1,
     worker: &mut W,
-) -> Result<(), ProposalHostExperimentError>
+) -> Result<Vec<ProposalHostExecutedObservationV1>, ProposalHostExperimentError>
 where
     E: EventStore,
     C: ContentStore,
@@ -277,6 +504,7 @@ where
         .validate_against(host_request)
         .map_err(agent_error)?;
     let durable = recover_bound_operations(events, content, host_request, experiment)?;
+    let mut observations = Vec::with_capacity(experiment.operations().len());
     for yielded in experiment.operations() {
         let operation = durable
             .iter()
@@ -287,16 +515,17 @@ where
                 )
             })?;
         validate_operation(operation, yielded)?;
-        execute_one_experiment(
+        observations.push(execute_one_experiment(
             events,
             content,
+            host_request,
             experiment,
             yielded,
             operation.clone(),
             worker,
-        )?;
+        )?);
     }
-    Ok(())
+    Ok(observations)
 }
 
 fn recover_bound_operations<E: EventStore, C: ContentStore>(
@@ -343,18 +572,21 @@ fn validate_operation(
 fn execute_one_experiment<E, C, W>(
     events: &mut E,
     content: &mut C,
+    host_request: &ProposalHostRequestV1,
     experiment: &ProposalHostExperimentRequestV1,
     yielded: &ProposalHostExperimentOperationV1,
     operation: PreparedToolOperation,
     worker: &mut W,
-) -> Result<(), ProposalHostExperimentError>
+) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError>
 where
     E: EventStore,
     C: ContentStore,
     W: ProposalHostExperimentWorker,
 {
     match recover_tool_operation(events, operation.operation_id()).map_err(agent_error)? {
-        ToolOperationState::Completed { .. } => return Ok(()),
+        ToolOperationState::Completed { result_id, .. } => {
+            return recover_executed_observation(content, result_id, host_request);
+        }
         ToolOperationState::NotFound => {}
         _ => return invalid("Proposal Host experiment operation requires explicit reconciliation"),
     }
@@ -379,7 +611,12 @@ where
         observed_now()?,
     )
     .map_err(agent_error)?;
-    let mut gateway = WorkerGateway { worker, dispatch };
+    let mut gateway = WorkerGateway {
+        worker,
+        dispatch,
+        host_request,
+        executed: None,
+    };
     let _ = execute_tool_operation(
         events,
         content,
@@ -389,12 +626,16 @@ where
         observed_now()?,
     )
     .map_err(agent_error)?;
-    Ok(())
+    gateway
+        .executed
+        .ok_or_else(|| ProposalHostExperimentError::Agent("Worker returned no observation".into()))
 }
 
 struct WorkerGateway<'a, W> {
     worker: &'a mut W,
     dispatch: ProposalHostExperimentDispatchV1,
+    host_request: &'a ProposalHostRequestV1,
+    executed: Option<ProposalHostExecutedObservationV1>,
 }
 
 impl<W: ProposalHostExperimentWorker> ToolGateway for WorkerGateway<'_, W> {
@@ -431,17 +672,67 @@ impl<W: ProposalHostExperimentWorker> ToolGateway for WorkerGateway<'_, W> {
                 "Worker observation changed its Controller dispatch".into(),
             ));
         }
-        let value = serde_json::to_value(ProvenanceBearingObservationV1 {
-            schema_version: schema_v1(),
-            dispatch: observed.dispatch,
-            receipt_id: observed.receipt_id,
-            receipt: &observed.receipt,
-            observation: &observed.observation,
-        })
-        .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        let controller =
+            ProposalHostControllerObservationV1::from_worker(self.dispatch.clone(), observed)
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        let executed = project_observation(self.host_request, controller)
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        let envelope = ProvenanceBearingObservationV1::new(executed.clone())
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        let value = serde_json::to_value(envelope)
+            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+        self.executed = Some(executed);
         CanonicalToolResult::from_value(&value)
             .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
     }
+}
+
+fn project_observation(
+    host_request: &ProposalHostRequestV1,
+    controller: ProposalHostControllerObservationV1,
+) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError> {
+    let (oracle_payload, oracle_observation) = match host_request.role() {
+        ProposalHostRoleRequestV1::OracleStrategy { work_item, run, .. } => {
+            let source = controller.identity()?;
+            let payload = OracleObservationPayloadV1::new(source, controller.observation().clone());
+            let observation = OracleExplorationObservationV1::proposal_host_effect(
+                work_item.identity().map_err(agent_error)?,
+                run.identity().map_err(agent_error)?,
+                source,
+                &payload,
+            )
+            .map_err(agent_error)?;
+            (Some(payload), Some(observation))
+        }
+        _ => (None, None),
+    };
+    let executed = ProposalHostExecutedObservationV1 {
+        controller,
+        oracle_payload,
+        oracle_observation,
+    };
+    executed.validate()?;
+    Ok(executed)
+}
+
+fn recover_executed_observation<C: ContentStore>(
+    content: &C,
+    result: ContentId<OperationResult>,
+    host_request: &ProposalHostRequestV1,
+) -> Result<ProposalHostExecutedObservationV1, ProposalHostExperimentError> {
+    let mut bytes = Vec::new();
+    content.write_to(&result, &mut bytes).map_err(agent_error)?;
+    let envelope: ProvenanceBearingObservationV1 =
+        cairn_codec::from_slice(&bytes).map_err(codec_error)?;
+    if cairn_codec::to_vec(&envelope).map_err(codec_error)? != bytes {
+        return invalid("persisted effect result is not canonical current V1");
+    }
+    let executed = envelope.validate()?;
+    let expected = project_observation(host_request, executed.controller.clone())?;
+    if executed != expected {
+        return invalid("persisted effect result changed its Host role projection");
+    }
+    Ok(executed)
 }
 
 fn schema_v1() -> SchemaVersion {

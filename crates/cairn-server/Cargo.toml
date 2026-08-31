@@ -21,6 +21,7 @@ cairn-observability.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true
 cairn-store-sqlite.workspace = true
+cairn-verification.workspace = true
 getrandom.workspace = true
 rcgen.workspace = true
 sha2.workspace = true

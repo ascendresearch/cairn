@@ -3,10 +3,6 @@
 pub mod controller_workflow;
 
 #[cfg(feature = "proposal-host")]
-mod candidate_manager;
-#[cfg(feature = "proposal-host")]
-mod candidate_workflow;
-#[cfg(feature = "proposal-host")]
 mod controller_manager;
 #[cfg(feature = "proposal-host")]
 mod controller_state;
@@ -18,23 +14,31 @@ mod proposal_host_supervisor;
 mod scheduling;
 
 #[cfg(feature = "proposal-host")]
-pub use candidate_manager::{
-    CandidateWorkflowBlockedV1, CandidateWorkflowManagerConfigV1, CandidateWorkflowManagerStatusV1,
-    CandidateWorkflowPollIntervalMillis, CandidateWorkflowWaitingV1,
-};
-#[cfg(feature = "proposal-host")]
 pub use controller_manager::{
-    ControllerWorkflowManagerStatusV1, drive_controller_workflow_once,
-    freeze_sir_controller_request, initialize_controller_oracle_exploration,
+    ControllerWorkflowManagerStatusV1, authorize_controller_oracle_admission,
+    drive_controller_workflow_once, execute_controller_oracle_strategy_experiments,
+    freeze_sir_controller_request, initialize_candidate_build, initialize_candidate_proposal_loop,
+    initialize_controller_oracle_exploration, prepare_candidate_strategy_proposal_host_request,
+    prepare_oracle_strategy_proposal_host_request, record_controller_oracle_admission_evidence,
+    record_controller_oracle_strategy_submission, record_controller_oracle_strategy_terminal,
     record_controller_user_intent_decision,
 };
 #[cfg(feature = "proposal-host")]
 pub use controller_state::{
     ControllerWorkflowError, ControllerWorkflowNextActionV1, ControllerWorkflowStateV1,
-    ControllerWorkflowV1, FrozenOracleExplorationAuthorityV1, FrozenSirAuthorityV1,
-    authorize_intent_admission, authorize_sir_episode, freeze_controller_workflow,
-    open_oracle_exploration, record_admitted_intent, record_intent_decision_requests,
-    record_sir_proposal, record_user_intent_decision, recover_controller_workflow,
+    ControllerWorkflowV1, FrozenCandidateAdmissionAuthorityV1, FrozenCandidateBuildAuthorityV1,
+    FrozenCandidateOracleAuthorityV1, FrozenCandidateProposalAuthorityV1,
+    FrozenOracleAdmissionAuthorityV1, FrozenOracleExplorationAuthorityV1,
+    FrozenOraclePortfolioAuthorityV1, FrozenOracleStrategyAuthorityV1, FrozenSirAuthorityV1,
+    MigrationTerminalStatusV1, OracleStrategyCompletionV1, authorize_candidate_admission,
+    authorize_candidate_build, authorize_candidate_proposal_episode, authorize_intent_admission,
+    authorize_oracle_admission, authorize_oracle_strategy, authorize_sir_episode,
+    freeze_candidate_build, freeze_candidate_oracle_contract, freeze_candidate_proposal_request,
+    freeze_controller_workflow, freeze_oracle_portfolio, open_oracle_exploration,
+    record_admitted_intent, record_candidate_admission_outcome, record_candidate_build_observation,
+    record_candidate_proposal, record_intent_decision_requests, record_oracle_admission_outcome,
+    record_oracle_strategy_completion, record_oracle_strategy_observations, record_sir_proposal,
+    record_user_intent_decision, recover_controller_workflow,
 };
 #[cfg(feature = "proposal-host")]
 pub use intent_admission_supervisor::{
@@ -47,14 +51,6 @@ pub use proposal_host_supervisor::{
     ProposalHostProcessBlockedV1, ProposalHostProcessConfigV1, ProposalHostProcessTimeoutMillis,
     ProposalHostStderrByteLimit, ProposalHostStdoutByteLimit,
     execute_proposal_host_controller_experiments,
-};
-
-#[cfg(feature = "proposal-host")]
-use candidate_manager::{run_candidate_workflow_manager, validate_candidate_workflow_exists};
-#[cfg(feature = "proposal-host")]
-use candidate_workflow::{
-    archive_proposal_host_runtime, prepare_candidate_native_build_dispatch,
-    prepare_candidate_proposal_host_request, schedule_candidate_native_build,
 };
 
 pub use enrollment::{
@@ -125,8 +121,6 @@ pub struct ServerConfig {
     pub tls: ServerTlsFiles,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
-    #[cfg(feature = "proposal-host")]
-    pub candidate_workflow_manager: Option<CandidateWorkflowManagerConfigV1>,
     pub protocol_version: WorkerProtocolVersion,
     pub session_timeout_ms: WorkerSessionTimeoutMillis,
     /// Optional generic scheduler service. `null` disables new placement while worker control and
@@ -707,8 +701,6 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         )
         .map_err(|error| ServerError::Startup(error.to_string()))?,
     }));
-    #[cfg(feature = "proposal-host")]
-    validate_configured_candidate_workflow(&config)?;
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
@@ -760,8 +752,6 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         enrollment_enabled = config.enrollment_service.is_some(),
         "controller control listener ready"
     );
-    #[cfg(feature = "proposal-host")]
-    spawn_configured_candidate_workflow(config.clone());
     loop {
         let (tcp, _) = listener
             .accept()
@@ -788,53 +778,6 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
             }
         });
     }
-}
-
-#[cfg(feature = "proposal-host")]
-fn validate_configured_candidate_workflow(config: &ServerConfig) -> Result<(), ServerError> {
-    if let Some(manager) = &config.candidate_workflow_manager {
-        validate_candidate_workflow_exists(config, manager)?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "proposal-host")]
-fn spawn_configured_candidate_workflow(config: ServerConfig) {
-    let Some(manager) = config.candidate_workflow_manager.clone() else {
-        return;
-    };
-    tokio::spawn(async move {
-        match run_candidate_workflow_manager(config, manager.clone()).await {
-            Ok(CandidateWorkflowManagerStatusV1::Terminal(outcome)) => tracing::info!(
-                target: "cairn.server.candidate-workflow",
-                event = "candidate_workflow_terminal",
-                task_id = %manager.task_id,
-                outcome = ?outcome,
-                "managed Candidate workflow reached terminal state"
-            ),
-            Ok(CandidateWorkflowManagerStatusV1::Blocked(reason)) => tracing::warn!(
-                target: "cairn.server.candidate-workflow",
-                event = "candidate_workflow_blocked",
-                task_id = %manager.task_id,
-                reason = ?reason,
-                "managed Candidate workflow requires reconciliation"
-            ),
-            Ok(status) => tracing::error!(
-                target: "cairn.server.candidate-workflow",
-                event = "candidate_workflow_manager_stopped",
-                task_id = %manager.task_id,
-                status = ?status,
-                "managed Candidate workflow stopped in a nonterminal state"
-            ),
-            Err(error) => tracing::error!(
-                target: "cairn.server.candidate-workflow",
-                event = "candidate_workflow_manager_failed",
-                task_id = %manager.task_id,
-                error = %error,
-                "managed Candidate workflow process manager failed"
-            ),
-        }
-    });
 }
 
 impl ServerConfig {
@@ -893,10 +836,6 @@ impl ServerConfig {
                 ));
             }
         }
-        #[cfg(feature = "proposal-host")]
-        if let Some(manager) = &self.candidate_workflow_manager {
-            manager.validate()?;
-        }
         Ok(())
     }
 
@@ -915,10 +854,6 @@ impl ServerConfig {
         resolve(&mut self.storage.event_database, base);
         resolve(&mut self.storage.content_database, base);
         resolve(&mut self.storage.content_directory, base);
-        #[cfg(feature = "proposal-host")]
-        if let Some(manager) = &mut self.candidate_workflow_manager {
-            manager.resolve_paths(base);
-        }
     }
 }
 

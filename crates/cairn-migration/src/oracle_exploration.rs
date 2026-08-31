@@ -25,7 +25,10 @@ use cairn_verification::{
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
-use crate::{IntentRecoveryInputArtifact, MigrationIntentContractArtifact, SirTaskBundleArtifact};
+use crate::{
+    AuthoritativeIntentClaimV1, IntentRecoveryInputArtifact, MigrationIntentContractArtifact,
+    ProposalHostInvocationArtifact, SirTaskBundleArtifact,
+};
 
 const SCHEMA_V1: u16 = 1;
 
@@ -41,6 +44,10 @@ macro_rules! artifact {
 }
 
 artifact!(OracleClaimArtifact, "migration.oracle-claim.v1");
+artifact!(
+    ProposalHostControllerObservationArtifact,
+    "migration.proposal-host-controller-observation.v1"
+);
 artifact!(
     OracleCoveragePolicyArtifact,
     "migration.oracle-coverage-policy.v1"
@@ -90,6 +97,10 @@ artifact!(OracleWorkItemArtifact, "migration.oracle-work-item.v1");
 artifact!(
     OracleStrategyRunArtifact,
     "migration.oracle-strategy-run.v1"
+);
+artifact!(
+    OracleStrategySubmissionArtifact,
+    "migration.oracle-strategy-submission.v1"
 );
 artifact!(
     OracleExperimentArgumentsArtifact,
@@ -152,6 +163,18 @@ artifact!(
     "migration.oracle-admission-policy.v1"
 );
 artifact!(
+    OracleAdmissionMechanismCatalogArtifact,
+    "migration.oracle-admission-mechanism-catalog.v1"
+);
+artifact!(
+    OracleAdmissionAttemptArtifact,
+    "migration.oracle-admission-attempt.v1"
+);
+artifact!(
+    OracleAdmissionEvidenceArtifact,
+    "migration.oracle-admission-evidence.v1"
+);
+artifact!(
     OracleQualifiedMechanismArtifact,
     "migration.oracle-qualified-mechanism.v1"
 );
@@ -211,6 +234,7 @@ label!(
     OracleExperimentOperationName,
     "oracle experiment operation name"
 );
+label!(OracleUnknownReason, "oracle unknown reason");
 
 /// One admitted-intent claim expanded independently by the Controller.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -219,6 +243,7 @@ pub struct OracleClaimV1 {
     task_id: TaskId,
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
     name: OracleClaimName,
+    specification: AuthoritativeIntentClaimV1,
 }
 
 #[derive(Deserialize)]
@@ -228,6 +253,7 @@ struct OracleClaimWire {
     task_id: TaskId,
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
     name: OracleClaimName,
+    specification: AuthoritativeIntentClaimV1,
 }
 
 impl OracleClaimV1 {
@@ -236,12 +262,14 @@ impl OracleClaimV1 {
         task_id: TaskId,
         admitted_intent: ContentId<MigrationIntentContractArtifact>,
         name: OracleClaimName,
+        specification: AuthoritativeIntentClaimV1,
     ) -> Self {
         Self {
             schema_version: SCHEMA_V1,
             task_id,
             admitted_intent,
             name,
+            specification,
         }
     }
 
@@ -260,6 +288,11 @@ impl OracleClaimV1 {
         &self.name
     }
 
+    #[must_use]
+    pub const fn specification(&self) -> &AuthoritativeIntentClaimV1 {
+        &self.specification
+    }
+
     pub fn identity(&self) -> Result<ContentId<OracleClaimArtifact>, OracleFrameworkError> {
         derive_id(self)
     }
@@ -269,7 +302,12 @@ impl TryFrom<OracleClaimWire> for OracleClaimV1 {
     type Error = OracleFrameworkError;
     fn try_from(wire: OracleClaimWire) -> Result<Self, Self::Error> {
         require_v1(wire.schema_version)?;
-        Ok(Self::new(wire.task_id, wire.admitted_intent, wire.name))
+        Ok(Self::new(
+            wire.task_id,
+            wire.admitted_intent,
+            wire.name,
+            wire.specification,
+        ))
     }
 }
 
@@ -282,6 +320,25 @@ impl<'de> Deserialize<'de> for OracleClaimV1 {
             .try_into()
             .map_err(de::Error::custom)
     }
+}
+
+/// Derives the complete current-V1 Oracle claim inventory from one admitted intent contract.
+///
+/// A current-V1 contract contains exactly one authoritative admitted claim. The claim remains
+/// bound to the complete contract identity; its planes and concerns are expanded separately by
+/// [`derive_oracle_work_items`]. Callers cannot supply or remove claims.
+#[must_use]
+pub fn derive_oracle_claims(
+    task_id: TaskId,
+    admitted_intent: ContentId<MigrationIntentContractArtifact>,
+    admitted_claim: &AuthoritativeIntentClaimV1,
+) -> Vec<OracleClaimV1> {
+    vec![OracleClaimV1::new(
+        task_id,
+        admitted_intent,
+        OracleClaimName("admitted-intent".to_owned()),
+        admitted_claim.clone(),
+    )]
 }
 
 /// Stable top-level plane. Concerns, rather than prompts, determine its required coverage.
@@ -502,9 +559,86 @@ pub enum OracleStrategyExecutorV1 {
         implementation: ContentId<OracleStrategyImplementationArtifact>,
     },
     AgentEpisode {
-        model: ContentId<ModelConfigurationArtifact>,
+        /// Verification-domain authorship identity retained on proposed Oracle material.
+        authorship_model: ContentId<ModelConfigurationArtifact>,
+        /// Exact resolved model, budget and transport invocation consumed by Proposal Host.
+        invocation: ContentId<ProposalHostInvocationArtifact>,
         tools: ContentId<OracleStrategyToolCatalogArtifact>,
     },
+}
+
+/// Closed capabilities exposed to every current-V1 Agent-backed Oracle cell.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleStrategyToolV1 {
+    ReadTaskArtifact,
+    SearchExternalTests,
+    RequestExperiment,
+    SubmitCellResult,
+}
+
+/// Canonical current-V1 Proposal Host tool surface for one Oracle strategy cell.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleStrategyToolCatalogV1 {
+    schema_version: u16,
+    tools: Vec<OracleStrategyToolV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleStrategyToolCatalogWire {
+    schema_version: u16,
+    tools: Vec<OracleStrategyToolV1>,
+}
+
+impl OracleStrategyToolCatalogV1 {
+    #[must_use]
+    pub fn standard() -> Self {
+        Self {
+            schema_version: SCHEMA_V1,
+            tools: vec![
+                OracleStrategyToolV1::ReadTaskArtifact,
+                OracleStrategyToolV1::SearchExternalTests,
+                OracleStrategyToolV1::RequestExperiment,
+                OracleStrategyToolV1::SubmitCellResult,
+            ],
+        }
+    }
+
+    #[must_use]
+    pub fn tools(&self) -> &[OracleStrategyToolV1] {
+        &self.tools
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleStrategyToolCatalogArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+}
+
+impl TryFrom<OracleStrategyToolCatalogWire> for OracleStrategyToolCatalogV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleStrategyToolCatalogWire) -> Result<Self, Self::Error> {
+        require_v1(wire.schema_version)?;
+        let expected = Self::standard();
+        if wire.tools != expected.tools {
+            return Err(OracleFrameworkError::StrategyToolCatalogDrift);
+        }
+        Ok(expected)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleStrategyToolCatalogV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleStrategyToolCatalogWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -560,6 +694,16 @@ impl OracleStrategyRegistrationV1 {
     #[must_use]
     pub const fn name(&self) -> &OracleStrategyName {
         &self.name
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> OracleStrategyKindV1 {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn executor(&self) -> &OracleStrategyExecutorV1 {
+        &self.executor
     }
 
     fn supports(&self, item: &OracleWorkItemV1) -> bool {
@@ -628,6 +772,11 @@ impl OracleStrategyCatalogV1 {
         &self,
     ) -> Result<ContentId<OracleStrategyCatalogArtifact>, OracleFrameworkError> {
         derive_id(self)
+    }
+
+    #[must_use]
+    pub fn strategies(&self) -> &[OracleStrategyRegistrationV1] {
+        &self.strategies
     }
 
     fn eligible(&self, item: &OracleWorkItemV1) -> Vec<OracleStrategyName> {
@@ -1218,6 +1367,10 @@ impl OracleExperimentRequestV1 {
     pub const fn tools(&self) -> ContentId<OracleExperimentToolCatalogArtifact> {
         self.tools
     }
+    #[must_use]
+    pub const fn arguments(&self) -> ContentId<OracleExperimentArgumentsArtifact> {
+        self.arguments
+    }
     pub fn identity(
         &self,
     ) -> Result<ContentId<OracleExperimentRequestArtifact>, OracleFrameworkError> {
@@ -1316,6 +1469,82 @@ impl<'de> Deserialize<'de> for TrustedOracleWorkerReceiptV1 {
     }
 }
 
+/// Evidence explaining why one exact cell remains unknown after a strategy run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleUnknownEvidenceV1 {
+    schema_version: u16,
+    item: ContentId<OracleWorkItemArtifact>,
+    run: ContentId<OracleStrategyRunArtifact>,
+    reason: OracleUnknownReason,
+    observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleUnknownEvidenceWire {
+    schema_version: u16,
+    item: ContentId<OracleWorkItemArtifact>,
+    run: ContentId<OracleStrategyRunArtifact>,
+    reason: OracleUnknownReason,
+    observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
+}
+
+impl OracleUnknownEvidenceV1 {
+    pub fn new(
+        item: ContentId<OracleWorkItemArtifact>,
+        run: ContentId<OracleStrategyRunArtifact>,
+        reason: OracleUnknownReason,
+        mut observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
+    ) -> Result<Self, OracleFrameworkError> {
+        observations.sort_by_key(ContentId::to_wire);
+        validate_content_id_order(&observations, "unknown observations")?;
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            item,
+            run,
+            reason,
+            observations,
+        })
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+        self.item
+    }
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.run
+    }
+    #[must_use]
+    pub fn observations(&self) -> &[ContentId<OracleExplorationObservationArtifact>] {
+        &self.observations
+    }
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleUnknownEvidenceArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+}
+
+impl TryFrom<OracleUnknownEvidenceWire> for OracleUnknownEvidenceV1 {
+    type Error = OracleFrameworkError;
+    fn try_from(wire: OracleUnknownEvidenceWire) -> Result<Self, Self::Error> {
+        require_v1(wire.schema_version)?;
+        Self::new(wire.item, wire.run, wire.reason, wire.observations)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleUnknownEvidenceV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleUnknownEvidenceWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
 /// Provenance class for an observation. Origin records facts but grants no admission authority.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "origin", rename_all = "kebab-case", deny_unknown_fields)]
@@ -1330,6 +1559,75 @@ pub enum OracleObservationProvenanceV1 {
         request: ContentId<OracleExperimentRequestArtifact>,
         receipt: ContentId<TrustedOracleWorkerReceiptArtifact>,
     },
+    ProposalHostEffect {
+        observation: ContentId<ProposalHostControllerObservationArtifact>,
+    },
+}
+
+/// Exact model-visible effect payload archived under the Oracle observation domain.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleObservationPayloadV1 {
+    schema_version: u16,
+    source: ContentId<ProposalHostControllerObservationArtifact>,
+    value: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleObservationPayloadWire {
+    schema_version: u16,
+    source: ContentId<ProposalHostControllerObservationArtifact>,
+    value: serde_json::Value,
+}
+
+impl OracleObservationPayloadV1 {
+    #[must_use]
+    pub fn new(
+        source: ContentId<ProposalHostControllerObservationArtifact>,
+        value: serde_json::Value,
+    ) -> Self {
+        Self {
+            schema_version: SCHEMA_V1,
+            source,
+            value,
+        }
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> ContentId<ProposalHostControllerObservationArtifact> {
+        self.source
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> &serde_json::Value {
+        &self.value
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleObservationPayloadArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+}
+
+impl TryFrom<OracleObservationPayloadWire> for OracleObservationPayloadV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleObservationPayloadWire) -> Result<Self, Self::Error> {
+        require_v1(wire.schema_version)?;
+        Ok(Self::new(wire.source, wire.value))
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleObservationPayloadV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleObservationPayloadWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
 }
 
 /// Exact provenance-bearing observation projected into one strategy run.
@@ -1353,6 +1651,26 @@ struct OracleExplorationObservationWire {
 }
 
 impl OracleExplorationObservationV1 {
+    pub fn proposal_host_effect(
+        item: ContentId<OracleWorkItemArtifact>,
+        run: ContentId<OracleStrategyRunArtifact>,
+        source: ContentId<ProposalHostControllerObservationArtifact>,
+        payload: &OracleObservationPayloadV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        if payload.source() != source {
+            return Err(OracleFrameworkError::ObservationBindingMismatch);
+        }
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            item,
+            run,
+            provenance: OracleObservationProvenanceV1::ProposalHostEffect {
+                observation: source,
+            },
+            payload: payload.identity()?,
+        })
+    }
+
     pub fn worker_experiment(
         request: &OracleExperimentRequestV1,
         receipt: &TrustedOracleWorkerReceiptV1,
@@ -1378,6 +1696,35 @@ impl OracleExplorationObservationV1 {
         &self,
     ) -> Result<ContentId<OracleExplorationObservationArtifact>, OracleFrameworkError> {
         derive_id(self)
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.run
+    }
+
+    #[cfg(feature = "agent-runtime")]
+    pub(crate) fn validates_proposal_host_effect(
+        &self,
+        item: ContentId<OracleWorkItemArtifact>,
+        run: ContentId<OracleStrategyRunArtifact>,
+        source: ContentId<ProposalHostControllerObservationArtifact>,
+        payload: &OracleObservationPayloadV1,
+    ) -> Result<bool, OracleFrameworkError> {
+        Ok(self.item == item
+            && self.run == run
+            && self.payload == payload.identity()?
+            && payload.source() == source
+            && matches!(
+                self.provenance,
+                OracleObservationProvenanceV1::ProposalHostEffect { observation }
+                    if observation == source
+            ))
     }
 
     fn validates_worker_binding(
@@ -1482,6 +1829,26 @@ impl OraclePortfolioElementV1 {
         derive_id(self)
     }
 
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.run
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> &OraclePortfolioElementKindV1 {
+        &self.kind
+    }
+
+    #[must_use]
+    pub fn observations(&self) -> &[ContentId<OracleExplorationObservationArtifact>] {
+        &self.observations
+    }
+
     fn validate(&self) -> Result<(), OracleFrameworkError> {
         require_v1(self.schema_version)?;
         validate_content_id_order(&self.observations, "portfolio element observations")
@@ -1514,6 +1881,135 @@ impl<'de> Deserialize<'de> for OraclePortfolioElementV1 {
     }
 }
 
+/// One strict terminal submission from a single cell-scoped strategy run.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum OracleStrategySubmissionOutcomeV1 {
+    Contribute {
+        elements: Vec<OraclePortfolioElementV1>,
+    },
+    RequestExperiment {
+        request: OracleExperimentRequestV1,
+    },
+    PreserveUnknown {
+        evidence: Vec<OracleUnknownEvidenceV1>,
+    },
+}
+
+/// Atomic strategy publication bound to one exact run and work item.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleStrategySubmissionV1 {
+    schema_version: u16,
+    run: ContentId<OracleStrategyRunArtifact>,
+    item: ContentId<OracleWorkItemArtifact>,
+    result: OracleStrategySubmissionOutcomeV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleStrategySubmissionWire {
+    schema_version: u16,
+    run: ContentId<OracleStrategyRunArtifact>,
+    item: ContentId<OracleWorkItemArtifact>,
+    result: OracleStrategySubmissionOutcomeV1,
+}
+
+impl OracleStrategySubmissionV1 {
+    pub fn new(
+        run: &OracleStrategyRunV1,
+        result: OracleStrategySubmissionOutcomeV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            run: run.identity()?,
+            item: run.item(),
+            result,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.run
+    }
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+        self.item
+    }
+    #[must_use]
+    pub const fn result(&self) -> &OracleStrategySubmissionOutcomeV1 {
+        &self.result
+    }
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleStrategySubmissionArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        match &self.result {
+            OracleStrategySubmissionOutcomeV1::Contribute { elements } => {
+                let ids = elements
+                    .iter()
+                    .map(|element| {
+                        element.validate()?;
+                        if element.item != self.item || element.run != self.run {
+                            return Err(OracleFrameworkError::PortfolioElementBindingMismatch);
+                        }
+                        element.identity()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                validate_content_ids(&ids, "strategy contribution")
+            }
+            OracleStrategySubmissionOutcomeV1::RequestExperiment { request } => {
+                if request.item() != self.item || request.run() != self.run {
+                    return Err(OracleFrameworkError::ExperimentBindingMismatch);
+                }
+                Ok(())
+            }
+            OracleStrategySubmissionOutcomeV1::PreserveUnknown { evidence } => {
+                let ids = evidence
+                    .iter()
+                    .map(|value| {
+                        if value.item() != self.item || value.run() != self.run {
+                            return Err(OracleFrameworkError::StrategyRunBindingMismatch);
+                        }
+                        value.identity()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                validate_content_ids(&ids, "strategy unknown evidence")
+            }
+        }
+    }
+}
+
+impl TryFrom<OracleStrategySubmissionWire> for OracleStrategySubmissionV1 {
+    type Error = OracleFrameworkError;
+    fn try_from(wire: OracleStrategySubmissionWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            run: wire.run,
+            item: wire.item,
+            result: wire.result,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleStrategySubmissionV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleStrategySubmissionWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum OracleObligationResolutionV1 {
@@ -1540,6 +2036,11 @@ pub enum OracleObligationResolutionV1 {
         elements: Vec<ContentId<OraclePortfolioElementArtifact>>,
         observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
     },
+    CoverageGap {
+        run: ContentId<OracleStrategyRunArtifact>,
+        elements: Vec<ContentId<OraclePortfolioElementArtifact>>,
+        observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
+    },
     Unknown {
         evidence: Vec<ContentId<OracleUnknownEvidenceArtifact>>,
     },
@@ -1556,6 +2057,7 @@ impl OracleObligationResolutionV1 {
         matches!(
             self,
             Self::Contributed { .. }
+                | Self::CoverageGap { .. }
                 | Self::Unknown { .. }
                 | Self::Unsupported { .. }
                 | Self::PolicyWaived { .. }
@@ -1568,6 +2070,17 @@ impl OracleObligationResolutionV1 {
 pub struct OracleObligationEntryV1 {
     item: OracleWorkItemV1,
     resolution: OracleObligationResolutionV1,
+}
+
+impl OracleObligationEntryV1 {
+    #[must_use]
+    pub const fn item(&self) -> &OracleWorkItemV1 {
+        &self.item
+    }
+    #[must_use]
+    pub const fn resolution(&self) -> &OracleObligationResolutionV1 {
+        &self.resolution
+    }
 }
 
 /// Immutable-snapshot durable exploration ledger. Every revision retains all work items.
@@ -1633,6 +2146,16 @@ impl OracleExplorationLedgerV1 {
     }
 
     #[must_use]
+    pub const fn workspace(&self) -> ContentId<OracleWorkspaceArtifact> {
+        self.workspace
+    }
+
+    #[must_use]
+    pub const fn parent(&self) -> Option<ContentId<OracleExplorationLedgerArtifact>> {
+        self.parent
+    }
+
+    #[must_use]
     pub const fn revision(&self) -> OracleExplorationRevision {
         self.revision
     }
@@ -1664,6 +2187,50 @@ impl OracleExplorationLedgerV1 {
                 strategy,
                 observations: Vec::new(),
             };
+            Ok(())
+        })
+    }
+
+    /// Projects Controller-produced effect observations into the exact active strategy run.
+    pub fn record_strategy_observations(
+        &self,
+        item: ContentId<OracleWorkItemArtifact>,
+        run: ContentId<OracleStrategyRunArtifact>,
+        observations: &[OracleExplorationObservationV1],
+    ) -> Result<Self, OracleFrameworkError> {
+        if observations.is_empty()
+            || observations
+                .iter()
+                .any(|observation| observation.item() != item || observation.run() != run)
+        {
+            return Err(OracleFrameworkError::ObservationBindingMismatch);
+        }
+        let mut new_ids = observations
+            .iter()
+            .map(OracleExplorationObservationV1::identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        new_ids.sort_by_key(ContentId::to_wire);
+        validate_content_ids(&new_ids, "strategy observations")?;
+        let index = self.entry_index(item)?;
+        let OracleObligationResolutionV1::Running {
+            run: active,
+            observations: current,
+            ..
+        } = &self.entries[index].resolution
+        else {
+            return Err(OracleFrameworkError::InvalidLedgerTransition);
+        };
+        if *active != run || new_ids.iter().any(|id| current.contains(id)) {
+            return Err(OracleFrameworkError::ObservationBindingMismatch);
+        }
+        self.revise(|next| {
+            let OracleObligationResolutionV1::Running { observations, .. } =
+                &mut next.entries[index].resolution
+            else {
+                unreachable!()
+            };
+            observations.extend(new_ids);
+            observations.sort_by_key(ContentId::to_wire);
             Ok(())
         })
     }
@@ -1804,6 +2371,13 @@ impl OracleExplorationLedgerV1 {
         {
             return Err(OracleFrameworkError::PortfolioElementBindingMismatch);
         }
+        let gaps = elements
+            .iter()
+            .filter(|element| matches!(element.kind, OraclePortfolioElementKindV1::CoverageGap(_)))
+            .count();
+        if gaps != 0 && gaps != elements.len() {
+            return Err(OracleFrameworkError::MixedCoverageGapContribution);
+        }
         let mut element_ids = elements
             .iter()
             .map(OraclePortfolioElementV1::identity)
@@ -1822,12 +2396,28 @@ impl OracleExplorationLedgerV1 {
         if *active != run {
             return Err(OracleFrameworkError::StrategyRunBindingMismatch);
         }
+        if elements.iter().any(|element| {
+            element
+                .observations
+                .iter()
+                .any(|observation| !observations.contains(observation))
+        }) {
+            return Err(OracleFrameworkError::ObservationBindingMismatch);
+        }
         let observations = observations.clone();
         self.revise(|next| {
-            next.entries[index].resolution = OracleObligationResolutionV1::Contributed {
-                run,
-                elements: element_ids,
-                observations,
+            next.entries[index].resolution = if gaps == elements.len() {
+                OracleObligationResolutionV1::CoverageGap {
+                    run,
+                    elements: element_ids,
+                    observations,
+                }
+            } else {
+                OracleObligationResolutionV1::Contributed {
+                    run,
+                    elements: element_ids,
+                    observations,
+                }
             };
             Ok(())
         })
@@ -1838,23 +2428,74 @@ impl OracleExplorationLedgerV1 {
         &self,
         item: ContentId<OracleWorkItemArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
-        mut evidence: Vec<ContentId<OracleUnknownEvidenceArtifact>>,
+        evidence: &[OracleUnknownEvidenceV1],
     ) -> Result<Self, OracleFrameworkError> {
-        evidence.sort_by_key(ContentId::to_wire);
-        validate_content_ids(&evidence, "unknown evidence")?;
+        if evidence
+            .iter()
+            .any(|value| value.item() != item || value.run() != run)
+        {
+            return Err(OracleFrameworkError::StrategyRunBindingMismatch);
+        }
+        let mut evidence_ids = evidence
+            .iter()
+            .map(OracleUnknownEvidenceV1::identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        evidence_ids.sort_by_key(ContentId::to_wire);
+        validate_content_ids(&evidence_ids, "unknown evidence")?;
         let index = self.entry_index(item)?;
-        let OracleObligationResolutionV1::Running { run: active, .. } =
-            self.entries[index].resolution
+        let OracleObligationResolutionV1::Running {
+            run: active,
+            ref observations,
+            ..
+        } = self.entries[index].resolution
         else {
             return Err(OracleFrameworkError::InvalidLedgerTransition);
         };
         if active != run {
             return Err(OracleFrameworkError::StrategyRunBindingMismatch);
         }
+        if evidence.iter().any(|value| {
+            value
+                .observations
+                .iter()
+                .any(|observation| !observations.contains(observation))
+        }) {
+            return Err(OracleFrameworkError::ObservationBindingMismatch);
+        }
         self.revise(|next| {
-            next.entries[index].resolution = OracleObligationResolutionV1::Unknown { evidence };
+            next.entries[index].resolution = OracleObligationResolutionV1::Unknown {
+                evidence: evidence_ids,
+            };
             Ok(())
         })
+    }
+
+    /// Applies one atomically validated cell submission to the active run.
+    pub fn apply_strategy_submission(
+        &self,
+        run: &OracleStrategyRunV1,
+        submission: &OracleStrategySubmissionV1,
+        workspace: &OracleWorkspaceV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        submission.validate()?;
+        if run.identity()? != submission.run()
+            || run.item() != submission.item()
+            || run.workspace() != self.workspace
+            || workspace.identity()? != self.workspace
+        {
+            return Err(OracleFrameworkError::StrategyRunBindingMismatch);
+        }
+        match submission.result() {
+            OracleStrategySubmissionOutcomeV1::Contribute { elements } => {
+                self.record_contribution(run.item(), submission.run(), elements)
+            }
+            OracleStrategySubmissionOutcomeV1::RequestExperiment { request } => {
+                self.request_experiment(request, workspace)
+            }
+            OracleStrategySubmissionOutcomeV1::PreserveUnknown { evidence } => {
+                self.record_unknown(run.item(), submission.run(), evidence)
+            }
+        }
     }
 
     pub fn next_action(
@@ -1933,11 +2574,17 @@ impl OracleExplorationLedgerV1 {
         for entry in &self.entries {
             match &entry.resolution {
                 OracleObligationResolutionV1::Contributed { elements, .. }
+                | OracleObligationResolutionV1::CoverageGap { elements, .. }
                     if elements.is_empty() =>
                 {
                     return Err(OracleFrameworkError::Empty("portfolio contribution"));
                 }
                 OracleObligationResolutionV1::Contributed {
+                    elements,
+                    observations,
+                    ..
+                }
+                | OracleObligationResolutionV1::CoverageGap {
                     elements,
                     observations,
                     ..
@@ -2177,6 +2824,11 @@ impl OraclePortfolioProposalV1 {
     }
 
     #[must_use]
+    pub const fn workspace(&self) -> ContentId<OracleWorkspaceArtifact> {
+        self.workspace
+    }
+
+    #[must_use]
     pub fn entries(&self) -> &[OracleObligationEntryV1] {
         &self.entries
     }
@@ -2299,6 +2951,295 @@ impl<'de> Deserialize<'de> for OracleAdmissionPolicyV1 {
     }
 }
 
+/// One Controller-selected qualified mechanism for one independent control family.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OracleQualifiedMechanismRegistrationV1 {
+    control: OracleControlFamilyV1,
+    mechanism: ContentId<OracleQualifiedMechanismArtifact>,
+}
+
+impl OracleQualifiedMechanismRegistrationV1 {
+    #[must_use]
+    pub const fn new(
+        control: OracleControlFamilyV1,
+        mechanism: ContentId<OracleQualifiedMechanismArtifact>,
+    ) -> Self {
+        Self { control, mechanism }
+    }
+
+    #[must_use]
+    pub const fn control(&self) -> OracleControlFamilyV1 {
+        self.control
+    }
+
+    #[must_use]
+    pub const fn mechanism(&self) -> ContentId<OracleQualifiedMechanismArtifact> {
+        self.mechanism
+    }
+}
+
+/// Exact qualified mechanism inventory frozen before any admission control may run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleAdmissionMechanismCatalogV1 {
+    schema_version: u16,
+    mechanisms: Vec<OracleQualifiedMechanismRegistrationV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleAdmissionMechanismCatalogWire {
+    schema_version: u16,
+    mechanisms: Vec<OracleQualifiedMechanismRegistrationV1>,
+}
+
+impl OracleAdmissionMechanismCatalogV1 {
+    pub fn new(
+        mut mechanisms: Vec<OracleQualifiedMechanismRegistrationV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        mechanisms.sort_by_key(OracleQualifiedMechanismRegistrationV1::control);
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            mechanisms,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub fn mechanisms(&self) -> &[OracleQualifiedMechanismRegistrationV1] {
+        &self.mechanisms
+    }
+
+    #[must_use]
+    pub fn mechanism(
+        &self,
+        control: OracleControlFamilyV1,
+    ) -> Option<ContentId<OracleQualifiedMechanismArtifact>> {
+        self.mechanisms
+            .iter()
+            .find(|registration| registration.control == control)
+            .map(|registration| registration.mechanism)
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleAdmissionMechanismCatalogArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        let controls = self
+            .mechanisms
+            .iter()
+            .map(OracleQualifiedMechanismRegistrationV1::control)
+            .collect::<Vec<_>>();
+        if controls != OracleAdmissionPolicyV1::strict().required_controls {
+            return Err(OracleFrameworkError::AdmissionMechanismCatalogDrift);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleAdmissionMechanismCatalogWire> for OracleAdmissionMechanismCatalogV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleAdmissionMechanismCatalogWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            mechanisms: wire.mechanisms,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleAdmissionMechanismCatalogV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleAdmissionMechanismCatalogWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// One exact item × control × qualified mechanism obligation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OracleControlObligationV1 {
+    item: ContentId<OracleWorkItemArtifact>,
+    control: OracleControlFamilyV1,
+    mechanism: ContentId<OracleQualifiedMechanismArtifact>,
+}
+
+impl OracleControlObligationV1 {
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn control(&self) -> OracleControlFamilyV1 {
+        self.control
+    }
+
+    #[must_use]
+    pub const fn mechanism(&self) -> ContentId<OracleQualifiedMechanismArtifact> {
+        self.mechanism
+    }
+}
+
+/// Frozen independent Admission authority derived from one exact portfolio.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleAdmissionAttemptV1 {
+    schema_version: u16,
+    proposal: ContentId<OraclePortfolioProposalArtifact>,
+    policy: ContentId<OracleAdmissionPolicyArtifact>,
+    mechanisms: ContentId<OracleAdmissionMechanismCatalogArtifact>,
+    required_controls: Vec<OracleControlObligationV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleAdmissionAttemptWire {
+    schema_version: u16,
+    proposal: ContentId<OraclePortfolioProposalArtifact>,
+    policy: ContentId<OracleAdmissionPolicyArtifact>,
+    mechanisms: ContentId<OracleAdmissionMechanismCatalogArtifact>,
+    required_controls: Vec<OracleControlObligationV1>,
+}
+
+impl OracleAdmissionAttemptV1 {
+    pub fn new(
+        proposal: &OraclePortfolioProposalV1,
+        policy: &OracleAdmissionPolicyV1,
+        mechanisms: &OracleAdmissionMechanismCatalogV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        let mut required_controls = Vec::new();
+        for entry in proposal.entries() {
+            for control in policy.required_controls() {
+                required_controls.push(OracleControlObligationV1 {
+                    item: entry.item().identity()?,
+                    control: *control,
+                    mechanism: mechanisms
+                        .mechanism(*control)
+                        .ok_or(OracleFrameworkError::AdmissionMechanismCatalogDrift)?,
+                });
+            }
+        }
+        required_controls.sort_by(|left, right| {
+            left.item
+                .to_wire()
+                .cmp(&right.item.to_wire())
+                .then_with(|| left.control.cmp(&right.control))
+        });
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            proposal: proposal.identity()?,
+            policy: policy.identity()?,
+            mechanisms: mechanisms.identity()?,
+            required_controls,
+        };
+        value.validate_structure()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn policy(&self) -> ContentId<OracleAdmissionPolicyArtifact> {
+        self.policy
+    }
+
+    #[must_use]
+    pub const fn mechanisms(&self) -> ContentId<OracleAdmissionMechanismCatalogArtifact> {
+        self.mechanisms
+    }
+
+    #[must_use]
+    pub fn required_controls(&self) -> &[OracleControlObligationV1] {
+        &self.required_controls
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleAdmissionAttemptArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate_against(
+        &self,
+        proposal: &OraclePortfolioProposalV1,
+        policy: &OracleAdmissionPolicyV1,
+        mechanisms: &OracleAdmissionMechanismCatalogV1,
+    ) -> Result<(), OracleFrameworkError> {
+        if self != &Self::new(proposal, policy, mechanisms)? {
+            return Err(OracleFrameworkError::AdmissionAttemptBindingMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        let controls = OracleAdmissionPolicyV1::strict();
+        for chunk in self
+            .required_controls
+            .chunks(controls.required_controls.len())
+        {
+            if chunk.len() != controls.required_controls.len()
+                || chunk
+                    .iter()
+                    .map(OracleControlObligationV1::control)
+                    .collect::<Vec<_>>()
+                    != controls.required_controls
+                || chunk.windows(2).any(|pair| pair[0].item != pair[1].item)
+            {
+                return Err(OracleFrameworkError::AdmissionAttemptBindingMismatch);
+            }
+        }
+        if self.required_controls.windows(2).any(|pair| {
+            pair[0].item.to_wire() > pair[1].item.to_wire()
+                || (pair[0].item == pair[1].item && pair[0].control >= pair[1].control)
+        }) {
+            return Err(OracleFrameworkError::AdmissionAttemptBindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleAdmissionAttemptWire> for OracleAdmissionAttemptV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleAdmissionAttemptWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            proposal: wire.proposal,
+            policy: wire.policy,
+            mechanisms: wire.mechanisms,
+            required_controls: wire.required_controls,
+        };
+        value.validate_structure()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleAdmissionAttemptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleAdmissionAttemptWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OracleControlResultV1 {
@@ -2338,6 +3279,152 @@ impl OracleControlReceiptV1 {
             result,
         }
     }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn control(&self) -> OracleControlFamilyV1 {
+        self.control
+    }
+
+    #[must_use]
+    pub const fn mechanism(&self) -> ContentId<OracleQualifiedMechanismArtifact> {
+        self.mechanism
+    }
+
+    #[must_use]
+    pub const fn receipt(&self) -> ContentId<TrustedOracleControlReceiptArtifact> {
+        self.receipt
+    }
+
+    #[must_use]
+    pub const fn result(&self) -> OracleControlResultV1 {
+        self.result
+    }
+}
+
+/// Exact trusted receipt set submitted for one frozen Admission attempt.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleAdmissionEvidenceV1 {
+    schema_version: u16,
+    attempt: ContentId<OracleAdmissionAttemptArtifact>,
+    receipts: Vec<OracleControlReceiptV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleAdmissionEvidenceWire {
+    schema_version: u16,
+    attempt: ContentId<OracleAdmissionAttemptArtifact>,
+    receipts: Vec<OracleControlReceiptV1>,
+}
+
+impl OracleAdmissionEvidenceV1 {
+    pub fn new(
+        attempt: &OracleAdmissionAttemptV1,
+        mut receipts: Vec<OracleControlReceiptV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        receipts.sort_by(|left, right| {
+            left.item
+                .to_wire()
+                .cmp(&right.item.to_wire())
+                .then_with(|| left.control.cmp(&right.control))
+        });
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            attempt: attempt.identity()?,
+            receipts,
+        };
+        value.validate_against(attempt)?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> ContentId<OracleAdmissionAttemptArtifact> {
+        self.attempt
+    }
+
+    #[must_use]
+    pub fn receipts(&self) -> &[OracleControlReceiptV1] {
+        &self.receipts
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleAdmissionEvidenceArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate_against(
+        &self,
+        attempt: &OracleAdmissionAttemptV1,
+    ) -> Result<(), OracleFrameworkError> {
+        self.validate_structure()?;
+        if self.attempt != attempt.identity()?
+            || self.receipts.iter().any(|receipt| {
+                receipt.proposal != attempt.proposal
+                    || !attempt.required_controls.iter().any(|obligation| {
+                        obligation.item == receipt.item
+                            && obligation.control == receipt.control
+                            && obligation.mechanism == receipt.mechanism
+                    })
+            })
+        {
+            return Err(OracleFrameworkError::AdmissionEvidenceBindingMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        let receipt_identities = self
+            .receipts
+            .iter()
+            .map(OracleControlReceiptV1::receipt)
+            .collect::<HashSet<_>>();
+        if receipt_identities.len() != self.receipts.len()
+            || self.receipts.windows(2).any(|pair| {
+                pair[0].item.to_wire() > pair[1].item.to_wire()
+                    || (pair[0].item == pair[1].item && pair[0].control >= pair[1].control)
+            })
+        {
+            return Err(OracleFrameworkError::DuplicateControlReceipt);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleAdmissionEvidenceWire> for OracleAdmissionEvidenceV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleAdmissionEvidenceWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            attempt: wire.attempt,
+            receipts: wire.receipts,
+        };
+        value.validate_structure()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleAdmissionEvidenceV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleAdmissionEvidenceWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2359,6 +3446,31 @@ pub struct OracleClaimAdmissionV1 {
 }
 
 impl OracleClaimAdmissionV1 {
+    #[must_use]
+    pub const fn claim(&self) -> ContentId<OracleClaimArtifact> {
+        self.claim
+    }
+
+    #[must_use]
+    pub const fn status(&self) -> OracleClaimAdmissionStatusV1 {
+        self.status
+    }
+
+    #[must_use]
+    pub fn admitted_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+        &self.admitted_items
+    }
+
+    #[must_use]
+    pub fn unresolved_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+        &self.unresolved_items
+    }
+
+    #[must_use]
+    pub fn rejected_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+        &self.rejected_items
+    }
+
     fn validate(&self) -> Result<(), OracleFrameworkError> {
         validate_content_id_order(&self.admitted_items, "admitted Oracle work items")?;
         validate_content_id_order(&self.unresolved_items, "unresolved Oracle work items")?;
@@ -2397,6 +3509,8 @@ impl OracleClaimAdmissionV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleAdmissionOutcomeV1 {
     schema_version: u16,
+    attempt: ContentId<OracleAdmissionAttemptArtifact>,
+    evidence: ContentId<OracleAdmissionEvidenceArtifact>,
     proposal: ContentId<OraclePortfolioProposalArtifact>,
     policy: ContentId<OracleAdmissionPolicyArtifact>,
     claims: Vec<OracleClaimAdmissionV1>,
@@ -2406,12 +3520,34 @@ pub struct OracleAdmissionOutcomeV1 {
 #[serde(deny_unknown_fields)]
 struct OracleAdmissionOutcomeWire {
     schema_version: u16,
+    attempt: ContentId<OracleAdmissionAttemptArtifact>,
+    evidence: ContentId<OracleAdmissionEvidenceArtifact>,
     proposal: ContentId<OraclePortfolioProposalArtifact>,
     policy: ContentId<OracleAdmissionPolicyArtifact>,
     claims: Vec<OracleClaimAdmissionV1>,
 }
 
 impl OracleAdmissionOutcomeV1 {
+    #[must_use]
+    pub const fn attempt(&self) -> ContentId<OracleAdmissionAttemptArtifact> {
+        self.attempt
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> ContentId<OracleAdmissionEvidenceArtifact> {
+        self.evidence
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn policy(&self) -> ContentId<OracleAdmissionPolicyArtifact> {
+        self.policy
+    }
+
     #[must_use]
     pub fn claims(&self) -> &[OracleClaimAdmissionV1] {
         &self.claims
@@ -2444,6 +3580,8 @@ impl TryFrom<OracleAdmissionOutcomeWire> for OracleAdmissionOutcomeV1 {
     fn try_from(wire: OracleAdmissionOutcomeWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
+            attempt: wire.attempt,
+            evidence: wire.evidence,
             proposal: wire.proposal,
             policy: wire.policy,
             claims: wire.claims,
@@ -2474,8 +3612,13 @@ type AdmissionBuckets = (
 pub fn recompute_oracle_admission(
     proposal: &OraclePortfolioProposalV1,
     policy: &OracleAdmissionPolicyV1,
-    receipts: &[OracleControlReceiptV1],
+    mechanisms: &OracleAdmissionMechanismCatalogV1,
+    attempt: &OracleAdmissionAttemptV1,
+    evidence: &OracleAdmissionEvidenceV1,
 ) -> Result<OracleAdmissionOutcomeV1, OracleFrameworkError> {
+    attempt.validate_against(proposal, policy, mechanisms)?;
+    evidence.validate_against(attempt)?;
+    let receipts = evidence.receipts();
     let proposal_id = proposal.identity()?;
     let known_items: HashSet<_> = proposal
         .entries
@@ -2534,10 +3677,13 @@ pub fn recompute_oracle_admission(
         }
     }
 
-    let claims = by_claim
+    let mut claims = by_claim
         .into_iter()
         .map(
-            |(claim, (admitted_items, unresolved_items, rejected_items))| {
+            |(claim, (mut admitted_items, mut unresolved_items, mut rejected_items))| {
+                admitted_items.sort_by_key(ContentId::to_wire);
+                unresolved_items.sort_by_key(ContentId::to_wire);
+                rejected_items.sort_by_key(ContentId::to_wire);
                 let status = if !rejected_items.is_empty() {
                     OracleClaimAdmissionStatusV1::Rejected
                 } else if unresolved_items.is_empty() {
@@ -2554,9 +3700,12 @@ pub fn recompute_oracle_admission(
                 }
             },
         )
-        .collect();
+        .collect::<Vec<_>>();
+    claims.sort_by_key(|claim| claim.claim.to_wire());
     let outcome = OracleAdmissionOutcomeV1 {
         schema_version: SCHEMA_V1,
+        attempt: attempt.identity()?,
+        evidence: evidence.identity()?,
         proposal: proposal_id,
         policy: policy.identity()?,
         claims,
@@ -2643,8 +3792,16 @@ pub enum OracleFrameworkError {
     CoveragePolicyDrift,
     #[error("admission policy required controls drifted")]
     AdmissionPolicyDrift,
+    #[error("Oracle Admission qualified mechanism catalog drifted")]
+    AdmissionMechanismCatalogDrift,
+    #[error("Oracle Admission attempt changed its portfolio, policy, mechanism, or obligations")]
+    AdmissionAttemptBindingMismatch,
+    #[error("Oracle Admission evidence is not authorized by the exact attempt")]
+    AdmissionEvidenceBindingMismatch,
     #[error("strategy kind and executor disagree")]
     StrategyExecutorMismatch,
+    #[error("Oracle strategy tool catalog changed the current-V1 capability surface")]
+    StrategyToolCatalogDrift,
     #[error("oracle work item plane does not match its concern")]
     WorkItemPlaneMismatch,
     #[error("oracle exploration revision overflowed")]
@@ -2671,6 +3828,8 @@ pub enum OracleFrameworkError {
     ObservationBindingMismatch,
     #[error("Oracle portfolio element cell or strategy-run binding changed")]
     PortfolioElementBindingMismatch,
+    #[error("coverage-gap material cannot be mixed with positive Oracle contributions")]
+    MixedCoverageGapContribution,
     #[error("no strategy implements {plane:?}/{concern:?}/{role:?}")]
     MissingStrategy {
         plane: OraclePlaneV1,
@@ -2768,6 +3927,40 @@ mod tests {
 
     fn claim(label: &str) -> ContentId<OracleClaimArtifact> {
         id(label)
+    }
+
+    fn admission_context(
+        proposal: &OraclePortfolioProposalV1,
+    ) -> (
+        OracleAdmissionPolicyV1,
+        OracleAdmissionMechanismCatalogV1,
+        OracleAdmissionAttemptV1,
+    ) {
+        let policy = OracleAdmissionPolicyV1::strict();
+        let mechanisms = OracleAdmissionMechanismCatalogV1::new(
+            policy
+                .required_controls()
+                .iter()
+                .map(|control| {
+                    OracleQualifiedMechanismRegistrationV1::new(
+                        *control,
+                        id(match control {
+                            OracleControlFamilyV1::MechanismQualification => {
+                                "mechanism qualification"
+                            }
+                            OracleControlFamilyV1::Honest => "honest mechanism",
+                            OracleControlFamilyV1::Mutant => "mutant mechanism",
+                            OracleControlFamilyV1::Hidden => "hidden mechanism",
+                            OracleControlFamilyV1::Bypass => "bypass mechanism",
+                        }),
+                    )
+                })
+                .collect(),
+        )
+        .expect("mechanism catalog");
+        let attempt = OracleAdmissionAttemptV1::new(proposal, &policy, &mechanisms)
+            .expect("admission attempt");
+        (policy, mechanisms, attempt)
     }
 
     fn all_concerns_registration(
@@ -3187,17 +4380,42 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear control compares partial, rejected, and Candidate-admitted projections"
+    )]
     fn admission_missing_receipts_is_partial_and_failed_control_is_rejected() {
+        let claim_body = OracleClaimV1::new(
+            TaskId::new(),
+            id("admitted intent"),
+            OracleClaimName::new("transform-output").expect("claim name"),
+            AuthoritativeIntentClaimV1::CollectionOutput(
+                crate::CollectionOutputIntentV1::exact_selected_occurrences(
+                    crate::SirCallerClaimId::new("selected-output").expect("caller claim"),
+                    crate::CollectionOutputOrderContractV1::StableInputRelative,
+                ),
+            ),
+        );
         let item = OracleWorkItemV1::new(
-            claim("claim-a"),
+            claim_body.identity().expect("claim id"),
             OracleConcernV1::ObservableOutputs,
             OracleStrategyRoleV1::Synthesis,
         );
+        let material_bytes = b"task-generic admitted reference semantics".to_vec();
+        let reference =
+            ContentId::<ReferenceArtifact>::derive(&material_bytes).expect("reference identity");
+        let element = OraclePortfolioElementV1::new(
+            item.identity().expect("item id"),
+            id("run"),
+            OraclePortfolioElementKindV1::Reference(reference),
+            vec![],
+        )
+        .expect("portfolio element");
         let entry = OracleObligationEntryV1 {
             item: item.clone(),
             resolution: OracleObligationResolutionV1::Contributed {
                 run: id("run"),
-                elements: vec![id("element")],
+                elements: vec![element.identity().expect("element id")],
                 observations: vec![],
             },
         };
@@ -3211,8 +4429,12 @@ mod tests {
             experiments_started: 0,
         };
         let proposal = OraclePortfolioProposalV1::freeze(&ledger).expect("proposal");
-        let policy = OracleAdmissionPolicyV1::strict();
-        let partial = recompute_oracle_admission(&proposal, &policy, &[]).expect("partial");
+        let (policy, mechanisms, attempt) = admission_context(&proposal);
+        let no_evidence =
+            OracleAdmissionEvidenceV1::new(&attempt, Vec::new()).expect("empty evidence");
+        let partial =
+            recompute_oracle_admission(&proposal, &policy, &mechanisms, &attempt, &no_evidence)
+                .expect("partial");
         assert_eq!(
             partial.claims[0].status,
             OracleClaimAdmissionStatusV1::Partial
@@ -3225,27 +4447,188 @@ mod tests {
             proposal.identity().expect("proposal id"),
             id("unknown-item"),
             OracleControlFamilyV1::Honest,
-            id("mechanism"),
+            mechanisms
+                .mechanism(OracleControlFamilyV1::Honest)
+                .expect("honest mechanism"),
             id("unknown-item-receipt"),
             OracleControlResultV1::Passed,
         );
         assert!(matches!(
-            recompute_oracle_admission(&proposal, &policy, &[unknown_item_receipt]),
-            Err(OracleFrameworkError::ReceiptBindingMismatch)
+            OracleAdmissionEvidenceV1::new(&attempt, vec![unknown_item_receipt]),
+            Err(OracleFrameworkError::AdmissionEvidenceBindingMismatch)
+        ));
+
+        let reused_receipt = id("reused trusted receipt");
+        let duplicate_provenance = vec![
+            OracleControlReceiptV1::new(
+                proposal.identity().expect("proposal id"),
+                item.identity().expect("item id"),
+                OracleControlFamilyV1::Honest,
+                mechanisms
+                    .mechanism(OracleControlFamilyV1::Honest)
+                    .expect("honest mechanism"),
+                reused_receipt,
+                OracleControlResultV1::Passed,
+            ),
+            OracleControlReceiptV1::new(
+                proposal.identity().expect("proposal id"),
+                item.identity().expect("item id"),
+                OracleControlFamilyV1::Mutant,
+                mechanisms
+                    .mechanism(OracleControlFamilyV1::Mutant)
+                    .expect("mutant mechanism"),
+                reused_receipt,
+                OracleControlResultV1::Passed,
+            ),
+        ];
+        assert!(matches!(
+            OracleAdmissionEvidenceV1::new(&attempt, duplicate_provenance),
+            Err(OracleFrameworkError::DuplicateControlReceipt)
         ));
 
         let failed = OracleControlReceiptV1::new(
             proposal.identity().expect("proposal id"),
             item.identity().expect("item id"),
             OracleControlFamilyV1::Mutant,
-            id("mechanism"),
+            mechanisms
+                .mechanism(OracleControlFamilyV1::Mutant)
+                .expect("mutant mechanism"),
             id("receipt"),
             OracleControlResultV1::Failed,
         );
-        let rejected = recompute_oracle_admission(&proposal, &policy, &[failed]).expect("rejected");
+        let failed_evidence =
+            OracleAdmissionEvidenceV1::new(&attempt, vec![failed]).expect("failed evidence");
+        let rejected =
+            recompute_oracle_admission(&proposal, &policy, &mechanisms, &attempt, &failed_evidence)
+                .expect("rejected");
         assert_eq!(
             rejected.claims[0].status,
             OracleClaimAdmissionStatusV1::Rejected
         );
+
+        assert!(matches!(
+            crate::CandidateOracleContractV1::derive(&proposal, &partial),
+            Err(crate::CandidateExplorationError::NoAdmittedOracleClaims)
+        ));
+        let admitted_receipts = policy
+            .required_controls()
+            .iter()
+            .map(|control| {
+                OracleControlReceiptV1::new(
+                    proposal.identity().expect("proposal id"),
+                    item.identity().expect("item id"),
+                    *control,
+                    mechanisms.mechanism(*control).expect("qualified mechanism"),
+                    id(match control {
+                        OracleControlFamilyV1::MechanismQualification => "qualified receipt",
+                        OracleControlFamilyV1::Honest => "honest receipt",
+                        OracleControlFamilyV1::Mutant => "mutant receipt",
+                        OracleControlFamilyV1::Hidden => "hidden receipt",
+                        OracleControlFamilyV1::Bypass => "bypass receipt",
+                    }),
+                    OracleControlResultV1::Passed,
+                )
+            })
+            .collect();
+        let admitted_evidence =
+            OracleAdmissionEvidenceV1::new(&attempt, admitted_receipts).expect("admitted evidence");
+        let admitted = recompute_oracle_admission(
+            &proposal,
+            &policy,
+            &mechanisms,
+            &attempt,
+            &admitted_evidence,
+        )
+        .expect("admitted outcome");
+        let candidate_contract = crate::CandidateOracleContractV1::derive(&proposal, &admitted)
+            .expect("Candidate Oracle contract");
+        assert_eq!(
+            candidate_contract.outcome(),
+            admitted.identity().expect("outcome id")
+        );
+        assert_eq!(
+            candidate_contract.admitted_claims()[0].claim(),
+            item.claim()
+        );
+        let material =
+            crate::CandidateOracleMaterialV1::from_portfolio_kind(element.kind(), material_bytes)
+                .expect("typed Oracle material");
+        let candidate_materials = crate::CandidateOracleMaterialsV1::new(
+            &candidate_contract,
+            vec![claim_body],
+            vec![
+                crate::CandidateOracleElementMaterialV1::new(element, material)
+                    .expect("element body"),
+            ],
+        )
+        .expect("complete Candidate-visible Oracle material");
+        candidate_materials
+            .validate_against(&candidate_contract)
+            .expect("exact admitted material set");
+        let mut drifted = serde_json::to_value(&candidate_materials).expect("materials json");
+        drifted["elements"][0]["material"]["bytes"][0] = serde_json::json!(0);
+        assert!(serde_json::from_value::<crate::CandidateOracleMaterialsV1>(drifted).is_err());
+    }
+
+    #[test]
+    fn admission_never_promotes_a_coverage_gap_even_when_every_control_passes() {
+        let item = OracleWorkItemV1::new(
+            claim("claim-a"),
+            OracleConcernV1::ObservableOutputs,
+            OracleStrategyRoleV1::Synthesis,
+        );
+        let item_id = item.identity().expect("item id");
+        let ledger = OracleExplorationLedgerV1 {
+            schema_version: SCHEMA_V1,
+            workspace: id("workspace"),
+            parent: None,
+            revision: OracleExplorationRevision::new(1).expect("revision"),
+            entries: vec![OracleObligationEntryV1 {
+                item,
+                resolution: OracleObligationResolutionV1::CoverageGap {
+                    run: id("run"),
+                    elements: vec![id("gap element")],
+                    observations: vec![],
+                },
+            }],
+            strategy_runs_started: 1,
+            experiments_started: 0,
+        };
+        let proposal = OraclePortfolioProposalV1::freeze(&ledger).expect("proposal");
+        let proposal_id = proposal.identity().expect("proposal id");
+        let (policy, mechanisms, attempt) = admission_context(&proposal);
+        let receipts = policy
+            .required_controls()
+            .iter()
+            .map(|control| {
+                OracleControlReceiptV1::new(
+                    proposal_id,
+                    item_id,
+                    *control,
+                    mechanisms.mechanism(*control).expect("qualified mechanism"),
+                    id(match control {
+                        OracleControlFamilyV1::MechanismQualification => {
+                            "qualification trusted receipt"
+                        }
+                        OracleControlFamilyV1::Honest => "honest trusted receipt",
+                        OracleControlFamilyV1::Mutant => "mutant trusted receipt",
+                        OracleControlFamilyV1::Hidden => "hidden trusted receipt",
+                        OracleControlFamilyV1::Bypass => "bypass trusted receipt",
+                    }),
+                    OracleControlResultV1::Passed,
+                )
+            })
+            .collect::<Vec<_>>();
+        let evidence =
+            OracleAdmissionEvidenceV1::new(&attempt, receipts).expect("control evidence");
+
+        let outcome =
+            recompute_oracle_admission(&proposal, &policy, &mechanisms, &attempt, &evidence)
+                .expect("admission");
+        assert_eq!(
+            outcome.claims[0].status,
+            OracleClaimAdmissionStatusV1::Partial
+        );
+        assert_eq!(outcome.claims[0].unresolved_items, vec![item_id]);
     }
 }

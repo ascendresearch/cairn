@@ -1,4 +1,5 @@
 //! Controller-owned supervision of one exact generic Proposal Host operation.
+#![allow(clippy::missing_errors_doc)]
 
 use std::{
     fs,
@@ -11,7 +12,8 @@ use cairn_agent::{
     AdapterVersion, EpisodeBudget, ModelOutputTokenLimit, ModelSelection, ResolvedRuntimeModel,
 };
 use cairn_migration::{
-    AgentResolvedRuntimeModelArtifact, ProposalHostBinaryIdentity, ProposalHostExperimentRequestV1,
+    AgentResolvedRuntimeModelArtifact, ProposalHostBinaryIdentity,
+    ProposalHostExecutedObservationV1, ProposalHostExperimentRequestV1,
     ProposalHostExperimentWorker, ProposalHostOutcomeV1, ProposalHostRequestV1,
     ProposalHostRuntimeV1, SirTaskLimits, execute_proposal_host_experiments,
 };
@@ -97,7 +99,7 @@ pub struct ProposalHostProcessConfigV1 {
 }
 
 impl ProposalHostProcessConfigV1 {
-    pub(crate) fn validate(&self) -> Result<(), ServerError> {
+    pub fn validate(&self) -> Result<(), ServerError> {
         if !self.executable.is_file() {
             return Err(ServerError::Configuration(
                 "Proposal Host executable must name an existing regular file".into(),
@@ -108,7 +110,7 @@ impl ProposalHostProcessConfigV1 {
         Ok(())
     }
 
-    pub(crate) fn resolve_paths(&mut self, base: &Path) {
+    pub fn resolve_paths(&mut self, base: &Path) {
         resolve(&mut self.executable, base);
         resolve(&mut self.state_root, base);
         resolve(&mut self.resolved_runtime_model, base);
@@ -138,10 +140,7 @@ impl ProposalHostProcessConfigV1 {
         Ok(model)
     }
 
-    pub(crate) fn runtime(
-        &self,
-        episode_id: EpisodeId,
-    ) -> Result<ProposalHostRuntimeV1, ServerError> {
+    pub fn runtime(&self, episode_id: EpisodeId) -> Result<ProposalHostRuntimeV1, ServerError> {
         let model = self.resolved_model()?;
         let bytes = model.canonical_bytes().map_err(configuration_error)?;
         Ok(ProposalHostRuntimeV1::new(
@@ -336,7 +335,7 @@ pub fn execute_proposal_host_controller_experiments<W: ProposalHostExperimentWor
     request: &ProposalHostRequestV1,
     experiment: &ProposalHostExperimentRequestV1,
     worker: &mut W,
-) -> Result<(), ServerError> {
+) -> Result<Vec<ProposalHostExecutedObservationV1>, ServerError> {
     validate_proposal_host_operation(config, request)
         .map_err(|failure| ServerError::MigrationWorkflow(failure.diagnostic))?;
     let state = config

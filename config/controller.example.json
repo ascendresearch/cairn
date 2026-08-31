@@ -1,6 +1,5 @@
 {
   "authority_poll_interval_ms": 1000,
-  "candidate_workflow_manager": null,
   "diagnostic_byte_limit": 1024,
   "enrollment_service": {
     "credential_validity_ms": 2592000000,
