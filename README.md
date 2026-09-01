@@ -69,22 +69,23 @@ Hardware affinity is not assumed to have one globally optimal implementation.
 CUDA task + caller + target
         │
         ▼
-Migration reasoning ── source/reference/target experiments
-        │                          │
-        │ material semantic fork  │
-        ├── focused SIR ───────────┤
-        │                          │
-        ▼                          ▼
+Controller-owned Candidate Search Loop
+        ├── Exploration Actor episodes
+        ├── optional focused SIR on a material semantic fork
+        ├── source/reference/target Worker experiments
+        ├── exploratory Ascend C candidate revisions
+        └── Development Evaluation feedback
+        │
+        ▼
 Intent contract + evolving Evidence/Assurance Graph
-        │                          │
-        ├── exploratory Ascend C candidate-family search
-        │             └── build / NPU run / profiling feedback
         │
         ▼
-sealed-policy coverage challenge + qualified Validation Bundle
+sealed-policy coverage challenge + frozen Validation Bundle
         │
-        ▼
-Qualification Epoch ── honest / correct-variant / mutant / hidden controls
+        └── end current search generation
+                    │
+                    ▼
+Qualification Epoch ── independent / mutant / hidden / 950PR controls
         │
         ▼
 Oracle Admission → Candidate Promotion/Admission
@@ -97,6 +98,13 @@ Source understanding occurs in every migration, but Cairn does not run a mini-SI
 deciding whether to run SIR. A focused SIR protocol is materialized only when actual migration
 reasoning exposes a semantic fork that changes the candidate or its judge. An exploratory candidate
 may exist before the final Oracle is accepted, but it has no release authority.
+
+The Candidate Search Loop is durable Controller orchestration, not another agent or a model-owned
+while-loop. It creates runtime-model episodes, validates typed actions, schedules authorized Worker
+effects and constructs each next immutable search state. Qualification is outside that loop. If a
+qualification failure is allowed to guide more development, Cairn starts a new search generation
+with only policy-authorized feedback; a disclosed hidden case is retired to the public regression
+set and replaced.
 
 Intent, assurance, Oracle and Candidate roles use real model/tool Agent Loops. The outer traversal
 over graph nodes, revisions, experiments, controls and candidates is mechanical Controller

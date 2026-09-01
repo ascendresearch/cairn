@@ -220,33 +220,46 @@ Runtime model、规则、原语和搜索算法可以共同提出候选；只有�
 
 四个平面共享 evidence graph，但 identity、authority、revision 和 outcome 类型不同。
 
-## 8. 两个耦合循环
+## 8. 开发搜索与资格化边界
 
 ```mermaid
 flowchart LR
     input["CUDA task + caller + target"]
-    sir["Contract discovery"]
+    loop["Controller-owned\nCandidate Search Loop"]
+    actor["Exploration Actor Episode"]
+    sir["Optional focused SIR"]
     intent{"Intent Admission"}
     validation["Validation Bundle"]
-    oracle{"Oracle Admission"}
-    probe["Exploratory implementation"]
-    pool["Ascend candidate family search"]
+    dev["Development Evaluation"]
     workers["CUDA / CPU / Ascend Workers"]
+    exit{"Search exit prerequisites"}
+    epoch[["Qualification Epoch"]]
+    oracle{"Oracle Admission"}
     verdict{"Candidate Admission"}
     package[["Migration Package"]]
 
-    input --> sir --> intent --> validation --> oracle
-    sir <--> workers
-    validation <--> workers
-    validation --> probe --> workers --> validation
-    oracle --> pool --> workers --> verdict --> package
-    verdict -->|candidate diagnostic| pool
-    verdict -->|intent or Oracle defect| sir
+    input --> loop --> actor
+    actor -->|typed proposals / requests| loop
+    actor -->|material semantic fork| sir --> loop
+    loop -->|authorized effect| workers -->|receipt| loop
+    loop --> dev --> loop
+    loop --> intent --> validation --> exit
+    exit -->|continue / typed terminal| loop
+    exit -->|freeze; leave search| epoch
+    epoch --> oracle --> verdict --> package
+    oracle -->|authorized feedback; new generation| loop
+    verdict -->|authorized feedback; new generation| loop
 ```
 
-图中的箭头表达 release authority dependency，不要求所有认知活动严格按图从左到右完成。source understanding 每次迁移都会
-发生，但 focused SIR 只在实际 reasoning 暴露 material semantic fork 时物化；不得增加 mini-SIR classifier。完整 Oracle
-accepted 是 Candidate Admission 的前置条件，不是生成第一个无发布 authority 的 exploratory Candidate 的前置条件。
+`ExplorationActor` 是 runtime model 的 proposal role；`CandidateSearchLoop` 是 `CudaMigrationWorkflow` 内由 Controller 拥有的
+durable orchestration。loop 创建 actor episode，actor 返回 typed action/tool request；actor 不调用或拥有 loop。source
+understanding 每次迁移都会发生，但 focused SIR 只在实际 reasoning 暴露 material semantic fork 时物化；不得增加 mini-SIR
+classifier。完整 Oracle accepted 是 Candidate Admission 的前置条件，不是生成第一个无发布 authority 的 exploratory
+Candidate 的前置条件。
+
+Qualification 不属于开发搜索循环。Controller 在进入 epoch 前结束当前 search generation并冻结 exact artifacts。Admission
+failure 若允许继续开发，只能创建新 generation并投影 exposure policy允许的反馈；已公开具体诊断的 hidden control必须退休为
+public regression并由新 holdout替换。
 
 ### 8.1 语义与验证循环
 
@@ -257,7 +270,8 @@ artifact；任何 relevant revision 都会使旧 Qualification Epoch 失效。
 ### 8.2 实现与性能循环
 
 Candidate family → build/run → correctness → profiling → revision。Correctness baseline 始终保留，性能变体不能覆盖或
-删除它的历史证据。
+删除它的历史证据。这里的“循环”是 Controller 从 immutable search state推进到下一 state的 durable iteration，不是模型内部
+while-loop；一个 iteration可以消费多个 runtime-model episodes和 Worker receipts。
 
 ### 8.3 Exploratory implementation
 
@@ -321,7 +335,9 @@ CUDA 源码质量、无法对 future Ascend candidate 产生判断的 item 不�
 
 ## 11. Candidate family search
 
-Candidate Search 从最简单、最容易检查的 Ascend C baseline 开始，再探索硬件亲和变体。搜索维度可以包括：
+Candidate Search Loop 是 Controller-owned state machine；它反复调用 Exploration Actor、校验 typed actions、调度获准 Worker、
+保存 lineage并构造下一 immutable state。Exploration Actor负责提出如何从最简单、最容易检查的 Ascend C baseline开始，并探索
+硬件亲和变体。搜索维度可以包括：
 
 - algorithm decomposition 和 fusion boundary；
 - Vector/Cube/SIMT 路径；
@@ -335,7 +351,8 @@ Candidate Search 从最简单、最容易检查的 Ascend C baseline 开始，�
 - integration、workspace 和 launch policy。
 
 一次 revision 只能在 exact admitted intent、Oracle、platform facts 和公开 feedback 下产生。Repository coding agent 不得
-解释 fixture 后写入生成答案。
+解释 fixture 后写入生成答案。Actor返回源码不等于 revision已经被 workflow接纳；只有 Controller能校验 artifact、parent、
+domain和 authority binding并创建 immutable revision。
 
 ## 12. 正确性、数值、安全与性能
 
@@ -379,7 +396,9 @@ writer，负责冻结输入、签发 authority、保存 revisions、调度 Worke
 ### 14.2 Agent Loops
 
 SIR、Oracle 和 Candidate reasoning 使用 `cairn-agent` 的真实 model/tool episode。Dimension、item、revision、candidate
-pool 和 experiment 的外层遍历是机械编排，不是嵌套 Agent Loop。
+pool 和 experiment 的外层遍历是机械编排，不是嵌套 Agent Loop。Candidate Search Loop属于这层机械编排：它创建、暂停、
+恢复或替换 Exploration Episode，持有 budget、effect、revision、stopping和 generation lifecycle；runtime model只有 proposal
+authority。Qualification在 search loop外执行。
 
 ### 14.3 Worker fabric
 

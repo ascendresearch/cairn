@@ -16,6 +16,23 @@
 | 结构应约束 authority/effect/evidence，而非固化全部认知步骤 | 2、6、9、16 | 已覆盖 |
 | 无法证明时应 fail closed/abstain，而不是追求 workflow completion | 3、22 | 已覆盖 |
 
+### 1.1 Exploration Actor 与 Candidate Search Loop 边界复核
+
+| 容易混淆的问题 | 文档落点 | 核对结果 |
+| --- | --- | --- |
+| Actor 是否调用/拥有 Candidate Search Loop | 7、9.1 | 已否定；loop 创建 episode，actor 只返回 proposal/request |
+| Candidate Search Loop 是否是另一个 Agent 或独立进程 | 9.1 | 已否定；它是 `CudaMigrationWorkflow` 内的 durable mechanical orchestration |
+| Exploration Actor 是否内部调用 focused 子 Agent | 9.1 | 已否定；Controller路由 peer role episode，不形成嵌套 Search Loop |
+| Agent Loop tool call 是否直接产生外部 effect | 9.1、18.1 | 已否定；它只提交 request，Controller 校验后调度 ordinary Worker |
+| 谁创建下一轮状态 | 9.1、9.3、9.4 | Controller 从 durable revision、receipt 和授权反馈构造 immutable projection |
+| episode、iteration、generation 是否混为 Agent Loop | 9.3 | 已分开；分别表示模型 continuation、durable state transition、qualification 间开发搜索 |
+| Actor 能否凭 confidence/完成声明进入 qualification | 9.2、9.4 | 不能；机械 prerequisites 与 stopping policy 重算 |
+| qualification-attempt prerequisites 是否偷做语义判断 | 9.4 | 只检查 typed closure/binding/pending state；adequacy/correctness仍由 loop外执行与 Admission重算 |
+| 多个 Actor/Candidate 如何并行 | 9.4 | 各自绑定 revision/parent，由 Controller 合入 Candidate Family，不覆盖 `latest` |
+| Qualification 是否属于搜索循环 | 7、9.5、20.9 | 不属于；进入 epoch 即结束当前 search generation |
+| Qualification failure 如何继续开发 | 9.5、20.8、20.9 | 新建 generation，只投影授权反馈；具体泄露使 control 退休并补充 holdout |
+| 上下文恢复是否依赖模型聊天记忆 | 9.3、21 | 不依赖；持久化有 consumer/replay/authority/recovery 价值的 typed state |
+
 ## 2. SIR 逻辑漏洞核对
 
 | 本轮结论 | 文档落点 | 核对结果 |
@@ -94,6 +111,8 @@
 | Controller 是唯一 workflow writer | 6.1、7、9 | 已覆盖 |
 | cairn-server 业务无关、migration app composition、ports 非独立进程 | 7、8 | 已覆盖 |
 | focused roles 使用真实 Agent Loop，外层 revision/experiment/control 机械编排 | 7、9 | 已覆盖 |
+| Candidate Search Loop 持有 episode/effect/revision/stopping，Actor 只有 proposal authority | 9.1—9.4 | 已覆盖 |
+| Qualification 位于 search loop 外，失败后续开发新建 generation | 9.5、20.9 | 已覆盖 |
 | model/Reviewer 只有 proposal authority | 3、6.1、17 | 已覆盖 |
 | Worker 只执行不判意图 | 6.1、18.1 | 已覆盖 |
 | Admission model-free | 6.1、20、30 | 已覆盖 |
@@ -144,6 +163,8 @@
 | time-to-first-running 与 time-to-package | 26.1 | 已新增 |
 | SIR materialization、missed ambiguity、late reopen | 26.2 | 已新增 |
 | graph churn、cross-feedback、epoch invalidation、co-adaptation | 26.3 | 已新增 |
+| search generation/iteration/episode/action 数量、成本与 yield | 9.3、26.3、26.7 | 已新增 |
+| qualification failure 后 reentry、反馈曝光与 holdout replacement | 9.5、20.8、26.3、26.7 | 已新增 |
 | promotion validity、symmetric replay、hidden replacement closure | 26.3、26.7 | 已新增 |
 | escalation value 与 full D fallback 收益 | 26.4 | 已新增 |
 | model capability/task difficulty interaction | 25.3、26.5 | 已新增 |
@@ -196,6 +217,13 @@
     retire-and-replace；已给出详细诊断的 control 不再计作 hidden。
 15. **性能/精度可能通过挑 workload 或调 tolerance 伪造提升**：新增 minimum practical improvement、冻结统计 policy、
     required non-regression、domain-bound specialization 和 Pareto candidate family。
+16. **Exploration Actor 与 Candidate Search Loop 可能被误解为递归 Agent**：已把 actor 定义为 episode 内 proposal role，把
+    loop 定义为 Controller-owned durable orchestration；调用方向、typed actions、immutable state、transition writer 和
+    qualification 外部边界均已固定。
+17. **Qualification failure 可能被当作普通开发反馈泄漏 hidden evaluator**：当前 generation 在 freeze 时结束；继续开发必须
+    创建新 generation，按 exposure policy投影，具体 counterexample一旦公开即 retire-to-public并替换 holdout。
+18. **新增 loop 层次后指标分母可能继续沿用模糊“Agent call”**：已新增 generation、iteration、episode、action 和 state
+    projection identities，以及 decision-changing iteration yield、qualification reentry、分层成本与 exposure联合解释规则。
 
 ## 12. 有意保留的开放问题
 
@@ -210,6 +238,8 @@
 
 最终保留的完整结构是：runtime model 在真实迁移中自然提出语义、证据、validation 和 exploratory Ascend C candidate；
 material semantic fork 才物化 focused SIR；Evidence/Assurance Graph 让 source、target、candidate 和 assurance 共同演化；
+Controller-owned Candidate Search Loop逐轮调用 Exploration Actor episode、调度授权 effect并构造 immutable state；Actor 不拥有
+loop、Worker、stopping或 transition；qualification位于 search loop外，后续开发使用新 generation与受控 feedback；
 发布前固定执行 sealed-policy challenge，必要时进入完整 D；Development/Qualification Oracle 分离，Oracle changes 使用 typed
 cause、meta-qualification 和 parent/current symmetric replay；Candidate 不因 latest 自动晋升，而是在同一 immutable epoch
 通过五层 Promotion Gates、predeclared performance/precision improvement 和 bounded hidden-query controls。ordinary Workers、

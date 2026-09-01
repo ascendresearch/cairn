@@ -67,34 +67,41 @@ CUDA bug、race、越界、未初始化读、错误边界结果、偶然 launch 
 ```mermaid
 flowchart TD
     intake["Frozen task + caller + 950PR target"]
-    reason["Migration reasoning episodes"]
+    loop["Controller-owned Candidate Search Loop"]
+    actor["Exploration Actor Episode"]
     graph[["Evidence / Assurance Graph"]]
     fork{"Material semantic fork found\nduring actual migration reasoning?"}
     sir["Focused SIR protocol\nsource/reference experiments + user decision"]
     intent{"Intent Admission"}
     exploratory["Exploratory Ascend C candidate revisions"]
     workers["Managed Workers\nCUDA / CPU / Ascend build / 950PR / profile"]
+    dev["Development Evaluation"]
     freeze["Freeze organic assurance graph"]
     challenge["Sealed-policy coverage challenge\n+ adaptive D fallback"]
+    exit{"Search exit prerequisites closed?"}
     epoch[["Qualification Epoch"]]
     oracle{"Mechanical Oracle Admission"}
     promotion{"Candidate Promotion / Admission"}
     package[["Migration Package"]]
 
-    intake --> reason
-    reason <--> graph
-    reason --> fork
+    intake --> loop
+    loop --> actor
+    actor -->|typed proposals / requests| loop
+    loop <--> graph
+    actor --> fork
     fork -->|yes| sir --> graph
-    fork -->|no separate SIR| graph
+    fork -->|no separate SIR| loop
+    loop --> exploratory --> loop
+    loop -->|authorized effect| workers
+    workers -->|receipt| graph
+    loop --> dev --> graph
     graph --> intent
-    graph <--> exploratory
-    graph <--> workers
-    exploratory <--> workers
-    intent --> freeze --> challenge --> epoch
-    exploratory --> epoch
+    intent --> freeze --> challenge --> exit
+    exit -->|no: next episode / typed terminal| loop
+    exit -->|yes: freeze and leave search| epoch
     epoch --> oracle --> promotion --> package
-    oracle -->|typed Oracle/evidence feedback| graph
-    promotion -->|typed candidate/oracle/intent/platform feedback| graph
+    oracle -->|authorized feedback; new generation| loop
+    promotion -->|authorized feedback; new generation| loop
 ```
 
 Intent Admission 可以在 co-design 中较早完成；但最迟必须在 policy ledger 实例化和 qualification 前完成。没有 admitted
@@ -105,11 +112,82 @@ Intent、Oracle、Candidate 和 Admission 是 workflow ports 背后的函数，�
 使用真实、可恢复的 Agent Loop；graph node、revision、experiment、control 和 feedback 的外层遍历是机械编排，不是嵌套
 Agent Loop。不存在 Proposal Host、专属 proposal binary 或测试旁路。
 
+### 4.1 Exploration Actor 是参与者，不是循环拥有者
+
+`ExplorationActorV1` 是 runtime model 在一次 `ExplorationEpisodeV1` 中承担的 proposal role。它可以理解 source、形成 competing
+hypotheses、提出 intent/assurance revision、请求实验、生成 Candidate、诊断公开开发反馈，并建议继续搜索或尝试
+qualification。
+
+Exploration Actor 是默认通用 co-design role，但不吞并 focused SIR、Oracle Developer/Reviewer 或 Coverage Review。它可以提出
+进入 focused intervention；只有 Controller 能暂停当前 episode并启动相应 peer role episode。focused role消费受限 state
+projection，返回 typed artifact/finding，不是 Actor内部调用的子 Agent，也不拥有嵌套 Search Loop。
+
+Actor 不能直接写 workflow state、覆盖 Candidate revision、调度 Worker、扩大 capability、读取 hidden/sibling receipt、冻结
+Qualification Epoch 或产生 promotion verdict。Agent Loop 内的 tool call 只是一个受约束的 effect request；Controller 校验后才
+能提交普通 Worker。
+
+### 4.2 Candidate Search Loop 是 Controller-owned orchestration
+
+`CandidateSearchLoopV1` 位于 `CudaMigrationWorkflow` 内，是 durable mechanical state machine，不是另一名 Agent、独立服务或
+模型内部 while-loop。调用方向固定为：
+
+```text
+CandidateSearchLoop
+    → 创建 ExplorationEpisode，并授予 exact state projection/capabilities
+    → Exploration Actor 返回 typed action proposals
+    → Controller 校验并持久化 revision，或调度获准 effect
+    → Worker/Development Evaluation 产生 evidence
+    → Controller 构造下一 immutable search state
+    → 创建 fresh/resumed ExplorationEpisode
+```
+
+loop 至少负责 episode lifecycle、budget、effect scheduling、Candidate lineage、assurance revisions、Development feedback、
+stopping counters 和机械 transition。它不解释源码、判断哪个语义 hypothesis 正确，或替模型设计 Ascend C。
+
+Actor action 至少强类型区分：evidence experiment request、intent clarification、intent contract proposal、assurance revision、
+Candidate revision、development diagnosis、qualification-attempt recommendation 和 gap-bound abstention。模型 confidence、预算
+耗尽或一句“完成”都不具有 transition authority。
+
+### 4.3 每轮状态、generation 与 qualification 边界
+
+三个时间单位必须分开：`ExplorationEpisodeV1` 是一次可暂停/恢复或替换的 runtime-model continuation；search iteration 是
+Controller 从一个 immutable state 推进到下一个 state的 durable transition，可以消费多个 episode/effect；search generation
+是两次 qualification边界之间的完整开发搜索。Qualification attempt 本身不是 iteration，也不能重新打开已经冻结的
+generation。
+
+每轮 actor 输入是授权的 immutable projection，而不是依赖完整聊天记忆：
+
+```text
+SearchState_k
+    = exact intake/intent/target revisions
+    + public assurance graph revision
+    + candidate family and selected parent
+    + proposal-visible Worker evidence
+    + Development feedback
+    + budget/query/stopping counters
+    + model/tool/skill snapshot identities
+```
+
+只有有 consumer、authority、effect、replay 或 recovery 价值的 typed output被持久化。多个 actor 可以提出竞争 variants，但只能
+由 Controller 以不同 revision/parent 合入 Candidate Family，不能并发覆盖 generic `latest`。
+
+Qualification 明确位于 Candidate Search Loop 外。进入 qualification 前，Controller 结束当前 search generation，冻结 exact
+Candidate、Qualification Oracle、public evidence、promotion claim、target 和 policy。Qualification failure 不能作为普通 tool
+result 原样回灌旧 episode：若 policy允许继续开发，必须建立新 generation，只投影授权的粗粒度反馈；若公开具体
+counterexample，该 control 立即退休为 public regression并由新 holdout替换。无可授权反馈或 query budget用尽时，正常终止为
+rejected、partial 或 abstained。
+
+Actor建议尝试 qualification后，Controller只机械检查：Intent已 admitted、Candidate已 `DevelopmentEligible`、public required
+checks和 known findings有闭合状态、organic freeze与 policy challenge完成、Oracle/target/capability/promotion revisions齐全、
+不存在 pending effect/decision，以及 hidden exposure/query/feedback policy已 seal。它不据此判断语义正确；允许创建 epoch只
+表示制品结构足以接受独立资格化，最终仍可被 Oracle或 Candidate Admission拒绝。
+
 ## 5. Authority 与数据边界
 
 | 参与者 | 可以做什么 | 不能做什么 |
 | --- | --- | --- |
-| Migration reasoning actor | 阅读授权材料；提出 intent、candidate、validation、experiment 和 diagnosis | 准入自己；伪造 observation；读取 hidden material |
+| Exploration Actor | 阅读授权 projection；提出 intent、Candidate、assurance、experiment、diagnosis 和 stopping recommendation | 拥有 Search Loop；写 workflow state；直接调度 Worker；准入自己；读取 hidden material |
+| Candidate Search Loop | 创建 actor episode；校验 action；调度获准 effect；持久化 lineage；构造下一 state；执行机械 stopping/transition | 解释源码或 intent；替模型生成 Candidate；把 qualification 当公开开发工具 |
 | Focused SIR role | 针对 exact semantic fork 收集 evidence、提出 hypotheses 和用户问题 | 作为每个 task 的 mandatory classifier；替用户决定语义 |
 | Controller | 冻结输入与 revision；授予 capability；调度 Worker；保存 lineage；执行机械闭合与 transition | 通过代码特征解释语义；制造 receipt；改写 model artifact |
 | Worker | 在 exact job contract 下编译、执行、profile 并返回 receipt | 解释 intent；扩大 scope；产生 Admission verdict |
@@ -194,7 +272,7 @@ plausible interpretations，且当前 evidence 无法消除时，建立独立、
 
 ### 7.3 Material semantic fork
 
-Migration reasoning actor 在实际理解、生成或验证过程中提交 `IntentClarificationRequiredV1`，至少包含：
+Exploration Actor 在实际理解、生成或验证过程中提交 `IntentClarificationRequiredV1`，至少包含：
 
 - exact competing interpretations；
 - source/caller/reference evidence 与反证；
@@ -306,6 +384,10 @@ Exploratory Candidate 可以请求 ordinary Ascend build/NPU/profile Worker，�
 Oracle/assurance 可以因 Candidate evidence 修订，Candidate 也可以因 validation evidence 修订；所有反馈必须 typed，并且任何
 影响 qualification 的 revision 都使旧 epoch 失效。
 
+Exploratory Candidate 由 Exploration Actor 通过 `SubmitCandidateRevision` 提出，但只有 Candidate Search Loop 能校验 parent、
+domain、artifact、improvement claim 和 authority binding，创建 immutable revision并调度 Development Evaluation。Actor 返回源码
+正文不等于 workflow 已接受一个 Candidate revision。
+
 ## 11. Oracle 是持续演化的 Assurance 子图
 
 Oracle 的最终产品形态仍是 executable Validation Bundle，但不要求在第一个 exploratory Candidate 前完整产生。Assurance
@@ -333,7 +415,7 @@ implementations、high-precision partial references、formal tools 和用户 aut
 
 ### 12.1 Organic assurance concern
 
-初始 reasoning actor 不读取内部 taxonomy。在实际迁移中，一个风险只有成为跨 episode consumer 时才物化为
+初始 Exploration Actor 不读取内部 taxonomy。在实际迁移中，一个风险只有成为跨 episode consumer 时才物化为
 `OrganicAssuranceConcernV1`，并绑定：
 
 - exact trigger evidence；
@@ -652,18 +734,20 @@ model body、stdout/stderr、hidden content、auth token、credential 或用户�
 真实验证必须由 runtime model 通过正常入口：
 
 1. 读取此前未知 CUDA task、caller 和 exact 950PR context；
-2. 直接开始 migration reasoning，不运行 mini-SIR；
-3. 若发现 material semantic fork，通过 focused SIR/Worker/administrator 决定；
-4. Intent Admission 发布 contract/evidence snapshot；
-5. 生成无发布 authority 的真实 exploratory Ascend C Candidate；
-6. ordinary Worker 对 exact Candidate 做真实 build/run/profile；
-7. assurance graph 随 source/target/Candidate evidence 演进；
-8. policy 暴露前 freeze organic graph，再完成 complete challenge/disposition；
-9. 必要时进入 full D property/case/mechanism Review；
-10. 冻结 Development/Qualification Oracle 和 exact Qualification Epoch；
-11. ordinary Workers 执行 honest、correct、negative、hidden 和 950PR controls；
-12. Oracle Admission 后，对 parent/current Candidates 执行同 epoch promotion；
-13. 只有 qualified revision/family 进入 migration package。
+2. Controller 创建 Candidate Search Loop generation与首个 Exploration Episode，actor直接开始 reasoning，不运行 mini-SIR；
+3. actor 以 typed action请求实验、提出 assurance/Candidate revision；Controller校验后才调度 Worker或修改 durable state；
+4. 若发现 material semantic fork，通过 focused SIR/Worker/administrator 决定；
+5. Intent Admission 发布 contract/evidence snapshot；
+6. 生成无发布 authority 的真实 exploratory Ascend C Candidate；
+7. ordinary Worker 对 exact Candidate 做真实 build/run/profile；
+8. Development Evaluation反馈进入下一 immutable search state，assurance graph随 source/target/Candidate evidence演进；
+9. policy 暴露前 freeze organic graph，再完成 complete challenge/disposition；
+10. 必要时进入 full D property/case/mechanism Review；
+11. Search Loop机械检查 exit prerequisites，结束 generation并冻结 Development/Qualification Oracle和 exact Qualification Epoch；
+12. loop外的 ordinary Workers执行 honest、correct、negative、hidden和 950PR controls；
+13. Oracle Admission 后，对 parent/current Candidates执行同 epoch promotion；
+14. qualification failure若继续开发，创建新 generation并只投影 exposure policy允许的反馈；
+15. 只有 qualified revision/family进入 migration package。
 
 人工必须能审查 intent、fork、evidence、organic concerns、policy mappings、Candidate revisions、Oracle changes、promotion claims、
 receipts、control exposure、epoch 和 verdict。至少两个语义/结构/evidence shape 明显不同的任务使用相同 product path；一次
@@ -678,15 +762,16 @@ performance/unknown；compatibility/V2/generic ID/fixture branch。
 本文描述的是 current V1 target，当前代码尚未完整实现。下一步应按最小真实 consumer推进：
 
 1. 删除/绕开任何 mandatory SIR classifier，统一 direct/focused path 的 `IntentContractProposalV1`；
-2. 建立最小 Evidence/Assurance Graph 强类型节点、边和 exact feedback routing；
-3. 在首 reasoning 前 seal policy derivation/exposure，接通 pre-challenge organic freeze；
-4. 接通真实 `ExploratoryAscendCandidateV1` 及 ordinary Ascend build/run Worker；
-5. 实现 Development/Qualification Oracle distinction 和 Oracle revision causes；
-6. 实现 `QualificationEpochV1`、revision invalidation 和 control exposure state；
-7. 实现 Candidate lifecycle、五层 promotion gates、same-epoch symmetric replay；
-8. 接通 exact 950PR performance/precision policy 与 Pareto candidate family；
-9. 用正常 CLI/server/app/workflow/Worker 路径运行无 framework 和有 reference 的不同任务；
-10. 在 correctness、hidden、capability 和 replay Gate 通过后再比较 D/E 成本。
+2. 定义 `CandidateSearchLoopV1`、`ExplorationEpisodeV1`、typed action envelope、immutable search state 和 generation lifecycle；
+3. 建立最小 Evidence/Assurance Graph 强类型节点、边和 exact feedback routing；
+4. 在首 reasoning 前 seal policy derivation/exposure，接通 pre-challenge organic freeze；
+5. 接通真实 `ExploratoryAscendCandidateV1` 及 ordinary Ascend build/run Worker；
+6. 实现 Development/Qualification Oracle distinction 和 Oracle revision causes；
+7. 实现 `QualificationEpochV1`、revision invalidation、loop-exit boundary 和 control exposure state；
+8. 实现 Candidate lifecycle、五层 promotion gates、same-epoch symmetric replay；
+9. 接通 exact 950PR performance/precision policy 与 Pareto candidate family；
+10. 用正常 CLI/server/app/workflow/Worker 路径运行无 framework 和有 reference 的不同任务；
+11. 在 correctness、hidden、capability 和 replay Gate 通过后再比较 D/E 成本。
 
 不先实现通用知识库、额外角色网络、Proposal Host、fixture-specific logic 或 compatibility path。
 
@@ -694,6 +779,10 @@ performance/unknown；compatibility/V2/generic ID/fixture branch。
 
 - 没有 mini-SIR/readiness/skip classifier；
 - runtime model 在实际 migration reasoning 中提出 material semantic fork，Controller 不解释源码；
+- Candidate Search Loop 是 Controller-owned durable process，不是 Actor 调用的工具或模型内部循环；
+- Exploration Actor 只返回 typed actions；Worker effect、revision、stopping 和 transition由 Controller控制；
+- 每轮使用 immutable authorized state projection，不依赖未持久化聊天记忆；
+- qualification 位于 Search Loop 外；失败后继续开发必须创建新 generation并执行 feedback exposure policy；
 - direct/focused path 产生同一 intent proposal，Intent Admission 在 qualification 前完成；
 - CUDA behavior 不自动 promotion；
 - exploratory Candidate 无发布 authority，但能通过 ordinary Worker 产生真实 target evidence；

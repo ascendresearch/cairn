@@ -17,6 +17,15 @@
 | 不以“足够强模型”为架构前提 | 2 | 已覆盖 |
 | complete Oracle 不再是第一个 exploratory Candidate 的前置条件 | 4、10、11 | 已覆盖 |
 | Oracle accepted 仍是正式 Candidate Admission 的前置条件 | 16、24 | 已覆盖 |
+| Exploration Actor 是被 Search Loop 调用的 proposal role | 4.1、4.2、5 | 已覆盖 |
+| Candidate Search Loop 是 Controller-owned durable orchestration，不是 Agent/进程 | 4.2、5 | 已覆盖 |
+| focused SIR/Oracle/Review 是 Controller 路由的 peer episode，不是 Actor 子 Agent | 4.1、4.2 | 已覆盖 |
+| Agent tool call 只提交 request，Controller 才调度 Worker | 4.1、4.2、15 | 已覆盖 |
+| 每轮 state 是 immutable authorized projection，不依赖聊天记忆 | 4.3、25 | 已覆盖 |
+| episode、iteration、generation 与 qualification attempt 明确分开 | 4.3、27 | 已覆盖 |
+| Qualification 位于 Search Loop 外 | 4.3、16、27 | 已覆盖 |
+| qualification 后继续开发必须新建 generation并限制反馈曝光 | 4.3、19、27 | 已覆盖 |
+| qualification-attempt transition只检查机械 closure，不预判语义正确 | 4.3、5、16 | 已覆盖 |
 
 ## 2. Candidate/Oracle 猫鼠问题
 
@@ -88,6 +97,7 @@
 | cairn-server 业务无关、migration-app composition | 4 | 已覆盖 |
 | ports 不是独立 proposal 进程 | 4 | 已覆盖 |
 | focused roles 是真实 Agent Loop，外层遍历机械编排 | 4 | 已覆盖 |
+| Search Loop 管 episode/effect/revision/stopping，Actor 不拥有 transition | 4.1—4.3、5 | 已覆盖 |
 | normal CLI/server/app/workflow/Worker path | 6、27 | 已覆盖 |
 | semantically distinct node/edge/state 使用强类型 | 9 | 已覆盖 |
 | deserialization 重跑 invariant、compile-fail boundary | 9 | 已覆盖 |
@@ -107,6 +117,10 @@
 4. **E 只有 epoch invalidation、没有正式 promotion 语义**：已在 E 和本联合文档中补齐 Candidate lifecycle、Oracle change
    control、五层 Gate、多目标规则和 adaptive hidden-query 防护。
 5. **新 shared graph 可能扩大旧 diagnostic 权限**：已明确 exact node/revision/receipt 与 16 KiB 上限不因 graph 共享而放宽。
+6. **Exploration Actor 与 Candidate Search Loop 的调用方向不清**：已明确由 Controller-owned loop创建 episode，actor返回 typed
+   action；Worker effect、durable revision、stopping和 qualification transition均不属于 actor authority。
+7. **Qualification failure 可能恢复旧 episode并污染 hidden controls**：已增加 search generation边界；只能向新 generation
+   投影授权反馈，具体 counterexample公开后必须 retire-to-public并替换 holdout。
 
 ## 8. 尚未由设计冒充已解决的问题
 
@@ -116,7 +130,8 @@
 - Qualification Epoch 按 family 还是 variant/workload partition；
 - full D fallback 的 mechanical severity threshold；
 - focused SIR 在缺少 independent specification 时的真实 recall；
-- 当前代码尚未实现 Graph、exploratory Ascend C consumer、Qualification Oracle 或 Promotion Gates。
+- 当前代码尚未实现 Candidate Search Loop generation/action protocol、Graph、exploratory Ascend C consumer、Qualification
+  Oracle 或 Promotion Gates。
 
 这些必须通过正式设计 slice、真实 runtime model、ordinary Workers、exact 950PR 和 common hidden evaluator解决，不能因为
 联合权威文档已经更新就误报为实现完成。
@@ -124,7 +139,9 @@
 ## 9. 最终防丢结论
 
 当前联合规范不再把 SIR、Oracle 和 Candidate 当成固定认知流水线。runtime model 直接开始迁移；material semantic fork 才
-物化 focused SIR；assurance 与无发布 authority 的 exploratory Candidate 共同演进；release 前执行 sealed-policy challenge，
+物化 focused SIR；Controller-owned Candidate Search Loop逐轮调用 Exploration Actor，actor只提出 typed actions，loop负责
+effect、revision、immutable state和 stopping；assurance 与无发布 authority 的 exploratory Candidate 共同演进；release 前执行 sealed-policy challenge，
 冻结 Qualification Oracle 和 epoch。后续 Candidate 只有在同一 epoch 通过五层 Gate 才晋升；Oracle 改版时新旧 Candidate
-对称重测；hidden feedback 受 query/exposure/retire-and-replace 管理。最终 authority 仍来自 exact intent、950PR receipts、
+对称重测；Qualification 位于 Search Loop 外，继续开发必须建立新 generation；hidden feedback 受
+query/exposure/retire-and-replace 管理。最终 authority 仍来自 exact intent、950PR receipts、
 independent controls 和 model-free Admissions。
