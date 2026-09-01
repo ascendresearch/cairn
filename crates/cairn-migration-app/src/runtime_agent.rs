@@ -9,13 +9,14 @@ use std::{
 use cairn_execution::{ExecutionStderrArtifact, ExecutionStdoutArtifact};
 
 use cairn_agent::{
-    AgentLoopCheckpointV1, AgentLoopExhaustionReasonV1, AgentLoopStepExecutionV1,
-    AgentLoopStepExecutor, AgentStepAccessV1, CanonicalToolResult, ContextBlock, EpisodeBudget,
-    FrozenAgentEpisodeDriverV1, HistoryItem, HttpModelTransport, InstructionBlock,
-    ModelOutputTokenLimit, ModelSelection, NativeProtocolCodec, NativeRequestSpec,
-    NativeToolDefinition, PolicyDocument, PreparedToolOperation, ResolvedRuntimeModel, ToolCatalog,
-    ToolDescriptorArtifact, ToolEffectClass, ToolGateway, ToolGatewayError,
-    ToolImplementationVersion, ToolRegistration, ToolRegistry, drive_agent_episode_step,
+    AgentEpisodeDriverError, AgentLoopCheckpointV1, AgentLoopExhaustionReasonV1,
+    AgentLoopStepExecutionV1, AgentLoopStepExecutor, AgentStepAccessV1, CanonicalToolResult,
+    ContextBlock, EpisodeBudget, FrozenAgentEpisodeDriverV1, HistoryItem, HttpModelTransport,
+    InstructionBlock, ModelOutputTokenLimit, ModelSelection, NativeProtocolCodec,
+    NativeRequestSpec, NativeToolDefinition, PolicyDocument, PreparedToolOperation,
+    ResolvedRuntimeModel, ToolCatalog, ToolDescriptorArtifact, ToolEffectClass, ToolGateway,
+    ToolGatewayError, ToolImplementationVersion, ToolRegistration, ToolRegistry,
+    TransportFailureClass, drive_agent_episode_step,
 };
 use cairn_migration::{
     AgentLoopRuntimeBindingArtifact, AgentResolvedRuntimeModelArtifact, AuthoritativeIntentClaimV1,
@@ -23,11 +24,12 @@ use cairn_migration::{
     CandidateRevisionAgentContextV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
     MigrationAgentToolV1, MigrationRoleStepObservationV1, OracleBuildTestSnapshotArtifact,
     OracleCheckEvidenceV1, OracleCheckMethodV1, OracleCheckObjective, OracleCheckObservation,
-    OracleCheckPassCondition, OracleCheckPlanV1, OracleCheckSetup, OracleControlFailureClassV1,
-    OracleControlResultV1, OracleCoveragePolicyV1, OracleDimensionItemDiscoveryAgentContextV1,
-    OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewDecisionV1,
-    OracleDimensionItemSetReviewV1, OracleDimensionItemSetReviewerAgentContextV1,
-    OracleDimensionV1, OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
+    OracleCheckPassCondition, OracleCheckPlanV1, OracleCheckSetup, OracleClaimV1,
+    OracleControlFailureClassV1, OracleControlResultV1, OracleCoveragePolicyV1,
+    OracleDimensionItemDiscoveryAgentContextV1, OracleDimensionItemSetProposalV1,
+    OracleDimensionItemSetReviewDecisionV1, OracleDimensionItemSetReviewV1,
+    OracleDimensionItemSetReviewerAgentContextV1, OracleDimensionV1,
+    OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
     OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
     OracleExplorationCapabilityGrantArtifact, OracleItemDeveloperAgentContextV1,
     OracleItemDiscoveryRevisionLimit, OracleItemDraftV1, OracleItemReviewDecisionV1,
@@ -38,21 +40,28 @@ use cairn_migration::{
     OracleResearchToolCatalogArtifact, OracleRevisionRequestV1, OracleSourceSnapshotArtifact,
     OracleStrategyCatalogV1, OracleStrategyExecutorV1, OracleStrategyKindV1, OracleStrategyName,
     OracleStrategyRegistrationV1, OracleStrategyRoleV1, OracleStrategyRunLimit,
-    OracleStrategyRunV1, OracleStrategyToolCatalogV1, OracleWorkspaceInput, OracleWorkspaceV1,
+    OracleStrategyRunV1, OracleStrategyToolCatalogV1, OracleWholePortfolioAgentContextV1,
+    OracleWholePortfolioProposalAuthorityV1, OracleWorkspaceInput, OracleWorkspaceV1,
     SirAgentContextV1, SirProposalSubmissionV1, SirReadLineLimit, SirSourceLineNumber,
     SirTaskArtifactPath, SirTaskLimits, SirTaskWorkspace, TrustedOracleControlReceiptArtifact,
     derive_oracle_claims, derive_oracle_dimensions,
 };
 use cairn_protocol::{AgentLoopId, ContentId, ContentType, EpisodeId, TaskId};
 use cairn_record::ContentStore;
+use cairn_server::ServerConfig;
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_verification::ModelConfigurationArtifact;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::evidence_experiment_runner::{
+    EvidenceExperimentRunnerV1, EvidenceExperimentWorkerConfigV1,
+};
+
 const SCHEMA_V1: u16 = 1;
 const TOOL_VERSION: &str = "migration-role-tools-v1";
+const MODEL_BACKED_SYNTHESIS_STRATEGY: &str = "model-backed-synthesis";
 const SIR_INSTRUCTION: &str = r"You are the semantic-intent-recovery analyst for one CUDA-to-Ascend-C migration task.
 
 Inspect only the offered task artifacts. First use migration-read-task-artifact to read the source, host launch, ABI, tests, or build files needed for your analysis. Treat observable source facts separately from intent inferences. Cite exact task-local paths and inclusive line ranges.
@@ -63,23 +72,37 @@ The proposal is non-authoritative. Do not claim admission, correctness, a confid
 
 const ORACLE_ITEM_DISCOVERY_INSTRUCTION: &str = r"You discover independently reviewable Oracle items for one exact Controller-derived dimension.
 
-Read the offered dimension and task evidence. Decompose the dimension into one or more distinct, concrete obligations that together express what this dimension needs checked. On a revision, read and address every exact item-set Review finding without changing the dimension. Submit only item statements through migration-submit-oracle-dimension-items. Do not design check plans yet, merge dimensions, invent identities, claim review or admission, or use unavailable knowledge.";
+Read the offered dimension and its exact admitted-intent claim through migration-read-oracle-dimension. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. Decompose the dimension into one or more distinct, concrete obligations that together express what this dimension needs checked. Every item must be candidate-facing: it must be capable of producing an expected value, property, comparator, candidate execution obligation, safety obligation, or performance requirement that can judge a future Ascend-C candidate or its target execution receipt. A statement that only restates the admitted intent, characterizes the CUDA source, or says that implementation details are free is not an Oracle item. CUDA facts may support a candidate-facing item but cannot be the only subject being checked. On a revision, read and address every exact item-set Review finding without changing the dimension. Submit only item statements through migration-submit-oracle-dimension-items. Do not design check plans yet, merge dimensions, invent identities, claim review or admission, or use unavailable knowledge.";
+
+const ORACLE_WHOLE_PORTFOLIO_INSTRUCTION: &str = r"You propose one complete Oracle portfolio for a CUDA-to-Ascend-C migration in a single Agent Loop.
+
+Read migration-read-oracle-whole-portfolio-scope before submitting. It provides every exact Controller-derived dimension, admitted-intent claim, target context, and exact prior Admission feedback when this is a revision. Read offered task files through migration-read-task-artifact as needed. Submit every offered dimension exactly once through migration-submit-oracle-whole-portfolio. For each dimension provide one or more distinct candidate-facing items, and for every item provide one or more executable plans with an obtainable future Ascend-C candidate artifact or target observation, an unambiguous pass condition, and exact source-citation or admitted-intent evidence. CUDA source characterization may support a plan but cannot be its only candidate observation. Resolve consistency, overlap, domain, numerical, integration, safety, and performance interactions yourself within this one episode; no model Reviewer will repair the result. Preserve unknowns rather than inventing evidence. Do not invent identities, request unavailable Worker experiments, claim execution, qualification, Review, or Admission.";
 
 const ORACLE_ITEM_SET_REVIEW_INSTRUCTION: &str = r"You independently review one exact proposed item decomposition for one Controller-derived Oracle dimension.
 
-Read migration-read-oracle-dimension-items, including the full Controller-derived dimension. Use migration-read-task-artifact for the exact source ranges needed to check whether the decomposition is grounded and complete. Approve only if the items are concrete, non-overlapping, remain inside the exact dimension, and jointly cover that dimension. Reject unsupported or unreadable evidence with actionable findings through migration-submit-oracle-dimension-items-review. Do not design check plans, rewrite the item set yourself, or claim control or Admission authority.";
+Read migration-read-oracle-dimension-items, including the full Controller-derived dimension and its exact admitted-intent claim. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. Approve only if the items are concrete, non-overlapping, remain inside the exact dimension, jointly cover that dimension, and can judge a future Ascend-C candidate or its target execution receipt. Reject an item as not-candidate-facing when it only restates intent, characterizes CUDA, proves that a CUDA mechanism has some property, or lists implementation freedoms without defining a candidate-facing expected value, property, comparator, execution obligation, safety obligation, or performance requirement. Reject unsupported or unreadable evidence with actionable findings through migration-submit-oracle-dimension-items-review. Do not design check plans, rewrite the item set yourself, or claim control or Admission authority.";
 
 const ORACLE_ITEM_DEVELOPMENT_INSTRUCTION: &str = r"You develop one exact Oracle item for a CUDA-to-Ascend-C migration task.
 
-Read migration-read-oracle-item-conversation before submitting. On the initial revision, create one or more complementary, executable check plans for only the offered item. On a later revision, preserve the same item and address every finding from the exact prior draft review and every exact artifact-owned failed control supplied by Admission. For each failed receipt, call migration-read-oracle-control-diagnostic and use its bounded exact stdout/stderr to determine the required correction; do not guess from an exit code or artifact identity. Treat prior receipts only as feedback, never as passing authority. Negative-challenge, mechanism, infrastructure-unavailable, or missing observations are reconciled by the Controller and are never a reason to rewrite an item. Each plan must state an objective, setup, obtainable observation, unambiguous pass condition, and exact source citation or admitted-intent evidence. Submit only through migration-submit-oracle-item-draft. Do not change the item, omit feedback, claim execution, review, qualification, or admission.";
+Read migration-read-oracle-item-conversation, including the item's exact dimension and admitted-intent claim, before submitting. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. On the initial revision, create one or more complementary, executable check plans for only the offered item. Every plan must say what future Ascend-C candidate artifact or target execution observation it consumes and how it can accept or reject that candidate. Static analysis of the CUDA source or restatement of admitted intent can support a plan but cannot itself be the candidate observation. On a later revision, preserve the same item and address every finding from the exact prior draft review and every exact artifact-owned failed control supplied by Admission. For each failed receipt, call migration-read-oracle-control-diagnostic and use its bounded exact stdout/stderr to determine the required correction; do not guess from an exit code or artifact identity. Treat prior receipts only as feedback, never as passing authority. Negative-challenge, mechanism, infrastructure-unavailable, or missing observations are reconciled by the Controller and are never a reason to rewrite an item. Each plan must state an objective, setup, obtainable candidate observation, unambiguous pass condition, and exact source citation or admitted-intent evidence. Submit only through migration-submit-oracle-item-draft. Do not change the item, omit feedback, claim execution, review, qualification, or admission.";
 
 const ORACLE_ITEM_REVIEW_INSTRUCTION: &str = r"You independently review one exact Oracle item draft revision.
 
-Read migration-read-oracle-item-draft. Use migration-read-task-artifact to inspect every exact source range needed to verify the draft's source citations; never treat an unread citation as support. Approve only if every proposed plan addresses the exact item, is supported by readable cited evidence, has complete setup, an obtainable observation, and an unambiguous pass condition. Otherwise submit one or more actionable findings bound to this exact item and draft through migration-submit-oracle-item-review. Multiple distinct findings may use the same issue class. Do not redesign the plan yourself or claim qualification or admission.";
+Read migration-read-oracle-item-draft, including the item's exact dimension and admitted-intent claim. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. Inspect every exact source range needed to verify the draft's source citations; never treat an unread citation as support. Approve only if every proposed plan addresses the exact item, is supported by readable cited evidence, has complete setup, consumes an obtainable future Ascend-C candidate artifact or target execution observation, and has an unambiguous candidate acceptance condition. A plan that only inspects CUDA, restates intent, or describes implementation freedom has no candidate observation and must be rejected as observation-unexecutable. Otherwise submit one or more actionable findings bound to this exact item and draft through migration-submit-oracle-item-review. Multiple distinct findings may use the same issue class. Do not redesign the plan yourself or claim qualification or admission.";
 
 const ORACLE_PORTFOLIO_COHERENCE_REVIEW_INSTRUCTION: &str = r"You independently review only the relationships among already item-reviewed Oracle drafts in one exact portfolio.
 
-Read migration-read-oracle-portfolio. Check for contradictory items, duplicate coverage, conflicting pass conditions, cross-plane gaps, and failures of the items to provide coherent joint coverage. Do not redo each item's detailed plan review and do not generate plans. Approve only when the exact assembled portfolio is coherent. Otherwise submit actionable findings through migration-submit-oracle-portfolio-coherence-review; every finding must name a non-empty exact affected item set, an issue class, an explanation, and a required change. You have no control, receipt, or Admission authority.";
+Read migration-read-oracle-portfolio, including the complete exact admitted-claim and Controller-dimension inventory. Check for contradictory items, duplicate coverage, conflicting pass conditions, cross-plane gaps, and failures of the items to provide coherent joint coverage. Do not redo each item's detailed plan review and do not generate plans. Approve only when the exact assembled portfolio is coherent. Otherwise submit actionable findings through migration-submit-oracle-portfolio-coherence-review; every finding must name a non-empty exact affected item set, an issue class, an explanation, and a required change. You have no control, receipt, or Admission authority.";
+
+fn role_instruction(base: &str, policy: cairn_migration::ReasoningDecompositionPolicyV1) -> String {
+    if policy.permits_worker_experiments() {
+        format!(
+            "{base}\n\nThe current task grants migration-run-evidence-experiment. Use it only when a bounded executable Worker observation can discriminate an explicit uncertainty or verify a material Review concern. The required language is posix-shell: program must be POSIX /bin/sh source, not Python or another interpreter's source. State the purpose in the request, inspect the returned exact receipt, and cite the observation in your reasoning before submitting. Do not request tautological source-printing, claim unavailable CUDA/GPU capabilities, or treat a proposal experiment as Oracle Admission authority."
+        )
+    } else {
+        base.to_owned()
+    }
+}
 
 enum RuntimeRoleSubmissionV1<T> {
     Submitted(T),
@@ -119,6 +142,7 @@ fn resolve_role_submission<T>(
 
 #[derive(Clone)]
 struct RuntimeTaskV1 {
+    reasoning_decomposition: cairn_migration::ReasoningDecompositionPolicyV1,
     workspace: SirTaskWorkspace,
     recovery_input: IntentRecoveryInputV1,
     limits: SirTaskLimits,
@@ -156,6 +180,7 @@ impl MigrationRuntimeMaterialsV1 {
         workspace: SirTaskWorkspace,
         recovery_input: IntentRecoveryInputV1,
         limits: SirTaskLimits,
+        reasoning_decomposition: cairn_migration::ReasoningDecompositionPolicyV1,
     ) -> Result<(), MigrationAgentRuntimeError> {
         if recovery_input.task_id() != task_id
             || recovery_input.task_bundle()
@@ -173,6 +198,7 @@ impl MigrationRuntimeMaterialsV1 {
         if let Some(existing) = tasks.get(&task_id) {
             if existing.recovery_input != recovery_input
                 || existing.workspace.bundle() != workspace.bundle()
+                || existing.reasoning_decomposition != reasoning_decomposition
             {
                 return Err(MigrationAgentRuntimeError::TaskBinding);
             }
@@ -181,6 +207,7 @@ impl MigrationRuntimeMaterialsV1 {
         tasks.insert(
             task_id,
             RuntimeTaskV1 {
+                reasoning_decomposition,
                 workspace,
                 recovery_input,
                 limits,
@@ -625,18 +652,45 @@ fn runtime_oracle_dimensions(
     task_id: TaskId,
     oracle: &RuntimeOracleTaskV1,
 ) -> Result<Vec<OracleDimensionV1>, MigrationAgentRuntimeError> {
-    let claims = derive_oracle_claims(
-        task_id,
-        oracle.workspace.admitted_intent(),
-        &oracle.admitted_claims,
-    );
+    let claims = runtime_oracle_claims(task_id, oracle);
     let mut claim_ids = claims
         .iter()
-        .map(cairn_migration::OracleClaimV1::identity)
+        .map(OracleClaimV1::identity)
         .collect::<Result<Vec<_>, _>>()
         .map_err(MigrationAgentRuntimeError::domain)?;
     claim_ids.sort_by_key(ContentId::to_wire);
     derive_oracle_dimensions(&claim_ids, &oracle.policy).map_err(MigrationAgentRuntimeError::domain)
+}
+
+fn runtime_oracle_claims(task_id: TaskId, oracle: &RuntimeOracleTaskV1) -> Vec<OracleClaimV1> {
+    derive_oracle_claims(
+        task_id,
+        oracle.workspace.admitted_intent(),
+        &oracle.admitted_claims,
+    )
+}
+
+fn runtime_oracle_claim_for_dimension(
+    task_id: TaskId,
+    oracle: &RuntimeOracleTaskV1,
+    dimension: &OracleDimensionV1,
+) -> Result<OracleClaimV1, MigrationAgentRuntimeError> {
+    exact_oracle_claim_for_dimension(&runtime_oracle_claims(task_id, oracle), dimension)
+}
+
+fn exact_oracle_claim_for_dimension(
+    claims: &[OracleClaimV1],
+    dimension: &OracleDimensionV1,
+) -> Result<OracleClaimV1, MigrationAgentRuntimeError> {
+    claims
+        .iter()
+        .find(|claim| {
+            claim
+                .identity()
+                .is_ok_and(|identity| identity == dimension.claim())
+        })
+        .cloned()
+        .ok_or(MigrationAgentRuntimeError::TaskBinding)
 }
 
 /// Production executor for role-scoped migration Agent Loops.
@@ -651,11 +705,13 @@ pub struct MigrationAgentRuntimeExecutorV1 {
     execution_content: SqliteContentStore,
     materials: MigrationRuntimeMaterialsV1,
     sir_submissions: BTreeMap<AgentLoopId, IntentHypothesisSetProposalV1>,
+    whole_portfolio_submissions: BTreeMap<AgentLoopId, OraclePortfolioProposalV1>,
     item_set_submissions: BTreeMap<AgentLoopId, OracleDimensionItemSetProposalV1>,
     item_set_review_submissions: BTreeMap<AgentLoopId, OracleDimensionItemSetReviewV1>,
     item_draft_submissions: BTreeMap<AgentLoopId, OracleItemDraftV1>,
     item_review_submissions: BTreeMap<AgentLoopId, OracleItemReviewV1>,
     coherence_review_submissions: BTreeMap<AgentLoopId, OraclePortfolioCoherenceReviewV1>,
+    evidence_worker: Option<(ServerConfig, EvidenceExperimentWorkerConfigV1)>,
 }
 
 impl MigrationAgentRuntimeExecutorV1 {
@@ -678,6 +734,7 @@ impl MigrationAgentRuntimeExecutorV1 {
         execution_content_database: &Path,
         execution_content_directory: &Path,
         materials: MigrationRuntimeMaterialsV1,
+        evidence_worker: Option<(ServerConfig, EvidenceExperimentWorkerConfigV1)>,
     ) -> Result<Self, MigrationAgentRuntimeError> {
         if selection.provider != *model.provider()
             || selection.model != *model.wire_model()
@@ -703,12 +760,41 @@ impl MigrationAgentRuntimeExecutorV1 {
             .map_err(MigrationAgentRuntimeError::domain)?,
             materials,
             sir_submissions: BTreeMap::new(),
+            whole_portfolio_submissions: BTreeMap::new(),
             item_set_submissions: BTreeMap::new(),
             item_set_review_submissions: BTreeMap::new(),
             item_draft_submissions: BTreeMap::new(),
             item_review_submissions: BTreeMap::new(),
             coherence_review_submissions: BTreeMap::new(),
+            evidence_worker,
         })
+    }
+
+    fn execute_evidence_worker_request(
+        &mut self,
+        task_id: TaskId,
+        request: &cairn_agent::AgentWorkerRequestV1,
+    ) -> Result<(), MigrationAgentRuntimeError> {
+        let task = self.materials.task(task_id)?;
+        if !task.reasoning_decomposition.permits_worker_experiments() {
+            return Err(MigrationAgentRuntimeError::UnexpectedExternalEffect(
+                "reasoning policy does not authorize proposal evidence experiments",
+            ));
+        }
+        let (server, config) = self.evidence_worker.clone().ok_or(
+            MigrationAgentRuntimeError::UnexpectedExternalEffect(
+                "proposal evidence Worker is not configured",
+            ),
+        )?;
+        let mut runner = EvidenceExperimentRunnerV1::new(server, config, task.workspace)
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        cairn_agent::execute_agent_worker_request(
+            &mut self.events,
+            &mut self.content,
+            &mut runner,
+            request,
+        )
+        .map_err(MigrationAgentRuntimeError::episode_driver)
     }
 
     /// Builds the exact model-backed synthesis registration consumed by Oracle item development.
@@ -744,7 +830,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             .map_err(MigrationAgentRuntimeError::domain)?;
         OracleStrategyCatalogV1::new(vec![
             OracleStrategyRegistrationV1::new(
-                OracleStrategyName::new("model-backed-synthesis")
+                OracleStrategyName::new(MODEL_BACKED_SYNTHESIS_STRATEGY)
                     .map_err(MigrationAgentRuntimeError::domain)?,
                 OracleStrategyKindV1::ModelBackedSynthesis,
                 OracleStrategyExecutorV1::AgentLoop {
@@ -799,6 +885,10 @@ impl MigrationAgentRuntimeExecutorV1 {
         let dimension_id = dimension
             .identity()
             .map_err(MigrationAgentRuntimeError::domain)?;
+        let claim = runtime_oracle_claim_for_dimension(context.task_id(), &oracle, &dimension)?;
+        let claim_id = claim
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
         let (previous, review) = match (context.previous_item_set(), context.review_feedback()) {
             (None, None) => (None, None),
             (Some(previous_id), Some(review_id)) => {
@@ -848,12 +938,14 @@ impl MigrationAgentRuntimeExecutorV1 {
             );
         }
         archive_exact(&mut self.content, dimension_id, &dimension)?;
-        let tools = exposed_native_tools(access, &oracle_item_discovery_native_tools()?)?;
+        let tools =
+            exposed_native_tools(access, &oracle_item_discovery_native_tools(task.limits)?)?;
         let model_context = json!({
             "schema_version": SCHEMA_V1,
             "workspace_id": context.workspace(),
             "admitted_intent_id": context.admitted_intent(),
             "dimension_id": dimension_id,
+            "claim_id": claim_id,
             "previous_item_set_id": context.previous_item_set(),
             "review_feedback_id": context.review_feedback(),
             "task_artifacts": task.workspace.bundle().artifacts(),
@@ -877,7 +969,10 @@ impl MigrationAgentRuntimeExecutorV1 {
             budget: self.budget.clone(),
             native_spec: NativeRequestSpec {
                 wire_model: self.selection.model.clone(),
-                instructions: ORACLE_ITEM_DISCOVERY_INSTRUCTION.to_owned(),
+                instructions: role_instruction(
+                    ORACLE_ITEM_DISCOVERY_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
                 tools: tools.clone(),
                 max_output_tokens: self.max_output_tokens,
             },
@@ -904,6 +999,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             task_workspace: task.workspace,
             limits: task.limits,
             dimension,
+            claim,
             previous,
             review,
             accepted: self.item_set_submissions.remove(&loop_id),
@@ -919,7 +1015,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             &frozen,
             &mut gateway,
         )
-        .map_err(MigrationAgentRuntimeError::domain)?;
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
         match outcome {
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
                 if let Some(submission) = gateway.accepted {
@@ -971,9 +1067,15 @@ impl MigrationAgentRuntimeExecutorV1 {
                     MigrationRoleStepObservationV1::Complete(proposal),
                 ))
             }
-            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(_) => Err(
-                MigrationAgentRuntimeError::UnexpectedExternalEffect("Oracle item discovery"),
-            ),
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.item_set_submissions.insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
         }
     }
 
@@ -1019,13 +1121,20 @@ impl MigrationAgentRuntimeExecutorV1 {
                     .is_ok_and(|identity| identity == context.dimension())
             })
             .ok_or(MigrationAgentRuntimeError::TaskBinding)?;
-        let tools = exposed_native_tools(access, &oracle_item_set_reviewer_native_tools()?)?;
+        let claim = runtime_oracle_claim_for_dimension(context.task_id(), &oracle, &dimension)?;
+        let claim_id = claim
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        let tools =
+            exposed_native_tools(access, &oracle_item_set_reviewer_native_tools(task.limits)?)?;
         let model_context = json!({
             "schema_version": SCHEMA_V1,
             "admitted_intent_id": context.admitted_intent(),
             "dimension_id": context.dimension(),
+            "claim_id": claim_id,
             "proposal_id": context.proposal(),
             "revision": proposal.revision().get(),
+            "task_artifacts": task.workspace.bundle().artifacts(),
         });
         let projection = archive_oracle_item_projection(
             &mut self.content,
@@ -1046,7 +1155,10 @@ impl MigrationAgentRuntimeExecutorV1 {
             budget: self.budget.clone(),
             native_spec: NativeRequestSpec {
                 wire_model: self.selection.model.clone(),
-                instructions: ORACLE_ITEM_SET_REVIEW_INSTRUCTION.to_owned(),
+                instructions: role_instruction(
+                    ORACLE_ITEM_SET_REVIEW_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
                 tools: tools.clone(),
                 max_output_tokens: self.max_output_tokens,
             },
@@ -1073,6 +1185,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             task_workspace: task.workspace,
             limits: task.limits,
             dimension,
+            claim,
             proposal,
             accepted: self.item_set_review_submissions.remove(&loop_id),
         };
@@ -1087,7 +1200,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             &frozen,
             &mut gateway,
         )
-        .map_err(MigrationAgentRuntimeError::domain)?;
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
         match outcome {
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
                 if let Some(submission) = gateway.accepted {
@@ -1139,9 +1252,15 @@ impl MigrationAgentRuntimeExecutorV1 {
                     MigrationRoleStepObservationV1::Complete(review),
                 ))
             }
-            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(_) => Err(
-                MigrationAgentRuntimeError::UnexpectedExternalEffect("Oracle item-set Review"),
-            ),
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.item_set_review_submissions.insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
         }
     }
 
@@ -1302,6 +1421,10 @@ impl MigrationAgentRuntimeExecutorV1 {
                     .is_ok_and(|identity| identity == item.dimension())
             })
             .ok_or(MigrationAgentRuntimeError::TaskBinding)?;
+        let claim = runtime_oracle_claim_for_dimension(context.task_id(), &oracle, &dimension)?;
+        let claim_id = claim
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
         if previous.as_ref().is_some_and(|draft| {
             draft.revision().get() >= oracle.workspace.budget().item_revisions.get()
         }) {
@@ -1315,7 +1438,7 @@ impl MigrationAgentRuntimeExecutorV1 {
         let run = OracleStrategyRunV1::new(
             context.workspace(),
             &dimension,
-            OracleStrategyName::new("model-backed-synthesis")
+            OracleStrategyName::new(MODEL_BACKED_SYNTHESIS_STRATEGY)
                 .map_err(MigrationAgentRuntimeError::domain)?,
             &oracle.catalog,
         )
@@ -1324,13 +1447,15 @@ impl MigrationAgentRuntimeExecutorV1 {
         archive_exact(&mut self.content, run_id, &run)?;
         let tools = exposed_native_tools(
             access,
-            &oracle_item_developer_native_tools(context.admitted_intent())?,
+            &oracle_item_developer_native_tools(context.admitted_intent(), task.limits)?,
         )?;
         let model_context = json!({
             "schema_version": SCHEMA_V1,
             "workspace_id": context.workspace(),
             "admitted_intent_id": context.admitted_intent(),
             "item_id": context.item(),
+            "dimension_id": item.dimension(),
+            "claim_id": claim_id,
             "previous_draft_id": context.previous_draft(),
             "review_feedback_id": context.review_feedback(),
             "coherence_feedback_id": context.coherence_feedback(),
@@ -1354,7 +1479,10 @@ impl MigrationAgentRuntimeExecutorV1 {
             budget: self.budget.clone(),
             native_spec: NativeRequestSpec {
                 wire_model: self.selection.model.clone(),
-                instructions: ORACLE_ITEM_DEVELOPMENT_INSTRUCTION.to_owned(),
+                instructions: role_instruction(
+                    ORACLE_ITEM_DEVELOPMENT_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
                 tools: tools.clone(),
                 max_output_tokens: self.max_output_tokens,
             },
@@ -1391,6 +1519,8 @@ impl MigrationAgentRuntimeExecutorV1 {
             limits: task.limits,
             oracle_workspace: oracle.workspace,
             item,
+            dimension,
+            claim,
             previous,
             review,
             coherence,
@@ -1410,7 +1540,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             &frozen,
             &mut gateway,
         )
-        .map_err(MigrationAgentRuntimeError::domain)?;
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
         match outcome {
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
                 if let Some(submission) = gateway.accepted {
@@ -1463,9 +1593,15 @@ impl MigrationAgentRuntimeExecutorV1 {
                     MigrationRoleStepObservationV1::Complete(draft),
                 ))
             }
-            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(_) => Err(
-                MigrationAgentRuntimeError::UnexpectedExternalEffect("Oracle item development"),
-            ),
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.item_draft_submissions.insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
         }
     }
 
@@ -1508,13 +1644,28 @@ impl MigrationAgentRuntimeExecutorV1 {
         {
             return Err(MigrationAgentRuntimeError::TaskBinding);
         }
-        let tools = exposed_native_tools(access, &oracle_item_reviewer_native_tools()?)?;
+        let dimension = runtime_oracle_dimensions(context.task_id(), &oracle)?
+            .into_iter()
+            .find(|dimension| {
+                dimension
+                    .identity()
+                    .is_ok_and(|identity| identity == draft.item().dimension())
+            })
+            .ok_or(MigrationAgentRuntimeError::TaskBinding)?;
+        let claim = runtime_oracle_claim_for_dimension(context.task_id(), &oracle, &dimension)?;
+        let claim_id = claim
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        let tools = exposed_native_tools(access, &oracle_item_reviewer_native_tools(task.limits)?)?;
         let model_context = json!({
             "schema_version": SCHEMA_V1,
             "admitted_intent_id": context.admitted_intent(),
             "item_id": context.item(),
+            "dimension_id": draft.item().dimension(),
+            "claim_id": claim_id,
             "draft_id": context.draft(),
             "revision": draft.revision().get(),
+            "task_artifacts": task.workspace.bundle().artifacts(),
         });
         let projection = archive_oracle_item_projection(
             &mut self.content,
@@ -1532,7 +1683,10 @@ impl MigrationAgentRuntimeExecutorV1 {
             budget: self.budget.clone(),
             native_spec: NativeRequestSpec {
                 wire_model: self.selection.model.clone(),
-                instructions: ORACLE_ITEM_REVIEW_INSTRUCTION.to_owned(),
+                instructions: role_instruction(
+                    ORACLE_ITEM_REVIEW_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
                 tools: tools.clone(),
                 max_output_tokens: self.max_output_tokens,
             },
@@ -1558,6 +1712,8 @@ impl MigrationAgentRuntimeExecutorV1 {
         let mut gateway = OracleItemReviewerGateway {
             task_workspace: task.workspace,
             limits: task.limits,
+            dimension,
+            claim,
             draft,
             accepted: self.item_review_submissions.remove(&loop_id),
         };
@@ -1572,7 +1728,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             &frozen,
             &mut gateway,
         )
-        .map_err(MigrationAgentRuntimeError::domain)?;
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
         match outcome {
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
                 if let Some(submission) = gateway.accepted {
@@ -1624,9 +1780,15 @@ impl MigrationAgentRuntimeExecutorV1 {
                     MigrationRoleStepObservationV1::Complete(review),
                 ))
             }
-            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(_) => Err(
-                MigrationAgentRuntimeError::UnexpectedExternalEffect("Oracle item Review"),
-            ),
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.item_review_submissions.insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
         }
     }
 
@@ -1660,6 +1822,8 @@ impl MigrationAgentRuntimeExecutorV1 {
             })
             .cloned()
             .ok_or(MigrationAgentRuntimeError::TaskBinding)?;
+        let claims = runtime_oracle_claims(context.task_id(), &oracle);
+        let dimensions = runtime_oracle_dimensions(context.task_id(), &oracle)?;
         let tools =
             exposed_native_tools(access, &oracle_portfolio_coherence_reviewer_native_tools()?)?;
         let model_context = json!({
@@ -1667,6 +1831,8 @@ impl MigrationAgentRuntimeExecutorV1 {
             "admitted_intent_id": context.admitted_intent(),
             "portfolio_id": context.portfolio(),
             "item_count": portfolio.accepted_items().len(),
+            "claim_count": claims.len(),
+            "dimension_count": dimensions.len(),
         });
         let projection = archive_oracle_item_projection(
             &mut self.content,
@@ -1687,7 +1853,10 @@ impl MigrationAgentRuntimeExecutorV1 {
             budget: self.budget.clone(),
             native_spec: NativeRequestSpec {
                 wire_model: self.selection.model.clone(),
-                instructions: ORACLE_PORTFOLIO_COHERENCE_REVIEW_INSTRUCTION.to_owned(),
+                instructions: role_instruction(
+                    ORACLE_PORTFOLIO_COHERENCE_REVIEW_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
                 tools: tools.clone(),
                 max_output_tokens: self.max_output_tokens,
             },
@@ -1710,6 +1879,8 @@ impl MigrationAgentRuntimeExecutorV1 {
         );
         let loop_id = checkpoint.start().loop_id();
         let mut gateway = OraclePortfolioCoherenceReviewerGateway {
+            claims,
+            dimensions,
             portfolio,
             accepted: self.coherence_review_submissions.remove(&loop_id),
         };
@@ -1724,7 +1895,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             &frozen,
             &mut gateway,
         )
-        .map_err(MigrationAgentRuntimeError::domain)?;
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
         match outcome {
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
                 if let Some(submission) = gateway.accepted {
@@ -1776,9 +1947,14 @@ impl MigrationAgentRuntimeExecutorV1 {
                     MigrationRoleStepObservationV1::Complete(review),
                 ))
             }
-            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(_) => {
-                Err(MigrationAgentRuntimeError::UnexpectedExternalEffect(
-                    "Oracle portfolio coherence Review",
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.coherence_review_submissions
+                        .insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
                 ))
             }
         }
@@ -1812,7 +1988,7 @@ impl MigrationAgentRuntimeExecutorV1 {
         {
             return Err(MigrationAgentRuntimeError::TaskBinding);
         }
-        let tools = exposed_native_tools(access, &sir_native_tools()?)?;
+        let tools = exposed_native_tools(access, &sir_native_tools(task.limits)?)?;
         let projection = archive_sir_projection(&mut self.content, &task, &tools)?;
         let episode_id = checkpoint.start().episode_id();
         let model_configuration = ContentId::<AgentResolvedRuntimeModelArtifact>::derive(
@@ -1832,7 +2008,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             budget: self.budget.clone(),
             native_spec: NativeRequestSpec {
                 wire_model: self.selection.model.clone(),
-                instructions: SIR_INSTRUCTION.to_owned(),
+                instructions: role_instruction(SIR_INSTRUCTION, task.reasoning_decomposition),
                 tools: tools.clone(),
                 max_output_tokens: self.max_output_tokens,
             },
@@ -1873,7 +2049,7 @@ impl MigrationAgentRuntimeExecutorV1 {
             &frozen,
             &mut gateway,
         )
-        .map_err(MigrationAgentRuntimeError::domain)?;
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
         match outcome {
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
                 if let Some(submission) = gateway.accepted {
@@ -1912,8 +2088,267 @@ impl MigrationAgentRuntimeExecutorV1 {
                     MigrationRoleStepObservationV1::Complete(proposal),
                 ))
             }
-            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(_) => {
-                Err(MigrationAgentRuntimeError::UnexpectedExternalEffect("SIR"))
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.sir_submissions.insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
+        }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the minimal-decomposition executor keeps one exact whole-portfolio authority boundary visible"
+    )]
+    fn execute_oracle_whole_portfolio(
+        &mut self,
+        checkpoint: &AgentLoopCheckpointV1,
+        context: &OracleWholePortfolioAgentContextV1,
+        access: &AgentStepAccessV1,
+    ) -> Result<
+        AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<OraclePortfolioProposalV1>>,
+        MigrationAgentRuntimeError,
+    > {
+        let task = self.materials.task(context.task_id())?;
+        let oracle = task
+            .oracle
+            .clone()
+            .ok_or(MigrationAgentRuntimeError::MissingOracleMaterials)?;
+        if context.admitted_intent() != oracle.workspace.admitted_intent()
+            || context.workspace()
+                != oracle
+                    .workspace
+                    .identity()
+                    .map_err(MigrationAgentRuntimeError::domain)?
+        {
+            return Err(MigrationAgentRuntimeError::TaskBinding);
+        }
+        let dimensions = runtime_oracle_dimensions(context.task_id(), &oracle)?;
+        let authority = OracleWholePortfolioProposalAuthorityV1::new(
+            &oracle.workspace,
+            dimensions
+                .iter()
+                .map(OracleDimensionV1::identity)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(MigrationAgentRuntimeError::domain)?,
+        )
+        .map_err(MigrationAgentRuntimeError::domain)?;
+        if authority
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?
+            != context.authority()
+        {
+            return Err(MigrationAgentRuntimeError::TaskBinding);
+        }
+        let previous = context
+            .previous_portfolio()
+            .map(|identity| {
+                oracle
+                    .portfolios
+                    .iter()
+                    .find(|portfolio| {
+                        portfolio
+                            .identity()
+                            .is_ok_and(|existing| existing == identity)
+                    })
+                    .cloned()
+                    .ok_or(MigrationAgentRuntimeError::TaskBinding)
+            })
+            .transpose()?;
+        let admission = context
+            .admission_feedback()
+            .map(|identity| {
+                oracle
+                    .revision_requests
+                    .iter()
+                    .find(|request| {
+                        request
+                            .identity()
+                            .is_ok_and(|existing| existing == identity)
+                    })
+                    .cloned()
+                    .ok_or(MigrationAgentRuntimeError::TaskBinding)
+            })
+            .transpose()?;
+        if previous.is_some() != admission.is_some() {
+            return Err(MigrationAgentRuntimeError::TaskBinding);
+        }
+        let claims = runtime_oracle_claims(context.task_id(), &oracle);
+        let tools = exposed_native_tools(
+            access,
+            &oracle_whole_portfolio_native_tools(context.admitted_intent(), task.limits)?,
+        )?;
+        let model_context = json!({
+            "schema_version": SCHEMA_V1,
+            "workspace_id": context.workspace(),
+            "admitted_intent_id": context.admitted_intent(),
+            "authority_id": context.authority(),
+            "dimension_count": dimensions.len(),
+            "previous_portfolio_id": context.previous_portfolio(),
+            "admission_feedback_id": context.admission_feedback(),
+            "task_artifacts": task.workspace.bundle().artifacts(),
+            "target_context": task.recovery_input,
+            "knowledge_snapshot": {"kind":"empty"},
+        });
+        let projection = archive_oracle_item_projection(
+            &mut self.content,
+            ORACLE_WHOLE_PORTFOLIO_INSTRUCTION,
+            &tools,
+            &model_context,
+            format!(
+                "Propose the complete Oracle portfolio under exact authority {}.",
+                context.authority()
+            ),
+        )?;
+        let episode_id = checkpoint.start().episode_id();
+        let frozen = FrozenAgentEpisodeDriverV1 {
+            task_id: context.task_id(),
+            episode_id,
+            role: checkpoint.start().role().clone(),
+            selection: self.selection.clone(),
+            budget: self.budget.clone(),
+            native_spec: NativeRequestSpec {
+                wire_model: self.selection.model.clone(),
+                instructions: role_instruction(
+                    ORACLE_WHOLE_PORTFOLIO_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
+                tools: tools.clone(),
+                max_output_tokens: self.max_output_tokens,
+            },
+            user_text: projection.user_text,
+            instruction: projection.instruction,
+            tool_catalog: projection.tool_catalog,
+            history: projection.history,
+            context: projection.context,
+            policy: projection.policy,
+            capability_grant: capability_grant(access, &tools)?,
+        };
+        let loop_id = checkpoint.start().loop_id();
+        let mut gateway = OracleWholePortfolioGateway {
+            task_workspace: task.workspace,
+            limits: task.limits,
+            recovery_input: task.recovery_input,
+            workspace: oracle.workspace,
+            dimensions,
+            claims,
+            catalog: oracle.catalog,
+            authority,
+            previous,
+            admission,
+            runs: Vec::new(),
+            accepted: self.whole_portfolio_submissions.remove(&loop_id),
+        };
+        let mut transport = HttpModelTransport::new(&self.model, &self.credential_base)
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        let outcome = drive_agent_episode_step(
+            &mut self.events,
+            &mut self.content,
+            &mut transport,
+            NativeProtocolCodec::from_config(self.model.protocol())
+                .map_err(MigrationAgentRuntimeError::domain)?,
+            &frozen,
+            &mut gateway,
+        )
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
+        match outcome {
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
+                if let Some(submission) = gateway.accepted {
+                    self.whole_portfolio_submissions.insert(loop_id, submission);
+                }
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::Complete(completion) => {
+                let portfolio = match resolve_role_submission(
+                    gateway.accepted,
+                    completion.reason,
+                    "Oracle whole portfolio",
+                )? {
+                    RuntimeRoleSubmissionV1::Submitted(portfolio) => portfolio,
+                    RuntimeRoleSubmissionV1::Exhausted(reason) => {
+                        return Ok(AgentLoopStepExecutionV1::Observed(
+                            MigrationRoleStepObservationV1::Exhausted(reason),
+                        ));
+                    }
+                };
+                archive_exact(
+                    &mut self.content,
+                    gateway
+                        .authority
+                        .identity()
+                        .map_err(MigrationAgentRuntimeError::domain)?,
+                    &gateway.authority,
+                )?;
+                for run in &gateway.runs {
+                    archive_exact(
+                        &mut self.content,
+                        run.identity().map_err(MigrationAgentRuntimeError::domain)?,
+                        run,
+                    )?;
+                }
+                for accepted in portfolio.accepted_items() {
+                    for plan in accepted.plans() {
+                        archive_exact(
+                            &mut self.content,
+                            plan.identity()
+                                .map_err(MigrationAgentRuntimeError::domain)?,
+                            plan,
+                        )?;
+                    }
+                    archive_exact(
+                        &mut self.content,
+                        accepted
+                            .draft()
+                            .identity()
+                            .map_err(MigrationAgentRuntimeError::domain)?,
+                        accepted.draft(),
+                    )?;
+                    archive_exact(
+                        &mut self.content,
+                        accepted
+                            .identity()
+                            .map_err(MigrationAgentRuntimeError::domain)?,
+                        accepted,
+                    )?;
+                    self.materials
+                        .record_oracle_item_draft(context.task_id(), accepted.draft())?;
+                }
+                let portfolio_id = portfolio
+                    .identity()
+                    .map_err(MigrationAgentRuntimeError::domain)?;
+                archive_exact(&mut self.content, portfolio_id, &portfolio)?;
+                self.materials
+                    .record_oracle_portfolio(context.task_id(), &portfolio)?;
+                tracing::info!(
+                    target: "cairn.migration.agent-runtime",
+                    event = "oracle_whole_portfolio_episode_completed",
+                    task_id = %context.task_id(),
+                    episode_id = %episode_id,
+                    authority_id = %context.authority(),
+                    portfolio_id = %portfolio_id,
+                    dimension_count = portfolio.entries().len(),
+                    item_count = portfolio.accepted_items().len(),
+                    steps_started = completion.steps_started,
+                    "minimal-decomposition Oracle whole-portfolio episode completed"
+                );
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Complete(portfolio),
+                ))
+            }
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                if let Some(submission) = gateway.accepted {
+                    self.whole_portfolio_submissions.insert(loop_id, submission);
+                }
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
             }
         }
     }
@@ -1940,6 +2375,31 @@ impl
     > + Send {
         ready(tokio::task::block_in_place(|| {
             self.execute_sir(checkpoint, context, access)
+        }))
+    }
+}
+
+impl
+    AgentLoopStepExecutor<
+        OracleWholePortfolioAgentContextV1,
+        MigrationRoleStepObservationV1<OraclePortfolioProposalV1>,
+    > for MigrationAgentRuntimeExecutorV1
+{
+    type Error = MigrationAgentRuntimeError;
+
+    fn execute_step(
+        &mut self,
+        checkpoint: &AgentLoopCheckpointV1,
+        context: &OracleWholePortfolioAgentContextV1,
+        access: &AgentStepAccessV1,
+    ) -> impl Future<
+        Output = Result<
+            AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<OraclePortfolioProposalV1>>,
+            Self::Error,
+        >,
+    > + Send {
+        ready(tokio::task::block_in_place(|| {
+            self.execute_oracle_whole_portfolio(checkpoint, context, access)
         }))
     }
 }
@@ -2127,6 +2587,7 @@ struct OracleDimensionItemDiscoveryGateway {
     task_workspace: SirTaskWorkspace,
     limits: SirTaskLimits,
     dimension: OracleDimensionV1,
+    claim: OracleClaimV1,
     previous: Option<OracleDimensionItemSetProposalV1>,
     review: Option<OracleDimensionItemSetReviewV1>,
     accepted: Option<OracleDimensionItemSetProposalV1>,
@@ -2154,7 +2615,9 @@ impl ToolGateway for OracleDimensionItemDiscoveryGateway {
                 CanonicalToolResult::from_value(&json!({
                     "schema_version": SCHEMA_V1,
                     "dimension_id": self.dimension.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                    "dimension": self.dimension,
                     "claim_id": self.dimension.claim(),
+                    "claim": self.claim,
                     "plane": self.dimension.plane(),
                     "concern": self.dimension.concern(),
                     "role": self.dimension.role(),
@@ -2233,6 +2696,7 @@ struct OracleDimensionItemSetReviewerGateway {
     task_workspace: SirTaskWorkspace,
     limits: SirTaskLimits,
     dimension: OracleDimensionV1,
+    claim: OracleClaimV1,
     proposal: OracleDimensionItemSetProposalV1,
     accepted: Option<OracleDimensionItemSetReviewV1>,
 }
@@ -2260,6 +2724,7 @@ impl ToolGateway for OracleDimensionItemSetReviewerGateway {
                     "schema_version": SCHEMA_V1,
                     "dimension_id": self.proposal.dimension(),
                     "dimension": self.dimension,
+                    "claim": self.claim,
                     "proposal_id": self.proposal.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
                     "proposal": self.proposal,
                 }))
@@ -2348,6 +2813,8 @@ struct OracleItemDeveloperGateway {
     limits: SirTaskLimits,
     oracle_workspace: OracleWorkspaceV1,
     item: OracleItemV1,
+    dimension: OracleDimensionV1,
+    claim: OracleClaimV1,
     previous: Option<OracleItemDraftV1>,
     review: Option<OracleItemReviewV1>,
     coherence: Option<OraclePortfolioCoherenceReviewV1>,
@@ -2459,6 +2926,8 @@ impl ToolGateway for OracleItemDeveloperGateway {
                     "schema_version": SCHEMA_V1,
                     "item_id": item_id,
                     "item": self.item,
+                    "dimension": self.dimension,
+                    "claim": self.claim,
                     "admitted_intent_id": self.oracle_workspace.admitted_intent(),
                     "previous_draft": self.previous,
                     "review_feedback": self.review,
@@ -2562,6 +3031,8 @@ struct OracleItemReviewSubmissionV1 {
 struct OracleItemReviewerGateway {
     task_workspace: SirTaskWorkspace,
     limits: SirTaskLimits,
+    dimension: OracleDimensionV1,
+    claim: OracleClaimV1,
     draft: OracleItemDraftV1,
     accepted: Option<OracleItemReviewV1>,
 }
@@ -2587,6 +3058,8 @@ impl ToolGateway for OracleItemReviewerGateway {
                 }
                 CanonicalToolResult::from_value(&json!({
                     "schema_version": SCHEMA_V1,
+                    "dimension": self.dimension,
+                    "claim": self.claim,
                     "draft_id": self.draft.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
                     "draft": self.draft,
                 }))
@@ -2659,6 +3132,8 @@ struct OraclePortfolioCoherenceReviewSubmissionV1 {
 }
 
 struct OraclePortfolioCoherenceReviewerGateway {
+    claims: Vec<OracleClaimV1>,
+    dimensions: Vec<OracleDimensionV1>,
     portfolio: OraclePortfolioProposalV1,
     accepted: Option<OraclePortfolioCoherenceReviewV1>,
 }
@@ -2681,6 +3156,8 @@ impl ToolGateway for OraclePortfolioCoherenceReviewerGateway {
                 }
                 CanonicalToolResult::from_value(&json!({
                     "schema_version": SCHEMA_V1,
+                    "claims": self.claims,
+                    "dimensions": self.dimensions,
                     "portfolio_id": self.portfolio.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
                     "portfolio": self.portfolio,
                 }))
@@ -2749,6 +3226,287 @@ struct OracleSubmittedCheckPlanV1 {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleWholePortfolioItemSubmissionV1 {
+    statement: OracleItemStatement,
+    plans: Vec<OracleSubmittedCheckPlanV1>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleWholePortfolioDimensionSubmissionV1 {
+    dimension_id: ContentId<cairn_migration::OracleDimensionArtifact>,
+    items: Vec<OracleWholePortfolioItemSubmissionV1>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OracleWholePortfolioSubmissionV1 {
+    schema_version: u16,
+    authority_id: ContentId<cairn_migration::OracleWholePortfolioProposalAuthorityArtifact>,
+    dimensions: Vec<OracleWholePortfolioDimensionSubmissionV1>,
+}
+
+struct OracleWholePortfolioGateway {
+    task_workspace: SirTaskWorkspace,
+    limits: SirTaskLimits,
+    recovery_input: IntentRecoveryInputV1,
+    workspace: OracleWorkspaceV1,
+    dimensions: Vec<OracleDimensionV1>,
+    claims: Vec<OracleClaimV1>,
+    catalog: OracleStrategyCatalogV1,
+    authority: OracleWholePortfolioProposalAuthorityV1,
+    previous: Option<OraclePortfolioProposalV1>,
+    admission: Option<OracleRevisionRequestV1>,
+    runs: Vec<OracleStrategyRunV1>,
+    accepted: Option<OraclePortfolioProposalV1>,
+}
+
+impl OracleWholePortfolioGateway {
+    fn materialize_evidence(
+        &self,
+        evidence: Vec<OracleSubmittedCheckEvidenceV1>,
+    ) -> Result<Vec<OracleCheckEvidenceV1>, ToolGatewayError> {
+        let mut encoded = evidence
+            .into_iter()
+            .map(|value| {
+                let typed = match value {
+                    OracleSubmittedCheckEvidenceV1::SourceCitation { citation } => {
+                        self.task_workspace
+                            .validate_citation(&citation)
+                            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                        OracleCheckEvidenceV1::SourceCitation { citation }
+                    }
+                    OracleSubmittedCheckEvidenceV1::AdmittedIntent { contract } => {
+                        let contract = contract
+                            .parse::<ContentId<cairn_migration::MigrationIntentContractArtifact>>()
+                            .map_err(|_| {
+                                ToolGatewayError::Rejected(
+                                    "invalid admitted-intent identity".to_owned(),
+                                )
+                            })?;
+                        if contract != self.workspace.admitted_intent() {
+                            return Err(ToolGatewayError::Rejected(
+                                "check evidence changed the admitted-intent identity".to_owned(),
+                            ));
+                        }
+                        OracleCheckEvidenceV1::AdmittedIntent { contract }
+                    }
+                };
+                cairn_codec::to_vec(&typed)
+                    .map(|bytes| (bytes, typed))
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        encoded.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(encoded.into_iter().map(|(_, value)| value).collect())
+    }
+}
+
+fn whole_portfolio_dimension_scope(
+    dimensions: &[OracleDimensionV1],
+) -> Result<Vec<Value>, ToolGatewayError> {
+    dimensions
+        .iter()
+        .map(|dimension| {
+            Ok(json!({
+                "dimension_id": dimension.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                "dimension": dimension,
+            }))
+        })
+        .collect()
+}
+
+fn whole_portfolio_claim_scope(claims: &[OracleClaimV1]) -> Result<Vec<Value>, ToolGatewayError> {
+    claims
+        .iter()
+        .map(|claim| {
+            Ok(json!({
+                "claim_id": claim.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                "claim": claim,
+            }))
+        })
+        .collect()
+}
+
+impl ToolGateway for OracleWholePortfolioGateway {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one strict submission boundary validates the complete dimension/item/plan tree"
+    )]
+    fn invoke(
+        &mut self,
+        operation: &PreparedToolOperation,
+    ) -> Result<CanonicalToolResult, ToolGatewayError> {
+        match operation.tool().as_str() {
+            "migration-read-task-artifact" => {
+                read_task_artifact(&self.task_workspace, self.limits, operation)
+            }
+            "migration-read-oracle-whole-portfolio-scope" => {
+                validate_operation(
+                    operation,
+                    "migration-read-oracle-whole-portfolio-scope",
+                    ToolEffectClass::ReadOnly,
+                )?;
+                let request: CurrentSchemaRequestV1 = decode_arguments(operation.argument_bytes())?;
+                if request.schema_version != SCHEMA_V1 {
+                    return rejected("whole-portfolio scope read requires current V1");
+                }
+                let dimensions = whole_portfolio_dimension_scope(&self.dimensions)?;
+                let claims = whole_portfolio_claim_scope(&self.claims)?;
+                CanonicalToolResult::from_value(&json!({
+                    "schema_version": SCHEMA_V1,
+                    "authority_id": self.authority.identity().map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                    "workspace": self.workspace,
+                    "task_context": self.recovery_input,
+                    "dimensions": dimensions,
+                    "claims": claims,
+                    "previous_portfolio": self.previous,
+                    "admission_feedback": self.admission,
+                }))
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            }
+            "migration-submit-oracle-whole-portfolio" => {
+                validate_operation(
+                    operation,
+                    "migration-submit-oracle-whole-portfolio",
+                    ToolEffectClass::Pure,
+                )?;
+                let mut submission: OracleWholePortfolioSubmissionV1 =
+                    decode_arguments(operation.argument_bytes())?;
+                let authority_id = self
+                    .authority
+                    .identity()
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                if submission.schema_version != SCHEMA_V1
+                    || submission.authority_id != authority_id
+                    || submission.dimensions.is_empty()
+                {
+                    return rejected("whole-portfolio submission changed its exact authority");
+                }
+                submission
+                    .dimensions
+                    .sort_by_key(|value| value.dimension_id.to_wire());
+                let mut expected = self
+                    .dimensions
+                    .iter()
+                    .map(OracleDimensionV1::identity)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                expected.sort_by_key(ContentId::to_wire);
+                let offered = submission
+                    .dimensions
+                    .iter()
+                    .map(|value| value.dimension_id)
+                    .collect::<Vec<_>>();
+                if offered != expected {
+                    return rejected(
+                        "whole-portfolio submission must cover every exact dimension once",
+                    );
+                }
+                let mut accepted_items = Vec::new();
+                for submitted_dimension in submission.dimensions {
+                    if submitted_dimension.items.is_empty() {
+                        return rejected("whole-portfolio dimension omitted all items");
+                    }
+                    let dimension = self
+                        .dimensions
+                        .iter()
+                        .find(|dimension| {
+                            dimension
+                                .identity()
+                                .is_ok_and(|identity| identity == submitted_dimension.dimension_id)
+                        })
+                        .ok_or_else(|| {
+                            ToolGatewayError::Rejected(
+                                "whole-portfolio dimension is not offered".to_owned(),
+                            )
+                        })?;
+                    let run = OracleStrategyRunV1::new(
+                        self.workspace
+                            .identity()
+                            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                        dimension,
+                        OracleStrategyName::new(MODEL_BACKED_SYNTHESIS_STRATEGY)
+                            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                        &self.catalog,
+                    )
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                    let run_id = run
+                        .identity()
+                        .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                    self.runs.push(run);
+                    for submitted_item in submitted_dimension.items {
+                        if submitted_item.plans.is_empty() {
+                            return rejected("whole-portfolio item omitted all plans");
+                        }
+                        let item = OracleItemV1::new(
+                            submitted_dimension.dimension_id,
+                            submitted_item.statement,
+                        )
+                        .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                        let item_id = item
+                            .identity()
+                            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                        let plans = submitted_item
+                            .plans
+                            .into_iter()
+                            .map(|submitted| {
+                                OracleCheckPlanV1::new(
+                                    item_id,
+                                    submitted.method,
+                                    submitted.objective,
+                                    submitted.setup,
+                                    submitted.observation,
+                                    submitted.pass_condition,
+                                    self.materialize_evidence(submitted.evidence)?,
+                                )
+                                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let draft = OracleItemDraftV1::initial(item, run_id, plans)
+                            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                        accepted_items.push(
+                            cairn_migration::OracleAcceptedItemV1::from_whole_portfolio_episode(
+                                &draft,
+                                &self.authority,
+                            )
+                            .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?,
+                        );
+                    }
+                }
+                let portfolio = OraclePortfolioProposalV1::assemble(
+                    &self.workspace,
+                    self.dimensions.clone(),
+                    accepted_items,
+                )
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                if self
+                    .accepted
+                    .as_ref()
+                    .is_some_and(|accepted| accepted != &portfolio)
+                {
+                    return rejected("whole-portfolio proposal was already submitted differently");
+                }
+                let portfolio_id = portfolio
+                    .identity()
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                self.accepted = Some(portfolio);
+                CanonicalToolResult::from_value(&json!({
+                    "schema_version": SCHEMA_V1,
+                    "authority_id": authority_id,
+                    "portfolio_id": portfolio_id,
+                }))
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            }
+            _ => Err(ToolGatewayError::NotStarted(
+                "operation is outside the Oracle whole-portfolio role grant".to_owned(),
+            )),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
 enum OracleSubmittedCheckEvidenceV1 {
     SourceCitation {
@@ -2774,7 +3532,10 @@ pub fn migration_tool_registry() -> Result<ToolRegistry, MigrationAgentRuntimeEr
     let mut registry = ToolRegistry::default();
     for tool in [
         MigrationAgentToolV1::ReadTaskArtifact,
+        MigrationAgentToolV1::RunEvidenceExperiment,
         MigrationAgentToolV1::SubmitSir,
+        MigrationAgentToolV1::ReadOracleWholePortfolioScope,
+        MigrationAgentToolV1::SubmitOracleWholePortfolio,
         MigrationAgentToolV1::ReadOracleDimension,
         MigrationAgentToolV1::SubmitOracleDimensionItems,
         MigrationAgentToolV1::ReadOracleDimensionItems,
@@ -2796,7 +3557,9 @@ pub fn migration_tool_registry() -> Result<ToolRegistry, MigrationAgentRuntimeEr
             .tool_name()
             .map_err(MigrationAgentRuntimeError::domain)?;
         let effect = match tool {
+            MigrationAgentToolV1::RunEvidenceExperiment => ToolEffectClass::Idempotent,
             MigrationAgentToolV1::ReadTaskArtifact
+            | MigrationAgentToolV1::ReadOracleWholePortfolioScope
             | MigrationAgentToolV1::ReadOracleDimension
             | MigrationAgentToolV1::ReadOracleDimensionItems
             | MigrationAgentToolV1::ReadOracleItemConversation
@@ -2847,6 +3610,7 @@ fn archive_oracle_item_projection(
     model_context: &Value,
     user_text: String,
 ) -> Result<SirProjectionV1, MigrationAgentRuntimeError> {
+    let user_text = model_visible_role_user_text(user_text, model_context)?;
     Ok(SirProjectionV1 {
         instruction: put_json::<InstructionBlock>(content, &json!({"text": instruction_text}))?,
         tool_catalog: put_json::<ToolCatalog>(
@@ -2878,6 +3642,19 @@ fn archive_oracle_item_projection(
         )?,
         user_text,
     })
+}
+
+fn model_visible_role_user_text(
+    mut request: String,
+    model_context: &Value,
+) -> Result<String, MigrationAgentRuntimeError> {
+    let context = String::from_utf8(
+        cairn_codec::to_vec(model_context).map_err(MigrationAgentRuntimeError::domain)?,
+    )
+    .map_err(MigrationAgentRuntimeError::domain)?;
+    request.push_str("\n\nFrozen role context:\n");
+    request.push_str(&context);
+    Ok(request)
 }
 
 fn archive_sir_projection(
@@ -3194,9 +3971,16 @@ fn read_task_artifact(
         ToolEffectClass::ReadOnly,
     )?;
     let request: ReadTaskArtifactRequestV1 = decode_arguments(operation.argument_bytes())?;
-    if request.schema_version != SCHEMA_V1 || request.line_count.get() > limits.max_read_lines.get()
-    {
-        return rejected("task read violates the current V1 limit");
+    if request.schema_version != SCHEMA_V1 {
+        return rejected("task read schema_version must be the current V1 value 1");
+    }
+    if request.line_count.get() > limits.max_read_lines.get() {
+        return rejected(&format!(
+            "task read line_count {} exceeds this task's maximum {}; retry with line_count at most {} and continue from the next start_line",
+            request.line_count.get(),
+            limits.max_read_lines.get(),
+            limits.max_read_lines.get()
+        ));
     }
     let artifact = workspace
         .artifact(&request.path)
@@ -3224,7 +4008,10 @@ fn read_task_artifact(
             .ok_or_else(|| ToolGatewayError::Rejected("source byte length overflow".to_owned()))
     })?;
     if returned_bytes > limits.max_read_bytes.get() {
-        return rejected("task read exceeds the current V1 byte limit");
+        return rejected(&format!(
+            "task read would return {returned_bytes} source bytes, exceeding this task's maximum {}; retry the same start_line with a smaller line_count",
+            limits.max_read_bytes.get()
+        ));
     }
     CanonicalToolResult::from_value(&json!({
             "schema_version": SCHEMA_V1,
@@ -3242,7 +4029,36 @@ fn read_task_artifact(
     clippy::too_many_lines,
     reason = "the exact provider schema stays visibly aligned with the current typed SIR submission"
 )]
-fn sir_native_tools() -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
+fn read_task_artifact_native_tool(
+    limits: SirTaskLimits,
+) -> Result<NativeToolDefinition, MigrationAgentRuntimeError> {
+    let max_read_lines = limits.max_read_lines.get();
+    let max_read_bytes = limits.max_read_bytes.get();
+    Ok(NativeToolDefinition {
+        name: MigrationAgentToolV1::ReadTaskArtifact
+            .tool_name()
+            .map_err(MigrationAgentRuntimeError::domain)?,
+        description: format!(
+            "Read one range from an offered task-local artifact: at most {max_read_lines} lines and {max_read_bytes} UTF-8 source bytes per call. For a longer artifact, make consecutive calls and advance start_line by the number of lines already read."
+        ),
+        input_schema: json!({
+            "type":"object",
+            "properties":{
+                "schema_version":{"type":"integer","const":1},
+                "path":{"type":"string","minLength":1},
+                "start_line":{"type":"integer","minimum":1},
+                "line_count":{"type":"integer","minimum":1,"maximum":max_read_lines}
+            },
+            "required":["schema_version","path","start_line","line_count"],
+            "additionalProperties":false
+        }),
+        strict: true,
+    })
+}
+
+fn sir_native_tools(
+    limits: SirTaskLimits,
+) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
     let local_id = json!({
         "type":"string", "minLength":1, "maxLength":64,
         "pattern":"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
@@ -3277,25 +4093,7 @@ fn sir_native_tools() -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntime
         "required":["id","statement","citations"],"additionalProperties":false
     });
     Ok(vec![
-        NativeToolDefinition {
-            name: MigrationAgentToolV1::ReadTaskArtifact
-                .tool_name()
-                .map_err(MigrationAgentRuntimeError::domain)?,
-            description: "Read a bounded line range from one offered task-local artifact."
-                .to_owned(),
-            input_schema: json!({
-                "type":"object",
-                "properties":{
-                    "schema_version":{"type":"integer","const":1},
-                    "path":{"type":"string","minLength":1},
-                    "start_line":{"type":"integer","minimum":1},
-                    "line_count":{"type":"integer","minimum":1,"maximum":200}
-                },
-                "required":["schema_version","path","start_line","line_count"],
-                "additionalProperties":false
-            }),
-            strict: true,
-        },
+        read_task_artifact_native_tool(limits)?,
         NativeToolDefinition {
             name: MigrationAgentToolV1::SubmitSir
                 .tool_name()
@@ -3349,29 +4147,12 @@ fn sir_native_tools() -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntime
     ])
 }
 
-fn oracle_item_discovery_native_tools()
--> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
+fn oracle_item_discovery_native_tools(
+    limits: SirTaskLimits,
+) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
     let text = json!({"type":"string","minLength":1,"maxLength":4096});
     Ok(vec![
-        NativeToolDefinition {
-            name: MigrationAgentToolV1::ReadTaskArtifact
-                .tool_name()
-                .map_err(MigrationAgentRuntimeError::domain)?,
-            description: "Read a bounded line range from one offered task-local artifact."
-                .to_owned(),
-            input_schema: json!({
-                "type":"object",
-                "properties":{
-                    "schema_version":{"type":"integer","const":1},
-                    "path":{"type":"string","minLength":1},
-                    "start_line":{"type":"integer","minimum":1},
-                    "line_count":{"type":"integer","minimum":1,"maximum":200}
-                },
-                "required":["schema_version","path","start_line","line_count"],
-                "additionalProperties":false
-            }),
-            strict: true,
-        },
+        read_task_artifact_native_tool(limits)?,
         NativeToolDefinition {
             name: MigrationAgentToolV1::ReadOracleDimension
                 .tool_name()
@@ -3404,20 +4185,93 @@ fn oracle_item_discovery_native_tools()
     ])
 }
 
-fn oracle_item_set_reviewer_native_tools()
--> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
+fn oracle_whole_portfolio_native_tools(
+    admitted_intent: ContentId<cairn_migration::MigrationIntentContractArtifact>,
+    limits: SirTaskLimits,
+) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
+    let text = json!({"type":"string","minLength":1,"maxLength":4096});
+    let citation = json!({
+        "type":"object",
+        "properties":{"path":{"type":"string","minLength":1},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},
+        "required":["path","start_line","end_line"],"additionalProperties":false
+    });
+    let evidence = json!({"oneOf":[
+        {"type":"object","properties":{"source":{"type":"string","const":"source-citation"},"citation":citation},"required":["source","citation"],"additionalProperties":false},
+        {"type":"object","properties":{"source":{"type":"string","const":"admitted-intent"},"contract":{"type":"string","const":admitted_intent}},"required":["source","contract"],"additionalProperties":false}
+    ]});
+    let plan = json!({
+        "type":"object",
+        "properties":{
+            "method":{"type":"string","enum":["static-analysis","reference-execution","metamorphic","boundary-probe","runtime-observation"]},
+            "objective":text,"setup":text,"observation":text,"pass_condition":text,
+            "evidence":{"type":"array","minItems":1,"maxItems":16,"items":evidence}
+        },
+        "required":["method","objective","setup","observation","pass_condition","evidence"],
+        "additionalProperties":false
+    });
+    let item = json!({
+        "type":"object",
+        "properties":{
+            "statement":text,
+            "plans":{"type":"array","minItems":1,"maxItems":16,"items":plan}
+        },
+        "required":["statement","plans"],
+        "additionalProperties":false
+    });
+    let dimension = json!({
+        "type":"object",
+        "properties":{
+            "dimension_id":{"type":"string","minLength":1},
+            "items":{"type":"array","minItems":1,"maxItems":32,"items":item}
+        },
+        "required":["dimension_id","items"],
+        "additionalProperties":false
+    });
+    Ok(vec![
+        read_task_artifact_native_tool(limits)?,
+        NativeToolDefinition {
+            name: MigrationAgentToolV1::ReadOracleWholePortfolioScope
+                .tool_name()
+                .map_err(MigrationAgentRuntimeError::domain)?,
+            description: "Read the exact admitted claims, target context, complete dimension inventory, and revision feedback for one whole-portfolio proposal.".to_owned(),
+            input_schema: json!({"type":"object","properties":{"schema_version":{"type":"integer","const":1}},"required":["schema_version"],"additionalProperties":false}),
+            strict: true,
+        },
+        NativeToolDefinition {
+            name: MigrationAgentToolV1::SubmitOracleWholePortfolio
+                .tool_name()
+                .map_err(MigrationAgentRuntimeError::domain)?,
+            description: "Submit one complete candidate-facing Oracle portfolio covering every offered dimension exactly once without claiming Review or Admission.".to_owned(),
+            input_schema: json!({
+                "type":"object",
+                "properties":{
+                    "schema_version":{"type":"integer","const":1},
+                    "authority_id":{"type":"string","minLength":1},
+                    "dimensions":{"type":"array","minItems":1,"maxItems":128,"items":dimension}
+                },
+                "required":["schema_version","authority_id","dimensions"],
+                "additionalProperties":false
+            }),
+            strict: true,
+        },
+    ])
+}
+
+fn oracle_item_set_reviewer_native_tools(
+    limits: SirTaskLimits,
+) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
     let text = json!({"type":"string","minLength":1,"maxLength":4096});
     let finding = json!({
         "type":"object",
         "properties":{
-            "issue":{"type":"string","enum":["incomplete-coverage","overlapping-items","vague-item","out-of-dimension"]},
+            "issue":{"type":"string","enum":["incomplete-coverage","overlapping-items","vague-item","out-of-dimension","not-candidate-facing"]},
             "explanation":text,
             "required_change":text
         },
         "required":["issue","explanation","required_change"],
         "additionalProperties":false
     });
-    let mut tools = oracle_item_discovery_native_tools()?;
+    let mut tools = oracle_item_discovery_native_tools(limits)?;
     tools.truncate(1);
     tools.extend([
         NativeToolDefinition {
@@ -3456,8 +4310,9 @@ fn oracle_item_set_reviewer_native_tools()
 
 fn oracle_item_developer_native_tools(
     admitted_intent: ContentId<cairn_migration::MigrationIntentContractArtifact>,
+    limits: SirTaskLimits,
 ) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
-    let mut tools = oracle_item_discovery_native_tools()?;
+    let mut tools = oracle_item_discovery_native_tools(limits)?;
     tools.truncate(1);
     let text = json!({"type":"string","minLength":1,"maxLength":4096});
     let citation = json!({
@@ -3524,8 +4379,9 @@ fn oracle_item_developer_native_tools(
     Ok(tools)
 }
 
-fn oracle_item_reviewer_native_tools()
--> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
+fn oracle_item_reviewer_native_tools(
+    limits: SirTaskLimits,
+) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
     let text = json!({"type":"string","minLength":1,"maxLength":4096});
     let finding = json!({
         "type":"object",
@@ -3536,7 +4392,7 @@ fn oracle_item_reviewer_native_tools()
         },
         "required":["item_id","issue","explanation","required_change"],"additionalProperties":false
     });
-    let mut tools = oracle_item_discovery_native_tools()?;
+    let mut tools = oracle_item_discovery_native_tools(limits)?;
     tools.truncate(1);
     tools.extend([
         NativeToolDefinition {
@@ -3647,6 +4503,9 @@ fn exposed_native_tools(
         .entries()
         .iter()
         .map(|entry| {
+            if entry.name().as_str() == "migration-run-evidence-experiment" {
+                return evidence_experiment_native_tool();
+            }
             available
                 .iter()
                 .find(|tool| tool.name == *entry.name())
@@ -3656,6 +4515,28 @@ fn exposed_native_tools(
                 })
         })
         .collect()
+}
+
+fn evidence_experiment_native_tool() -> Result<NativeToolDefinition, MigrationAgentRuntimeError> {
+    Ok(NativeToolDefinition {
+        name: MigrationAgentToolV1::RunEvidenceExperiment
+            .tool_name()
+            .map_err(MigrationAgentRuntimeError::domain)?,
+        description: "Request one Controller-authorized, idempotent evidence experiment on an ordinary capability-matched Worker. The current environment executes program as POSIX /bin/sh source (not Python or another interpreter) with the exact frozen task files but no promised CUDA compiler or GPU. Use it for a bounded executable reference/probe that can discriminate a stated hypothesis; it is not Oracle qualification and its receipt is returned only to this Agent episode."
+            .to_owned(),
+        input_schema: json!({
+            "type":"object",
+            "properties":{
+                "schema_version":{"type":"integer","const":1},
+                "language":{"type":"string","enum":["posix-shell"],"description":"Exact execution language. program must contain POSIX /bin/sh source."},
+                "purpose":{"type":"string","minLength":1,"maxLength":1024},
+                "program":{"type":"string","minLength":1,"maxLength":32768,"description":"POSIX /bin/sh source executed with the task directory as the current working directory."}
+            },
+            "required":["schema_version","language","purpose","program"],
+            "additionalProperties":false
+        }),
+        strict: true,
+    })
 }
 
 fn validate_operation(
@@ -3725,6 +4606,11 @@ pub enum MigrationAgentRuntimeError {
     TaskBinding,
     #[error("migration role runtime model binding changed")]
     ModelBinding,
+    #[error("migration role model dispatch failed ({class:?}): {diagnostic}")]
+    ModelDispatch {
+        class: TransportFailureClass,
+        diagnostic: String,
+    },
     #[error("migration role runtime artifact binding changed")]
     ArtifactBinding,
     #[error("migration role hook exposed tool {0} without a native definition")]
@@ -3757,14 +4643,153 @@ impl MigrationAgentRuntimeError {
     fn domain(error: impl std::fmt::Display) -> Self {
         Self::Domain(error.to_string())
     }
+
+    fn episode_driver(error: AgentEpisodeDriverError) -> Self {
+        match error {
+            AgentEpisodeDriverError::ModelDispatch { class, diagnostic } => {
+                Self::ModelDispatch { class, diagnostic }
+            }
+            error => Self::domain(error),
+        }
+    }
+}
+
+impl crate::MigrationRoleExecutionError for MigrationAgentRuntimeError {
+    fn model_dispatch_failure_class(&self) -> Option<TransportFailureClass> {
+        match self {
+            Self::ModelDispatch { class, .. } => Some(*class),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn model_dispatch_failure_retains_its_transport_class() {
+        let error =
+            MigrationAgentRuntimeError::episode_driver(AgentEpisodeDriverError::ModelDispatch {
+                class: TransportFailureClass::Ambiguous,
+                diagnostic: "response body interrupted".into(),
+            });
+
+        assert_eq!(
+            crate::MigrationRoleExecutionError::model_dispatch_failure_class(&error),
+            Some(TransportFailureClass::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn frozen_role_context_is_present_in_the_model_visible_user_message() {
+        let context = json!({
+            "schema_version": 1,
+            "task_artifacts": [{
+                "path": "previously-unknown.cu",
+                "line_count": 17,
+                "identity": "task-artifact-identity"
+            }]
+        });
+
+        let message = model_visible_role_user_text("Review exact draft.".into(), &context)
+            .expect("model-visible context");
+
+        assert!(message.starts_with("Review exact draft.\n\nFrozen role context:\n"));
+        assert!(message.contains("\"path\":\"previously-unknown.cu\""));
+        assert!(message.contains("\"line_count\":17"));
+    }
+
+    #[test]
+    fn task_read_tool_exposes_the_exact_frozen_limits() {
+        let limits = SirTaskLimits {
+            max_read_lines: SirReadLineLimit::new(512).expect("read line limit"),
+            max_read_bytes: cairn_migration::SirReadByteLimit::new(65_536)
+                .expect("read byte limit"),
+            ..SirTaskLimits::default()
+        };
+
+        let tool = read_task_artifact_native_tool(limits).expect("read tool definition");
+
+        assert_eq!(
+            tool.input_schema["properties"]["line_count"]["maximum"],
+            json!(512)
+        );
+        assert!(tool.description.contains("at most 512 lines"));
+        assert!(tool.description.contains("65536 UTF-8 source bytes"));
+        assert!(tool.description.contains("advance start_line"));
+    }
+
     fn identity<T: ContentType>(label: &[u8]) -> ContentId<T> {
         ContentId::derive(label).expect("identity")
+    }
+
+    fn admitted_claim(label: &str) -> AuthoritativeIntentClaimV1 {
+        let caller_claim = cairn_migration::SirCallerClaimV1::new(
+            cairn_migration::SirCallerClaimId::new(format!("caller-{label}"))
+                .expect("caller claim id"),
+            cairn_migration::SirIntentLayer::Algorithm,
+            cairn_migration::SirCallerClaimStatement::new(format!("caller statement {label}"))
+                .expect("caller claim statement"),
+            Vec::new(),
+        )
+        .expect("caller claim");
+        AuthoritativeIntentClaimV1::new(
+            cairn_migration::OperationIntentV1::new(
+                vec![caller_claim],
+                cairn_migration::SirIntentLayer::Algorithm,
+                cairn_migration::SirHypothesisClaim::new(format!("semantics {label}"))
+                    .expect("semantics"),
+                cairn_migration::SirIntentDomain::new(format!("domain {label}")).expect("domain"),
+            )
+            .expect("operation intent"),
+        )
+    }
+
+    #[test]
+    fn exact_dimension_claim_lookup_rejects_a_sibling_claim_projection() {
+        let task_id = TaskId::new();
+        let admitted_intent =
+            identity::<cairn_migration::MigrationIntentContractArtifact>(b"admitted intent");
+        let claims = derive_oracle_claims(
+            task_id,
+            admitted_intent,
+            &[admitted_claim("first"), admitted_claim("second")],
+        );
+        let mut claim_ids = claims
+            .iter()
+            .map(OracleClaimV1::identity)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("claim identities");
+        claim_ids.sort_by_key(ContentId::to_wire);
+        let policy = OracleCoveragePolicyV1::new(
+            cairn_migration::OracleCoverageProfileV1::Correctness,
+            cairn_migration::OracleAdversarialPolicyV1::NotRequired,
+        );
+        let dimensions = derive_oracle_dimensions(&claim_ids, &policy).expect("dimensions");
+        let scope = whole_portfolio_dimension_scope(&dimensions).expect("dimension scope");
+        assert_eq!(scope.len(), dimensions.len());
+        for (entry, dimension) in scope.iter().zip(&dimensions) {
+            assert_eq!(
+                entry["dimension_id"],
+                json!(dimension.identity().expect("dimension identity"))
+            );
+            assert_eq!(entry["dimension"]["claim"], json!(dimension.claim()));
+        }
+        let second_claim_id = claims[1].identity().expect("second claim identity");
+        let dimension = dimensions
+            .iter()
+            .find(|dimension| dimension.claim() == second_claim_id)
+            .expect("second claim dimension");
+
+        assert_eq!(
+            exact_oracle_claim_for_dimension(&claims, dimension).expect("exact claim"),
+            claims[1]
+        );
+        assert!(matches!(
+            exact_oracle_claim_for_dimension(&claims[..1], dimension),
+            Err(MigrationAgentRuntimeError::TaskBinding)
+        ));
     }
 
     #[test]

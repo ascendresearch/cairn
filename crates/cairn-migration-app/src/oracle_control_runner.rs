@@ -9,8 +9,8 @@ use cairn_execution::{
     DockerExecutionEnvironmentV1, DockerImageId, EvidenceByteLimit, ExecutionBackend,
     ExecutionEnvironmentArtifact, ExecutionJob, ExecutionJobState, ExecutionOutcome,
     ExecutionTimeoutMillis, InputBundleArtifact, InputBundleEntry, InputBundleV1, InputFileMode,
-    JobContract, NetworkPolicy, OutputByteLimit, PlacementRequest, ResourceRequest, SandboxPath,
-    WorkerPoolName, recover_execution_job,
+    JobContract, NetworkPolicy, OutputByteLimit, PlacementRequest, ReservationReleaseReason,
+    ResourceRequest, SandboxPath, WorkerPoolName, recover_execution_job,
 };
 use cairn_migration::{
     OracleAdmissionAttemptV1, OracleAdmissionEvidenceV1, OracleAdmissionMechanismCatalogV1,
@@ -29,7 +29,7 @@ use cairn_protocol::{
 use cairn_record::ContentStore;
 use cairn_server::{
     ControllerScheduleCommandIds, ControllerScheduleIds, ControllerSchedulingOutcome, ServerConfig,
-    schedule_execution_contract,
+    release_execution_reservation, schedule_execution_contract,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Serialize};
@@ -69,6 +69,7 @@ while IFS='|' read -r file item digest; do
   esac
 done < meta/control-index
 "#;
+const MIN_SCHEDULING_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Product configuration for one qualified Oracle control mechanism running on a Worker.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -147,6 +148,14 @@ impl OracleControlRunnerV1 {
         plans: &[OracleCheckPlanV1],
     ) -> Result<OracleAdmissionMechanismCatalogV1, OracleControlRunnerError> {
         validate_plan_coverage(proposal, plans)?;
+        // The bundled runner currently proves only canonical plan encoding and authority binding.
+        // Those checks are useful protocol controls, but they are not evidence that any plan can
+        // execute against an Ascend-C candidate or target receipt. Fail closed until the ordinary
+        // Worker path executes a candidate-facing Oracle mechanism; otherwise mechanical
+        // Admission would turn a structural self-check into false semantic authority.
+        if !candidate_facing_runner_available() {
+            return Err(OracleControlRunnerError::SemanticExecutionUnavailable);
+        }
         let proposal_id = proposal.identity().map_err(domain)?;
         if let Some(existing) = self.qualified.get(&task_id) {
             if existing.proposal == proposal_id {
@@ -427,36 +436,46 @@ impl OracleControlRunnerV1 {
             archive_exact(&mut content, input_id, &bundle)?;
             archive_bytes(&mut content, environment_id, &environment_bytes)?;
         }
-        let attempt_id = AttemptId::new();
-        let ids = ControllerScheduleIds {
-            attempt_id,
-            placement_id: PlacementId::new(),
-            reservation_id: ReservationId::new(),
-            assignment_id: AssignmentId::new(),
-            lease_id: LeaseId::new(),
-            offer_message_id: ControlMessageId::new(),
-            start_message_id: ControlMessageId::new(),
-            commands: ControllerScheduleCommandIds {
-                authorize_attempt: CommandId::new(),
-                reserve_placement: CommandId::new(),
-                grant_assignment: CommandId::new(),
-                enqueue_offer: CommandId::new(),
-            },
-        };
-        match tokio::task::block_in_place(|| {
-            schedule_execution_contract(&self.server, &contract, ids)
-        })
-        .map_err(domain)?
-        {
-            ControllerSchedulingOutcome::Scheduled { .. } => {}
-            ControllerSchedulingOutcome::NoCandidate { .. } => {
-                return Err(OracleControlRunnerError::NoWorker);
-            }
-        }
-        let contract_id =
-            ContentId::derive(&cairn_codec::to_vec(&contract).map_err(domain)?).map_err(domain)?;
         let deadline =
             tokio::time::Instant::now() + Duration::from_millis(self.config.completion_timeout_ms);
+        let scheduling_retry_interval =
+            Duration::from_millis(self.config.poll_interval_ms).max(MIN_SCHEDULING_RETRY_INTERVAL);
+        let (attempt_id, reservation_id) = loop {
+            let attempt_id = AttemptId::new();
+            let reservation_id = ReservationId::new();
+            let ids = ControllerScheduleIds {
+                attempt_id,
+                placement_id: PlacementId::new(),
+                reservation_id,
+                assignment_id: AssignmentId::new(),
+                lease_id: LeaseId::new(),
+                offer_message_id: ControlMessageId::new(),
+                start_message_id: ControlMessageId::new(),
+                commands: ControllerScheduleCommandIds {
+                    authorize_attempt: CommandId::new(),
+                    reserve_placement: CommandId::new(),
+                    grant_assignment: CommandId::new(),
+                    enqueue_offer: CommandId::new(),
+                },
+            };
+            match tokio::task::block_in_place(|| {
+                schedule_execution_contract(&self.server, &contract, ids)
+            })
+            .map_err(domain)?
+            {
+                ControllerSchedulingOutcome::Scheduled { .. } => {
+                    break (attempt_id, reservation_id);
+                }
+                ControllerSchedulingOutcome::NoCandidate { .. } => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(OracleControlRunnerError::NoWorker);
+                    }
+                    tokio::time::sleep(scheduling_retry_interval).await;
+                }
+            }
+        };
+        let contract_id =
+            ContentId::derive(&cairn_codec::to_vec(&contract).map_err(domain)?).map_err(domain)?;
         let job = ExecutionJob::new(job_id).map_err(domain)?;
         loop {
             let events =
@@ -467,6 +486,15 @@ impl OracleControlRunnerV1 {
                     receipt_id,
                     receipt,
                 } => {
+                    let release_reason = release_execution_reservation(
+                        &self.server,
+                        reservation_id,
+                        &CommandId::new(),
+                    )
+                    .map_err(domain)?;
+                    if release_reason != ReservationReleaseReason::ExecutionTerminal {
+                        return Err(OracleControlRunnerError::Binding);
+                    }
                     let result = if receipt.outcome() == ExecutionOutcome::Succeeded
                         && receipt.exit_code() == Some(0)
                     {
@@ -504,6 +532,10 @@ impl OracleControlRunnerV1 {
         )
         .map_err(domain)
     }
+}
+
+fn candidate_facing_runner_available() -> bool {
+    false
 }
 
 fn classify_control_failure(
@@ -727,6 +759,8 @@ fn domain(error: impl std::fmt::Display) -> OracleControlRunnerError {
 pub enum OracleControlRunnerError {
     #[error("Oracle control Worker configuration is invalid")]
     InvalidConfiguration,
+    #[error("no candidate-facing executable Oracle mechanism is available")]
+    SemanticExecutionUnavailable,
     #[error("Oracle control binding changed")]
     Binding,
     #[error("Oracle controls have not been qualified for this task")]
@@ -786,6 +820,15 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first, plan.item());
+    }
+
+    #[test]
+    fn structural_plan_validator_cannot_grant_semantic_qualification() {
+        assert!(!candidate_facing_runner_available());
+        assert_eq!(
+            OracleControlRunnerError::SemanticExecutionUnavailable.to_string(),
+            "no candidate-facing executable Oracle mechanism is available"
+        );
     }
 
     #[test]

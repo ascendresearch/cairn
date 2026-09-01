@@ -25,6 +25,7 @@ mod materialize;
 mod memory_surface;
 mod oracle_control;
 mod oracle_exploration;
+mod reasoning_decomposition;
 mod reduction_admission;
 mod reduction_candidate;
 mod reduction_control;
@@ -104,7 +105,7 @@ pub use collection_oracle::{
 pub use controller_workflow::{
     CandidateAdmissionDispositionV1, CudaMigrationWorkflow, OracleAdmissionDispositionV1,
     OracleItemDevelopmentLineageV1, OracleItemDiscoveryLineageV1, OracleReviewDispositionV1,
-    OracleWorkflowDispositionV1, run_cuda_migration,
+    OracleWholePortfolioLineageV1, OracleWorkflowDispositionV1, run_cuda_migration,
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,
@@ -239,32 +240,35 @@ pub use oracle_exploration::{
     OracleExplorationLedgerV1, OracleExplorationNextActionV1, OracleExplorationObservationArtifact,
     OracleExplorationObservationV1, OracleExplorationRevision, OracleFrameworkError,
     OracleItemArtifact, OracleItemDiscoveryRevisionLimit, OracleItemDraftArtifact,
-    OracleItemDraftV1, OracleItemReviewArtifact, OracleItemReviewDecisionV1, OracleItemReviewV1,
-    OracleItemRevision, OracleItemRevisionLimit, OracleItemSetReviewFindingV1,
-    OracleItemSetReviewIssueClassV1, OracleItemSetRevision, OracleItemStatement, OracleItemV1,
-    OracleKnowledgeSnapshotArtifact, OracleObligationEntryV1, OracleObligationResolutionV1,
-    OracleObservationPayloadArtifact, OracleObservationPayloadV1, OracleObservationProvenanceV1,
-    OraclePlaneV1, OraclePortfolioCoherenceDecisionV1, OraclePortfolioCoherenceFindingV1,
-    OraclePortfolioCoherenceIssueClassV1, OraclePortfolioCoherenceReviewArtifact,
-    OraclePortfolioCoherenceReviewV1, OraclePortfolioElementArtifact, OraclePortfolioElementKindV1,
-    OraclePortfolioElementV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleQualifiedMechanismArtifact, OracleQualifiedMechanismRegistrationV1,
-    OracleResearchExchangeArtifact, OracleResearchToolCatalogArtifact, OracleReviewExplanation,
-    OracleReviewFindingV1, OracleReviewIssueClassV1, OracleReviewRequiredChange,
-    OracleRevisionRequestArtifact, OracleRevisionRequestV1, OracleSourceSnapshotArtifact,
-    OracleStrategyCatalogArtifact, OracleStrategyCatalogV1, OracleStrategyExecutorV1,
-    OracleStrategyImplementationArtifact, OracleStrategyKindV1, OracleStrategyName,
-    OracleStrategyRegistrationV1, OracleStrategyRoleV1, OracleStrategyRunArtifact,
-    OracleStrategyRunLimit, OracleStrategyRunV1, OracleStrategySubmissionArtifact,
-    OracleStrategySubmissionOutcomeV1, OracleStrategySubmissionV1,
-    OracleStrategyToolCatalogArtifact, OracleStrategyToolCatalogV1, OracleStrategyToolV1,
-    OracleUnknownEvidenceArtifact, OracleUnknownEvidenceV1, OracleUnknownReason,
-    OracleWaiverAuthorityArtifact, OracleWorkspaceArtifact, OracleWorkspaceInput,
-    OracleWorkspaceV1, TrustedOracleControlReceiptArtifact, TrustedOracleWorkerReceiptArtifact,
+    OracleItemDraftV1, OracleItemProposalAuthorityV1, OracleItemReviewArtifact,
+    OracleItemReviewDecisionV1, OracleItemReviewV1, OracleItemRevision, OracleItemRevisionLimit,
+    OracleItemSetReviewFindingV1, OracleItemSetReviewIssueClassV1, OracleItemSetRevision,
+    OracleItemStatement, OracleItemV1, OracleKnowledgeSnapshotArtifact, OracleObligationEntryV1,
+    OracleObligationResolutionV1, OracleObservationPayloadArtifact, OracleObservationPayloadV1,
+    OracleObservationProvenanceV1, OraclePlaneV1, OraclePortfolioCoherenceDecisionV1,
+    OraclePortfolioCoherenceFindingV1, OraclePortfolioCoherenceIssueClassV1,
+    OraclePortfolioCoherenceReviewArtifact, OraclePortfolioCoherenceReviewV1,
+    OraclePortfolioElementArtifact, OraclePortfolioElementKindV1, OraclePortfolioElementV1,
+    OraclePortfolioProposalArtifact, OraclePortfolioProposalV1, OracleQualifiedMechanismArtifact,
+    OracleQualifiedMechanismRegistrationV1, OracleResearchExchangeArtifact,
+    OracleResearchToolCatalogArtifact, OracleReviewExplanation, OracleReviewFindingV1,
+    OracleReviewIssueClassV1, OracleReviewRequiredChange, OracleRevisionRequestArtifact,
+    OracleRevisionRequestV1, OracleSourceSnapshotArtifact, OracleStrategyCatalogArtifact,
+    OracleStrategyCatalogV1, OracleStrategyExecutorV1, OracleStrategyImplementationArtifact,
+    OracleStrategyKindV1, OracleStrategyName, OracleStrategyRegistrationV1, OracleStrategyRoleV1,
+    OracleStrategyRunArtifact, OracleStrategyRunLimit, OracleStrategyRunV1,
+    OracleStrategySubmissionArtifact, OracleStrategySubmissionOutcomeV1,
+    OracleStrategySubmissionV1, OracleStrategyToolCatalogArtifact, OracleStrategyToolCatalogV1,
+    OracleStrategyToolV1, OracleUnknownEvidenceArtifact, OracleUnknownEvidenceV1,
+    OracleUnknownReason, OracleWaiverAuthorityArtifact,
+    OracleWholePortfolioProposalAuthorityArtifact, OracleWholePortfolioProposalAuthorityV1,
+    OracleWorkspaceArtifact, OracleWorkspaceInput, OracleWorkspaceV1,
+    TrustedOracleControlReceiptArtifact, TrustedOracleWorkerReceiptArtifact,
     TrustedOracleWorkerReceiptV1, WorkflowToolControllerObservationArtifact,
     archive_oracle_framework_artifact, derive_oracle_claims, derive_oracle_dimensions,
     recompute_oracle_admission, run_independent_oracle_admission,
 };
+pub use reasoning_decomposition::ReasoningDecompositionPolicyV1;
 pub use reduction_admission::{
     HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,
     compose_historical_reduction_admission,
@@ -311,7 +315,8 @@ pub use role_agent::{
     OracleItemDeveloperAgentContextV1, OracleItemDeveloperRoleHooksV1,
     OracleItemReviewerAgentContextV1, OracleItemReviewerRoleHooksV1,
     OraclePortfolioCoherenceReviewerAgentContextV1, OraclePortfolioCoherenceReviewerRoleHooksV1,
-    SirAgentContextV1, SirRoleHooksV1,
+    OracleWholePortfolioAgentContextV1, OracleWholePortfolioRoleHooksV1, SirAgentContextV1,
+    SirRoleHooksV1,
 };
 #[cfg(feature = "agent-runtime")]
 pub use sir::SirTaskWorkspace;

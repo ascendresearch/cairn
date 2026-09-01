@@ -9,10 +9,27 @@ repositories' evidence nor their histories. It separates current decisions from 
 narrative so that a future implementation cannot be mistaken for complete merely because a design
 document is complete.
 
+## Current design overlay
+
+Two later current-V1 documents now lead the reading order:
+
+- [`design/CAIRN_CURRENT_PRODUCT_DESIGN.md`](design/CAIRN_CURRENT_PRODUCT_DESIGN.md) defines the
+  current product mission, four planes and D/E experiment direction;
+- [`design/SIR_ORACLE_CURRENT_DESIGN.md`](design/SIR_ORACLE_CURRENT_DESIGN.md) is the focused
+  authority for source understanding, optional focused SIR, evolving/qualification Oracle,
+  exploratory Candidate interaction and Candidate promotion.
+
+Where older workflow or Oracle documents require a mandatory SIR stage or a complete Oracle before
+any exploratory Candidate, the current focused document directly updates that current-V1 timing.
+The older requirements and designs continue to govern obligations that the current documents do not
+explicitly change; they remain valuable historical rationale, not an implicit compatibility path.
+
 ## Document map
 
 | Document | Question it answers | Authority |
 |---|---|---|
+| [`design/CAIRN_CURRENT_PRODUCT_DESIGN.md`](design/CAIRN_CURRENT_PRODUCT_DESIGN.md) | What is the current product mission and experiment direction? | Current global product design |
+| [`design/SIR_ORACLE_CURRENT_DESIGN.md`](design/SIR_ORACLE_CURRENT_DESIGN.md) | How do focused SIR, assurance, Oracle qualification and Candidate promotion currently compose? | Current focused SIR/Oracle authority |
 | [`SYSTEM_REQUIREMENTS.md`](SYSTEM_REQUIREMENTS.md) | What must the system do, refuse, expose, and prove? | Normative requirements |
 | [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) | What architecture is intended to satisfy those requirements? | Normative target design |
 | [`design/README.md`](design/README.md) | How are the target code, logical, and runtime architectures organized? | Normative software architecture index |
@@ -46,14 +63,15 @@ document is complete.
 
 ## Reading order
 
-1. Read the requirements to understand the product boundary and acceptance properties.
-2. Read the system design for the architecture and end-to-end workflows.
-3. Read [`design/README.md`](design/README.md) for code, logical, and runtime architecture.
-4. Read [`dev/README.md`](dev/README.md) before planning or starting an implementation slice.
-5. Follow [`oracle/README.md`](oracle/README.md) through semantic-intent recovery, Oracle exploration,
-   independent admission, Oracle admission, performance/hardware, and knowledge/skill trust.
-6. Read durable execution evidence for the concrete replay guarantees.
-7. Read resolved decisions and open questions before changing an unsettled boundary.
+1. Read repository [`../AGENTS.md`](../AGENTS.md).
+2. Read the current product and focused SIR/Oracle documents above.
+3. Read the requirements and system design for obligations not explicitly updated by the current
+   documents.
+4. Read [`design/README.md`](design/README.md) for code, logical, and runtime architecture.
+5. Read [`dev/README.md`](dev/README.md) and the current implementation baseline before planning a
+   slice; design completion is not implementation evidence.
+6. Use `oracle/`, durable execution records, decisions and open questions as focused rationale and
+   guardrails without restoring superseded fixed-stage timing.
 
 ## Normative language
 
@@ -84,6 +102,10 @@ open questions cannot override normative design. A real conflict between normati
 the affected work until all impacted documents are reconciled; it is not permission to implement a
 fallback or choose the most convenient interpretation. Oracle-specific conformance is summarized in
 [`oracle/DESIGN_INVARIANTS.md`](oracle/DESIGN_INVARIANTS.md).
+
+The current overlay above is an explicit current-V1 update, not an accidental conflict or a
+compatibility layer. It changes SIR/Oracle/Candidate timing while preserving authority, evidence,
+target, hidden-control and mechanical Admission obligations.
 
 ## Source material
 

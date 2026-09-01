@@ -2,6 +2,8 @@ use std::future::Future;
 
 use cairn_protocol::{AgentLoopId, TaskId};
 
+use crate::ReasoningDecompositionPolicyV1;
+
 /// Exact prior lineage exposed to one dimension item-discovery Agent Loop.
 pub enum OracleItemDiscoveryLineageV1<'a, S, R> {
     Initial,
@@ -30,6 +32,12 @@ pub enum OracleItemDevelopmentLineageV1<'a, D, R, C, A> {
     },
 }
 
+/// Exact whole-portfolio lineage for the minimal-decomposition ablation arm.
+pub enum OracleWholePortfolioLineageV1<'a, D, A> {
+    Initial,
+    AdmissionRevision { previous: &'a D, admission: &'a A },
+}
+
 /// Product-owned ports beneath the readable CUDA migration workflow.
 ///
 /// Cognitive activities are split into role-scoped Agent Loops. Admission and authority-granting
@@ -52,6 +60,7 @@ pub trait CudaMigrationWorkflow: Send {
 
     type OracleWorkspace: Send + Sync;
     type OracleDimension: Send + Sync;
+    type OracleWholePortfolioContext: Send + Sync;
     type OracleItemDiscoveryContext: Send + Sync;
     type OracleItemSet: Send + Sync;
     type OracleItemSetReviewContext: Send + Sync;
@@ -89,6 +98,8 @@ pub trait CudaMigrationWorkflow: Send {
     ) -> impl Future<Output = Result<Self::FrozenTask, Self::Error>> + Send;
 
     fn task_id(&self, task: &Self::FrozenTask) -> TaskId;
+
+    fn reasoning_decomposition(&self, task: &Self::FrozenTask) -> ReasoningDecompositionPolicyV1;
 
     fn prepare_sir_context(
         &mut self,
@@ -141,6 +152,36 @@ pub trait CudaMigrationWorkflow: Send {
         intent: &Self::AdmittedIntent,
         workspace: &Self::OracleWorkspace,
     ) -> Result<Vec<Self::OracleDimension>, Self::Error>;
+
+    fn prepare_oracle_whole_portfolio_context(
+        &mut self,
+        task: &Self::FrozenTask,
+        intent: &Self::AdmittedIntent,
+        workspace: &Self::OracleWorkspace,
+        dimensions: &[Self::OracleDimension],
+        lineage: OracleWholePortfolioLineageV1<
+            '_,
+            Self::ReviewedOracleDraft,
+            Self::OracleRevisionRequest,
+        >,
+    ) -> Result<Self::OracleWholePortfolioContext, Self::Error>;
+
+    fn initialize_oracle_whole_portfolio_loop(
+        &mut self,
+        task: &Self::FrozenTask,
+        context: &Self::OracleWholePortfolioContext,
+    ) -> impl Future<Output = Result<AgentLoopId, Self::Error>> + Send;
+
+    fn run_oracle_whole_portfolio_loop(
+        &mut self,
+        loop_id: AgentLoopId,
+        context: Self::OracleWholePortfolioContext,
+    ) -> impl Future<Output = Result<Self::OracleDraft, Self::Error>> + Send;
+
+    fn accept_oracle_whole_portfolio_proposal(
+        &mut self,
+        draft: Self::OracleDraft,
+    ) -> Result<Self::ReviewedOracleDraft, Self::Error>;
 
     fn prepare_oracle_item_discovery_context(
         &mut self,
@@ -581,6 +622,11 @@ async fn establish_oracle<W: CudaMigrationWorkflow>(
 ) -> Result<W::AdmittedOracle, W::Error> {
     let workspace = workflow.prepare_oracle_workspace(task, intent).await?;
     let dimensions = workflow.derive_required_oracle_dimensions(task, intent, &workspace)?;
+    if workflow.reasoning_decomposition(task)
+        == ReasoningDecompositionPolicyV1::MinimalDecomposition
+    {
+        return establish_minimal_oracle(workflow, task, intent, &workspace, &dimensions).await;
+    }
     let mut accepted_items = Vec::new();
     for dimension in &dimensions {
         let mut previous_item_set = None;
@@ -837,6 +883,73 @@ async fn establish_oracle<W: CudaMigrationWorkflow>(
     }
 }
 
+/// Runs the A-arm topology without manufacturing independent Review facts.
+async fn establish_minimal_oracle<W: CudaMigrationWorkflow>(
+    workflow: &mut W,
+    task: &W::FrozenTask,
+    intent: &W::AdmittedIntent,
+    workspace: &W::OracleWorkspace,
+    dimensions: &[W::OracleDimension],
+) -> Result<W::AdmittedOracle, W::Error> {
+    let mut previous = None;
+    let mut admission_feedback = None;
+    loop {
+        let context = workflow.prepare_oracle_whole_portfolio_context(
+            task,
+            intent,
+            workspace,
+            dimensions,
+            match (&previous, &admission_feedback) {
+                (None, None) => OracleWholePortfolioLineageV1::Initial,
+                (Some(previous), Some(admission)) => {
+                    OracleWholePortfolioLineageV1::AdmissionRevision {
+                        previous,
+                        admission,
+                    }
+                }
+                _ => unreachable!("Controller owns exact whole-portfolio lineage"),
+            },
+        )?;
+        let loop_id = workflow
+            .initialize_oracle_whole_portfolio_loop(task, &context)
+            .await?;
+        let draft = workflow
+            .run_oracle_whole_portfolio_loop(loop_id, context)
+            .await?;
+        let mut reviewed = workflow.accept_oracle_whole_portfolio_proposal(draft)?;
+        let mut observations = workflow
+            .run_qualified_oracle_controls(task, intent, &reviewed)
+            .await?;
+        loop {
+            match workflow
+                .admit_oracle(task, intent, reviewed, observations)
+                .await?
+            {
+                OracleAdmissionDispositionV1::Admitted(oracle) => return Ok(oracle),
+                OracleAdmissionDispositionV1::Reconcile {
+                    draft,
+                    request,
+                    control_observations: _,
+                } => {
+                    observations = workflow
+                        .reconcile_oracle_controls(task, intent, &draft, &request)
+                        .await?;
+                    reviewed = draft;
+                }
+                OracleAdmissionDispositionV1::Revise {
+                    draft,
+                    request,
+                    control_observations: _,
+                } => {
+                    previous = Some(draft);
+                    admission_feedback = Some(request);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// Explores, reviews, builds, observes, and mechanically admits a Candidate.
 async fn establish_candidate<W: CudaMigrationWorkflow>(
     workflow: &mut W,
@@ -935,6 +1048,7 @@ mod tests {
         oracle_revised: bool,
         candidate_revised: bool,
         complete_after_oracle: bool,
+        reasoning_decomposition: Option<ReasoningDecompositionPolicyV1>,
     }
 
     impl RecordedWorkflow {
@@ -959,6 +1073,7 @@ mod tests {
         type AdmittedIntent = ();
         type OracleWorkspace = ();
         type OracleDimension = ();
+        type OracleWholePortfolioContext = ();
         type OracleItemDiscoveryContext = ();
         type OracleItemSet = Vec<()>;
         type OracleItemSetReviewContext = ();
@@ -998,6 +1113,11 @@ mod tests {
 
         fn task_id(&self, task: &FrozenTask) -> TaskId {
             task.0
+        }
+
+        fn reasoning_decomposition(&self, _task: &FrozenTask) -> ReasoningDecompositionPolicyV1 {
+            self.reasoning_decomposition
+                .unwrap_or(ReasoningDecompositionPolicyV1::StructuredReview)
         }
 
         fn prepare_sir_context(
@@ -1067,6 +1187,39 @@ mod tests {
         ) -> Result<Vec<()>, Infallible> {
             self.trace.push("derive-oracle-dimensions");
             Ok(vec![()])
+        }
+
+        fn prepare_oracle_whole_portfolio_context(
+            &mut self,
+            _task: &FrozenTask,
+            _intent: &(),
+            _workspace: &(),
+            _dimensions: &[()],
+            _lineage: OracleWholePortfolioLineageV1<'_, (), ()>,
+        ) -> Result<(), Infallible> {
+            self.trace.push("prepare-oracle-whole-portfolio");
+            Ok(())
+        }
+
+        fn initialize_oracle_whole_portfolio_loop(
+            &mut self,
+            _task: &FrozenTask,
+            _context: &(),
+        ) -> impl Future<Output = Result<AgentLoopId, Infallible>> + Send {
+            self.mark("initialize-oracle-whole-portfolio", AgentLoopId::new())
+        }
+
+        fn run_oracle_whole_portfolio_loop(
+            &mut self,
+            _loop_id: AgentLoopId,
+            _context: (),
+        ) -> impl Future<Output = Result<(), Infallible>> + Send {
+            self.mark("run-oracle-whole-portfolio", ())
+        }
+
+        fn accept_oracle_whole_portfolio_proposal(&mut self, _draft: ()) -> Result<(), Infallible> {
+            self.trace.push("accept-oracle-whole-portfolio");
+            Ok(())
         }
 
         fn prepare_oracle_item_discovery_context(
@@ -1581,5 +1734,26 @@ mod tests {
         assert_eq!(workflow.trace.last(), Some(&"choose-completion-target"));
         assert!(!workflow.trace.contains(&"prepare-candidate-context"));
         assert!(!workflow.trace.contains(&"record-terminal"));
+    }
+
+    #[tokio::test]
+    async fn minimal_decomposition_uses_one_whole_portfolio_loop_and_no_review_loop() {
+        let mut workflow = RecordedWorkflow {
+            reasoning_decomposition: Some(ReasoningDecompositionPolicyV1::MinimalDecomposition),
+            complete_after_oracle: true,
+            oracle_revised: true,
+            ..RecordedWorkflow::default()
+        };
+        run_cuda_migration(&mut workflow, ())
+            .await
+            .expect("minimal workflow");
+
+        assert!(workflow.trace.contains(&"prepare-oracle-whole-portfolio"));
+        assert!(workflow.trace.contains(&"run-oracle-whole-portfolio"));
+        assert!(workflow.trace.contains(&"accept-oracle-whole-portfolio"));
+        assert!(!workflow.trace.contains(&"prepare-oracle-item-discovery"));
+        assert!(!workflow.trace.contains(&"prepare-oracle-item-review"));
+        assert!(!workflow.trace.contains(&"prepare-oracle-portfolio-review"));
+        assert_eq!(workflow.trace.last(), Some(&"choose-completion-target"));
     }
 }

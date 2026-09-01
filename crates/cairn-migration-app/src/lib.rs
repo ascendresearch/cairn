@@ -16,13 +16,13 @@ pub use runtime_agent::{
     migration_tool_registry,
 };
 
-use std::{collections::BTreeMap, fmt::Display, future::Future};
+use std::{collections::BTreeMap, fmt::Display, future::Future, num::NonZeroU16};
 
 use cairn_agent::{
-    AgentLoopCheckpointV1, AgentLoopContext, AgentLoopHooks, AgentLoopRunOutcomeV1,
-    AgentLoopStartV1, AgentLoopStepExecutor, AgentLoopStepLimit, AgentRegistries,
-    InitializedAgentLoopV1, KnowledgeRegistry, SkillRegistry, ToolRegistry, initialize_agent_loop,
-    run_agent_loop,
+    AgentLoopCheckpointV1, AgentLoopContext, AgentLoopHooks, AgentLoopRunError,
+    AgentLoopRunOutcomeV1, AgentLoopStartV1, AgentLoopStepExecutor, AgentLoopStepLimit,
+    AgentRegistries, InitializedAgentLoopV1, KnowledgeRegistry, SkillRegistry, ToolRegistry,
+    TransportFailureClass, initialize_agent_loop, run_agent_loop,
 };
 use cairn_migration::{
     CandidateAdmissionAttemptV1, CandidateAdmissionDispositionV1,
@@ -48,8 +48,10 @@ use cairn_migration::{
     OracleItemReviewerRoleHooksV1, OracleItemV1, OraclePortfolioCoherenceDecisionV1,
     OraclePortfolioCoherenceReviewV1, OraclePortfolioCoherenceReviewerAgentContextV1,
     OraclePortfolioCoherenceReviewerRoleHooksV1, OraclePortfolioProposalV1,
-    OracleReviewDispositionV1, OracleRevisionRequestV1, OracleWorkflowDispositionV1,
-    OracleWorkspaceV1, PreparedIntentAdmissionV1, SirAgentContextV1, SirRoleHooksV1,
+    OracleReviewDispositionV1, OracleRevisionRequestV1, OracleWholePortfolioAgentContextV1,
+    OracleWholePortfolioLineageV1, OracleWholePortfolioProposalAuthorityV1,
+    OracleWholePortfolioRoleHooksV1, OracleWorkflowDispositionV1, OracleWorkspaceV1,
+    PreparedIntentAdmissionV1, ReasoningDecompositionPolicyV1, SirAgentContextV1, SirRoleHooksV1,
     SirTaskWorkspace, UserIntentAuthorityGrantV1, UserIntentDecisionRequestV1,
     UserIntentDecisionV1, derive_user_intent_decision_requests, promote_user_intent,
     recompute_candidate_admission, recompute_oracle_admission,
@@ -60,12 +62,16 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
+mod evidence_experiment_runner;
+pub use evidence_experiment_runner::EvidenceExperimentWorkerConfigV1;
+
 /// Exact task snapshot admitted at the product composition boundary.
 #[derive(Clone)]
 pub struct FrozenMigrationTaskV1 {
     task_id: TaskId,
     workspace: SirTaskWorkspace,
     recovery_input: IntentRecoveryInputV1,
+    reasoning_decomposition: ReasoningDecompositionPolicyV1,
 }
 
 impl FrozenMigrationTaskV1 {
@@ -78,6 +84,7 @@ impl FrozenMigrationTaskV1 {
         task_id: TaskId,
         workspace: SirTaskWorkspace,
         recovery_input: IntentRecoveryInputV1,
+        reasoning_decomposition: ReasoningDecompositionPolicyV1,
     ) -> Result<Self, MigrationApplicationError> {
         let bundle = workspace
             .bundle()
@@ -90,6 +97,7 @@ impl FrozenMigrationTaskV1 {
             task_id,
             workspace,
             recovery_input,
+            reasoning_decomposition,
         })
     }
 
@@ -106,6 +114,12 @@ impl FrozenMigrationTaskV1 {
     #[must_use]
     pub const fn recovery_input(&self) -> &IntentRecoveryInputV1 {
         &self.recovery_input
+    }
+
+    /// Returns the exact reasoning topology frozen for this task run.
+    #[must_use]
+    pub const fn reasoning_decomposition(&self) -> ReasoningDecompositionPolicyV1 {
+        self.reasoning_decomposition
     }
 }
 
@@ -150,6 +164,7 @@ pub trait MigrationTaskRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MigrationWorkflowFailureClassV1 {
     ProductService,
+    OracleSemanticMechanismUnavailable,
     Domain,
     AuthorityBinding,
     AgentLoopInitialization,
@@ -159,6 +174,66 @@ pub enum MigrationWorkflowFailureClassV1 {
     DuplicateAgentLoop,
     UnknownAgentLoop,
     MissingWorkflowState,
+}
+
+/// Lets a product service preserve a stable workflow failure class across the
+/// generic composition boundary without exposing its concrete error type.
+pub trait MigrationProductServiceError: Display {
+    fn workflow_failure_class(&self) -> MigrationWorkflowFailureClassV1 {
+        MigrationWorkflowFailureClassV1::ProductService
+    }
+
+    fn into_workflow_failure(self) -> (MigrationWorkflowFailureClassV1, String)
+    where
+        Self: Sized,
+    {
+        (self.workflow_failure_class(), self.to_string())
+    }
+}
+
+impl MigrationProductServiceError for std::convert::Infallible {
+    fn workflow_failure_class(&self) -> MigrationWorkflowFailureClassV1 {
+        match *self {}
+    }
+}
+
+/// Maximum number of independently identified Agent Loops allowed for one migration role call.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct MigrationRoleAttemptLimitV1(NonZeroU16);
+
+impl MigrationRoleAttemptLimitV1 {
+    #[must_use]
+    pub const fn new(value: NonZeroU16) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0.get()
+    }
+}
+
+/// Typed failure boundary used by workflow composition to authorize a fresh role attempt.
+pub trait MigrationRoleExecutionError: Display {
+    fn model_dispatch_failure_class(&self) -> Option<TransportFailureClass>;
+}
+
+impl MigrationRoleExecutionError for std::convert::Infallible {
+    fn model_dispatch_failure_class(&self) -> Option<TransportFailureClass> {
+        match *self {}
+    }
+}
+
+fn may_restart_migration_role_attempt(
+    class: TransportFailureClass,
+    attempt_ordinal: u16,
+    attempt_limit: MigrationRoleAttemptLimitV1,
+) -> bool {
+    matches!(
+        class,
+        TransportFailureClass::NotSent | TransportFailureClass::Ambiguous
+    ) && attempt_ordinal < attempt_limit.get()
 }
 
 impl AuthorizedIntentDecisionV1 {
@@ -314,7 +389,7 @@ impl OracleAdmissionObservationSummaryV1 {
 pub struct AdmittedOracleV1 {
     workspace: OracleWorkspaceV1,
     proposal: OraclePortfolioProposalV1,
-    coherence_review: OraclePortfolioCoherenceReviewV1,
+    coherence_review: Option<OraclePortfolioCoherenceReviewV1>,
     outcome: OracleAdmissionOutcomeV1,
 }
 
@@ -330,13 +405,38 @@ impl AdmittedOracleV1 {
     }
 
     #[must_use]
-    pub const fn coherence_review(&self) -> &OraclePortfolioCoherenceReviewV1 {
-        &self.coherence_review
+    pub const fn coherence_review(&self) -> Option<&OraclePortfolioCoherenceReviewV1> {
+        self.coherence_review.as_ref()
     }
 
     #[must_use]
     pub const fn outcome(&self) -> &OracleAdmissionOutcomeV1 {
         &self.outcome
+    }
+}
+
+/// Proposal ready for mechanical Oracle controls under its exact decomposition treatment.
+#[derive(Clone)]
+pub enum OracleAdmissionReadyDraftV1 {
+    Structured(OracleCoherentPortfolioV1),
+    Minimal(OraclePortfolioProposalV1),
+}
+
+impl OracleAdmissionReadyDraftV1 {
+    #[must_use]
+    pub const fn proposal(&self) -> &OraclePortfolioProposalV1 {
+        match self {
+            Self::Structured(value) => value.proposal(),
+            Self::Minimal(value) => value,
+        }
+    }
+
+    #[must_use]
+    pub const fn coherence_review(&self) -> Option<&OraclePortfolioCoherenceReviewV1> {
+        match self {
+            Self::Structured(value) => Some(value.review()),
+            Self::Minimal(_) => None,
+        }
     }
 }
 
@@ -515,7 +615,7 @@ impl MigrationTerminalOutcomeV1 {
 pub trait CudaMigrationProductServices: Send + 'static {
     type Request: MigrationTaskRequest + Send + 'static;
     type CandidateBuildAuthority: Send + Sync;
-    type Error: Display + Send + 'static;
+    type Error: MigrationProductServiceError + Send + 'static;
 
     fn freeze_task(
         &mut self,
@@ -626,10 +726,12 @@ where
     skills: SkillRegistry,
     knowledge: KnowledgeRegistry,
     loop_step_limit: AgentLoopStepLimit,
+    role_attempt_limit: MigrationRoleAttemptLimitV1,
     oracle_admission_policy: OracleAdmissionPolicyV1,
     candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
     completion_target: MigrationCompletionTargetV1,
     initialized_loops: BTreeMap<AgentLoopId, (TaskId, InitializedAgentLoopV1)>,
+    task_reasoning: BTreeMap<TaskId, ReasoningDecompositionPolicyV1>,
     oracle_workspace: Option<OracleWorkspaceV1>,
     candidate_contract: Option<CandidateOracleContractV1>,
 }
@@ -649,6 +751,7 @@ where
         skills: SkillRegistry,
         knowledge: KnowledgeRegistry,
         loop_step_limit: AgentLoopStepLimit,
+        role_attempt_limit: MigrationRoleAttemptLimitV1,
         oracle_admission_policy: OracleAdmissionPolicyV1,
         candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
         completion_target: MigrationCompletionTargetV1,
@@ -662,10 +765,12 @@ where
             skills,
             knowledge,
             loop_step_limit,
+            role_attempt_limit,
             oracle_admission_policy,
             candidate_mechanisms,
             completion_target,
             initialized_loops: BTreeMap::new(),
+            task_reasoning: BTreeMap::new(),
             oracle_workspace: None,
             candidate_contract: None,
         }
@@ -677,6 +782,16 @@ where
             skills: &self.skills,
             knowledge: &self.knowledge,
         }
+    }
+
+    fn reasoning_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<ReasoningDecompositionPolicyV1, MigrationApplicationError> {
+        self.task_reasoning
+            .get(&task_id)
+            .copied()
+            .ok_or(MigrationApplicationError::Binding("task reasoning policy"))
     }
 
     fn initialize_role_loop<C, H>(
@@ -713,6 +828,33 @@ where
         Ok(loop_id)
     }
 
+    fn initialize_replacement_role_loop<C, H>(
+        &self,
+        task_id: TaskId,
+        context: &C,
+        hooks: &H,
+    ) -> Result<(AgentLoopId, InitializedAgentLoopV1), MigrationApplicationError>
+    where
+        C: AgentLoopContext,
+        H: AgentLoopHooks<C> + MigrationRoleHooksV1,
+        H::Error: Display,
+    {
+        let loop_id = AgentLoopId::new();
+        let start = AgentLoopStartV1::new(
+            loop_id,
+            cairn_protocol::EpisodeId::new(),
+            task_id,
+            MigrationRoleHooksV1::role(hooks).clone(),
+            MigrationRoleHooksV1::profile(hooks).clone(),
+            MigrationRoleHooksV1::version(hooks).clone(),
+            context.context_id(),
+            self.loop_step_limit,
+        );
+        initialize_agent_loop(start, context, hooks, self.registries())
+            .map(|initialized| (loop_id, initialized))
+            .map_err(|_| MigrationApplicationError::AgentLoopInitialization)
+    }
+
     async fn run_role_loop<C, H>(
         &mut self,
         loop_id: AgentLoopId,
@@ -721,27 +863,72 @@ where
     ) -> Result<H::Output, MigrationApplicationError>
     where
         C: AgentLoopContext,
-        H: AgentLoopHooks<C>,
+        H: AgentLoopHooks<C> + MigrationRoleHooksV1,
         H::Error: Display,
         E: AgentLoopStepExecutor<C, H::StepObservation>,
-        <E as AgentLoopStepExecutor<C, H::StepObservation>>::Error: Display,
+        <E as AgentLoopStepExecutor<C, H::StepObservation>>::Error: MigrationRoleExecutionError,
     {
-        let (task_id, initialized) = self
+        let (task_id, mut initialized) = self
             .initialized_loops
             .remove(&loop_id)
             .ok_or(MigrationApplicationError::UnknownAgentLoop(loop_id))?;
-        self.services
-            .ensure_task_active(task_id)
-            .await
-            .map_err(MigrationApplicationError::product)?;
-        let registries = AgentRegistries {
-            tools: &self.tools,
-            skills: &self.skills,
-            knowledge: &self.knowledge,
+        let mut current_loop_id = loop_id;
+        let mut attempt_ordinal = 1_u16;
+        let outcome = loop {
+            self.services
+                .ensure_task_active(task_id)
+                .await
+                .map_err(MigrationApplicationError::product)?;
+            let registries = AgentRegistries {
+                tools: &self.tools,
+                skills: &self.skills,
+                knowledge: &self.knowledge,
+            };
+            match run_agent_loop(initialized, context, hooks, registries, &mut self.executor).await
+            {
+                Ok(outcome) => break outcome,
+                Err(AgentLoopRunError::Executor(error)) => {
+                    let Some(class) = error.model_dispatch_failure_class() else {
+                        return Err(MigrationApplicationError::AgentLoopExecution);
+                    };
+                    if !may_restart_migration_role_attempt(
+                        class,
+                        attempt_ordinal,
+                        self.role_attempt_limit,
+                    ) {
+                        tracing::warn!(
+                            target: "cairn.migration.application",
+                            event = "migration_role_attempts_exhausted",
+                            loop_id = %current_loop_id,
+                            task_id = %task_id,
+                            role = %MigrationRoleHooksV1::role(hooks),
+                            transport_failure_class = ?class,
+                            attempt_ordinal,
+                            attempt_limit = self.role_attempt_limit.get(),
+                            "migration role could not recover from model dispatch failure"
+                        );
+                        return Err(MigrationApplicationError::AgentLoopExecution);
+                    }
+                    let failed_loop_id = current_loop_id;
+                    attempt_ordinal += 1;
+                    (current_loop_id, initialized) =
+                        self.initialize_replacement_role_loop(task_id, context, hooks)?;
+                    tracing::warn!(
+                        target: "cairn.migration.application",
+                        event = "migration_role_attempt_restarted",
+                        failed_loop_id = %failed_loop_id,
+                        replacement_loop_id = %current_loop_id,
+                        task_id = %task_id,
+                        role = %MigrationRoleHooksV1::role(hooks),
+                        transport_failure_class = ?class,
+                        attempt_ordinal,
+                        attempt_limit = self.role_attempt_limit.get(),
+                        "migration role restarted with a fresh Agent Loop after model dispatch failure"
+                    );
+                }
+                Err(_) => return Err(MigrationApplicationError::AgentLoopExecution),
+            }
         };
-        let outcome = run_agent_loop(initialized, context, hooks, registries, &mut self.executor)
-            .await
-            .map_err(|_| MigrationApplicationError::AgentLoopExecution)?;
         self.services
             .ensure_task_active(task_id)
             .await
@@ -800,8 +987,11 @@ where
 
 #[derive(Debug, Error)]
 pub enum MigrationApplicationError {
-    #[error("migration product service failed: {0}")]
-    Product(String),
+    #[error("migration product service failed: {message}")]
+    Product {
+        failure: MigrationWorkflowFailureClassV1,
+        message: String,
+    },
     #[error("migration domain operation failed: {0}")]
     Domain(String),
     #[error("migration authority binding failed: {0}")]
@@ -823,8 +1013,9 @@ pub enum MigrationApplicationError {
 }
 
 impl MigrationApplicationError {
-    fn product(error: impl Display) -> Self {
-        Self::Product(error.to_string())
+    fn product(error: impl MigrationProductServiceError) -> Self {
+        let (failure, message) = error.into_workflow_failure();
+        Self::Product { failure, message }
     }
 
     fn domain(error: impl Display) -> Self {
@@ -833,7 +1024,11 @@ impl MigrationApplicationError {
 
     const fn log_class(&self) -> &'static str {
         match self {
-            Self::Product(_) => "product-service",
+            Self::Product {
+                failure: MigrationWorkflowFailureClassV1::OracleSemanticMechanismUnavailable,
+                ..
+            } => "oracle-semantic-mechanism-unavailable",
+            Self::Product { .. } => "product-service",
             Self::Domain(_) => "domain",
             Self::Binding(_) => "authority-binding",
             Self::AgentLoopInitialization => "agent-loop-initialization",
@@ -848,7 +1043,7 @@ impl MigrationApplicationError {
 
     const fn failure_class(&self) -> MigrationWorkflowFailureClassV1 {
         match self {
-            Self::Product(_) => MigrationWorkflowFailureClassV1::ProductService,
+            Self::Product { failure, .. } => *failure,
             Self::Domain(_) => MigrationWorkflowFailureClassV1::Domain,
             Self::Binding(_) => MigrationWorkflowFailureClassV1::AuthorityBinding,
             Self::AgentLoopInitialization => {
@@ -870,6 +1065,9 @@ where
     E: AgentLoopStepExecutor<
             SirAgentContextV1,
             MigrationRoleStepObservationV1<IntentHypothesisSetProposalV1>,
+        > + AgentLoopStepExecutor<
+            OracleWholePortfolioAgentContextV1,
+            MigrationRoleStepObservationV1<OraclePortfolioProposalV1>,
         > + AgentLoopStepExecutor<
             OracleDimensionItemDiscoveryAgentContextV1,
             MigrationRoleStepObservationV1<OracleDimensionItemSetProposalV1>,
@@ -898,39 +1096,43 @@ where
     <E as AgentLoopStepExecutor<
         SirAgentContextV1,
         MigrationRoleStepObservationV1<IntentHypothesisSetProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
+    <E as AgentLoopStepExecutor<
+        OracleWholePortfolioAgentContextV1,
+        MigrationRoleStepObservationV1<OraclePortfolioProposalV1>,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleDimensionItemDiscoveryAgentContextV1,
         MigrationRoleStepObservationV1<OracleDimensionItemSetProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleDimensionItemSetReviewerAgentContextV1,
         MigrationRoleStepObservationV1<OracleDimensionItemSetReviewV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleItemDeveloperAgentContextV1,
         MigrationRoleStepObservationV1<OracleItemDraftV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleItemReviewerAgentContextV1,
         MigrationRoleStepObservationV1<OracleItemReviewV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OraclePortfolioCoherenceReviewerAgentContextV1,
         MigrationRoleStepObservationV1<OraclePortfolioCoherenceReviewV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateExplorationAgentContextV1,
         MigrationRoleStepObservationV1<CandidateProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateReviewAgentContextV1,
         MigrationRoleStepObservationV1<ContentId<CandidateProposalArtifact>>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateRevisionAgentContextV1,
         MigrationRoleStepObservationV1<CandidateProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
 {
     type Error = MigrationApplicationError;
     type Request = S::Request;
@@ -944,6 +1146,7 @@ where
 
     type OracleWorkspace = OracleWorkspaceV1;
     type OracleDimension = OracleDimensionV1;
+    type OracleWholePortfolioContext = OracleWholePortfolioAgentContextV1;
     type OracleItemDiscoveryContext = OracleDimensionItemDiscoveryAgentContextV1;
     type OracleItemSet = OracleDimensionItemSetProposalV1;
     type OracleItemSetReviewContext = OracleDimensionItemSetReviewerAgentContextV1;
@@ -957,7 +1160,7 @@ where
     type OracleDraft = OraclePortfolioProposalV1;
     type OraclePortfolioReviewContext = OraclePortfolioCoherenceReviewerAgentContextV1;
     type OraclePortfolioReview = OraclePortfolioCoherenceReviewV1;
-    type ReviewedOracleDraft = OracleCoherentPortfolioV1;
+    type ReviewedOracleDraft = OracleAdmissionReadyDraftV1;
     type OracleControlObservations = OracleAdmissionMaterialsV1;
     type OracleRevisionRequest = OracleRevisionRequestV1;
     type OracleControlReconciliationRequest = OracleControlReconciliationRequestV1;
@@ -981,14 +1184,22 @@ where
     ) -> Result<Self::FrozenTask, Self::Error> {
         self.oracle_workspace = None;
         self.candidate_contract = None;
-        self.services
+        let task = self
+            .services
             .freeze_task(request)
             .await
-            .map_err(MigrationApplicationError::product)
+            .map_err(MigrationApplicationError::product)?;
+        self.task_reasoning
+            .insert(task.task_id(), task.reasoning_decomposition());
+        Ok(task)
     }
 
     fn task_id(&self, task: &Self::FrozenTask) -> TaskId {
         task.task_id()
+    }
+
+    fn reasoning_decomposition(&self, task: &Self::FrozenTask) -> ReasoningDecompositionPolicyV1 {
+        task.reasoning_decomposition()
     }
 
     async fn prepare_sir_context(
@@ -1016,20 +1227,22 @@ where
         self.initialize_role_loop(
             task.task_id(),
             context,
-            &SirRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+            &SirRoleHooksV1::for_reasoning_decomposition(task.reasoning_decomposition())
+                .map_err(MigrationApplicationError::domain)?,
         )
     }
 
     async fn run_sir_loop(
         &mut self,
         loop_id: AgentLoopId,
-        _task: &Self::FrozenTask,
+        task: &Self::FrozenTask,
         context: Self::SirContext,
     ) -> Result<Self::SirDraft, Self::Error> {
         self.run_role_loop(
             loop_id,
             &context,
-            &SirRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+            &SirRoleHooksV1::for_reasoning_decomposition(task.reasoning_decomposition())
+                .map_err(MigrationApplicationError::domain)?,
         )
         .await
     }
@@ -1145,6 +1358,109 @@ where
             .map_err(MigrationApplicationError::product)
     }
 
+    fn prepare_oracle_whole_portfolio_context(
+        &mut self,
+        task: &Self::FrozenTask,
+        intent: &Self::AdmittedIntent,
+        workspace: &Self::OracleWorkspace,
+        dimensions: &[Self::OracleDimension],
+        lineage: OracleWholePortfolioLineageV1<
+            '_,
+            Self::ReviewedOracleDraft,
+            Self::OracleRevisionRequest,
+        >,
+    ) -> Result<Self::OracleWholePortfolioContext, Self::Error> {
+        if task.reasoning_decomposition() != ReasoningDecompositionPolicyV1::MinimalDecomposition {
+            return Err(MigrationApplicationError::Binding(
+                "whole-portfolio decomposition policy",
+            ));
+        }
+        let authority = OracleWholePortfolioProposalAuthorityV1::new(
+            workspace,
+            dimensions
+                .iter()
+                .map(OracleDimensionV1::identity)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(MigrationApplicationError::domain)?,
+        )
+        .map_err(MigrationApplicationError::domain)?;
+        let (previous_portfolio, admission_feedback) = match lineage {
+            OracleWholePortfolioLineageV1::Initial => (None, None),
+            OracleWholePortfolioLineageV1::AdmissionRevision {
+                previous,
+                admission,
+            } => (
+                Some(
+                    previous
+                        .proposal()
+                        .identity()
+                        .map_err(MigrationApplicationError::domain)?,
+                ),
+                Some(
+                    admission
+                        .identity()
+                        .map_err(MigrationApplicationError::domain)?,
+                ),
+            ),
+        };
+        OracleWholePortfolioAgentContextV1::new(
+            task.task_id(),
+            intent
+                .prepared()
+                .public_outcome()
+                .contract()
+                .identity()
+                .map_err(MigrationApplicationError::domain)?,
+            workspace
+                .identity()
+                .map_err(MigrationApplicationError::domain)?,
+            authority
+                .identity()
+                .map_err(MigrationApplicationError::domain)?,
+            previous_portfolio,
+            admission_feedback,
+        )
+        .map_err(MigrationApplicationError::domain)
+    }
+
+    async fn initialize_oracle_whole_portfolio_loop(
+        &mut self,
+        task: &Self::FrozenTask,
+        context: &Self::OracleWholePortfolioContext,
+    ) -> Result<AgentLoopId, Self::Error> {
+        self.initialize_role_loop(
+            task.task_id(),
+            context,
+            &OracleWholePortfolioRoleHooksV1::for_reasoning_decomposition(
+                task.reasoning_decomposition(),
+            )
+            .map_err(MigrationApplicationError::domain)?,
+        )
+    }
+
+    async fn run_oracle_whole_portfolio_loop(
+        &mut self,
+        loop_id: AgentLoopId,
+        context: Self::OracleWholePortfolioContext,
+    ) -> Result<Self::OracleDraft, Self::Error> {
+        self.run_role_loop(
+            loop_id,
+            &context,
+            &OracleWholePortfolioRoleHooksV1::for_reasoning_decomposition(
+                self.reasoning_for_task(context.task_id())?,
+            )
+            .map_err(MigrationApplicationError::domain)?,
+        )
+        .await
+    }
+
+    fn accept_oracle_whole_portfolio_proposal(
+        &mut self,
+        draft: Self::OracleDraft,
+    ) -> Result<Self::ReviewedOracleDraft, Self::Error> {
+        Ok(OracleAdmissionReadyDraftV1::Minimal(draft))
+    }
+
     fn prepare_oracle_item_discovery_context(
         &mut self,
         task: &Self::FrozenTask,
@@ -1212,8 +1528,10 @@ where
         self.initialize_role_loop(
             task.task_id(),
             context,
-            &OracleDimensionItemDiscoveryRoleHooksV1::new()
-                .map_err(MigrationApplicationError::domain)?,
+            &OracleDimensionItemDiscoveryRoleHooksV1::for_reasoning_decomposition(
+                task.reasoning_decomposition(),
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
     }
 
@@ -1225,8 +1543,10 @@ where
         self.run_role_loop(
             loop_id,
             &context,
-            &OracleDimensionItemDiscoveryRoleHooksV1::new()
-                .map_err(MigrationApplicationError::domain)?,
+            &OracleDimensionItemDiscoveryRoleHooksV1::for_reasoning_decomposition(
+                self.reasoning_for_task(context.task_id())?,
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
         .await
     }
@@ -1261,8 +1581,10 @@ where
         self.initialize_role_loop(
             task.task_id(),
             context,
-            &OracleDimensionItemSetReviewerRoleHooksV1::new()
-                .map_err(MigrationApplicationError::domain)?,
+            &OracleDimensionItemSetReviewerRoleHooksV1::for_reasoning_decomposition(
+                task.reasoning_decomposition(),
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
     }
 
@@ -1278,8 +1600,10 @@ where
             .run_role_loop(
                 loop_id,
                 &context,
-                &OracleDimensionItemSetReviewerRoleHooksV1::new()
-                    .map_err(MigrationApplicationError::domain)?,
+                &OracleDimensionItemSetReviewerRoleHooksV1::for_reasoning_decomposition(
+                    self.reasoning_for_task(context.task_id())?,
+                )
+                .map_err(MigrationApplicationError::domain)?,
             )
             .await?;
         match review.decision() {
@@ -1475,7 +1799,10 @@ where
         self.initialize_role_loop(
             task.task_id(),
             context,
-            &OracleItemDeveloperRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+            &OracleItemDeveloperRoleHooksV1::for_reasoning_decomposition(
+                task.reasoning_decomposition(),
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
     }
 
@@ -1487,7 +1814,10 @@ where
         self.run_role_loop(
             loop_id,
             &context,
-            &OracleItemDeveloperRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+            &OracleItemDeveloperRoleHooksV1::for_reasoning_decomposition(
+                self.reasoning_for_task(context.task_id())?,
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
         .await
     }
@@ -1525,7 +1855,10 @@ where
         self.initialize_role_loop(
             task.task_id(),
             context,
-            &OracleItemReviewerRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+            &OracleItemReviewerRoleHooksV1::for_reasoning_decomposition(
+                task.reasoning_decomposition(),
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
     }
 
@@ -1541,7 +1874,10 @@ where
             .run_role_loop(
                 loop_id,
                 &context,
-                &OracleItemReviewerRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+                &OracleItemReviewerRoleHooksV1::for_reasoning_decomposition(
+                    self.reasoning_for_task(context.task_id())?,
+                )
+                .map_err(MigrationApplicationError::domain)?,
             )
             .await?;
         match review.decision() {
@@ -1592,7 +1928,7 @@ where
         dimensions: Vec<Self::OracleDimension>,
         accepted_items: Vec<Self::AcceptedOracleItem>,
     ) -> Result<Self::OracleDraft, Self::Error> {
-        OraclePortfolioProposalV1::assemble_reviewed(workspace, dimensions, accepted_items)
+        OraclePortfolioProposalV1::assemble(workspace, dimensions, accepted_items)
             .map_err(MigrationApplicationError::domain)
     }
 
@@ -1628,8 +1964,10 @@ where
         self.initialize_role_loop(
             task.task_id(),
             context,
-            &OraclePortfolioCoherenceReviewerRoleHooksV1::new()
-                .map_err(MigrationApplicationError::domain)?,
+            &OraclePortfolioCoherenceReviewerRoleHooksV1::for_reasoning_decomposition(
+                task.reasoning_decomposition(),
+            )
+            .map_err(MigrationApplicationError::domain)?,
         )
     }
 
@@ -1645,8 +1983,10 @@ where
             .run_role_loop(
                 loop_id,
                 &context,
-                &OraclePortfolioCoherenceReviewerRoleHooksV1::new()
-                    .map_err(MigrationApplicationError::domain)?,
+                &OraclePortfolioCoherenceReviewerRoleHooksV1::for_reasoning_decomposition(
+                    self.reasoning_for_task(context.task_id())?,
+                )
+                .map_err(MigrationApplicationError::domain)?,
             )
             .await?;
         match review.decision() {
@@ -1716,7 +2056,9 @@ where
         draft: Self::OracleDraft,
         review: Self::OraclePortfolioReview,
     ) -> Result<Self::ReviewedOracleDraft, Self::Error> {
-        OracleCoherentPortfolioV1::new(&draft, &review).map_err(MigrationApplicationError::domain)
+        OracleCoherentPortfolioV1::new(&draft, &review)
+            .map(OracleAdmissionReadyDraftV1::Structured)
+            .map_err(MigrationApplicationError::domain)
     }
 
     fn replace_oracle_items_after_coherence_revision(
@@ -1859,7 +2201,7 @@ where
         );
         if summary.admitted {
             let proposal = draft.proposal().clone();
-            let coherence_review = draft.review().clone();
+            let coherence_review = draft.coherence_review().cloned();
             Ok(OracleAdmissionDispositionV1::Admitted(AdmittedOracleV1 {
                 workspace: self.oracle_workspace()?.clone(),
                 proposal,
@@ -2333,7 +2675,7 @@ fn replace_oracle_items(
         .iter()
         .map(|entry| entry.dimension().clone())
         .collect();
-    OraclePortfolioProposalV1::assemble_reviewed(workspace, dimensions, accepted_items)
+    OraclePortfolioProposalV1::assemble(workspace, dimensions, accepted_items)
         .map_err(MigrationApplicationError::domain)
 }
 
@@ -2343,6 +2685,9 @@ where
     E: AgentLoopStepExecutor<
             SirAgentContextV1,
             MigrationRoleStepObservationV1<IntentHypothesisSetProposalV1>,
+        > + AgentLoopStepExecutor<
+            OracleWholePortfolioAgentContextV1,
+            MigrationRoleStepObservationV1<OraclePortfolioProposalV1>,
         > + AgentLoopStepExecutor<
             OracleDimensionItemDiscoveryAgentContextV1,
             MigrationRoleStepObservationV1<OracleDimensionItemSetProposalV1>,
@@ -2371,39 +2716,43 @@ where
     <E as AgentLoopStepExecutor<
         SirAgentContextV1,
         MigrationRoleStepObservationV1<IntentHypothesisSetProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
+    <E as AgentLoopStepExecutor<
+        OracleWholePortfolioAgentContextV1,
+        MigrationRoleStepObservationV1<OraclePortfolioProposalV1>,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleDimensionItemDiscoveryAgentContextV1,
         MigrationRoleStepObservationV1<OracleDimensionItemSetProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleDimensionItemSetReviewerAgentContextV1,
         MigrationRoleStepObservationV1<OracleDimensionItemSetReviewV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleItemDeveloperAgentContextV1,
         MigrationRoleStepObservationV1<OracleItemDraftV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OracleItemReviewerAgentContextV1,
         MigrationRoleStepObservationV1<OracleItemReviewV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         OraclePortfolioCoherenceReviewerAgentContextV1,
         MigrationRoleStepObservationV1<OraclePortfolioCoherenceReviewV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateExplorationAgentContextV1,
         MigrationRoleStepObservationV1<CandidateProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateReviewAgentContextV1,
         MigrationRoleStepObservationV1<ContentId<CandidateProposalArtifact>>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateRevisionAgentContextV1,
         MigrationRoleStepObservationV1<CandidateProposalV1>,
-    >>::Error: Display,
+    >>::Error: MigrationRoleExecutionError,
 {
     type Error = MigrationApplicationError;
 
@@ -2630,6 +2979,32 @@ mod tests {
 
         require_workflow::<CudaMigrationApplication<NeverServices, NeverExecutor>>();
         require_application::<CudaMigrationApplication<NeverServices, NeverExecutor>>();
+    }
+
+    #[test]
+    fn role_attempt_policy_restarts_only_safe_transport_classes_within_bound() {
+        let limit = MigrationRoleAttemptLimitV1::new(NonZeroU16::new(8).expect("non-zero"));
+
+        assert!(may_restart_migration_role_attempt(
+            TransportFailureClass::NotSent,
+            1,
+            limit
+        ));
+        assert!(may_restart_migration_role_attempt(
+            TransportFailureClass::Ambiguous,
+            7,
+            limit
+        ));
+        assert!(!may_restart_migration_role_attempt(
+            TransportFailureClass::Rejected,
+            1,
+            limit
+        ));
+        assert!(!may_restart_migration_role_attempt(
+            TransportFailureClass::Ambiguous,
+            8,
+            limit
+        ));
     }
 
     #[test]

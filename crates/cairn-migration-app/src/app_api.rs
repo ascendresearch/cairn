@@ -1,8 +1,10 @@
 use std::{
     collections::BTreeMap,
     fs,
+    future::Future,
     os::unix::fs::FileTypeExt,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,12 +15,12 @@ use cairn_migration::{
     CandidateProposalV1, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
     IntentRecoveryInputV1, OracleAdmissionAttemptV1, OracleAdmissionEvidenceV1,
     OracleCoveragePolicyV1, OracleDimensionV1, OraclePortfolioProposalV1, OracleStrategyCatalogV1,
-    OracleWorkspaceV1, PreparedIntentAdmissionV1, SirCapabilityManifestV1, SirTaskLimits,
-    SirTaskWorkspace, TaskIntentAuthoritySubject, UserIntentAuthorityGrantV1,
-    UserIntentDecisionResponseV1, UserIntentDecisionV1, derive_oracle_claims,
-    derive_oracle_dimensions,
+    OracleWorkspaceV1, PreparedIntentAdmissionV1, ReasoningDecompositionPolicyV1,
+    SirCapabilityManifestV1, SirTaskLimits, SirTaskWorkspace, TaskIntentAuthoritySubject,
+    UserIntentAuthorityGrantV1, UserIntentDecisionResponseV1, UserIntentDecisionV1,
+    derive_oracle_claims, derive_oracle_dimensions,
 };
-use cairn_protocol::{EventId, EventSequence, ObservedAtUnixMillis, TaskId};
+use cairn_protocol::{ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
 use cairn_sdk::{
     AppApiErrorCodeV1, CairnRequestV1, CairnResponseV1, IntentReviewRequestResourceV1,
     IntentReviewResourceV1, TaskAttentionV1, TaskPhaseV1, TaskProgressItemV1, TaskProgressPageV1,
@@ -34,8 +36,9 @@ use tokio::{
 use crate::{
     AdmittedIntentV1, AdmittedOracleV1, AuthorizedIntentDecisionV1, CudaMigrationApplication,
     CudaMigrationProductServices, FrozenMigrationTaskV1, MigrationAgentRuntimeExecutorV1,
-    MigrationRuntimeMaterialsV1, MigrationTaskRequest, MigrationTerminalOutcomeV1,
-    MigrationWorkflowFailureClassV1, OracleControlRunnerV1,
+    MigrationProductServiceError, MigrationRuntimeMaterialsV1, MigrationTaskRequest,
+    MigrationTerminalOutcomeV1, MigrationWorkflowFailureClassV1, OracleControlRunnerError,
+    OracleControlRunnerV1,
 };
 
 /// Exact request admitted by the App API and sent to the product workflow inbox.
@@ -147,6 +150,82 @@ impl TaskStateV1 {
     }
 }
 
+fn pause_for_intent_reconciliation(
+    state: &mut TaskStateV1,
+    unresolved_decision_count: usize,
+) -> Result<bool, MigrationAppApiError> {
+    if unresolved_decision_count == 0
+        || (state.phase == TaskPhaseV1::Blocked
+            && state.attention == Some(TaskAttentionV1::IntentAdmissionReconciliation))
+    {
+        return Ok(false);
+    }
+    state.transition(
+        TaskPhaseV1::Blocked,
+        Some(TaskAttentionV1::IntentAdmissionReconciliation),
+    )?;
+    Ok(true)
+}
+
+enum IntentDecisionReadinessV1 {
+    Pending,
+    Reconciliation {
+        newly_paused: bool,
+        unresolved_decision_count: usize,
+    },
+    Ready(Vec<AuthorizedIntentDecisionV1>),
+}
+
+fn take_resolved_intent_decisions(
+    state: &mut TaskStateV1,
+    request_ids: &[ContentId<cairn_migration::UserIntentDecisionRequestArtifact>],
+) -> Result<IntentDecisionReadinessV1, MigrationAppApiError> {
+    if !request_ids.iter().all(|request_id| {
+        state.decisions.iter().any(|decision| {
+            decision
+                .request
+                .identity()
+                .is_ok_and(|identity| identity == *request_id)
+        })
+    }) {
+        return Ok(IntentDecisionReadinessV1::Pending);
+    }
+    let unresolved_decision_count = state
+        .decisions
+        .iter()
+        .filter(|decision| {
+            matches!(
+                decision.decision.response(),
+                UserIntentDecisionResponseV1::KeepUnknown
+            )
+        })
+        .count();
+    if unresolved_decision_count != 0 {
+        return Ok(IntentDecisionReadinessV1::Reconciliation {
+            newly_paused: pause_for_intent_reconciliation(state, unresolved_decision_count)?,
+            unresolved_decision_count,
+        });
+    }
+    let decisions = request_ids
+        .iter()
+        .map(|request_id| {
+            let position = state
+                .decisions
+                .iter()
+                .position(|decision| {
+                    decision
+                        .request
+                        .identity()
+                        .is_ok_and(|identity| identity == *request_id)
+                })
+                .ok_or(MigrationAppApiError::Conflict)?;
+            Ok::<_, MigrationAppApiError>(state.decisions.remove(position))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    state.transition(TaskPhaseV1::AdmittingIntent, None)?;
+    Ok(IntentDecisionReadinessV1::Ready(decisions))
+}
+
 #[derive(Clone, Default)]
 struct SharedTasksV1(Arc<Mutex<BTreeMap<TaskId, TaskStateV1>>>);
 
@@ -213,6 +292,7 @@ pub struct MigrationProductServicesV1 {
     oracle_policy: OracleCoveragePolicyV1,
     oracle_catalog: OracleStrategyCatalogV1,
     oracle_controls: OracleControlRunnerV1,
+    reasoning_decomposition: ReasoningDecompositionPolicyV1,
 }
 
 /// CUDA migration App API and workflow composed as one product module above the generic host.
@@ -253,13 +333,30 @@ impl ApplicationModule for CudaMigrationProductModuleV1 {
             api,
             workflow,
         } = self;
-        tokio::select! {
-            result = api.run() => result,
-            result = ApplicationModule::run(workflow) => {
-                result.map_err(MigrationAppApiError::internal)
-            }
-        }
+        let workflow_task = async move {
+            Box::pin(ApplicationModule::run(workflow))
+                .await
+                .map_err(MigrationAppApiError::internal)
+        };
+        run_product_tasks(Box::pin(api.run()), Box::pin(workflow_task)).await
     }
+}
+
+type ProductTask = Pin<Box<dyn Future<Output = Result<(), MigrationAppApiError>> + Send + 'static>>;
+
+async fn run_product_tasks(
+    api: ProductTask,
+    workflow: ProductTask,
+) -> Result<(), MigrationAppApiError> {
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(api);
+    tasks.spawn(workflow);
+    let result = tasks
+        .join_next()
+        .await
+        .ok_or_else(|| MigrationAppApiError::internal("product task set is empty"))?;
+    tasks.abort_all();
+    result.map_err(MigrationAppApiError::internal)?
 }
 
 /// Creates the App API, workflow product services, and their single normal submission channel.
@@ -279,6 +376,7 @@ pub fn migration_product_boundary(
     oracle_policy: OracleCoveragePolicyV1,
     oracle_catalog: OracleStrategyCatalogV1,
     oracle_controls: OracleControlRunnerV1,
+    reasoning_decomposition: ReasoningDecompositionPolicyV1,
     inbox_capacity: usize,
 ) -> Result<
     (
@@ -307,6 +405,7 @@ pub fn migration_product_boundary(
             oracle_policy,
             oracle_catalog,
             oracle_controls,
+            reasoning_decomposition,
         },
         receiver,
     ))
@@ -344,10 +443,23 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             workspace.clone(),
             recovery_input.clone(),
             self.task_limits,
+            self.reasoning_decomposition,
         )?;
         self.transition(request.task_id, TaskPhaseV1::RecoveringIntent, None)?;
-        FrozenMigrationTaskV1::new(request.task_id, workspace, recovery_input)
-            .map_err(MigrationAppApiError::internal)
+        tracing::info!(
+            target: "cairn.migration.ablation",
+            event = "reasoning_decomposition_policy_frozen",
+            task_id = %request.task_id,
+            reasoning_decomposition = %self.reasoning_decomposition,
+            "migration reasoning decomposition frozen"
+        );
+        FrozenMigrationTaskV1::new(
+            request.task_id,
+            workspace,
+            recovery_input,
+            self.reasoning_decomposition,
+        )
+        .map_err(MigrationAppApiError::internal)
     }
 
     async fn await_administrator_intent_decision(
@@ -415,33 +527,28 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
                     .map(cairn_migration::UserIntentDecisionRequestV1::identity)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(MigrationAppApiError::internal)?;
-                if request_ids.iter().all(|request_id| {
-                    state.decisions.iter().any(|decision| {
-                        decision
-                            .request
-                            .identity()
-                            .is_ok_and(|identity| identity == *request_id)
-                    })
-                }) {
-                    let decisions = request_ids
-                        .iter()
-                        .map(|request_id| {
-                            let position = state
-                                .decisions
-                                .iter()
-                                .position(|decision| {
-                                    decision
-                                        .request
-                                        .identity()
-                                        .is_ok_and(|identity| identity == *request_id)
-                                })
-                                .ok_or(MigrationAppApiError::Conflict)?;
-                            Ok::<_, MigrationAppApiError>(state.decisions.remove(position))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    state.transition(TaskPhaseV1::AdmittingIntent, None)?;
-                    return crate::AuthorizedIntentDecisionSetV1::new(requests, decisions)
-                        .map_err(MigrationAppApiError::internal);
+                match take_resolved_intent_decisions(state, &request_ids)? {
+                    IntentDecisionReadinessV1::Reconciliation {
+                        newly_paused: true,
+                        unresolved_decision_count,
+                    } => {
+                        tracing::info!(
+                            target: "cairn.migration.admission",
+                            event = "intent_admission_waiting_for_reconciliation",
+                            task_id = %task.task_id(),
+                            unresolved_decision_count,
+                            "Intent Admission paused on explicit task-authority unknowns"
+                        );
+                    }
+                    IntentDecisionReadinessV1::Ready(decisions) => {
+                        return crate::AuthorizedIntentDecisionSetV1::new(requests, decisions)
+                            .map_err(MigrationAppApiError::internal);
+                    }
+                    IntentDecisionReadinessV1::Pending
+                    | IntentDecisionReadinessV1::Reconciliation {
+                        newly_paused: false,
+                        ..
+                    } => {}
                 }
             }
             notified.await;
@@ -646,7 +753,12 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         self.oracle_controls
             .qualify(task.task_id(), proposal, policy, &plans)
             .await
-            .map_err(MigrationAppApiError::internal)
+            .map_err(|error| match error {
+                OracleControlRunnerError::SemanticExecutionUnavailable => {
+                    MigrationAppApiError::OracleSemanticMechanismUnavailable
+                }
+                error => MigrationAppApiError::internal(error),
+            })
     }
 
     async fn authorize_candidate_build(
@@ -709,14 +821,13 @@ impl MigrationProductServicesV1 {
 }
 
 const fn workflow_failure_attention(failure: MigrationWorkflowFailureClassV1) -> TaskAttentionV1 {
-    if matches!(
-        failure,
+    match failure {
         MigrationWorkflowFailureClassV1::AgentLoopExecution
-            | MigrationWorkflowFailureClassV1::AgentLoopExhausted
-    ) {
-        TaskAttentionV1::AgentExecution
-    } else {
-        TaskAttentionV1::WorkflowFailure
+        | MigrationWorkflowFailureClassV1::AgentLoopExhausted => TaskAttentionV1::AgentExecution,
+        MigrationWorkflowFailureClassV1::OracleSemanticMechanismUnavailable => {
+            TaskAttentionV1::OracleMechanisms
+        }
+        _ => TaskAttentionV1::WorkflowFailure,
     }
 }
 
@@ -905,7 +1016,33 @@ async fn handle_request(
                 task: task_resource(tasks, task_id)?,
             })
         }
-        CairnRequestV1::ReconcileIntentAdmission { .. } => Err(MigrationAppApiError::NotReady),
+        CairnRequestV1::ReconcileIntentAdmission {
+            command_id,
+            task_id,
+        } => {
+            let task = {
+                let states = tasks.lock()?;
+                let state = states
+                    .get(&task_id)
+                    .ok_or(MigrationAppApiError::TaskNotFound)?;
+                if state.phase != TaskPhaseV1::AwaitingIntentReview
+                    && (state.phase != TaskPhaseV1::Blocked
+                        || state.attention != Some(TaskAttentionV1::IntentAdmissionReconciliation))
+                {
+                    return Err(MigrationAppApiError::NotReady);
+                }
+                let review = state
+                    .intent_review
+                    .as_ref()
+                    .ok_or(MigrationAppApiError::NotReady)?;
+                if state.decisions.len() != review.requests.len() {
+                    return Err(MigrationAppApiError::NotReady);
+                }
+                state.notify.notify_waiters();
+                state.resource(task_id)
+            };
+            Ok(CairnResponseV1::Mutation { command_id, task })
+        }
     }
 }
 
@@ -921,13 +1058,9 @@ fn record_intent_decision(
     let state = states
         .get_mut(&task_id)
         .ok_or(MigrationAppApiError::TaskNotFound)?;
-    if state.decisions.iter().any(|decision| {
-        decision
-            .request
-            .identity()
-            .is_ok_and(|identity| identity == request_id)
-    }) || state.phase != TaskPhaseV1::AwaitingIntentReview
-    {
+    let revising_unknown = state.phase == TaskPhaseV1::Blocked
+        && state.attention == Some(TaskAttentionV1::IntentAdmissionReconciliation);
+    if state.phase != TaskPhaseV1::AwaitingIntentReview && !revising_unknown {
         return Err(MigrationAppApiError::NotReady);
     }
     let review = state
@@ -956,10 +1089,21 @@ fn record_intent_decision(
         grant.identity().map_err(MigrationAppApiError::internal)?,
         response,
     );
-    state.decisions.push(
-        AuthorizedIntentDecisionV1::new(request, grant, decision)
-            .map_err(MigrationAppApiError::internal)?,
-    );
+    let authorized = AuthorizedIntentDecisionV1::new(request, grant, decision)
+        .map_err(MigrationAppApiError::internal)?;
+    if let Some(position) = state.decisions.iter().position(|decision| {
+        decision
+            .request
+            .identity()
+            .is_ok_and(|identity| identity == request_id)
+    }) {
+        if !revising_unknown {
+            return Err(MigrationAppApiError::NotReady);
+        }
+        state.decisions[position] = authorized;
+    } else {
+        state.decisions.push(authorized);
+    }
     state.notify.notify_waiters();
     tracing::info!(
         target: "cairn.migration.app-api",
@@ -1029,6 +1173,8 @@ pub enum MigrationAppApiError {
     StatePoisoned,
     #[error("migration product capability is not implemented: {0}")]
     NotImplemented(&'static str),
+    #[error("no candidate-facing executable Oracle mechanism is available")]
+    OracleSemanticMechanismUnavailable,
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1055,6 +1201,7 @@ impl MigrationAppApiError {
             Self::WorkflowUnavailable => "workflow-unavailable",
             Self::StatePoisoned => "state-poisoned",
             Self::NotImplemented(_) => "not-implemented",
+            Self::OracleSemanticMechanismUnavailable => "oracle-semantic-mechanism-unavailable",
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1071,8 +1218,20 @@ impl MigrationAppApiError {
             Self::WorkflowUnavailable
             | Self::StatePoisoned
             | Self::NotImplemented(_)
+            | Self::OracleSemanticMechanismUnavailable
             | Self::Io(_)
             | Self::Internal(_) => AppApiErrorCodeV1::Internal,
+        }
+    }
+}
+
+impl MigrationProductServiceError for MigrationAppApiError {
+    fn workflow_failure_class(&self) -> MigrationWorkflowFailureClassV1 {
+        match self {
+            Self::OracleSemanticMechanismUnavailable => {
+                MigrationWorkflowFailureClassV1::OracleSemanticMechanismUnavailable
+            }
+            _ => MigrationWorkflowFailureClassV1::ProductService,
         }
     }
 }
@@ -1086,6 +1245,33 @@ impl From<crate::MigrationAgentRuntimeError> for MigrationAppApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn app_api_task_progresses_while_the_workflow_runs_blocking_provider_work() {
+        let (workflow_started_tx, workflow_started_rx) = tokio::sync::oneshot::channel();
+        let (api_progress_tx, api_progress_rx) = tokio::sync::oneshot::channel();
+        let product = tokio::spawn(run_product_tasks(
+            Box::pin(async move {
+                workflow_started_rx.await.expect("workflow started");
+                api_progress_tx.send(()).expect("record API progress");
+                std::future::pending::<Result<(), MigrationAppApiError>>().await
+            }),
+            Box::pin(async move {
+                workflow_started_tx.send(()).expect("mark workflow started");
+                tokio::task::block_in_place(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                });
+                std::future::pending::<Result<(), MigrationAppApiError>>().await
+            }),
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), api_progress_rx)
+            .await
+            .expect("App API task must not wait for blocking provider work")
+            .expect("App API progress signal");
+        product.abort();
+        let _ = product.await;
+    }
 
     #[test]
     fn cancelled_task_cannot_be_advanced_or_reclassified_as_failed() {
@@ -1110,14 +1296,55 @@ mod tests {
     }
 
     #[test]
-    fn workflow_failure_attention_distinguishes_agent_execution() {
+    fn workflow_failure_attention_distinguishes_recoverable_capabilities() {
         assert_eq!(
             workflow_failure_attention(MigrationWorkflowFailureClassV1::AgentLoopExecution),
             TaskAttentionV1::AgentExecution
         );
         assert_eq!(
+            workflow_failure_attention(
+                MigrationWorkflowFailureClassV1::OracleSemanticMechanismUnavailable
+            ),
+            TaskAttentionV1::OracleMechanisms
+        );
+        assert_eq!(
             workflow_failure_attention(MigrationWorkflowFailureClassV1::Domain),
             TaskAttentionV1::WorkflowFailure
         );
+    }
+
+    #[test]
+    fn semantic_mechanism_failure_survives_the_product_service_boundary() {
+        let error = MigrationAppApiError::OracleSemanticMechanismUnavailable;
+
+        assert_eq!(
+            error.workflow_failure_class(),
+            MigrationWorkflowFailureClassV1::OracleSemanticMechanismUnavailable
+        );
+        assert_eq!(error.log_class(), "oracle-semantic-mechanism-unavailable");
+    }
+
+    #[test]
+    fn explicit_unknown_pauses_for_intent_reconciliation_without_repeated_progress() {
+        let mut state = TaskStateV1::new(TaskId::new()).expect("task state");
+        state
+            .transition(
+                TaskPhaseV1::AwaitingIntentReview,
+                Some(TaskAttentionV1::IntentReview),
+            )
+            .expect("review transition");
+
+        assert!(pause_for_intent_reconciliation(&mut state, 1).expect("pause for reconciliation"));
+        assert_eq!(state.phase, TaskPhaseV1::Blocked);
+        assert_eq!(
+            state.attention,
+            Some(TaskAttentionV1::IntentAdmissionReconciliation)
+        );
+        let progress_len = state.progress.len();
+        assert!(
+            !pause_for_intent_reconciliation(&mut state, 1)
+                .expect("already paused reconciliation is stable")
+        );
+        assert_eq!(state.progress.len(), progress_len);
     }
 }

@@ -49,6 +49,7 @@ pub use episode_driver::{
     AgentEpisodeDriverCompletionV1, AgentEpisodeDriverError, AgentEpisodeDriverStepOutcomeV1,
     AgentProfileEpisodeOutcomeV1, AgentStepCapabilityGrantV1, AgentWorkerOperationRequestV1,
     AgentWorkerRequestV1, FrozenAgentEpisodeDriverV1, drive_agent_episode_step,
+    execute_agent_worker_request,
 };
 pub use http_transport::{HttpModelTransport, HttpTransportConfigError};
 pub use metering::{

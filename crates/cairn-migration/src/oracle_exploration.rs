@@ -126,6 +126,10 @@ artifact!(
     OracleAcceptedItemArtifact,
     "migration.oracle-accepted-item.v1"
 );
+artifact!(
+    OracleWholePortfolioProposalAuthorityArtifact,
+    "migration.oracle-whole-portfolio-proposal-authority.v1"
+);
 artifact!(OracleCheckPlanArtifact, "migration.oracle-check-plan.v1");
 artifact!(
     OracleStrategyRunArtifact,
@@ -1636,6 +1640,7 @@ pub enum OracleItemSetReviewIssueClassV1 {
     OverlappingItems,
     VagueItem,
     OutOfDimension,
+    NotCandidateFacing,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -3699,8 +3704,9 @@ struct OraclePortfolioProposalWire {
 }
 
 impl OraclePortfolioProposalV1 {
-    /// Mechanically assembles only independently approved exact item revisions.
-    pub fn assemble_reviewed(
+    /// Mechanically assembles exact item revisions carrying treatment-appropriate proposal
+    /// authority. This does not grant Oracle Admission.
+    pub fn assemble(
         workspace: &OracleWorkspaceV1,
         mut dimensions: Vec<OracleDimensionV1>,
         accepted_items: Vec<OracleAcceptedItemV1>,
@@ -4471,12 +4477,110 @@ impl<'de> Deserialize<'de> for OracleItemReviewV1 {
     }
 }
 
-/// Item authority granted only by an independent approval of the exact draft revision.
+/// Controller authority for one whole-portfolio proposal episode in the minimal-decomposition arm.
+///
+/// This is proposal authority, not independent Review or Oracle Admission. Its distinct identity
+/// prevents an ablation arm from fabricating an `Approved` review that never occurred.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleWholePortfolioProposalAuthorityV1 {
+    schema_version: u16,
+    workspace: ContentId<OracleWorkspaceArtifact>,
+    dimensions: Vec<ContentId<OracleDimensionArtifact>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleWholePortfolioProposalAuthorityWire {
+    schema_version: u16,
+    workspace: ContentId<OracleWorkspaceArtifact>,
+    dimensions: Vec<ContentId<OracleDimensionArtifact>>,
+}
+
+impl OracleWholePortfolioProposalAuthorityV1 {
+    pub fn new(
+        workspace: &OracleWorkspaceV1,
+        mut dimensions: Vec<ContentId<OracleDimensionArtifact>>,
+    ) -> Result<Self, OracleFrameworkError> {
+        dimensions.sort_by_key(ContentId::to_wire);
+        validate_content_ids(&dimensions, "whole-portfolio proposal dimensions")?;
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            workspace: workspace.identity()?,
+            dimensions,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn workspace(&self) -> ContentId<OracleWorkspaceArtifact> {
+        self.workspace
+    }
+
+    #[must_use]
+    pub fn dimensions(&self) -> &[ContentId<OracleDimensionArtifact>] {
+        &self.dimensions
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleWholePortfolioProposalAuthorityArtifact>, OracleFrameworkError>
+    {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        validate_content_ids(&self.dimensions, "whole-portfolio proposal dimensions")
+    }
+}
+
+impl TryFrom<OracleWholePortfolioProposalAuthorityWire>
+    for OracleWholePortfolioProposalAuthorityV1
+{
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleWholePortfolioProposalAuthorityWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            workspace: wire.workspace,
+            dimensions: wire.dimensions,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleWholePortfolioProposalAuthorityV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleWholePortfolioProposalAuthorityWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Exact authority by which one item entered a proposal portfolio.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum OracleItemProposalAuthorityV1 {
+    IndependentReview {
+        review: OracleItemReviewV1,
+    },
+    WholePortfolioEpisode {
+        authority: OracleWholePortfolioProposalAuthorityV1,
+    },
+}
+
+/// Item admitted into a proposal portfolio through the treatment-appropriate proposal authority.
+/// Neither authority variant grants Oracle Admission.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleAcceptedItemV1 {
     schema_version: u16,
     draft: OracleItemDraftV1,
-    review: OracleItemReviewV1,
+    authority: OracleItemProposalAuthorityV1,
 }
 
 #[derive(Deserialize)]
@@ -4484,7 +4588,7 @@ pub struct OracleAcceptedItemV1 {
 struct OracleAcceptedItemWire {
     schema_version: u16,
     draft: OracleItemDraftV1,
-    review: OracleItemReviewV1,
+    authority: OracleItemProposalAuthorityV1,
 }
 
 impl OracleAcceptedItemV1 {
@@ -4499,8 +4603,25 @@ impl OracleAcceptedItemV1 {
         Ok(Self {
             schema_version: SCHEMA_V1,
             draft: draft.clone(),
-            review: review.clone(),
+            authority: OracleItemProposalAuthorityV1::IndependentReview {
+                review: review.clone(),
+            },
         })
+    }
+
+    pub fn from_whole_portfolio_episode(
+        draft: &OracleItemDraftV1,
+        authority: &OracleWholePortfolioProposalAuthorityV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            draft: draft.clone(),
+            authority: OracleItemProposalAuthorityV1::WholePortfolioEpisode {
+                authority: authority.clone(),
+            },
+        };
+        value.validate()?;
+        Ok(value)
     }
 
     #[must_use]
@@ -4514,8 +4635,8 @@ impl OracleAcceptedItemV1 {
     }
 
     #[must_use]
-    pub const fn review(&self) -> &OracleItemReviewV1 {
-        &self.review
+    pub const fn authority(&self) -> &OracleItemProposalAuthorityV1 {
+        &self.authority
     }
 
     #[must_use]
@@ -4535,9 +4656,22 @@ impl OracleAcceptedItemV1 {
     fn validate(&self) -> Result<(), OracleFrameworkError> {
         require_v1(self.schema_version)?;
         self.draft.validate()?;
-        self.review.validate_against(&self.draft)?;
-        if !matches!(self.review.decision(), OracleItemReviewDecisionV1::Approved) {
-            return Err(OracleFrameworkError::ReviewCannotApproveUnresolved);
+        match &self.authority {
+            OracleItemProposalAuthorityV1::IndependentReview { review } => {
+                review.validate_against(&self.draft)?;
+                if !matches!(review.decision(), OracleItemReviewDecisionV1::Approved) {
+                    return Err(OracleFrameworkError::ReviewCannotApproveUnresolved);
+                }
+            }
+            OracleItemProposalAuthorityV1::WholePortfolioEpisode { authority } => {
+                authority.validate()?;
+                if !authority
+                    .dimensions()
+                    .contains(&self.draft.item().dimension())
+                {
+                    return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                }
+            }
         }
         Ok(())
     }
@@ -4550,7 +4684,7 @@ impl TryFrom<OracleAcceptedItemWire> for OracleAcceptedItemV1 {
         let value = Self {
             schema_version: wire.schema_version,
             draft: wire.draft,
-            review: wire.review,
+            authority: wire.authority,
         };
         value.validate()?;
         Ok(value)
@@ -6294,7 +6428,7 @@ mod tests {
                 item_revisions: OracleItemRevisionLimit::new(4).expect("item revision limit"),
             },
         });
-        let proposal = OraclePortfolioProposalV1::assemble_reviewed(
+        let proposal = OraclePortfolioProposalV1::assemble(
             &workspace,
             vec![dimension],
             vec![accepted_a, accepted_b],
@@ -6369,7 +6503,7 @@ mod tests {
             .enumerate()
             .map(|(index, item)| accepted_item(&item, &format!("run-{index}")))
             .collect();
-        OraclePortfolioProposalV1::assemble_reviewed(&test_workspace(), vec![dimension], accepted)
+        OraclePortfolioProposalV1::assemble(&test_workspace(), vec![dimension], accepted)
             .expect("reviewed proposal")
     }
 
@@ -6770,7 +6904,7 @@ mod tests {
             OracleItemDraftV1::initial(proposed_item, id("run"), vec![plan]).expect("item draft");
         let review = OracleItemReviewV1::approved(&draft).expect("item approval");
         let accepted = OracleAcceptedItemV1::new(&draft, &review).expect("accepted item");
-        let proposal = OraclePortfolioProposalV1::assemble_reviewed(
+        let proposal = OraclePortfolioProposalV1::assemble(
             &test_workspace(),
             vec![item.clone()],
             vec![accepted],

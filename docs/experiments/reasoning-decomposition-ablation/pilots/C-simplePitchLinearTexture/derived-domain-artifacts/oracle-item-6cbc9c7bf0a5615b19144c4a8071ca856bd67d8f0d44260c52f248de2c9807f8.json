@@ -1,0 +1,1 @@
+{"dimension":"cairn:v1:sha256:migration.oracle-dimension.v1:a14034f9307ff9677d52cc48911bdc4a0629b51a3d9812f36c4bce859bb37c20","schema_version":1,"statement":"Unit dimensions. With W=1, H=1, P=1, shiftX=5, shiftY=-7, and source S[0]=42.5f, the candidate must produce O[0] bitwise identical to the binary32 representation of 42.5f."}

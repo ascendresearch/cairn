@@ -11,12 +11,14 @@ use cairn_agent::{
 };
 use cairn_migration::{
     CandidateMechanismCatalogV1, OracleAdmissionPolicyV1, OracleAdversarialPolicyV1,
-    OracleCoveragePolicyV1, OracleCoverageProfileV1, SirTaskLimits, TaskIntentAuthoritySubject,
+    OracleCoveragePolicyV1, OracleCoverageProfileV1, ReasoningDecompositionPolicyV1, SirTaskLimits,
+    TaskIntentAuthoritySubject,
 };
 use cairn_migration_app::{
-    CudaMigrationApplication, CudaMigrationProductModuleV1, MigrationAgentRuntimeExecutorV1,
-    MigrationCompletionTargetV1, MigrationRuntimeMaterialsV1, OracleControlRunnerV1,
-    OracleControlWorkerConfigV1, migration_product_boundary, migration_tool_registry,
+    CudaMigrationApplication, CudaMigrationProductModuleV1, EvidenceExperimentWorkerConfigV1,
+    MigrationAgentRuntimeExecutorV1, MigrationCompletionTargetV1, MigrationRoleAttemptLimitV1,
+    MigrationRuntimeMaterialsV1, OracleControlRunnerV1, OracleControlWorkerConfigV1,
+    migration_product_boundary, migration_tool_registry,
 };
 use cairn_server::{ApplicationName, load_server_config, run_with_application};
 use serde::Deserialize;
@@ -38,11 +40,14 @@ struct ProductConfigV1 {
     episode_budget: EpisodeBudget,
     model_output_tokens: ModelOutputTokenLimit,
     agent_loop_step_limit: AgentLoopStepLimit,
+    migration_role_attempt_limit: MigrationRoleAttemptLimitV1,
     task_limits: SirTaskLimits,
     inbox_capacity: usize,
     completion_target: MigrationCompletionTargetV1,
     oracle_coverage_profile: OracleCoverageProfileV1,
     oracle_adversarial_policy: OracleAdversarialPolicyV1,
+    reasoning_decomposition: ReasoningDecompositionPolicyV1,
+    evidence_experiment_worker: Option<EvidenceExperimentWorkerConfigV1>,
     oracle_control_worker: OracleControlWorkerConfigV1,
     candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
 }
@@ -80,6 +85,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if config.schema_version != 1 || config.inbox_capacity == 0 {
         return Err("invalid current-V1 CUDA migration product configuration".into());
     }
+    if config.reasoning_decomposition.permits_worker_experiments()
+        && config.evidence_experiment_worker.is_none()
+    {
+        return Err(
+            "evidence-augmented reasoning requires an ordinary Worker configuration".into(),
+        );
+    }
     resolve_product_paths(&mut config, base);
     let server = load_server_config(&config.server_config)?;
     let template: ModelTemplate = serde_json::from_slice(&std::fs::read(&config.model_template)?)?;
@@ -106,6 +118,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &server.storage.content_database,
         &server.storage.content_directory,
         materials.clone(),
+        config
+            .evidence_experiment_worker
+            .map(|worker| (server.clone(), worker)),
     )?;
     let oracle_policy = OracleCoveragePolicyV1::new(
         config.oracle_coverage_profile,
@@ -121,6 +136,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         oracle_policy,
         oracle_catalog,
         oracle_controls,
+        config.reasoning_decomposition,
         config.inbox_capacity,
     )?;
     let name = ApplicationName::new("cuda-migration")?;
@@ -133,6 +149,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         SkillRegistry::default(),
         KnowledgeRegistry::default(),
         config.agent_loop_step_limit,
+        config.migration_role_attempt_limit,
         OracleAdmissionPolicyV1::strict(),
         config.candidate_mechanisms,
         config.completion_target,

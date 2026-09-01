@@ -103,6 +103,7 @@ pub struct AgentEpisodeDriverCompletionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentWorkerOperationRequestV1 {
     pub operation_id: OperationId,
+    pub source_tool_call_id: crate::ToolCallId,
     pub tool: ToolName,
     pub implementation_version: crate::ToolImplementationVersion,
     pub effect: ToolEffectClass,
@@ -137,6 +138,11 @@ pub enum AgentProfileEpisodeOutcomeV1<T> {
 pub enum AgentEpisodeDriverError {
     #[error("Agent episode driver failed: {0}")]
     Agent(String),
+    #[error("Agent episode model dispatch failed ({class:?}): {diagnostic}")]
+    ModelDispatch {
+        class: crate::TransportFailureClass,
+        diagnostic: String,
+    },
     #[error("Agent profile does not grant tool {0}")]
     UnavailableTool(String),
     #[error("Agent capability grant is invalid: {0}")]
@@ -526,10 +532,21 @@ where
             step,
             attempt_id,
         }),
-        DispatchCompletion::NotSent { diagnostic }
-        | DispatchCompletion::Rejected { diagnostic }
-        | DispatchCompletion::Ambiguous { diagnostic } => {
-            Err(AgentEpisodeDriverError::Agent(diagnostic))
+        DispatchCompletion::NotSent { diagnostic } => Err(AgentEpisodeDriverError::ModelDispatch {
+            class: crate::TransportFailureClass::NotSent,
+            diagnostic,
+        }),
+        DispatchCompletion::Rejected { diagnostic } => {
+            Err(AgentEpisodeDriverError::ModelDispatch {
+                class: crate::TransportFailureClass::Rejected,
+                diagnostic,
+            })
+        }
+        DispatchCompletion::Ambiguous { diagnostic } => {
+            Err(AgentEpisodeDriverError::ModelDispatch {
+                class: crate::TransportFailureClass::Ambiguous,
+                diagnostic,
+            })
         }
     }
 }
@@ -737,12 +754,87 @@ fn worker_operation_request(
     let arguments = cairn_codec::from_slice(operation.argument_bytes()).map_err(agent_error)?;
     Ok(AgentWorkerOperationRequestV1 {
         operation_id: operation.operation_id(),
+        source_tool_call_id: operation.source_tool_call_id().ok_or_else(|| {
+            AgentEpisodeDriverError::Agent(
+                "external Worker operation has no decoded tool-call lineage".into(),
+            )
+        })?,
         tool: operation.tool().clone(),
         implementation_version: operation.implementation_version().clone(),
         effect: operation.effect(),
         arguments_id: operation.arguments_id(),
         arguments,
     })
+}
+
+/// Executes the exact external operations previously yielded by [`drive_agent_episode_step`].
+///
+/// The Controller supplies the trusted gateway only after deciding that the request is allowed and
+/// that an appropriate Worker is available. Re-entering the episode driver afterwards projects the
+/// durable results back into the same model continuation.
+///
+/// # Errors
+///
+/// Rejects altered request metadata, an already-started operation, or a gateway/record failure.
+pub fn execute_agent_worker_request<E, C, G>(
+    events: &mut E,
+    content: &mut C,
+    gateway: &mut G,
+    request: &AgentWorkerRequestV1,
+) -> Result<(), AgentEpisodeDriverError>
+where
+    E: EventStore,
+    C: ContentStore,
+    G: ToolGateway,
+{
+    for requested in &request.operations {
+        let argument_bytes = cairn_codec::to_vec(&requested.arguments).map_err(agent_error)?;
+        let arguments_id =
+            ContentId::<crate::ToolArguments>::derive(&argument_bytes).map_err(agent_error)?;
+        if arguments_id != requested.arguments_id {
+            return Err(AgentEpisodeDriverError::Agent(
+                "Worker request arguments changed after episode yield".into(),
+            ));
+        }
+        let operation = PreparedToolOperation::from_tool_call(
+            requested.operation_id,
+            requested.source_tool_call_id,
+            requested.tool.clone(),
+            requested.implementation_version.clone(),
+            requested.effect,
+            requested.arguments_id,
+            argument_bytes,
+        );
+        if !matches!(
+            recover_tool_operation(events, requested.operation_id).map_err(agent_error)?,
+            ToolOperationState::NotFound
+        ) {
+            return Err(AgentEpisodeDriverError::Agent(
+                "Worker request operation is not awaiting first execution".into(),
+            ));
+        }
+        let authority =
+            authorize_tool_operation(events, &CommandId::new(), observed_now()?, operation)
+                .map_err(agent_error)?;
+        let started = begin_tool_operation(
+            events,
+            authority,
+            AttemptId::new(),
+            &CommandId::new(),
+            observed_now()?,
+        )
+        .map_err(agent_error)?;
+        let _completion = execute_tool_operation(
+            events,
+            content,
+            gateway,
+            started,
+            &CommandId::new(),
+            observed_now()?,
+        )
+        .map_err(agent_error)?;
+    }
+    Ok(())
 }
 
 fn project_operation_observations<E: EventStore, C: ContentStore>(

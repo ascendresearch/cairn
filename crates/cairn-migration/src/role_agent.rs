@@ -16,8 +16,9 @@ use crate::{
     OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewArtifact,
     OracleDimensionItemSetReviewV1, OracleItemArtifact, OracleItemDraftArtifact, OracleItemDraftV1,
     OracleItemReviewArtifact, OracleItemReviewV1, OraclePortfolioCoherenceReviewArtifact,
-    OraclePortfolioCoherenceReviewV1, OraclePortfolioProposalArtifact,
-    OracleRevisionRequestArtifact, OracleWorkspaceArtifact, SirTaskBundleArtifact,
+    OraclePortfolioCoherenceReviewV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
+    OracleRevisionRequestArtifact, OracleWholePortfolioProposalAuthorityArtifact,
+    OracleWorkspaceArtifact, SirTaskBundleArtifact,
 };
 
 const HOOK_VERSION: &str = "migration-role-hooks-v1";
@@ -27,7 +28,10 @@ const HOOK_VERSION: &str = "migration-role-hooks-v1";
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MigrationAgentToolV1 {
     ReadTaskArtifact,
+    RunEvidenceExperiment,
     SubmitSir,
+    ReadOracleWholePortfolioScope,
+    SubmitOracleWholePortfolio,
     ReadOracleDimension,
     SubmitOracleDimensionItems,
     ReadOracleDimensionItems,
@@ -55,7 +59,10 @@ impl MigrationAgentToolV1 {
     pub fn tool_name(self) -> Result<ToolName, MigrationAgentRoleError> {
         ToolName::new(match self {
             Self::ReadTaskArtifact => "migration-read-task-artifact",
+            Self::RunEvidenceExperiment => "migration-run-evidence-experiment",
             Self::SubmitSir => "migration-submit-sir",
+            Self::ReadOracleWholePortfolioScope => "migration-read-oracle-whole-portfolio-scope",
+            Self::SubmitOracleWholePortfolio => "migration-submit-oracle-whole-portfolio",
             Self::ReadOracleDimension => "migration-read-oracle-dimension",
             Self::SubmitOracleDimensionItems => "migration-submit-oracle-dimension-items",
             Self::ReadOracleDimensionItems => "migration-read-oracle-dimension-items",
@@ -156,6 +163,13 @@ role_context!(OracleDimensionItemDiscoveryAgentContextV1 {
     previous_item_set: Option<ContentId<OracleDimensionItemSetProposalArtifact>>,
     review_feedback: Option<ContentId<OracleDimensionItemSetReviewArtifact>>,
 });
+role_context!(OracleWholePortfolioAgentContextV1 {
+    admitted_intent: ContentId<MigrationIntentContractArtifact>,
+    workspace: ContentId<OracleWorkspaceArtifact>,
+    authority: ContentId<OracleWholePortfolioProposalAuthorityArtifact>,
+    previous_portfolio: Option<ContentId<OraclePortfolioProposalArtifact>>,
+    admission_feedback: Option<ContentId<OracleRevisionRequestArtifact>>,
+});
 role_context!(OracleDimensionItemSetReviewerAgentContextV1 {
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
     dimension: ContentId<OracleDimensionArtifact>,
@@ -202,14 +216,14 @@ pub enum MigrationRoleStepObservationV1<T> {
     Complete(T),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RoleAccessPolicy {
-    tools: &'static [MigrationAgentToolV1],
+    tools: Vec<MigrationAgentToolV1>,
 }
 
 impl RoleAccessPolicy {
     fn resolve(
-        self,
+        &self,
         registries: AgentRegistries<'_>,
     ) -> Result<AgentStepAccessV1, MigrationAgentRoleError> {
         let tools = self
@@ -240,7 +254,7 @@ macro_rules! role_hooks {
         output = $output:ty,
         role = $role:literal,
         profile = $profile:literal,
-        tools = [$($tool:path),+ $(,)?]
+            tools = [$($tool:path),+ $(,)?]
     ) => {
         pub struct $hooks {
             role: AgentRoleName,
@@ -256,14 +270,35 @@ macro_rules! role_hooks {
             ///
             /// Returns an error if a built-in label violates agent label validation.
             pub fn new() -> Result<Self, MigrationAgentRoleError> {
+                Self::for_reasoning_decomposition(
+                    crate::ReasoningDecompositionPolicyV1::StructuredReview,
+                )
+            }
+
+            /// Constructs the role with the exact experiment authority selected for this task.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if a built-in role or profile label is invalid.
+            pub fn for_reasoning_decomposition(
+                policy: crate::ReasoningDecompositionPolicyV1,
+            ) -> Result<Self, MigrationAgentRoleError> {
+                let mut tools = vec![$($tool),+];
+                if policy.permits_worker_experiments() {
+                    tools.push(MigrationAgentToolV1::RunEvidenceExperiment);
+                }
                 Ok(Self {
                     role: AgentRoleName::new($role)
                         .map_err(|_| MigrationAgentRoleError::InvalidBuiltInLabel)?,
-                    profile: AgentHookProfileName::new($profile)
+                    profile: AgentHookProfileName::new(if policy.permits_worker_experiments() {
+                        concat!($profile, "-evidence")
+                    } else {
+                        $profile
+                    })
                         .map_err(|_| MigrationAgentRoleError::InvalidBuiltInLabel)?,
                     version: AgentHookProfileVersion::new(HOOK_VERSION)
                         .map_err(|_| MigrationAgentRoleError::InvalidBuiltInLabel)?,
-                    access: RoleAccessPolicy { tools: &[$($tool),+] },
+                    access: RoleAccessPolicy { tools },
                 })
             }
 
@@ -297,7 +332,7 @@ macro_rules! role_hooks {
             }
 
             fn required_tools(&self) -> &[MigrationAgentToolV1] {
-                self.access.tools
+                &self.access.tools
             }
         }
 
@@ -373,6 +408,18 @@ role_hooks!(
     tools = [
         MigrationAgentToolV1::ReadTaskArtifact,
         MigrationAgentToolV1::SubmitSir
+    ]
+);
+role_hooks!(
+    OracleWholePortfolioRoleHooksV1,
+    context = OracleWholePortfolioAgentContextV1,
+    output = OraclePortfolioProposalV1,
+    role = "migration-oracle-whole-portfolio-proposer",
+    profile = "migration-oracle-whole-portfolio-proposal-hooks",
+    tools = [
+        MigrationAgentToolV1::ReadTaskArtifact,
+        MigrationAgentToolV1::ReadOracleWholePortfolioScope,
+        MigrationAgentToolV1::SubmitOracleWholePortfolio,
     ]
 );
 role_hooks!(
@@ -610,5 +657,27 @@ mod tests {
             MigrationRoleHooksV1::required_tools(&candidate)
                 .contains(&MigrationAgentToolV1::ReadAdmittedOracle)
         );
+    }
+
+    #[test]
+    fn evidence_augmented_hooks_alone_grant_the_worker_experiment_tool() {
+        let structured = SirRoleHooksV1::for_reasoning_decomposition(
+            crate::ReasoningDecompositionPolicyV1::StructuredReview,
+        )
+        .expect("structured hooks");
+        let augmented = SirRoleHooksV1::for_reasoning_decomposition(
+            crate::ReasoningDecompositionPolicyV1::EvidenceAugmentedStructuredReview,
+        )
+        .expect("augmented hooks");
+
+        assert!(
+            !MigrationRoleHooksV1::required_tools(&structured)
+                .contains(&MigrationAgentToolV1::RunEvidenceExperiment)
+        );
+        assert!(
+            MigrationRoleHooksV1::required_tools(&augmented)
+                .contains(&MigrationAgentToolV1::RunEvidenceExperiment)
+        );
+        assert_ne!(structured.profile(), augmented.profile());
     }
 }
