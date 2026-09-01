@@ -9,7 +9,8 @@ use thiserror::Error;
 
 use crate::{
     CandidateOracleContractArtifact, CandidateOracleContractV1, CandidateProposalArtifact,
-    CandidateProposalV1, OracleClaimArtifact, OraclePlaneV1, OracleWorkItemArtifact,
+    CandidateProposalV1, OracleClaimArtifact, OracleItemArtifact, OracleObligationResolutionV1,
+    OraclePlaneV1,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -52,7 +53,7 @@ artifact!(
     "migration.candidate-admission-outcome.v1"
 );
 
-/// Independent control families mechanically required by admitted Oracle work-item plane.
+/// Independent control families mechanically required by admitted Oracle dimension plane.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CandidateControlFamilyV1 {
@@ -232,7 +233,7 @@ impl<'de> Deserialize<'de> for CandidateMechanismCatalogV1 {
 #[serde(deny_unknown_fields)]
 pub struct CandidateControlObligationV1 {
     claim: ContentId<OracleClaimArtifact>,
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     plane: OraclePlaneV1,
     family: CandidateControlFamilyV1,
     mechanism: ContentId<CandidateQualifiedMechanismArtifact>,
@@ -244,7 +245,7 @@ impl CandidateControlObligationV1 {
         self.claim
     }
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
         self.item
     }
     #[must_use]
@@ -303,17 +304,23 @@ impl CandidateAdmissionAttemptV1 {
         let mut obligations = Vec::new();
         for claim in contract.admitted_claims() {
             for entry in claim.entries() {
-                let item = entry.item().identity().map_err(binding)?;
-                for family in required_controls(entry.item().plane()) {
-                    obligations.push(CandidateControlObligationV1 {
-                        claim: claim.claim(),
-                        item,
-                        plane: entry.item().plane(),
-                        family,
-                        mechanism: mechanisms
-                            .mechanism(family)
-                            .ok_or(CandidateAdmissionError::MissingMechanism(family))?,
-                    });
+                let OracleObligationResolutionV1::Contributed { items, .. } = entry.resolution()
+                else {
+                    return Err(CandidateAdmissionError::BindingMismatch);
+                };
+                for item in items {
+                    let item = item.identity().map_err(binding)?;
+                    for family in required_controls(entry.dimension().plane()) {
+                        obligations.push(CandidateControlObligationV1 {
+                            claim: claim.claim(),
+                            item,
+                            plane: entry.dimension().plane(),
+                            family,
+                            mechanism: mechanisms
+                                .mechanism(family)
+                                .ok_or(CandidateAdmissionError::MissingMechanism(family))?,
+                        });
+                    }
                 }
             }
         }
@@ -410,7 +417,7 @@ pub enum CandidateControlResultV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateControlReceiptV1 {
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     family: CandidateControlFamilyV1,
     mechanism: ContentId<CandidateQualifiedMechanismArtifact>,
     receipt: ContentId<TrustedCandidateControlReceiptArtifact>,
@@ -419,7 +426,7 @@ pub struct CandidateControlReceiptV1 {
 impl CandidateControlReceiptV1 {
     #[must_use]
     pub const fn new(
-        item: ContentId<OracleWorkItemArtifact>,
+        item: ContentId<OracleItemArtifact>,
         family: CandidateControlFamilyV1,
         mechanism: ContentId<CandidateQualifiedMechanismArtifact>,
         receipt: ContentId<TrustedCandidateControlReceiptArtifact>,
@@ -434,7 +441,7 @@ impl CandidateControlReceiptV1 {
         }
     }
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
         self.item
     }
     #[must_use]
@@ -559,9 +566,9 @@ pub enum CandidateClaimStatusV1 {
 pub struct CandidateClaimOutcomeV1 {
     claim: ContentId<OracleClaimArtifact>,
     status: CandidateClaimStatusV1,
-    admitted_items: Vec<ContentId<OracleWorkItemArtifact>>,
-    unresolved_items: Vec<ContentId<OracleWorkItemArtifact>>,
-    rejected_items: Vec<ContentId<OracleWorkItemArtifact>>,
+    admitted_items: Vec<ContentId<OracleItemArtifact>>,
+    unresolved_items: Vec<ContentId<OracleItemArtifact>>,
+    rejected_items: Vec<ContentId<OracleItemArtifact>>,
 }
 impl CandidateClaimOutcomeV1 {
     #[must_use]
@@ -573,15 +580,15 @@ impl CandidateClaimOutcomeV1 {
         self.status
     }
     #[must_use]
-    pub fn admitted_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+    pub fn admitted_items(&self) -> &[ContentId<OracleItemArtifact>] {
         &self.admitted_items
     }
     #[must_use]
-    pub fn unresolved_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+    pub fn unresolved_items(&self) -> &[ContentId<OracleItemArtifact>] {
         &self.unresolved_items
     }
     #[must_use]
-    pub fn rejected_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+    pub fn rejected_items(&self) -> &[ContentId<OracleItemArtifact>] {
         &self.rejected_items
     }
 }
@@ -640,7 +647,7 @@ impl CandidateAdmissionOutcomeV1 {
             return Err(CandidateAdmissionError::OutcomeDrift);
         }
         for claim in &self.claims {
-            let canonical = |values: &[ContentId<OracleWorkItemArtifact>]| {
+            let canonical = |values: &[ContentId<OracleItemArtifact>]| {
                 !values
                     .windows(2)
                     .any(|pair| pair[0].to_wire() >= pair[1].to_wire())
@@ -724,26 +731,31 @@ pub fn recompute_candidate_admission(
         let mut unresolved = Vec::new();
         let mut rejected = Vec::new();
         for entry in claim.entries() {
-            let item = entry.item().identity().map_err(binding)?;
-            let mut missing = false;
-            let mut failed = false;
-            for obligation in attempt
-                .obligations
-                .iter()
-                .filter(|value| value.item == item)
-            {
-                match receipt_map.get(&(item, obligation.family)) {
-                    Some(CandidateControlResultV1::Passed) => {}
-                    Some(CandidateControlResultV1::Failed) => failed = true,
-                    Some(CandidateControlResultV1::Unavailable) | None => missing = true,
+            let OracleObligationResolutionV1::Contributed { items, .. } = entry.resolution() else {
+                return Err(CandidateAdmissionError::BindingMismatch);
+            };
+            for item in items {
+                let item = item.identity().map_err(binding)?;
+                let mut missing = false;
+                let mut failed = false;
+                for obligation in attempt
+                    .obligations
+                    .iter()
+                    .filter(|value| value.item == item)
+                {
+                    match receipt_map.get(&(item, obligation.family)) {
+                        Some(CandidateControlResultV1::Passed) => {}
+                        Some(CandidateControlResultV1::Failed) => failed = true,
+                        Some(CandidateControlResultV1::Unavailable) | None => missing = true,
+                    }
                 }
-            }
-            if failed {
-                rejected.push(item);
-            } else if missing {
-                unresolved.push(item);
-            } else {
-                admitted.push(item);
+                if failed {
+                    rejected.push(item);
+                } else if missing {
+                    unresolved.push(item);
+                } else {
+                    admitted.push(item);
+                }
             }
         }
         let status = if !rejected.is_empty() {

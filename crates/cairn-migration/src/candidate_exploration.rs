@@ -17,12 +17,12 @@ use thiserror::Error;
 use crate::{
     AgentResolvedRuntimeModelArtifact, IntentRecoveryInputArtifact,
     MigrationIntentContractArtifact, OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1,
-    OracleBuildTestSnapshotArtifact, OracleClaimAdmissionStatusV1, OracleClaimArtifact,
-    OracleClaimV1, OracleComparatorProposalArtifact, OracleDocumentationSnapshotArtifact,
-    OracleExecutionSafetyProposalArtifact, OracleKnowledgeSnapshotArtifact,
-    OracleObligationEntryV1, OracleObligationResolutionV1, OraclePortfolioElementKindV1,
-    OraclePortfolioElementV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleWorkspaceArtifact, OracleWorkspaceV1, SirTaskBundleArtifact,
+    OracleBuildTestSnapshotArtifact, OracleCheckPlanArtifact, OracleClaimAdmissionStatusV1,
+    OracleClaimArtifact, OracleClaimV1, OracleComparatorProposalArtifact,
+    OracleDocumentationSnapshotArtifact, OracleExecutionSafetyProposalArtifact,
+    OracleKnowledgeSnapshotArtifact, OracleObligationEntryV1, OracleObligationResolutionV1,
+    OraclePortfolioElementKindV1, OraclePortfolioElementV1, OraclePortfolioProposalArtifact,
+    OraclePortfolioProposalV1, OracleWorkspaceArtifact, OracleWorkspaceV1, SirTaskBundleArtifact,
 };
 
 const SCHEMA_V1: u16 = 1;
@@ -554,10 +554,10 @@ impl CandidateAdmittedOracleClaimV1 {
             else {
                 return Err(CandidateExplorationError::ContractDrift);
             };
-            if elements.is_empty() || entry.item().claim() != self.claim {
+            if elements.is_empty() || entry.dimension().claim() != self.claim {
                 return Err(CandidateExplorationError::ContractDrift);
             }
-            let identity = entry.item().identity().map_err(codec)?;
+            let identity = entry.dimension().identity().map_err(codec)?;
             if prior.is_some_and(|prior: String| prior >= identity.to_wire()) {
                 return Err(CandidateExplorationError::ContractDrift);
             }
@@ -624,11 +624,6 @@ impl CandidateOracleContractV1 {
         if outcome.proposal() != proposal_id {
             return Err(CandidateExplorationError::BindingMismatch);
         }
-        let mut entries_by_id = proposal
-            .entries()
-            .iter()
-            .map(|entry| Ok((entry.item().identity().map_err(codec)?, entry.clone())))
-            .collect::<Result<HashMap<_, _>, CandidateExplorationError>>()?;
         let mut admitted_claims = Vec::new();
         for claim in outcome.claims() {
             if claim.status() != OracleClaimAdmissionStatusV1::Admitted {
@@ -637,15 +632,32 @@ impl CandidateOracleContractV1 {
             if !claim.unresolved_items().is_empty() || !claim.rejected_items().is_empty() {
                 return Err(CandidateExplorationError::BindingMismatch);
             }
-            let entries = claim
+            let mut admitted_items = claim
                 .admitted_items()
                 .iter()
-                .map(|item| {
-                    entries_by_id
-                        .remove(item)
-                        .ok_or(CandidateExplorationError::BindingMismatch)
+                .copied()
+                .collect::<HashSet<_>>();
+            let entries = proposal
+                .entries()
+                .iter()
+                .filter(|entry| entry.dimension().claim() == claim.claim())
+                .map(|entry| {
+                    let OracleObligationResolutionV1::Contributed { items, .. } =
+                        entry.resolution()
+                    else {
+                        return Err(CandidateExplorationError::BindingMismatch);
+                    };
+                    for item in items {
+                        if !admitted_items.remove(&item.identity().map_err(codec)?) {
+                            return Err(CandidateExplorationError::BindingMismatch);
+                        }
+                    }
+                    Ok(entry.clone())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            if !admitted_items.is_empty() {
+                return Err(CandidateExplorationError::BindingMismatch);
+            }
             admitted_claims.push(CandidateAdmittedOracleClaimV1 {
                 claim: claim.claim(),
                 entries,
@@ -705,7 +717,7 @@ impl CandidateOracleContractV1 {
         for claim in &self.admitted_claims {
             claim.validate()?;
             for entry in &claim.entries {
-                if !items.insert(entry.item().identity().map_err(codec)?) {
+                if !items.insert(entry.dimension().identity().map_err(codec)?) {
                     return Err(CandidateExplorationError::ContractDrift);
                 }
             }
@@ -744,6 +756,10 @@ impl<'de> Deserialize<'de> for CandidateOracleContractV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum CandidateOracleMaterialV1 {
+    CheckPlan {
+        identity: ContentId<OracleCheckPlanArtifact>,
+        bytes: Vec<u8>,
+    },
     DomainRefinement {
         identity: ContentId<DomainRefinementArtifact>,
         bytes: Vec<u8>,
@@ -785,6 +801,10 @@ pub enum CandidateOracleMaterialV1 {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum CandidateOracleMaterialWire {
+    CheckPlan {
+        identity: ContentId<OracleCheckPlanArtifact>,
+        bytes: Vec<u8>,
+    },
     DomainRefinement {
         identity: ContentId<DomainRefinementArtifact>,
         bytes: Vec<u8>,
@@ -837,6 +857,10 @@ impl CandidateOracleMaterialV1 {
             return Err(CandidateExplorationError::MaterialDrift);
         }
         let value = match kind {
+            OraclePortfolioElementKindV1::CheckPlan(identity) => Self::CheckPlan {
+                identity: *identity,
+                bytes,
+            },
             OraclePortfolioElementKindV1::DomainRefinement(identity) => Self::DomainRefinement {
                 identity: *identity,
                 bytes,
@@ -886,7 +910,8 @@ impl CandidateOracleMaterialV1 {
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         match self {
-            Self::DomainRefinement { bytes, .. }
+            Self::CheckPlan { bytes, .. }
+            | Self::DomainRefinement { bytes, .. }
             | Self::CorpusCase { bytes, .. }
             | Self::Reference { bytes, .. }
             | Self::PropertyRelation { bytes, .. }
@@ -900,6 +925,12 @@ impl CandidateOracleMaterialV1 {
 
     fn validates_kind(&self, kind: &OraclePortfolioElementKindV1) -> bool {
         matches!(
+            (self, kind),
+            (
+                Self::CheckPlan { identity: left, .. },
+                OraclePortfolioElementKindV1::CheckPlan(right)
+            ) if left == right
+        ) || matches!(
             (self, kind),
             (
                 Self::DomainRefinement { identity: left, .. },
@@ -938,6 +969,7 @@ impl CandidateOracleMaterialV1 {
             return Err(CandidateExplorationError::MaterialDrift);
         }
         let valid = match self {
+            Self::CheckPlan { identity, .. } => ContentId::derive(bytes) == Ok(*identity),
             Self::DomainRefinement { identity, .. } => ContentId::derive(bytes) == Ok(*identity),
             Self::CorpusCase { identity, .. } => ContentId::derive(bytes) == Ok(*identity),
             Self::Reference { identity, .. } => ContentId::derive(bytes) == Ok(*identity),
@@ -961,6 +993,9 @@ impl TryFrom<CandidateOracleMaterialWire> for CandidateOracleMaterialV1 {
 
     fn try_from(wire: CandidateOracleMaterialWire) -> Result<Self, Self::Error> {
         let value = match wire {
+            CandidateOracleMaterialWire::CheckPlan { identity, bytes } => {
+                Self::CheckPlan { identity, bytes }
+            }
             CandidateOracleMaterialWire::DomainRefinement { identity, bytes } => {
                 Self::DomainRefinement { identity, bytes }
             }
@@ -1137,7 +1172,7 @@ impl CandidateOracleMaterialsV1 {
         &self.elements
     }
 
-    /// Recomputes the exact claim, work-item, element, kind and body bindings.
+    /// Recomputes the exact claim, dimension, element, kind and body bindings.
     ///
     /// # Errors
     ///
@@ -1163,13 +1198,27 @@ impl CandidateOracleMaterialsV1 {
         let mut expected_elements = HashMap::new();
         for claim in &contract.admitted_claims {
             for entry in &claim.entries {
-                let item = entry.item().identity().map_err(codec)?;
-                let OracleObligationResolutionV1::Contributed { elements, .. } = entry.resolution()
+                let OracleObligationResolutionV1::Contributed {
+                    items, elements, ..
+                } = entry.resolution()
                 else {
                     return Err(CandidateExplorationError::MaterialDrift);
                 };
+                let item_ids = items
+                    .iter()
+                    .map(|item| item.identity().map_err(codec))
+                    .collect::<Result<HashSet<_>, _>>()?;
                 for element in elements {
-                    if expected_elements.insert(*element, item).is_some() {
+                    let material = self
+                        .elements
+                        .iter()
+                        .find(|material| material.element.identity().is_ok_and(|id| id == *element))
+                        .ok_or(CandidateExplorationError::MaterialDrift)?;
+                    if !item_ids.contains(&material.element.item())
+                        || expected_elements
+                            .insert(*element, material.element.item())
+                            .is_some()
+                    {
                         return Err(CandidateExplorationError::MaterialDrift);
                     }
                 }

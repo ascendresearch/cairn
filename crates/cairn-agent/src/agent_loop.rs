@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, future::Future};
 
-use cairn_protocol::{AgentLoopId, ContentId, TaskId};
+use cairn_protocol::{AgentLoopId, ContentId, EpisodeId, TaskId};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 
@@ -53,6 +53,7 @@ impl<'de> Deserialize<'de> for AgentLoopStepLimit {
 #[serde(deny_unknown_fields)]
 pub struct AgentLoopStartV1 {
     loop_id: AgentLoopId,
+    episode_id: EpisodeId,
     task_id: TaskId,
     role: AgentRoleName,
     hook_profile: AgentHookProfileName,
@@ -64,8 +65,13 @@ pub struct AgentLoopStartV1 {
 impl AgentLoopStartV1 {
     /// Freezes the role, context, hook implementation, and budget before any model step starts.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the start record exposes every distinct lifecycle, role, hook, context, and budget binding"
+    )]
     pub const fn new(
         loop_id: AgentLoopId,
+        episode_id: EpisodeId,
         task_id: TaskId,
         role: AgentRoleName,
         hook_profile: AgentHookProfileName,
@@ -75,6 +81,7 @@ impl AgentLoopStartV1 {
     ) -> Self {
         Self {
             loop_id,
+            episode_id,
             task_id,
             role,
             hook_profile,
@@ -87,6 +94,12 @@ impl AgentLoopStartV1 {
     #[must_use]
     pub const fn loop_id(&self) -> AgentLoopId {
         self.loop_id
+    }
+
+    /// Returns the exact durable episode owned by this role-scoped loop.
+    #[must_use]
+    pub const fn episode_id(&self) -> EpisodeId {
+        self.episode_id
     }
 
     #[must_use]
@@ -142,7 +155,9 @@ impl TryFrom<AgentLoopCheckpointWireV1> for AgentLoopCheckpointV1 {
         if wire.steps_started == 0
             && matches!(
                 wire.status,
-                AgentLoopStatusV1::Suspended(_) | AgentLoopStatusV1::Complete
+                AgentLoopStatusV1::Suspended(_)
+                    | AgentLoopStatusV1::Exhausted(_)
+                    | AgentLoopStatusV1::Complete
             )
         {
             return Err(AgentLoopRegistryError::InvalidCheckpoint);
@@ -189,7 +204,20 @@ impl AgentLoopCheckpointV1 {
 pub enum AgentLoopStatusV1 {
     Ready,
     Suspended(AgentLoopSuspensionReason),
+    Exhausted(AgentLoopExhaustionReasonV1),
     Complete,
+}
+
+/// Why a role-scoped Agent Loop stopped without reaching its goal.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentLoopExhaustionReasonV1 {
+    LoopStepLimit,
+    EpisodeStepLimit,
+    EpisodeDeadline,
+    EpisodeToolOperationLimit,
+    EpisodeProviderTokenLimit,
+    EpisodeProviderUsageUnavailable,
 }
 
 /// Tool metadata visible to the model. It is not invocation authority.
@@ -708,6 +736,7 @@ pub enum AgentLoopStepExecutionV1<O> {
 pub enum AgentLoopDirectiveV1<T> {
     Continue,
     Suspend(AgentLoopSuspensionReason),
+    Exhausted(AgentLoopExhaustionReasonV1),
     Complete(T),
 }
 
@@ -825,7 +854,19 @@ where
     }
     loop {
         if initialized.checkpoint.steps_started == initialized.checkpoint.start.step_limit.get() {
-            return Err(AgentLoopRunError::StepLimitReached);
+            initialized.checkpoint.status =
+                AgentLoopStatusV1::Exhausted(AgentLoopExhaustionReasonV1::LoopStepLimit);
+            tracing::warn!(
+                target: "cairn.agent.loop",
+                event = "agent_loop_budget_exhausted",
+                loop_id = %initialized.checkpoint.start.loop_id(),
+                task_id = %initialized.checkpoint.start.task_id(),
+                role = %initialized.checkpoint.start.role(),
+                steps_started = initialized.checkpoint.steps_started,
+                reason = ?AgentLoopExhaustionReasonV1::LoopStepLimit,
+                "Agent Loop stopped without completing its role goal"
+            );
+            return Ok(AgentLoopRunOutcomeV1::Exhausted(initialized.checkpoint));
         }
         initialized.checkpoint.steps_started += 1;
         tracing::info!(
@@ -869,6 +910,20 @@ where
                 initialized.checkpoint.status = AgentLoopStatusV1::Suspended(reason);
                 return Ok(AgentLoopRunOutcomeV1::Suspended(initialized.checkpoint));
             }
+            AgentLoopDirectiveV1::Exhausted(reason) => {
+                initialized.checkpoint.status = AgentLoopStatusV1::Exhausted(reason);
+                tracing::warn!(
+                    target: "cairn.agent.loop",
+                    event = "agent_loop_budget_exhausted",
+                    loop_id = %initialized.checkpoint.start.loop_id(),
+                    task_id = %initialized.checkpoint.start.task_id(),
+                    role = %initialized.checkpoint.start.role(),
+                    steps_started = initialized.checkpoint.steps_started,
+                    reason = ?reason,
+                    "Agent Loop stopped without completing its role goal"
+                );
+                return Ok(AgentLoopRunOutcomeV1::Exhausted(initialized.checkpoint));
+            }
             AgentLoopDirectiveV1::Complete(output) => {
                 initialized.checkpoint.status = AgentLoopStatusV1::Complete;
                 tracing::info!(
@@ -891,6 +946,7 @@ where
 
 pub enum AgentLoopRunOutcomeV1<T> {
     Suspended(AgentLoopCheckpointV1),
+    Exhausted(AgentLoopCheckpointV1),
     Complete {
         checkpoint: AgentLoopCheckpointV1,
         output: T,
@@ -905,8 +961,6 @@ pub enum AgentLoopRunError<H, E> {
     ContextBindingMismatch,
     #[error("only a suspended Agent Loop checkpoint can be resumed")]
     CheckpointNotSuspended,
-    #[error("Agent Loop reached its step limit before the role completed")]
-    StepLimitReached,
     #[error("Agent Loop hook failed")]
     Hook(H),
     #[error("Agent Loop step executor failed")]
@@ -1040,6 +1094,7 @@ mod tests {
     fn checkpoint_deserialization_rechecks_frozen_step_bound() {
         let start = AgentLoopStartV1::new(
             AgentLoopId::new(),
+            EpisodeId::new(),
             TaskId::new(),
             AgentRoleName::new("reviewer").expect("role"),
             AgentHookProfileName::new("review-hooks").expect("profile"),
@@ -1117,6 +1172,7 @@ mod tests {
         let version = AgentHookProfileVersion::new("builtin-v1").expect("version");
         let start = AgentLoopStartV1::new(
             AgentLoopId::new(),
+            EpisodeId::new(),
             TaskId::new(),
             AgentRoleName::new("reviewer").expect("role"),
             profile.clone(),
@@ -1141,5 +1197,139 @@ mod tests {
             ),
             Err(AgentLoopRunError::ContextBindingMismatch)
         ));
+    }
+
+    struct ContinuingHooks {
+        profile: AgentHookProfileName,
+        version: AgentHookProfileVersion,
+    }
+
+    fn empty_access(
+        registries: AgentRegistries<'_>,
+    ) -> Result<AgentStepAccessV1, AgentLoopRegistryError> {
+        Ok(AgentStepAccessV1 {
+            exposure: AgentContextExposureV1 {
+                tools: registries.tools.index(&[])?,
+                skills: registries.skills.index(&[])?,
+                knowledge: registries.knowledge.index(&[])?,
+            },
+            tool_invocation: registries.tools.grant(&[])?,
+            skill_activation: registries.skills.grant(&[])?,
+            knowledge_read: registries.knowledge.grant(&[])?,
+        })
+    }
+
+    impl AgentLoopHooks<Context> for ContinuingHooks {
+        type StepObservation = ();
+        type Output = ();
+        type Error = AgentLoopRegistryError;
+
+        fn profile(&self) -> (&AgentHookProfileName, &AgentHookProfileVersion) {
+            (&self.profile, &self.version)
+        }
+
+        fn initialize(
+            &self,
+            _start: &AgentLoopStartV1,
+            _context: &Context,
+            registries: AgentRegistries<'_>,
+        ) -> Result<AgentLoopInitializationV1, Self::Error> {
+            Ok(AgentLoopInitializationV1 {
+                first_step_access: empty_access(registries)?,
+            })
+        }
+
+        fn before_step(
+            &self,
+            _checkpoint: &AgentLoopCheckpointV1,
+            _context: &Context,
+            registries: AgentRegistries<'_>,
+        ) -> Result<AgentStepAccessV1, Self::Error> {
+            empty_access(registries)
+        }
+
+        fn after_step(
+            &self,
+            _checkpoint: &AgentLoopCheckpointV1,
+            _context: &Context,
+            _observation: (),
+        ) -> Result<AgentLoopDirectiveV1<()>, Self::Error> {
+            Ok(AgentLoopDirectiveV1::Continue)
+        }
+    }
+
+    struct ContinuingExecutor;
+
+    struct NoopWake;
+
+    impl std::task::Wake for NoopWake {
+        fn wake(self: std::sync::Arc<Self>) {}
+    }
+
+    impl AgentLoopStepExecutor<Context, ()> for ContinuingExecutor {
+        type Error = Infallible;
+
+        async fn execute_step(
+            &mut self,
+            _checkpoint: &AgentLoopCheckpointV1,
+            _context: &Context,
+            _access: &AgentStepAccessV1,
+        ) -> Result<AgentLoopStepExecutionV1<()>, Self::Error> {
+            Ok(AgentLoopStepExecutionV1::Observed(()))
+        }
+    }
+
+    #[test]
+    fn step_budget_exhaustion_is_a_typed_terminal_outcome() {
+        let context = Context(
+            ContentId::<AgentLoopContextArtifact>::derive(b"bounded context").expect("context"),
+        );
+        let hooks = ContinuingHooks {
+            profile: AgentHookProfileName::new("bounded-hooks").expect("profile"),
+            version: AgentHookProfileVersion::new("builtin-v1").expect("version"),
+        };
+        let start = AgentLoopStartV1::new(
+            AgentLoopId::new(),
+            EpisodeId::new(),
+            TaskId::new(),
+            AgentRoleName::new("bounded-role").expect("role"),
+            hooks.profile.clone(),
+            hooks.version.clone(),
+            context.context_id(),
+            AgentLoopStepLimit::new(1).expect("limit"),
+        );
+        let tools = ToolRegistry::default();
+        let skills = SkillRegistry::default();
+        let knowledge = KnowledgeRegistry::default();
+        let registries = AgentRegistries {
+            tools: &tools,
+            skills: &skills,
+            knowledge: &knowledge,
+        };
+        let initialized =
+            initialize_agent_loop(start, &context, &hooks, registries).expect("initialized loop");
+        let waker = std::task::Waker::from(std::sync::Arc::new(NoopWake));
+        let mut task_context = std::task::Context::from_waker(&waker);
+        let mut executor = ContinuingExecutor;
+        let mut future = std::pin::pin!(run_agent_loop(
+            initialized,
+            &context,
+            &hooks,
+            registries,
+            &mut executor,
+        ));
+        let outcome = loop {
+            match std::future::Future::poll(future.as_mut(), &mut task_context) {
+                std::task::Poll::Ready(outcome) => break outcome.expect("typed outcome"),
+                std::task::Poll::Pending => std::thread::yield_now(),
+            }
+        };
+        let AgentLoopRunOutcomeV1::Exhausted(checkpoint) = outcome else {
+            panic!("continuing loop must exhaust its exact step budget")
+        };
+        assert_eq!(
+            checkpoint.status(),
+            &AgentLoopStatusV1::Exhausted(AgentLoopExhaustionReasonV1::LoopStepLimit)
+        );
     }
 }

@@ -22,13 +22,14 @@ mod step_operation;
 
 pub use agent_loop::{
     AgentContextExposureV1, AgentLoopCheckpointV1, AgentLoopContext, AgentLoopDirectiveV1,
-    AgentLoopHooks, AgentLoopInitializationV1, AgentLoopRegistryError, AgentLoopRunError,
-    AgentLoopRunOutcomeV1, AgentLoopStartV1, AgentLoopStatusV1, AgentLoopStepExecutionV1,
-    AgentLoopStepExecutor, AgentLoopStepLimit, AgentRegistries, AgentStepAccessV1,
-    InitializedAgentLoopV1, KnowledgeIndexEntryV1, KnowledgeIndexViewV1, KnowledgeReadGrantV1,
-    KnowledgeRegistrationV1, KnowledgeRegistry, SkillActivationGrantV1, SkillIndexEntryV1,
-    SkillIndexViewV1, SkillRegistrationV1, SkillRegistry, ToolIndexEntryV1, ToolIndexViewV1,
-    ToolInvocationGrantV1, ToolRegistry, initialize_agent_loop, resume_agent_loop, run_agent_loop,
+    AgentLoopExhaustionReasonV1, AgentLoopHooks, AgentLoopInitializationV1, AgentLoopRegistryError,
+    AgentLoopRunError, AgentLoopRunOutcomeV1, AgentLoopStartV1, AgentLoopStatusV1,
+    AgentLoopStepExecutionV1, AgentLoopStepExecutor, AgentLoopStepLimit, AgentRegistries,
+    AgentStepAccessV1, InitializedAgentLoopV1, KnowledgeIndexEntryV1, KnowledgeIndexViewV1,
+    KnowledgeReadGrantV1, KnowledgeRegistrationV1, KnowledgeRegistry, SkillActivationGrantV1,
+    SkillIndexEntryV1, SkillIndexViewV1, SkillRegistrationV1, SkillRegistry, ToolIndexEntryV1,
+    ToolIndexViewV1, ToolInvocationGrantV1, ToolRegistry, initialize_agent_loop, resume_agent_loop,
+    run_agent_loop,
 };
 pub use dispatch::{
     DispatchAuthority, DispatchCompletion, DispatchCoordinatorError, ModelAttemptState,
@@ -41,13 +42,13 @@ pub use episode::{
     EpisodeCoordinatorError, EpisodeDeadlineUnixMillis, EpisodeOperationAdmission,
     EpisodeOperationAdmissionOutcome, EpisodeProviderTokenLimit, EpisodeProviderTokenLimitError,
     EpisodeStepAuthority, EpisodeStepLimit, EpisodeToolOperationLimit, EpisodeValueError,
-    admit_episode_operations, advance_agent_episode, open_agent_episode, prepare_episode_step,
-    prepare_native_episode_step, recover_agent_episode,
+    PreviousEpisodeStepV1, admit_episode_operations, advance_agent_episode, open_agent_episode,
+    prepare_episode_step, prepare_native_episode_step, recover_agent_episode,
 };
 pub use episode_driver::{
-    AgentEpisodeDriverCompletionV1, AgentEpisodeDriverError, AgentEpisodeDriverOutcomeV1,
+    AgentEpisodeDriverCompletionV1, AgentEpisodeDriverError, AgentEpisodeDriverStepOutcomeV1,
     AgentProfileEpisodeOutcomeV1, AgentStepCapabilityGrantV1, AgentWorkerOperationRequestV1,
-    AgentWorkerRequestV1, FrozenAgentEpisodeDriverV1, drive_agent_episode,
+    AgentWorkerRequestV1, FrozenAgentEpisodeDriverV1, drive_agent_episode_step,
 };
 pub use http_transport::{HttpModelTransport, HttpTransportConfigError};
 pub use metering::{

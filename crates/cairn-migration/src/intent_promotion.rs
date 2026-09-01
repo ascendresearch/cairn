@@ -3,10 +3,11 @@
 use std::{fmt, str::FromStr};
 
 use crate::{
-    AuthoritativeIntentClaimV1, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
-    IntentRecoveryInputV1, MigrationIntentContractArtifact, SirCallerClaimId, SirHypothesisId,
-    SirIntentHypothesisSetProposalArtifact, UserIntentDecisionRequestArtifact,
-    UserIntentDecisionRequestV1, derive_user_intent_decision_requests,
+    AuthoritativeIntentClaimV1, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputArtifact, IntentRecoveryInputV1, MigrationIntentContractArtifact,
+    SirCallerClaimId, SirHypothesisId, SirIntentHypothesisSetProposalArtifact,
+    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
+    derive_user_intent_decision_requests,
 };
 use cairn_protocol::{ContentId, ContentType, SchemaVersion, TaskId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -384,6 +385,29 @@ impl<'de> Deserialize<'de> for UserIntentDecisionV1 {
     }
 }
 
+/// One mechanically admitted answer in an exact administrator decision set.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdmittedIntentDecisionV1 {
+    request: ContentId<UserIntentDecisionRequestArtifact>,
+    authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
+    user_decision: ContentId<UserIntentDecisionArtifact>,
+    selected_hypothesis: Option<SirHypothesisId>,
+    admitted_claim: AuthoritativeIntentClaimV1,
+}
+
+impl AdmittedIntentDecisionV1 {
+    #[must_use]
+    pub const fn request(&self) -> ContentId<UserIntentDecisionRequestArtifact> {
+        self.request
+    }
+
+    #[must_use]
+    pub const fn admitted_claim(&self) -> &AuthoritativeIntentClaimV1 {
+        &self.admitted_claim
+    }
+}
+
 /// Immutable first admitted intent contract.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MigrationIntentContractV1 {
@@ -391,11 +415,8 @@ pub struct MigrationIntentContractV1 {
     task_id: TaskId,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
-    request: ContentId<UserIntentDecisionRequestArtifact>,
-    authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
-    user_decision: ContentId<UserIntentDecisionArtifact>,
-    selected_hypothesis: Option<SirHypothesisId>,
-    admitted_claim: AuthoritativeIntentClaimV1,
+    decision_requests: ContentId<crate::IntentDecisionRequestBatchArtifact>,
+    decisions: Vec<AdmittedIntentDecisionV1>,
 }
 
 #[derive(Deserialize)]
@@ -405,11 +426,8 @@ struct MigrationIntentContractWire {
     task_id: TaskId,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
     proposal: ContentId<SirIntentHypothesisSetProposalArtifact>,
-    request: ContentId<UserIntentDecisionRequestArtifact>,
-    authority_grant: ContentId<UserIntentAuthorityGrantArtifact>,
-    user_decision: ContentId<UserIntentDecisionArtifact>,
-    selected_hypothesis: Option<SirHypothesisId>,
-    admitted_claim: AuthoritativeIntentClaimV1,
+    decision_requests: ContentId<crate::IntentDecisionRequestBatchArtifact>,
+    decisions: Vec<AdmittedIntentDecisionV1>,
 }
 
 impl MigrationIntentContractV1 {
@@ -417,6 +435,16 @@ impl MigrationIntentContractV1 {
         if self.schema_version != schema_v1() {
             return Err(IntentPromotionError::InvalidStructure(
                 "migration intent contract schema",
+            ));
+        }
+        let unique_requests = self
+            .decisions
+            .iter()
+            .map(|decision| decision.request().to_wire())
+            .collect::<std::collections::BTreeSet<_>>();
+        if self.decisions.is_empty() || unique_requests.len() != self.decisions.len() {
+            return Err(IntentPromotionError::InvalidStructure(
+                "admitted intent decision order",
             ));
         }
         Ok(())
@@ -449,23 +477,20 @@ impl MigrationIntentContractV1 {
     }
 
     #[must_use]
-    pub const fn request(&self) -> ContentId<UserIntentDecisionRequestArtifact> {
-        self.request
+    pub const fn decision_requests(&self) -> ContentId<crate::IntentDecisionRequestBatchArtifact> {
+        self.decision_requests
     }
 
     #[must_use]
-    pub const fn authority_grant(&self) -> ContentId<UserIntentAuthorityGrantArtifact> {
-        self.authority_grant
+    pub fn decisions(&self) -> &[AdmittedIntentDecisionV1] {
+        &self.decisions
     }
 
     #[must_use]
-    pub const fn user_decision(&self) -> ContentId<UserIntentDecisionArtifact> {
-        self.user_decision
-    }
-
-    #[must_use]
-    pub const fn admitted_claim(&self) -> &AuthoritativeIntentClaimV1 {
-        &self.admitted_claim
+    pub fn admitted_claims(&self) -> impl ExactSizeIterator<Item = &AuthoritativeIntentClaimV1> {
+        self.decisions
+            .iter()
+            .map(AdmittedIntentDecisionV1::admitted_claim)
     }
 }
 
@@ -478,11 +503,8 @@ impl TryFrom<MigrationIntentContractWire> for MigrationIntentContractV1 {
             task_id: wire.task_id,
             recovery_input: wire.recovery_input,
             proposal: wire.proposal,
-            request: wire.request,
-            authority_grant: wire.authority_grant,
-            user_decision: wire.user_decision,
-            selected_hypothesis: wire.selected_hypothesis,
-            admitted_claim: wire.admitted_claim,
+            decision_requests: wire.decision_requests,
+            decisions: wire.decisions,
         };
         value.validate()?;
         Ok(value)
@@ -505,7 +527,7 @@ impl<'de> Deserialize<'de> for MigrationIntentContractV1 {
 pub struct RestrictedIntentAdmissionDecisionV1 {
     schema_version: SchemaVersion,
     mechanism: ContentId<IntentUserDecisionGateArtifact>,
-    user_decision: ContentId<UserIntentDecisionArtifact>,
+    user_decisions: Vec<ContentId<UserIntentDecisionArtifact>>,
     contract: ContentId<MigrationIntentContractArtifact>,
 }
 
@@ -514,7 +536,7 @@ pub struct RestrictedIntentAdmissionDecisionV1 {
 struct RestrictedIntentAdmissionDecisionWire {
     schema_version: SchemaVersion,
     mechanism: ContentId<IntentUserDecisionGateArtifact>,
-    user_decision: ContentId<UserIntentDecisionArtifact>,
+    user_decisions: Vec<ContentId<UserIntentDecisionArtifact>>,
     contract: ContentId<MigrationIntentContractArtifact>,
 }
 
@@ -527,7 +549,16 @@ impl RestrictedIntentAdmissionDecisionV1 {
     pub fn identity(
         &self,
     ) -> Result<ContentId<RestrictedIntentAdmissionDecisionArtifact>, IntentPromotionError> {
-        if self.schema_version != schema_v1() || self.mechanism != intent_user_decision_gate_id()? {
+        let unique_decisions = self
+            .user_decisions
+            .iter()
+            .map(ContentId::to_wire)
+            .collect::<std::collections::BTreeSet<_>>();
+        if self.schema_version != schema_v1()
+            || self.mechanism != intent_user_decision_gate_id()?
+            || self.user_decisions.is_empty()
+            || unique_decisions.len() != self.user_decisions.len()
+        {
             return Err(IntentPromotionError::InvalidStructure(
                 "restricted intent admission decision",
             ));
@@ -543,7 +574,7 @@ impl TryFrom<RestrictedIntentAdmissionDecisionWire> for RestrictedIntentAdmissio
         let value = Self {
             schema_version: wire.schema_version,
             mechanism: wire.mechanism,
-            user_decision: wire.user_decision,
+            user_decisions: wire.user_decisions,
             contract: wire.contract,
         };
         let _ = value.identity()?;
@@ -657,40 +688,30 @@ impl PreparedIntentAdmissionV1 {
     }
 }
 
-/// Mechanically promotes one exact task-authority decision.
+/// One exact request, grant, and answer offered to the mechanical promotion gate.
+pub struct IntentDecisionMaterialV1<'a> {
+    pub request: &'a UserIntentDecisionRequestV1,
+    pub grant: &'a UserIntentAuthorityGrantV1,
+    pub decision: &'a UserIntentDecisionV1,
+}
+
+/// Mechanically promotes one complete task-authority decision set.
 ///
 /// # Errors
 ///
 /// Fails closed on any identity, task, request, option, authority-scope, or caller-claim mismatch.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear mechanical gate keeps the complete administrator decision-set binding visible"
+)]
 pub fn promote_user_intent(
     proposal_id: ContentId<SirIntentHypothesisSetProposalArtifact>,
     proposal: &IntentHypothesisSetProposalV1,
     recovery_input_id: ContentId<IntentRecoveryInputArtifact>,
     recovery_input: &IntentRecoveryInputV1,
-    request_id: ContentId<UserIntentDecisionRequestArtifact>,
-    request: &UserIntentDecisionRequestV1,
-    grant_id: ContentId<UserIntentAuthorityGrantArtifact>,
-    grant: &UserIntentAuthorityGrantV1,
-    decision_id: ContentId<UserIntentDecisionArtifact>,
-    decision: &UserIntentDecisionV1,
+    requests: &IntentDecisionRequestBatchV1,
+    decisions: &[IntentDecisionMaterialV1<'_>],
 ) -> Result<PreparedIntentAdmissionV1, IntentPromotionError> {
-    require_identity(grant.identity()?, grant_id, "authority grant")?;
-    require_identity(decision.identity()?, decision_id, "user decision")?;
-    require_identity(
-        request.identity().map_err(migration_error)?,
-        request_id,
-        "decision request",
-    )?;
-    if decision.request != request_id || decision.authority_grant != grant_id {
-        return Err(IntentPromotionError::Binding("decision input"));
-    }
-    if grant.task_id != recovery_input.task_id()
-        || request.proposal() != proposal_id
-        || request.recovery_input() != recovery_input_id
-    {
-        return Err(IntentPromotionError::Binding("task/proposal/request"));
-    }
     let derived = derive_user_intent_decision_requests(
         proposal_id,
         proposal,
@@ -698,74 +719,96 @@ pub fn promote_user_intent(
         recovery_input,
     )
     .map_err(migration_error)?;
-    if !derived.requests().iter().any(|candidate| {
-        candidate
-            .identity()
-            .is_ok_and(|candidate_id| candidate_id == request_id && candidate == request)
-    }) {
-        return Err(IntentPromotionError::Binding("derived decision request"));
+    if &derived != requests || decisions.len() != requests.requests().len() {
+        return Err(IntentPromotionError::Binding(
+            "complete decision request batch",
+        ));
     }
-
-    let (selected_hypothesis, admitted_claim) = match &decision.response {
-        UserIntentDecisionResponseV1::SelectHypothesis { hypothesis } => {
-            if !request
-                .options()
-                .iter()
-                .any(|option| option.hypothesis() == hypothesis)
-            {
-                return Err(IntentPromotionError::UnofferedHypothesis);
+    let mut admitted = Vec::with_capacity(decisions.len());
+    for (expected, material) in requests.requests().iter().zip(decisions) {
+        if material.request != expected {
+            return Err(IntentPromotionError::Binding("decision request order"));
+        }
+        let request_id = material.request.identity().map_err(migration_error)?;
+        let grant_id = material.grant.identity()?;
+        let decision_id = material.decision.identity()?;
+        if material.decision.request != request_id
+            || material.decision.authority_grant != grant_id
+            || material.grant.task_id != recovery_input.task_id()
+            || material.request.proposal() != proposal_id
+            || material.request.recovery_input() != recovery_input_id
+        {
+            return Err(IntentPromotionError::Binding("decision input"));
+        }
+        let (selected_hypothesis, admitted_claim) = match &material.decision.response {
+            UserIntentDecisionResponseV1::SelectHypothesis { hypothesis } => {
+                if !material
+                    .request
+                    .options()
+                    .iter()
+                    .any(|option| option.hypothesis() == hypothesis)
+                {
+                    return Err(IntentPromotionError::UnofferedHypothesis);
+                }
+                let selected = proposal
+                    .submission()
+                    .hypotheses()
+                    .iter()
+                    .find(|candidate| candidate.id() == hypothesis)
+                    .ok_or(IntentPromotionError::UnofferedHypothesis)?;
+                let operation = crate::OperationIntentV1::new(
+                    scoped_caller_claims(material.grant, recovery_input)?,
+                    selected.layer(),
+                    selected.claim().clone(),
+                    selected.domain().clone(),
+                )
+                .map_err(|error| IntentPromotionError::Migration(error.to_string()))?;
+                (
+                    Some(hypothesis.clone()),
+                    AuthoritativeIntentClaimV1::new(operation),
+                )
             }
-            let selected = proposal
-                .submission()
-                .hypotheses()
-                .iter()
-                .find(|candidate| candidate.id() == hypothesis)
-                .ok_or(IntentPromotionError::UnofferedHypothesis)?;
-            let caller_claims = scoped_caller_claims(grant, recovery_input)?;
-            let operation = crate::OperationIntentV1::new(
-                caller_claims,
-                selected.layer(),
-                selected.claim().clone(),
-                selected.domain().clone(),
-            )
-            .map_err(|error| IntentPromotionError::Migration(error.to_string()))?;
-            (
-                Some(hypothesis.clone()),
-                AuthoritativeIntentClaimV1::new(operation),
-            )
-        }
-        UserIntentDecisionResponseV1::ProvideAuthoritativeClaim { claim } => {
-            let operation = crate::OperationIntentV1::new(
-                scoped_caller_claims(grant, recovery_input)?,
-                claim.layer(),
-                claim.semantics().clone(),
-                claim.domain().clone(),
-            )
-            .map_err(|error| IntentPromotionError::Migration(error.to_string()))?;
-            (None, AuthoritativeIntentClaimV1::new(operation))
-        }
-        UserIntentDecisionResponseV1::KeepUnknown => {
-            return Err(IntentPromotionError::KeptUnknown);
-        }
-    };
-    validate_authority_scope(grant, recovery_input, &admitted_claim)?;
+            UserIntentDecisionResponseV1::ProvideAuthoritativeClaim { claim } => {
+                let operation = crate::OperationIntentV1::new(
+                    scoped_caller_claims(material.grant, recovery_input)?,
+                    claim.layer(),
+                    claim.semantics().clone(),
+                    claim.domain().clone(),
+                )
+                .map_err(|error| IntentPromotionError::Migration(error.to_string()))?;
+                (None, AuthoritativeIntentClaimV1::new(operation))
+            }
+            UserIntentDecisionResponseV1::KeepUnknown => {
+                return Err(IntentPromotionError::KeptUnknown);
+            }
+        };
+        validate_authority_scope(material.grant, recovery_input, &admitted_claim)?;
+        admitted.push(AdmittedIntentDecisionV1 {
+            request: request_id,
+            authority_grant: grant_id,
+            user_decision: decision_id,
+            selected_hypothesis,
+            admitted_claim,
+        });
+    }
 
     let contract = MigrationIntentContractV1 {
         schema_version: schema_v1(),
         task_id: recovery_input.task_id(),
         recovery_input: recovery_input_id,
         proposal: proposal_id,
-        request: request_id,
-        authority_grant: grant_id,
-        user_decision: decision_id,
-        selected_hypothesis,
-        admitted_claim,
+        decision_requests: requests.identity().map_err(migration_error)?,
+        decisions: admitted,
     };
     contract.validate()?;
     let restricted_decision = RestrictedIntentAdmissionDecisionV1 {
         schema_version: schema_v1(),
         mechanism: intent_user_decision_gate_id()?,
-        user_decision: decision_id,
+        user_decisions: contract
+            .decisions()
+            .iter()
+            .map(|decision| decision.user_decision)
+            .collect(),
         contract: contract.identity()?,
     };
     let restricted_decision_id = restricted_decision.identity()?;
@@ -874,17 +917,6 @@ fn derive_id<T: ContentType>(value: &impl Serialize) -> Result<ContentId<T>, Int
 
 fn schema_v1() -> SchemaVersion {
     SchemaVersion::new(1).expect("current V1 is a valid non-zero schema version")
-}
-
-fn require_identity<T: ContentType>(
-    actual: ContentId<T>,
-    expected: ContentId<T>,
-    name: &'static str,
-) -> Result<(), IntentPromotionError> {
-    if actual != expected {
-        return Err(IntentPromotionError::IdentityMismatch(name));
-    }
-    Ok(())
 }
 
 fn migration_error(error: impl fmt::Display) -> IntentPromotionError {

@@ -190,6 +190,8 @@ pub enum TaskAttentionV1 {
     OracleWorkspace,
     OracleMechanisms,
     OracleExperiment,
+    AgentExecution,
+    WorkflowFailure,
     Reconciliation,
 }
 

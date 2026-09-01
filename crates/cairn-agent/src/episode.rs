@@ -327,6 +327,28 @@ pub struct EpisodeStepAuthority {
     step: AgentStep,
     model_attempt_id: ModelAttemptId,
     expected_pending_results: Vec<ContentId<OperationResult>>,
+    previous_step: Option<PreviousEpisodeStepV1>,
+}
+
+/// Durable predecessor needed to reconstruct a protocol-native continuation at a step boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreviousEpisodeStepV1 {
+    step_id: StepId,
+    model_attempt_id: ModelAttemptId,
+}
+
+impl PreviousEpisodeStepV1 {
+    /// Returns the preceding durable step identity.
+    #[must_use]
+    pub const fn step_id(self) -> StepId {
+        self.step_id
+    }
+
+    /// Returns the preceding model attempt identity.
+    #[must_use]
+    pub const fn model_attempt_id(self) -> ModelAttemptId {
+        self.model_attempt_id
+    }
 }
 
 impl EpisodeStepAuthority {
@@ -352,6 +374,12 @@ impl EpisodeStepAuthority {
     #[must_use]
     pub fn expected_pending_results(&self) -> &[ContentId<OperationResult>] {
         &self.expected_pending_results
+    }
+
+    /// Returns the predecessor whose recorded native continuation produced this step.
+    #[must_use]
+    pub const fn previous_step(&self) -> Option<PreviousEpisodeStepV1> {
+        self.previous_step
     }
 }
 
@@ -567,6 +595,7 @@ pub fn open_agent_episode<E: EventStore>(
             first_step_id,
             first_model_attempt_id,
             Vec::new(),
+            None,
         );
     }
     let event = episode_fact(EPISODE_OPENED, None, observed_at, &payload)?;
@@ -595,6 +624,7 @@ pub fn open_agent_episode<E: EventStore>(
         first_step_id,
         first_model_attempt_id,
         Vec::new(),
+        None,
     )
 }
 
@@ -617,6 +647,7 @@ pub fn prepare_episode_step<E: EventStore, C: cairn_record::ContentStore>(
         step,
         model_attempt_id,
         expected_pending_results,
+        previous_step: _,
     } = authority;
     if decision.pending_results != expected_pending_results {
         return invalid_episode("step input does not carry the episode's ordered pending results");
@@ -653,6 +684,7 @@ pub fn prepare_native_episode_step<E: EventStore, C: cairn_record::ContentStore>
         step,
         model_attempt_id,
         expected_pending_results,
+        previous_step: _,
     } = authority;
     if decision.pending_results != expected_pending_results {
         return invalid_episode("step input does not carry the episode's ordered pending results");
@@ -885,6 +917,12 @@ pub fn recover_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             step,
             model_attempt_id: current.model_attempt_id,
             expected_pending_results: current.expected_pending_results.clone(),
+            previous_step: projection.steps.iter().rev().nth(1).map(|previous| {
+                PreviousEpisodeStepV1 {
+                    step_id: previous.step_id,
+                    model_attempt_id: previous.model_attempt_id,
+                }
+            }),
         }))
     } else {
         Ok(AgentEpisodeState::Active {
@@ -970,6 +1008,15 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
             current.step_id,
             current.model_attempt_id,
             current.expected_pending_results.clone(),
+            projection
+                .steps
+                .iter()
+                .rev()
+                .nth(1)
+                .map(|previous| PreviousEpisodeStepV1 {
+                    step_id: previous.step_id,
+                    model_attempt_id: previous.model_attempt_id,
+                }),
         )
         .map(EpisodeAdvance::NextStep);
     }
@@ -1068,6 +1115,10 @@ pub fn advance_agent_episode<E: EventStore, C: cairn_record::ContentStore>(
         next_step_id,
         next_model_attempt_id,
         pending_results,
+        Some(PreviousEpisodeStepV1 {
+            step_id: current.step_id,
+            model_attempt_id: current.model_attempt_id,
+        }),
     )
     .map(EpisodeAdvance::NextStep)
 }
@@ -1214,12 +1265,14 @@ fn step_authority(
     step_id: StepId,
     model_attempt_id: ModelAttemptId,
     expected_pending_results: Vec<ContentId<OperationResult>>,
+    previous_step: Option<PreviousEpisodeStepV1>,
 ) -> Result<EpisodeStepAuthority, EpisodeCoordinatorError> {
     Ok(EpisodeStepAuthority {
         episode_id,
         step: AgentStep::new(step_id)?,
         model_attempt_id,
         expected_pending_results,
+        previous_step,
     })
 }
 

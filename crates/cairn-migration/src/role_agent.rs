@@ -1,8 +1,8 @@
 use cairn_agent::{
     AgentContextExposureV1, AgentHookProfileName, AgentHookProfileVersion, AgentLoopContext,
-    AgentLoopDirectiveV1, AgentLoopHooks, AgentLoopInitializationV1, AgentLoopRegistryError,
-    AgentLoopStartV1, AgentRegistries, AgentRoleName, AgentStepAccessV1, KnowledgeSourceName,
-    SkillName, ToolName,
+    AgentLoopDirectiveV1, AgentLoopExhaustionReasonV1, AgentLoopHooks, AgentLoopInitializationV1,
+    AgentLoopRegistryError, AgentLoopStartV1, AgentRegistries, AgentRoleName, AgentStepAccessV1,
+    KnowledgeSourceName, SkillName, ToolName,
 };
 use cairn_protocol::{ContentId, TaskId};
 use serde::Serialize;
@@ -11,9 +11,13 @@ use thiserror::Error;
 use crate::{
     CandidateAdmissionEvidenceArtifact, CandidateOracleContractArtifact, CandidateProposalArtifact,
     CandidateProposalV1, CandidateWorkspaceArtifact, IntentHypothesisSetProposalV1,
-    IntentRecoveryInputArtifact, MigrationIntentContractArtifact, OracleAdmissionEvidenceArtifact,
-    OracleAdmissionOutcomeArtifact, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleWorkspaceArtifact, SirTaskBundleArtifact,
+    IntentRecoveryInputArtifact, MigrationIntentContractArtifact, OracleAdmissionOutcomeArtifact,
+    OracleDimensionArtifact, OracleDimensionItemSetProposalArtifact,
+    OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewArtifact,
+    OracleDimensionItemSetReviewV1, OracleItemArtifact, OracleItemDraftArtifact, OracleItemDraftV1,
+    OracleItemReviewArtifact, OracleItemReviewV1, OraclePortfolioCoherenceReviewArtifact,
+    OraclePortfolioCoherenceReviewV1, OraclePortfolioProposalArtifact,
+    OracleRevisionRequestArtifact, OracleWorkspaceArtifact, SirTaskBundleArtifact,
 };
 
 const HOOK_VERSION: &str = "migration-role-hooks-v1";
@@ -24,13 +28,17 @@ const HOOK_VERSION: &str = "migration-role-hooks-v1";
 pub enum MigrationAgentToolV1 {
     ReadTaskArtifact,
     SubmitSir,
-    ReadOracleWorkspace,
-    SearchExternalTests,
-    RequestOracleExperiment,
-    SubmitOraclePortfolio,
-    SubmitOracleReview,
-    ReadOracleControlEvidence,
-    SubmitOracleRevision,
+    ReadOracleDimension,
+    SubmitOracleDimensionItems,
+    ReadOracleDimensionItems,
+    SubmitOracleDimensionItemsReview,
+    ReadOracleItemConversation,
+    ReadOracleControlDiagnostic,
+    SubmitOracleItemDraft,
+    ReadOracleItemDraft,
+    SubmitOracleItemReview,
+    ReadOraclePortfolio,
+    SubmitOraclePortfolioCoherenceReview,
     ReadAdmittedOracle,
     SubmitCandidate,
     SubmitCandidateReview,
@@ -48,13 +56,21 @@ impl MigrationAgentToolV1 {
         ToolName::new(match self {
             Self::ReadTaskArtifact => "migration-read-task-artifact",
             Self::SubmitSir => "migration-submit-sir",
-            Self::ReadOracleWorkspace => "migration-read-oracle-workspace",
-            Self::SearchExternalTests => "migration-search-external-tests",
-            Self::RequestOracleExperiment => "migration-request-oracle-experiment",
-            Self::SubmitOraclePortfolio => "migration-submit-oracle-portfolio",
-            Self::SubmitOracleReview => "migration-submit-oracle-review",
-            Self::ReadOracleControlEvidence => "migration-read-oracle-control-evidence",
-            Self::SubmitOracleRevision => "migration-submit-oracle-revision",
+            Self::ReadOracleDimension => "migration-read-oracle-dimension",
+            Self::SubmitOracleDimensionItems => "migration-submit-oracle-dimension-items",
+            Self::ReadOracleDimensionItems => "migration-read-oracle-dimension-items",
+            Self::SubmitOracleDimensionItemsReview => {
+                "migration-submit-oracle-dimension-items-review"
+            }
+            Self::ReadOracleItemConversation => "migration-read-oracle-item-conversation",
+            Self::ReadOracleControlDiagnostic => "migration-read-oracle-control-diagnostic",
+            Self::SubmitOracleItemDraft => "migration-submit-oracle-item-draft",
+            Self::ReadOracleItemDraft => "migration-read-oracle-item-draft",
+            Self::SubmitOracleItemReview => "migration-submit-oracle-item-review",
+            Self::ReadOraclePortfolio => "migration-read-oracle-portfolio",
+            Self::SubmitOraclePortfolioCoherenceReview => {
+                "migration-submit-oracle-portfolio-coherence-review"
+            }
             Self::ReadAdmittedOracle => "migration-read-admitted-oracle",
             Self::SubmitCandidate => "migration-submit-candidate",
             Self::SubmitCandidateReview => "migration-submit-candidate-review",
@@ -89,6 +105,10 @@ macro_rules! role_context {
             /// # Errors
             ///
             /// Returns an error if the canonical context binding cannot be encoded or identified.
+            #[allow(
+                clippy::too_many_arguments,
+                reason = "role context constructors expose every semantically distinct lineage binding"
+            )]
             pub fn new(task_id: TaskId, $($field: $type),+) -> Result<Self, MigrationAgentRoleError> {
                 #[derive(Serialize)]
                 struct Binding<'a> {
@@ -129,18 +149,35 @@ role_context!(SirAgentContextV1 {
     task_bundle: ContentId<SirTaskBundleArtifact>,
     recovery_input: ContentId<IntentRecoveryInputArtifact>,
 });
-role_context!(OracleExplorationAgentContextV1 {
+role_context!(OracleDimensionItemDiscoveryAgentContextV1 {
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
     workspace: ContentId<OracleWorkspaceArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
+    previous_item_set: Option<ContentId<OracleDimensionItemSetProposalArtifact>>,
+    review_feedback: Option<ContentId<OracleDimensionItemSetReviewArtifact>>,
 });
-role_context!(OracleReviewAgentContextV1 {
+role_context!(OracleDimensionItemSetReviewerAgentContextV1 {
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
-    proposal: ContentId<OraclePortfolioProposalArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
+    proposal: ContentId<OracleDimensionItemSetProposalArtifact>,
 });
-role_context!(OracleRevisionAgentContextV1 {
+role_context!(OracleItemDeveloperAgentContextV1 {
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
-    proposal: ContentId<OraclePortfolioProposalArtifact>,
-    control_evidence: ContentId<OracleAdmissionEvidenceArtifact>,
+    workspace: ContentId<OracleWorkspaceArtifact>,
+    item: ContentId<OracleItemArtifact>,
+    previous_draft: Option<ContentId<OracleItemDraftArtifact>>,
+    review_feedback: Option<ContentId<OracleItemReviewArtifact>>,
+    coherence_feedback: Option<ContentId<OraclePortfolioCoherenceReviewArtifact>>,
+    admission_feedback: Option<ContentId<OracleRevisionRequestArtifact>>,
+});
+role_context!(OracleItemReviewerAgentContextV1 {
+    admitted_intent: ContentId<MigrationIntentContractArtifact>,
+    item: ContentId<OracleItemArtifact>,
+    draft: ContentId<OracleItemDraftArtifact>,
+});
+role_context!(OraclePortfolioCoherenceReviewerAgentContextV1 {
+    admitted_intent: ContentId<MigrationIntentContractArtifact>,
+    portfolio: ContentId<OraclePortfolioProposalArtifact>,
 });
 role_context!(CandidateExplorationAgentContextV1 {
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
@@ -161,6 +198,7 @@ role_context!(CandidateRevisionAgentContextV1 {
 /// Typed observation returned by a durable role step to its product hook.
 pub enum MigrationRoleStepObservationV1<T> {
     Continue,
+    Exhausted(AgentLoopExhaustionReasonV1),
     Complete(T),
 }
 
@@ -306,6 +344,9 @@ macro_rules! role_hooks {
             ) -> Result<AgentLoopDirectiveV1<Self::Output>, Self::Error> {
                 Ok(match observation {
                     MigrationRoleStepObservationV1::Continue => AgentLoopDirectiveV1::Continue,
+                    MigrationRoleStepObservationV1::Exhausted(reason) => {
+                        AgentLoopDirectiveV1::Exhausted(reason)
+                    }
                     MigrationRoleStepObservationV1::Complete(output) => {
                         AgentLoopDirectiveV1::Complete(output)
                     }
@@ -335,40 +376,63 @@ role_hooks!(
     ]
 );
 role_hooks!(
-    OracleExplorationRoleHooksV1,
-    context = OracleExplorationAgentContextV1,
-    output = OraclePortfolioProposalV1,
-    role = "migration-oracle-explorer",
-    profile = "migration-oracle-exploration-hooks",
+    OracleDimensionItemSetReviewerRoleHooksV1,
+    context = OracleDimensionItemSetReviewerAgentContextV1,
+    output = OracleDimensionItemSetReviewV1,
+    role = "migration-oracle-item-set-reviewer",
+    profile = "migration-oracle-item-set-review-hooks",
     tools = [
         MigrationAgentToolV1::ReadTaskArtifact,
-        MigrationAgentToolV1::ReadOracleWorkspace,
-        MigrationAgentToolV1::SearchExternalTests,
-        MigrationAgentToolV1::RequestOracleExperiment,
-        MigrationAgentToolV1::SubmitOraclePortfolio,
+        MigrationAgentToolV1::ReadOracleDimensionItems,
+        MigrationAgentToolV1::SubmitOracleDimensionItemsReview,
     ]
 );
 role_hooks!(
-    OracleReviewRoleHooksV1,
-    context = OracleReviewAgentContextV1,
-    output = ContentId<OraclePortfolioProposalArtifact>,
-    role = "migration-oracle-reviewer",
-    profile = "migration-oracle-review-hooks",
+    OracleDimensionItemDiscoveryRoleHooksV1,
+    context = OracleDimensionItemDiscoveryAgentContextV1,
+    output = OracleDimensionItemSetProposalV1,
+    role = "migration-oracle-item-discoverer",
+    profile = "migration-oracle-item-discovery-hooks",
     tools = [
-        MigrationAgentToolV1::ReadOracleWorkspace,
-        MigrationAgentToolV1::SubmitOracleReview,
+        MigrationAgentToolV1::ReadTaskArtifact,
+        MigrationAgentToolV1::ReadOracleDimension,
+        MigrationAgentToolV1::SubmitOracleDimensionItems,
     ]
 );
 role_hooks!(
-    OracleRevisionRoleHooksV1,
-    context = OracleRevisionAgentContextV1,
-    output = OraclePortfolioProposalV1,
-    role = "migration-oracle-reviser",
-    profile = "migration-oracle-revision-hooks",
+    OracleItemDeveloperRoleHooksV1,
+    context = OracleItemDeveloperAgentContextV1,
+    output = OracleItemDraftV1,
+    role = "migration-oracle-item-developer",
+    profile = "migration-oracle-item-development-hooks",
     tools = [
-        MigrationAgentToolV1::ReadOracleWorkspace,
-        MigrationAgentToolV1::ReadOracleControlEvidence,
-        MigrationAgentToolV1::SubmitOracleRevision,
+        MigrationAgentToolV1::ReadTaskArtifact,
+        MigrationAgentToolV1::ReadOracleItemConversation,
+        MigrationAgentToolV1::ReadOracleControlDiagnostic,
+        MigrationAgentToolV1::SubmitOracleItemDraft,
+    ]
+);
+role_hooks!(
+    OracleItemReviewerRoleHooksV1,
+    context = OracleItemReviewerAgentContextV1,
+    output = OracleItemReviewV1,
+    role = "migration-oracle-item-reviewer",
+    profile = "migration-oracle-item-review-hooks",
+    tools = [
+        MigrationAgentToolV1::ReadTaskArtifact,
+        MigrationAgentToolV1::ReadOracleItemDraft,
+        MigrationAgentToolV1::SubmitOracleItemReview,
+    ]
+);
+role_hooks!(
+    OraclePortfolioCoherenceReviewerRoleHooksV1,
+    context = OraclePortfolioCoherenceReviewerAgentContextV1,
+    output = OraclePortfolioCoherenceReviewV1,
+    role = "migration-oracle-portfolio-coherence-reviewer",
+    profile = "migration-oracle-portfolio-coherence-review-hooks",
+    tools = [
+        MigrationAgentToolV1::ReadOraclePortfolio,
+        MigrationAgentToolV1::SubmitOraclePortfolioCoherenceReview,
     ]
 );
 role_hooks!(
@@ -453,15 +517,73 @@ mod tests {
     }
 
     #[test]
+    fn oracle_item_developer_context_binds_exact_feedback_lineage() {
+        let task_id = TaskId::new();
+        let intent = ContentId::derive(b"intent").expect("intent identity");
+        let workspace = ContentId::derive(b"workspace").expect("workspace identity");
+        let item = ContentId::derive(b"item").expect("item identity");
+        let draft = ContentId::derive(b"draft").expect("draft identity");
+        let first_review = ContentId::derive(b"review-one").expect("review identity");
+        let second_review = ContentId::derive(b"review-two").expect("review identity");
+        let admission = ContentId::derive(b"admission-feedback").expect("admission identity");
+        let first = OracleItemDeveloperAgentContextV1::new(
+            task_id,
+            intent,
+            workspace,
+            item,
+            Some(draft),
+            Some(first_review),
+            None,
+            None,
+        )
+        .expect("first context");
+        let second = OracleItemDeveloperAgentContextV1::new(
+            task_id,
+            intent,
+            workspace,
+            item,
+            Some(draft),
+            Some(second_review),
+            None,
+            None,
+        )
+        .expect("second context");
+        let admission_revision = OracleItemDeveloperAgentContextV1::new(
+            task_id,
+            intent,
+            workspace,
+            item,
+            Some(draft),
+            None,
+            None,
+            Some(admission),
+        )
+        .expect("Admission revision context");
+
+        assert_ne!(first.context_id(), second.context_id());
+        assert_ne!(first.context_id(), admission_revision.context_id());
+        assert_eq!(first.item(), item);
+        assert_eq!(first.previous_draft(), Some(draft));
+        assert_eq!(first.review_feedback(), Some(first_review));
+        assert_eq!(first.admission_feedback(), None);
+        assert_eq!(admission_revision.admission_feedback(), Some(admission));
+    }
+
+    #[test]
     fn every_role_has_distinct_identity_and_context_selected_tools() {
         let sir = SirRoleHooksV1::new().expect("SIR hooks");
-        let oracle = OracleExplorationRoleHooksV1::new().expect("Oracle hooks");
-        let oracle_review = OracleReviewRoleHooksV1::new().expect("Oracle review hooks");
+        let item_discovery =
+            OracleDimensionItemDiscoveryRoleHooksV1::new().expect("item discovery hooks");
+        let item_set_reviewer =
+            OracleDimensionItemSetReviewerRoleHooksV1::new().expect("item-set reviewer hooks");
+        let item_developer = OracleItemDeveloperRoleHooksV1::new().expect("item developer hooks");
+        let item_reviewer = OracleItemReviewerRoleHooksV1::new().expect("item reviewer hooks");
         let candidate = CandidateExplorationRoleHooksV1::new().expect("Candidate hooks");
         let roles = [
             MigrationRoleHooksV1::role(&sir).to_string(),
-            MigrationRoleHooksV1::role(&oracle).to_string(),
-            MigrationRoleHooksV1::role(&oracle_review).to_string(),
+            MigrationRoleHooksV1::role(&item_discovery).to_string(),
+            MigrationRoleHooksV1::role(&item_developer).to_string(),
+            MigrationRoleHooksV1::role(&item_reviewer).to_string(),
             MigrationRoleHooksV1::role(&candidate).to_string(),
         ];
         assert_eq!(roles.iter().collect::<BTreeSet<_>>().len(), roles.len());
@@ -473,12 +595,16 @@ mod tests {
             ]
         );
         assert!(
-            MigrationRoleHooksV1::required_tools(&oracle)
-                .contains(&MigrationAgentToolV1::RequestOracleExperiment)
+            MigrationRoleHooksV1::required_tools(&item_reviewer)
+                .contains(&MigrationAgentToolV1::ReadTaskArtifact)
         );
         assert!(
-            !MigrationRoleHooksV1::required_tools(&oracle_review)
-                .contains(&MigrationAgentToolV1::RequestOracleExperiment)
+            MigrationRoleHooksV1::required_tools(&item_developer)
+                .contains(&MigrationAgentToolV1::ReadOracleControlDiagnostic)
+        );
+        assert!(
+            MigrationRoleHooksV1::required_tools(&item_set_reviewer)
+                .contains(&MigrationAgentToolV1::ReadTaskArtifact)
         );
         assert!(
             MigrationRoleHooksV1::required_tools(&candidate)

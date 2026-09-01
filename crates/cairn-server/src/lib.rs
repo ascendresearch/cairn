@@ -251,7 +251,7 @@ pub async fn run_from_arguments(
             return Err(ServerError::Usage);
         }
         let reason = release_execution_reservation(
-            &load_config(&config_path)?,
+            &load_server_config(&config_path)?,
             reservation_id,
             &command_id,
         )?;
@@ -277,7 +277,7 @@ pub async fn run_from_arguments(
                 return Err(ServerError::Usage);
             }
             return revoke_enrollment_authority(
-                &load_config(&config_path)?,
+                &load_server_config(&config_path)?,
                 enrollment_id,
                 &command_id,
             )
@@ -307,7 +307,7 @@ pub async fn run_from_arguments(
         if arguments.next().is_some() {
             return Err(ServerError::Usage);
         }
-        let config = load_config(&config_path)?;
+        let config = load_server_config(&config_path)?;
         let bundle = create_enrollment_bundle(&config, pool, ttl_ms)?;
         let bytes = serde_json::to_vec_pretty(&bundle)
             .map_err(|error| ServerError::Configuration(error.to_string()))?;
@@ -323,7 +323,7 @@ pub async fn run_from_arguments(
         let action = arguments.next().ok_or(ServerError::Usage)?;
         let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
         let credential_id = parse_argument::<CredentialId>(arguments.next())?;
-        let config = load_config(&config_path)?;
+        let config = load_server_config(&config_path)?;
         if action == "revoke" {
             let command_id = parse_argument::<CommandId>(arguments.next())?;
             if arguments.next().is_some() {
@@ -356,7 +356,7 @@ pub async fn run_from_arguments(
         let action = arguments.next().ok_or(ServerError::Usage)?;
         let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
         let worker_id = parse_argument::<WorkerId>(arguments.next())?;
-        let config = load_config(&config_path)?;
+        let config = load_server_config(&config_path)?;
         if action == "disable" || action == "enable" {
             let command_id = parse_argument::<CommandId>(arguments.next())?;
             if arguments.next().is_some() {
@@ -399,13 +399,13 @@ pub async fn run_from_arguments(
     if arguments.next().is_some() {
         return Err(ServerError::Usage);
     }
-    run(load_config(&config_path)?).await
+    run(load_server_config(&config_path)?).await
 }
 
 fn run_registry_command(arguments: &mut impl Iterator<Item = OsString>) -> Result<(), ServerError> {
     let action = arguments.next().ok_or(ServerError::Usage)?;
     let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
-    let config = load_config(&config_path)?;
+    let config = load_server_config(&config_path)?;
     if action == "list" || action == "audit" {
         if arguments.next().is_some() {
             return Err(ServerError::Usage);
@@ -494,7 +494,14 @@ fn write_new_secret_file(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
         .map_err(|error| ServerError::Configuration(error.to_string()))
 }
 
-fn load_config(config_path: &Path) -> Result<ServerConfig, ServerError> {
+/// Loads one strict current-V1 server configuration and resolves its relative paths against the
+/// configuration file. Product composition binaries use this without teaching the server their
+/// application configuration.
+///
+/// # Errors
+///
+/// Returns a configuration error for unreadable, invalid, or non-current input.
+pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerError> {
     let mut config: ServerConfig = serde_json::from_slice(
         &std::fs::read(config_path)
             .map_err(|error| ServerError::Configuration(error.to_string()))?,

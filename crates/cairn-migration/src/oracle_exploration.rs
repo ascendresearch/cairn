@@ -14,7 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io::Cursor;
 
-use cairn_execution::{ExecutionReceiptArtifact, JobContractArtifact};
+use cairn_execution::{
+    ExecutionReceiptArtifact, ExecutionStderrArtifact, ExecutionStdoutArtifact, JobContractArtifact,
+};
 use cairn_protocol::{ContentId, ContentType, TaskId};
 use cairn_record::{ContentStore, ContentStoreError};
 use cairn_verification::{
@@ -100,7 +102,31 @@ artifact!(
     "migration.oracle-strategy-tool-catalog.v1"
 );
 artifact!(OracleWorkspaceArtifact, "migration.oracle-workspace.v1");
-artifact!(OracleWorkItemArtifact, "migration.oracle-work-item.v1");
+artifact!(OracleDimensionArtifact, "migration.oracle-dimension.v1");
+artifact!(OracleItemArtifact, "migration.oracle-item.v1");
+artifact!(
+    OracleDimensionItemSetProposalArtifact,
+    "migration.oracle-dimension-item-set-proposal.v1"
+);
+artifact!(
+    OracleDimensionItemSetReviewArtifact,
+    "migration.oracle-dimension-item-set-review.v1"
+);
+artifact!(OracleItemDraftArtifact, "migration.oracle-item-draft.v1");
+artifact!(OracleItemReviewArtifact, "migration.oracle-item-review.v1");
+artifact!(
+    OraclePortfolioCoherenceReviewArtifact,
+    "migration.oracle-portfolio-coherence-review.v1"
+);
+artifact!(
+    OracleCoherentPortfolioArtifact,
+    "migration.oracle-coherent-portfolio.v1"
+);
+artifact!(
+    OracleAcceptedItemArtifact,
+    "migration.oracle-accepted-item.v1"
+);
+artifact!(OracleCheckPlanArtifact, "migration.oracle-check-plan.v1");
 artifact!(
     OracleStrategyRunArtifact,
     "migration.oracle-strategy-run.v1"
@@ -164,6 +190,14 @@ artifact!(
 artifact!(
     OraclePortfolioProposalArtifact,
     "migration.oracle-portfolio-proposal.v1"
+);
+artifact!(
+    OracleRevisionRequestArtifact,
+    "migration.oracle-revision-request.v1"
+);
+artifact!(
+    OracleControlReconciliationRequestArtifact,
+    "migration.oracle-control-reconciliation-request.v1"
 );
 artifact!(
     OracleAdmissionPolicyArtifact,
@@ -242,6 +276,51 @@ label!(
     "oracle experiment operation name"
 );
 label!(OracleUnknownReason, "oracle unknown reason");
+
+macro_rules! bounded_text {
+    ($(#[$meta:meta])* $name:ident, $kind:literal) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Result<Self, OracleFrameworkError> {
+                let value = value.into();
+                if value.trim() != value || value.is_empty() || value.len() > 4_096 {
+                    return Err(OracleFrameworkError::InvalidText($kind));
+                }
+                Ok(Self(value))
+            }
+
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
+            }
+        }
+    };
+}
+
+bounded_text!(OracleCheckObjective, "Oracle check objective");
+bounded_text!(OracleItemStatement, "Oracle item statement");
+bounded_text!(OracleCheckSetup, "Oracle check setup");
+bounded_text!(OracleCheckObservation, "Oracle check observation");
+bounded_text!(OracleCheckPassCondition, "Oracle check pass condition");
+bounded_text!(OracleReviewExplanation, "Oracle review explanation");
+bounded_text!(OracleReviewRequiredChange, "Oracle review required change");
+bounded_text!(
+    OracleControlDiagnosticSummary,
+    "Oracle control diagnostic summary"
+);
 
 /// One admitted-intent claim expanded independently by the Controller.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -331,21 +410,27 @@ impl<'de> Deserialize<'de> for OracleClaimV1 {
 
 /// Derives the complete current-V1 Oracle claim inventory from one admitted intent contract.
 ///
-/// A current-V1 contract contains exactly one authoritative admitted claim. The claim remains
-/// bound to the complete contract identity; its planes and concerns are expanded separately by
-/// [`derive_oracle_work_items`]. Callers cannot supply or remove claims.
+/// Every admitted claim remains bound to the complete contract identity; its planes and concerns
+/// are expanded separately by [`derive_oracle_dimensions`]. Callers cannot supply or remove
+/// claims.
 #[must_use]
 pub fn derive_oracle_claims(
     task_id: TaskId,
     admitted_intent: ContentId<MigrationIntentContractArtifact>,
-    admitted_claim: &AuthoritativeIntentClaimV1,
+    admitted_claims: &[AuthoritativeIntentClaimV1],
 ) -> Vec<OracleClaimV1> {
-    vec![OracleClaimV1::new(
-        task_id,
-        admitted_intent,
-        OracleClaimName("admitted-intent".to_owned()),
-        admitted_claim.clone(),
-    )]
+    admitted_claims
+        .iter()
+        .enumerate()
+        .map(|(index, claim)| {
+            OracleClaimV1::new(
+                task_id,
+                admitted_intent,
+                OracleClaimName(format!("admitted-intent-{index:04}")),
+                claim.clone(),
+            )
+        })
+        .collect()
 }
 
 /// Stable top-level plane. Concerns, rather than prompts, determine its required coverage.
@@ -579,9 +664,8 @@ pub enum OracleStrategyExecutorV1 {
 #[serde(rename_all = "kebab-case")]
 pub enum OracleStrategyToolV1 {
     ReadTaskArtifact,
-    SearchExternalTests,
-    RequestExperiment,
-    SubmitCellResult,
+    ReadItemConversation,
+    SubmitItemDraft,
 }
 
 /// Canonical current-V1 tool surface exposed to one Oracle strategy Agent Loop.
@@ -605,9 +689,8 @@ impl OracleStrategyToolCatalogV1 {
             schema_version: SCHEMA_V1,
             tools: vec![
                 OracleStrategyToolV1::ReadTaskArtifact,
-                OracleStrategyToolV1::SearchExternalTests,
-                OracleStrategyToolV1::RequestExperiment,
-                OracleStrategyToolV1::SubmitCellResult,
+                OracleStrategyToolV1::ReadItemConversation,
+                OracleStrategyToolV1::SubmitItemDraft,
             ],
         }
     }
@@ -713,8 +796,8 @@ impl OracleStrategyRegistrationV1 {
         &self.executor
     }
 
-    fn supports(&self, item: &OracleWorkItemV1) -> bool {
-        self.roles.contains(&item.role) && self.concerns.contains(&item.concern)
+    fn supports(&self, dimension: &OracleDimensionV1) -> bool {
+        self.roles.contains(&dimension.role) && self.concerns.contains(&dimension.concern)
     }
 }
 
@@ -786,22 +869,22 @@ impl OracleStrategyCatalogV1 {
         &self.strategies
     }
 
-    fn eligible(&self, item: &OracleWorkItemV1) -> Vec<OracleStrategyName> {
+    fn eligible(&self, dimension: &OracleDimensionV1) -> Vec<OracleStrategyName> {
         self.strategies
             .iter()
-            .filter(|strategy| strategy.supports(item))
+            .filter(|strategy| strategy.supports(dimension))
             .map(|strategy| strategy.name.clone())
             .collect()
     }
 
     fn resolve(
         &self,
-        item: &OracleWorkItemV1,
+        dimension: &OracleDimensionV1,
         strategy: &OracleStrategyName,
     ) -> Result<&OracleStrategyRegistrationV1, OracleFrameworkError> {
         self.strategies
             .iter()
-            .find(|registration| registration.name == *strategy && registration.supports(item))
+            .find(|registration| registration.name == *strategy && registration.supports(dimension))
             .ok_or(OracleFrameworkError::IneligibleStrategy)
     }
 }
@@ -916,11 +999,111 @@ impl<'de> Deserialize<'de> for OracleExplorationRevision {
     }
 }
 
+/// Monotonic immutable revision inside one exact Oracle item conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct OracleItemRevision(u32);
+
+impl OracleItemRevision {
+    pub const fn new(value: u32) -> Result<Self, OracleFrameworkError> {
+        if value == 0 {
+            Err(OracleFrameworkError::NonPositive("Oracle item revision"))
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    fn next(self) -> Result<Self, OracleFrameworkError> {
+        self.0
+            .checked_add(1)
+            .ok_or(OracleFrameworkError::RevisionOverflow)
+            .and_then(Self::new)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemRevision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u32::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+/// Maximum revision number authorized for each exact Oracle item conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct OracleItemRevisionLimit(u32);
+
+impl OracleItemRevisionLimit {
+    pub const fn new(value: u32) -> Result<Self, OracleFrameworkError> {
+        if value == 0 {
+            Err(OracleFrameworkError::NonPositive(
+                "Oracle item revision limit",
+            ))
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Maximum revision number authorized for one exact dimension item-discovery conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct OracleItemDiscoveryRevisionLimit(u32);
+
+impl OracleItemDiscoveryRevisionLimit {
+    pub const fn new(value: u32) -> Result<Self, OracleFrameworkError> {
+        if value == 0 {
+            Err(OracleFrameworkError::NonPositive(
+                "Oracle item discovery revision limit",
+            ))
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemDiscoveryRevisionLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u32::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemRevisionLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u32::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OracleExplorationBudgetV1 {
     pub strategy_runs: OracleStrategyRunLimit,
     pub experiments: OracleExperimentLimit,
+    pub item_discovery_revisions: OracleItemDiscoveryRevisionLimit,
+    pub item_revisions: OracleItemRevisionLimit,
 }
 
 /// Exact code, documentation, knowledge, tools and authority available to exploration.
@@ -1100,16 +1283,16 @@ impl OracleWorkspaceV1 {
 }
 
 /// One indivisible claim × concern × logical-role obligation.
-/// A claim identity cannot be substituted where a fully scoped work-item identity is required.
+/// A claim identity cannot be substituted where a fully scoped dimension identity is required.
 ///
 /// ```compile_fail
-/// use cairn_migration::{OracleClaimArtifact, OracleWorkItemArtifact};
+/// use cairn_migration::{OracleClaimArtifact, OracleDimensionArtifact};
 /// use cairn_protocol::ContentId;
-/// fn require_work_item(_: ContentId<OracleWorkItemArtifact>) {}
-/// fn wrong(claim: ContentId<OracleClaimArtifact>) { require_work_item(claim); }
+/// fn require_dimension(_: ContentId<OracleDimensionArtifact>) {}
+/// fn wrong(claim: ContentId<OracleClaimArtifact>) { require_dimension(claim); }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-pub struct OracleWorkItemV1 {
+pub struct OracleDimensionV1 {
     claim: ContentId<OracleClaimArtifact>,
     plane: OraclePlaneV1,
     concern: OracleConcernV1,
@@ -1118,14 +1301,14 @@ pub struct OracleWorkItemV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OracleWorkItemWire {
+struct OracleDimensionWire {
     claim: ContentId<OracleClaimArtifact>,
     plane: OraclePlaneV1,
     concern: OracleConcernV1,
     role: OracleStrategyRoleV1,
 }
 
-impl Ord for OracleWorkItemV1 {
+impl Ord for OracleDimensionV1 {
     fn cmp(&self, other: &Self) -> Ordering {
         self.claim
             .to_wire()
@@ -1136,34 +1319,34 @@ impl Ord for OracleWorkItemV1 {
     }
 }
 
-impl TryFrom<OracleWorkItemWire> for OracleWorkItemV1 {
+impl TryFrom<OracleDimensionWire> for OracleDimensionV1 {
     type Error = OracleFrameworkError;
-    fn try_from(wire: OracleWorkItemWire) -> Result<Self, Self::Error> {
+    fn try_from(wire: OracleDimensionWire) -> Result<Self, Self::Error> {
         if wire.plane != wire.concern.plane() {
-            return Err(OracleFrameworkError::WorkItemPlaneMismatch);
+            return Err(OracleFrameworkError::DimensionPlaneMismatch);
         }
         Ok(Self::new(wire.claim, wire.concern, wire.role))
     }
 }
 
-impl<'de> Deserialize<'de> for OracleWorkItemV1 {
+impl<'de> Deserialize<'de> for OracleDimensionV1 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        OracleWorkItemWire::deserialize(deserializer)?
+        OracleDimensionWire::deserialize(deserializer)?
             .try_into()
             .map_err(de::Error::custom)
     }
 }
 
-impl PartialOrd for OracleWorkItemV1 {
+impl PartialOrd for OracleDimensionV1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl OracleWorkItemV1 {
+impl OracleDimensionV1 {
     fn new(
         claim: ContentId<OracleClaimArtifact>,
         concern: OracleConcernV1,
@@ -1193,27 +1376,757 @@ impl OracleWorkItemV1 {
     pub const fn role(&self) -> OracleStrategyRoleV1 {
         self.role
     }
-    pub fn identity(&self) -> Result<ContentId<OracleWorkItemArtifact>, OracleFrameworkError> {
+    pub fn identity(&self) -> Result<ContentId<OracleDimensionArtifact>, OracleFrameworkError> {
         derive_id(self)
     }
 }
 
+/// One independently generated and reviewed Oracle obligation inside an exact Controller-derived
+/// dimension. A dimension may contain any positive number of items; the model supplies the
+/// statement, while the gateway binds it to the offered dimension and derives its identity.
+///
+/// ```compile_fail
+/// use cairn_migration::{OracleDimensionArtifact, OracleItemArtifact};
+/// use cairn_protocol::ContentId;
+/// fn require_item(_: ContentId<OracleItemArtifact>) {}
+/// fn wrong(dimension: ContentId<OracleDimensionArtifact>) { require_item(dimension); }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleItemV1 {
+    schema_version: u16,
+    dimension: ContentId<OracleDimensionArtifact>,
+    statement: OracleItemStatement,
+}
+
+impl Ord for OracleItemV1 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.dimension
+            .to_wire()
+            .cmp(&other.dimension.to_wire())
+            .then_with(|| self.statement.as_str().cmp(other.statement.as_str()))
+    }
+}
+
+impl PartialOrd for OracleItemV1 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleItemWire {
+    schema_version: u16,
+    dimension: ContentId<OracleDimensionArtifact>,
+    statement: OracleItemStatement,
+}
+
+impl OracleItemV1 {
+    pub fn new(
+        dimension: ContentId<OracleDimensionArtifact>,
+        statement: OracleItemStatement,
+    ) -> Result<Self, OracleFrameworkError> {
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            dimension,
+            statement,
+        })
+    }
+
+    #[must_use]
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
+    }
+
+    #[must_use]
+    pub const fn statement(&self) -> &OracleItemStatement {
+        &self.statement
+    }
+
+    pub fn identity(&self) -> Result<ContentId<OracleItemArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+}
+
+impl TryFrom<OracleItemWire> for OracleItemV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleItemWire) -> Result<Self, Self::Error> {
+        require_v1(wire.schema_version)?;
+        Self::new(wire.dimension, wire.statement)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleItemWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct OracleItemSetRevision(u32);
+
+impl OracleItemSetRevision {
+    pub const fn new(value: u32) -> Result<Self, OracleFrameworkError> {
+        if value == 0 {
+            Err(OracleFrameworkError::NonPositive(
+                "Oracle item set revision",
+            ))
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    fn next(self) -> Result<Self, OracleFrameworkError> {
+        self.0
+            .checked_add(1)
+            .ok_or(OracleFrameworkError::RevisionOverflow)
+            .and_then(Self::new)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemSetRevision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u32::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+/// Non-authoritative item decomposition for one exact Controller-derived dimension. It contains
+/// no plans, Review decision, receipt, or Admission authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleDimensionItemSetProposalV1 {
+    schema_version: u16,
+    dimension: ContentId<OracleDimensionArtifact>,
+    parent: Option<ContentId<OracleDimensionItemSetProposalArtifact>>,
+    revision: OracleItemSetRevision,
+    items: Vec<OracleItemV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleDimensionItemSetProposalWire {
+    schema_version: u16,
+    dimension: ContentId<OracleDimensionArtifact>,
+    parent: Option<ContentId<OracleDimensionItemSetProposalArtifact>>,
+    revision: OracleItemSetRevision,
+    items: Vec<OracleItemV1>,
+}
+
+impl OracleDimensionItemSetProposalV1 {
+    pub fn new(
+        dimension: ContentId<OracleDimensionArtifact>,
+        mut items: Vec<OracleItemV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        items.sort();
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            dimension,
+            parent: None,
+            revision: OracleItemSetRevision::new(1)?,
+            items,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn revise(
+        previous: &Self,
+        mut items: Vec<OracleItemV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        items.sort();
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            dimension: previous.dimension,
+            parent: Some(previous.identity()?),
+            revision: previous.revision.next()?,
+            items,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
+    }
+
+    #[must_use]
+    pub fn items(&self) -> &[OracleItemV1] {
+        &self.items
+    }
+
+    #[must_use]
+    pub const fn parent(&self) -> Option<ContentId<OracleDimensionItemSetProposalArtifact>> {
+        self.parent
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> OracleItemSetRevision {
+        self.revision
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleDimensionItemSetProposalArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        validate_strict(&self.items, "Oracle dimension item set")?;
+        if self
+            .items
+            .iter()
+            .any(|item| item.dimension() != self.dimension)
+        {
+            return Err(OracleFrameworkError::OracleItemBindingMismatch);
+        }
+        if (self.revision.get() == 1) != self.parent.is_none() {
+            return Err(OracleFrameworkError::RevisionLineageMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleDimensionItemSetProposalWire> for OracleDimensionItemSetProposalV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleDimensionItemSetProposalWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            dimension: wire.dimension,
+            parent: wire.parent,
+            revision: wire.revision,
+            items: wire.items,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleDimensionItemSetProposalV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleDimensionItemSetProposalWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleItemSetReviewIssueClassV1 {
+    IncompleteCoverage,
+    OverlappingItems,
+    VagueItem,
+    OutOfDimension,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OracleItemSetReviewFindingV1 {
+    issue: OracleItemSetReviewIssueClassV1,
+    explanation: OracleReviewExplanation,
+    required_change: OracleReviewRequiredChange,
+}
+
+impl OracleItemSetReviewFindingV1 {
+    #[must_use]
+    pub fn new(
+        issue: OracleItemSetReviewIssueClassV1,
+        explanation: OracleReviewExplanation,
+        required_change: OracleReviewRequiredChange,
+    ) -> Self {
+        Self {
+            issue,
+            explanation,
+            required_change,
+        }
+    }
+
+    #[must_use]
+    pub const fn issue(&self) -> OracleItemSetReviewIssueClassV1 {
+        self.issue
+    }
+
+    #[must_use]
+    pub const fn explanation(&self) -> &OracleReviewExplanation {
+        &self.explanation
+    }
+
+    #[must_use]
+    pub const fn required_change(&self) -> &OracleReviewRequiredChange {
+        &self.required_change
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "decision", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum OracleDimensionItemSetReviewDecisionV1 {
+    Approved,
+    NeedsRevision {
+        findings: Vec<OracleItemSetReviewFindingV1>,
+    },
+}
+
+/// Independent semantic Review of one exact dimension item-decomposition revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleDimensionItemSetReviewV1 {
+    schema_version: u16,
+    dimension: ContentId<OracleDimensionArtifact>,
+    proposal: ContentId<OracleDimensionItemSetProposalArtifact>,
+    decision: OracleDimensionItemSetReviewDecisionV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleDimensionItemSetReviewWire {
+    schema_version: u16,
+    dimension: ContentId<OracleDimensionArtifact>,
+    proposal: ContentId<OracleDimensionItemSetProposalArtifact>,
+    decision: OracleDimensionItemSetReviewDecisionV1,
+}
+
+impl OracleDimensionItemSetReviewV1 {
+    pub fn approved(
+        proposal: &OracleDimensionItemSetProposalV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            dimension: proposal.dimension(),
+            proposal: proposal.identity()?,
+            decision: OracleDimensionItemSetReviewDecisionV1::Approved,
+        })
+    }
+
+    pub fn needs_revision(
+        proposal: &OracleDimensionItemSetProposalV1,
+        findings: Vec<OracleItemSetReviewFindingV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        let mut encoded = findings
+            .into_iter()
+            .map(|finding| {
+                cairn_codec::to_vec(&finding)
+                    .map(|bytes| (bytes, finding))
+                    .map_err(|error| OracleFrameworkError::Codec(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        encoded.sort_by(|left, right| left.0.cmp(&right.0));
+        if encoded.is_empty() || encoded.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(OracleFrameworkError::ReviewFindingsInvalid);
+        }
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            dimension: proposal.dimension(),
+            proposal: proposal.identity()?,
+            decision: OracleDimensionItemSetReviewDecisionV1::NeedsRevision {
+                findings: encoded.into_iter().map(|(_, finding)| finding).collect(),
+            },
+        };
+        value.validate_against(proposal)?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OracleDimensionItemSetProposalArtifact> {
+        self.proposal
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> &OracleDimensionItemSetReviewDecisionV1 {
+        &self.decision
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleDimensionItemSetReviewArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    pub fn validate_against(
+        &self,
+        proposal: &OracleDimensionItemSetProposalV1,
+    ) -> Result<(), OracleFrameworkError> {
+        self.validate()?;
+        if self.dimension != proposal.dimension() || self.proposal != proposal.identity()? {
+            return Err(OracleFrameworkError::ReviewProposalMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        if let OracleDimensionItemSetReviewDecisionV1::NeedsRevision { findings } = &self.decision {
+            if findings.is_empty() {
+                return Err(OracleFrameworkError::ReviewFindingsInvalid);
+            }
+            let encoded = findings
+                .iter()
+                .map(cairn_codec::to_vec)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?;
+            if encoded.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(OracleFrameworkError::ReviewFindingsInvalid);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleDimensionItemSetReviewWire> for OracleDimensionItemSetReviewV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleDimensionItemSetReviewWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            dimension: wire.dimension,
+            proposal: wire.proposal,
+            decision: wire.decision,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleDimensionItemSetReviewV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleDimensionItemSetReviewWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Method selected by a proposal strategy for one exact Oracle coverage obligation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleCheckMethodV1 {
+    StaticAnalysis,
+    ReferenceExecution,
+    Metamorphic,
+    BoundaryProbe,
+    RuntimeObservation,
+}
+
+/// Exact evidence edge supporting one proposed Oracle check.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum OracleCheckEvidenceV1 {
+    SourceCitation {
+        citation: crate::SirSourceCitationV1,
+    },
+    AdmittedIntent {
+        contract: ContentId<MigrationIntentContractArtifact>,
+    },
+}
+
+/// Model-proposed, non-authoritative check plan bound to one exact Oracle item.
+///
+/// The plan can describe how evidence should be obtained, but it cannot create an observation,
+/// a qualified-control receipt, or an Admission result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleCheckPlanV1 {
+    schema_version: u16,
+    item: ContentId<OracleItemArtifact>,
+    method: OracleCheckMethodV1,
+    objective: OracleCheckObjective,
+    setup: OracleCheckSetup,
+    observation: OracleCheckObservation,
+    pass_condition: OracleCheckPassCondition,
+    evidence: Vec<OracleCheckEvidenceV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleCheckPlanWire {
+    schema_version: u16,
+    item: ContentId<OracleItemArtifact>,
+    method: OracleCheckMethodV1,
+    objective: OracleCheckObjective,
+    setup: OracleCheckSetup,
+    observation: OracleCheckObservation,
+    pass_condition: OracleCheckPassCondition,
+    evidence: Vec<OracleCheckEvidenceV1>,
+}
+
+impl OracleCheckPlanV1 {
+    pub fn new(
+        item: ContentId<OracleItemArtifact>,
+        method: OracleCheckMethodV1,
+        objective: OracleCheckObjective,
+        setup: OracleCheckSetup,
+        observation: OracleCheckObservation,
+        pass_condition: OracleCheckPassCondition,
+        evidence: Vec<OracleCheckEvidenceV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            item,
+            method,
+            objective,
+            setup,
+            observation,
+            pass_condition,
+            evidence,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn method(&self) -> OracleCheckMethodV1 {
+        self.method
+    }
+
+    #[must_use]
+    pub fn evidence(&self) -> &[OracleCheckEvidenceV1] {
+        &self.evidence
+    }
+
+    pub fn identity(&self) -> Result<ContentId<OracleCheckPlanArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        if self.evidence.is_empty() {
+            return Err(OracleFrameworkError::Empty("Oracle check evidence"));
+        }
+        let encoded = self
+            .evidence
+            .iter()
+            .map(cairn_codec::to_vec)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?;
+        if encoded.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(OracleFrameworkError::NonCanonical("Oracle check evidence"));
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleCheckPlanWire> for OracleCheckPlanV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleCheckPlanWire) -> Result<Self, Self::Error> {
+        require_v1(wire.schema_version)?;
+        Self::new(
+            wire.item,
+            wire.method,
+            wire.objective,
+            wire.setup,
+            wire.observation,
+            wire.pass_condition,
+            wire.evidence,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleCheckPlanV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleCheckPlanWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// One immutable generation from an exact item-scoped conversation. Review always binds this
+/// exact draft identity; feedback cannot be applied to a sibling item or an older revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleItemDraftV1 {
+    schema_version: u16,
+    item: OracleItemV1,
+    run: ContentId<OracleStrategyRunArtifact>,
+    parent: Option<ContentId<OracleItemDraftArtifact>>,
+    revision: OracleItemRevision,
+    plans: Vec<OracleCheckPlanV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleItemDraftWire {
+    schema_version: u16,
+    item: OracleItemV1,
+    run: ContentId<OracleStrategyRunArtifact>,
+    parent: Option<ContentId<OracleItemDraftArtifact>>,
+    revision: OracleItemRevision,
+    plans: Vec<OracleCheckPlanV1>,
+}
+
+impl OracleItemDraftV1 {
+    pub fn initial(
+        item: OracleItemV1,
+        run: ContentId<OracleStrategyRunArtifact>,
+        plans: Vec<OracleCheckPlanV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        Self::build(item, run, None, OracleItemRevision::new(1)?, plans)
+    }
+
+    pub fn revise(
+        previous: &Self,
+        run: ContentId<OracleStrategyRunArtifact>,
+        plans: Vec<OracleCheckPlanV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        Self::build(
+            previous.item.clone(),
+            run,
+            Some(previous.identity()?),
+            previous.revision.next()?,
+            plans,
+        )
+    }
+
+    fn build(
+        item: OracleItemV1,
+        run: ContentId<OracleStrategyRunArtifact>,
+        parent: Option<ContentId<OracleItemDraftArtifact>>,
+        revision: OracleItemRevision,
+        plans: Vec<OracleCheckPlanV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        let mut identified = plans
+            .into_iter()
+            .map(|plan| Ok((plan.identity()?.to_wire(), plan)))
+            .collect::<Result<Vec<_>, OracleFrameworkError>>()?;
+        identified.sort_by(|left, right| left.0.cmp(&right.0));
+        let plans = identified.into_iter().map(|(_, plan)| plan).collect();
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            item,
+            run,
+            parent,
+            revision,
+            plans,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> &OracleItemV1 {
+        &self.item
+    }
+
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.run
+    }
+
+    #[must_use]
+    pub const fn parent(&self) -> Option<ContentId<OracleItemDraftArtifact>> {
+        self.parent
+    }
+
+    #[must_use]
+    pub const fn revision(&self) -> OracleItemRevision {
+        self.revision
+    }
+
+    #[must_use]
+    pub fn plans(&self) -> &[OracleCheckPlanV1] {
+        &self.plans
+    }
+
+    pub fn identity(&self) -> Result<ContentId<OracleItemDraftArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        if (self.revision.get() == 1 && self.parent.is_some())
+            || (self.revision.get() > 1 && self.parent.is_none())
+        {
+            return Err(OracleFrameworkError::RevisionLineageMismatch);
+        }
+        let item = self.item.identity()?;
+        let plan_ids = self
+            .plans
+            .iter()
+            .map(|plan| {
+                if plan.item() != item {
+                    return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                }
+                plan.identity()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_content_ids(&plan_ids, "Oracle item draft plans")
+    }
+}
+
+impl TryFrom<OracleItemDraftWire> for OracleItemDraftV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleItemDraftWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            item: wire.item,
+            run: wire.run,
+            parent: wire.parent,
+            revision: wire.revision,
+            plans: wire.plans,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemDraftV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleItemDraftWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
 /// Deterministically expands every claim across every policy concern and required logical role.
-pub fn derive_oracle_work_items(
+pub fn derive_oracle_dimensions(
     claims: &[ContentId<OracleClaimArtifact>],
     policy: &OracleCoveragePolicyV1,
-) -> Result<Vec<OracleWorkItemV1>, OracleFrameworkError> {
+) -> Result<Vec<OracleDimensionV1>, OracleFrameworkError> {
     validate_content_ids(claims, "oracle claims")?;
     let mut items = Vec::new();
     for claim in claims {
         for concern in policy.concerns() {
-            items.push(OracleWorkItemV1::new(
+            items.push(OracleDimensionV1::new(
                 *claim,
                 *concern,
                 OracleStrategyRoleV1::Synthesis,
             ));
             if policy.adversarial() == OracleAdversarialPolicyV1::RequiredForEveryConcern {
-                items.push(OracleWorkItemV1::new(
+                items.push(OracleDimensionV1::new(
                     *claim,
                     *concern,
                     OracleStrategyRoleV1::Adversarial,
@@ -1225,12 +2138,12 @@ pub fn derive_oracle_work_items(
     Ok(items)
 }
 
-/// One exact strategy execution authority for one indivisible work item.
+/// One exact strategy execution authority for one indivisible dimension.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleStrategyRunV1 {
     schema_version: u16,
     workspace: ContentId<OracleWorkspaceArtifact>,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     strategy: OracleStrategyName,
     executor: OracleStrategyExecutorV1,
 }
@@ -1240,7 +2153,7 @@ pub struct OracleStrategyRunV1 {
 struct OracleStrategyRunWire {
     schema_version: u16,
     workspace: ContentId<OracleWorkspaceArtifact>,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     strategy: OracleStrategyName,
     executor: OracleStrategyExecutorV1,
 }
@@ -1248,15 +2161,15 @@ struct OracleStrategyRunWire {
 impl OracleStrategyRunV1 {
     pub fn new(
         workspace: ContentId<OracleWorkspaceArtifact>,
-        item: &OracleWorkItemV1,
+        dimension: &OracleDimensionV1,
         strategy: OracleStrategyName,
         catalog: &OracleStrategyCatalogV1,
     ) -> Result<Self, OracleFrameworkError> {
-        let executor = catalog.resolve(item, &strategy)?.executor.clone();
+        let executor = catalog.resolve(dimension, &strategy)?.executor.clone();
         Ok(Self {
             schema_version: SCHEMA_V1,
             workspace,
-            item: item.identity()?,
+            dimension: dimension.identity()?,
             strategy,
             executor,
         })
@@ -1267,8 +2180,8 @@ impl OracleStrategyRunV1 {
         self.workspace
     }
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
-        self.item
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
     }
     #[must_use]
     pub const fn strategy(&self) -> &OracleStrategyName {
@@ -1285,10 +2198,10 @@ impl OracleStrategyRunV1 {
     fn validate_against(
         &self,
         workspace: ContentId<OracleWorkspaceArtifact>,
-        item: &OracleWorkItemV1,
+        dimension: &OracleDimensionV1,
         catalog: &OracleStrategyCatalogV1,
     ) -> Result<(), OracleFrameworkError> {
-        let expected = Self::new(workspace, item, self.strategy.clone(), catalog)?;
+        let expected = Self::new(workspace, dimension, self.strategy.clone(), catalog)?;
         if *self != expected {
             return Err(OracleFrameworkError::StrategyRunBindingMismatch);
         }
@@ -1303,7 +2216,7 @@ impl TryFrom<OracleStrategyRunWire> for OracleStrategyRunV1 {
         Ok(Self {
             schema_version: SCHEMA_V1,
             workspace: wire.workspace,
-            item: wire.item,
+            dimension: wire.dimension,
             strategy: wire.strategy,
             executor: wire.executor,
         })
@@ -1325,7 +2238,7 @@ impl<'de> Deserialize<'de> for OracleStrategyRunV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleExperimentRequestV1 {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     tools: ContentId<OracleExperimentToolCatalogArtifact>,
     operation: OracleExperimentOperationName,
@@ -1336,7 +2249,7 @@ pub struct OracleExperimentRequestV1 {
 #[serde(deny_unknown_fields)]
 struct OracleExperimentRequestWire {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     tools: ContentId<OracleExperimentToolCatalogArtifact>,
     operation: OracleExperimentOperationName,
@@ -1346,7 +2259,7 @@ struct OracleExperimentRequestWire {
 impl OracleExperimentRequestV1 {
     #[must_use]
     pub fn new(
-        item: ContentId<OracleWorkItemArtifact>,
+        dimension: ContentId<OracleDimensionArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
         tools: ContentId<OracleExperimentToolCatalogArtifact>,
         operation: OracleExperimentOperationName,
@@ -1354,7 +2267,7 @@ impl OracleExperimentRequestV1 {
     ) -> Self {
         Self {
             schema_version: SCHEMA_V1,
-            item,
+            dimension,
             run,
             tools,
             operation,
@@ -1363,8 +2276,8 @@ impl OracleExperimentRequestV1 {
     }
 
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
-        self.item
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
     }
     #[must_use]
     pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
@@ -1390,7 +2303,7 @@ impl TryFrom<OracleExperimentRequestWire> for OracleExperimentRequestV1 {
     fn try_from(wire: OracleExperimentRequestWire) -> Result<Self, Self::Error> {
         require_v1(wire.schema_version)?;
         Ok(Self::new(
-            wire.item,
+            wire.dimension,
             wire.run,
             wire.tools,
             wire.operation,
@@ -1480,7 +2393,7 @@ impl<'de> Deserialize<'de> for TrustedOracleWorkerReceiptV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleUnknownEvidenceV1 {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     reason: OracleUnknownReason,
     observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
@@ -1490,7 +2403,7 @@ pub struct OracleUnknownEvidenceV1 {
 #[serde(deny_unknown_fields)]
 struct OracleUnknownEvidenceWire {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     reason: OracleUnknownReason,
     observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
@@ -1498,7 +2411,7 @@ struct OracleUnknownEvidenceWire {
 
 impl OracleUnknownEvidenceV1 {
     pub fn new(
-        item: ContentId<OracleWorkItemArtifact>,
+        item: ContentId<OracleItemArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
         reason: OracleUnknownReason,
         mut observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
@@ -1515,7 +2428,7 @@ impl OracleUnknownEvidenceV1 {
     }
 
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
         self.item
     }
     #[must_use]
@@ -1641,7 +2554,7 @@ impl<'de> Deserialize<'de> for OracleObservationPayloadV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleExplorationObservationV1 {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     provenance: OracleObservationProvenanceV1,
     payload: ContentId<OracleObservationPayloadArtifact>,
@@ -1651,7 +2564,7 @@ pub struct OracleExplorationObservationV1 {
 #[serde(deny_unknown_fields)]
 struct OracleExplorationObservationWire {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     provenance: OracleObservationProvenanceV1,
     payload: ContentId<OracleObservationPayloadArtifact>,
@@ -1659,7 +2572,7 @@ struct OracleExplorationObservationWire {
 
 impl OracleExplorationObservationV1 {
     pub fn workflow_tool(
-        item: ContentId<OracleWorkItemArtifact>,
+        dimension: ContentId<OracleDimensionArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
         source: ContentId<WorkflowToolControllerObservationArtifact>,
         payload: &OracleObservationPayloadV1,
@@ -1669,7 +2582,7 @@ impl OracleExplorationObservationV1 {
         }
         Ok(Self {
             schema_version: SCHEMA_V1,
-            item,
+            dimension,
             run,
             provenance: OracleObservationProvenanceV1::WorkflowTool {
                 observation: source,
@@ -1689,7 +2602,7 @@ impl OracleExplorationObservationV1 {
         }
         Ok(Self {
             schema_version: SCHEMA_V1,
-            item: request.item(),
+            dimension: request.dimension(),
             run: request.run(),
             provenance: OracleObservationProvenanceV1::WorkerExperiment {
                 request: request_id,
@@ -1706,8 +2619,8 @@ impl OracleExplorationObservationV1 {
     }
 
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
-        self.item
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
     }
 
     #[must_use]
@@ -1720,7 +2633,7 @@ impl OracleExplorationObservationV1 {
         request: &OracleExperimentRequestV1,
         receipt: &TrustedOracleWorkerReceiptV1,
     ) -> Result<bool, OracleFrameworkError> {
-        Ok(self.item == request.item()
+        Ok(self.dimension == request.dimension()
             && self.run == request.run()
             && matches!(
                 self.provenance,
@@ -1738,7 +2651,7 @@ impl TryFrom<OracleExplorationObservationWire> for OracleExplorationObservationV
         require_v1(wire.schema_version)?;
         Ok(Self {
             schema_version: SCHEMA_V1,
-            item: wire.item,
+            dimension: wire.dimension,
             run: wire.run,
             provenance: wire.provenance,
             payload: wire.payload,
@@ -1761,6 +2674,7 @@ impl<'de> Deserialize<'de> for OracleExplorationObservationV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "artifact", rename_all = "kebab-case")]
 pub enum OraclePortfolioElementKindV1 {
+    CheckPlan(ContentId<OracleCheckPlanArtifact>),
     DomainRefinement(ContentId<DomainRefinementArtifact>),
     CorpusCase(ContentId<CorpusCaseArtifact>),
     Reference(ContentId<ReferenceArtifact>),
@@ -1777,7 +2691,7 @@ pub enum OraclePortfolioElementKindV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OraclePortfolioElementV1 {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     kind: OraclePortfolioElementKindV1,
     observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
@@ -1787,7 +2701,7 @@ pub struct OraclePortfolioElementV1 {
 #[serde(deny_unknown_fields)]
 struct OraclePortfolioElementWire {
     schema_version: u16,
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     run: ContentId<OracleStrategyRunArtifact>,
     kind: OraclePortfolioElementKindV1,
     observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
@@ -1795,7 +2709,7 @@ struct OraclePortfolioElementWire {
 
 impl OraclePortfolioElementV1 {
     pub fn new(
-        item: ContentId<OracleWorkItemArtifact>,
+        item: ContentId<OracleItemArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
         kind: OraclePortfolioElementKindV1,
         mut observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
@@ -1818,7 +2732,7 @@ impl OraclePortfolioElementV1 {
     }
 
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
         self.item
     }
 
@@ -1874,22 +2788,24 @@ impl<'de> Deserialize<'de> for OraclePortfolioElementV1 {
 #[serde(tag = "outcome", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum OracleStrategySubmissionOutcomeV1 {
     Contribute {
+        items: Vec<OracleItemV1>,
         elements: Vec<OraclePortfolioElementV1>,
     },
     RequestExperiment {
         request: OracleExperimentRequestV1,
     },
     PreserveUnknown {
+        items: Vec<OracleItemV1>,
         evidence: Vec<OracleUnknownEvidenceV1>,
     },
 }
 
-/// Atomic strategy publication bound to one exact run and work item.
+/// Atomic strategy publication bound to one exact run and dimension.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleStrategySubmissionV1 {
     schema_version: u16,
     run: ContentId<OracleStrategyRunArtifact>,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     result: OracleStrategySubmissionOutcomeV1,
 }
 
@@ -1898,7 +2814,7 @@ pub struct OracleStrategySubmissionV1 {
 struct OracleStrategySubmissionWire {
     schema_version: u16,
     run: ContentId<OracleStrategyRunArtifact>,
-    item: ContentId<OracleWorkItemArtifact>,
+    dimension: ContentId<OracleDimensionArtifact>,
     result: OracleStrategySubmissionOutcomeV1,
 }
 
@@ -1910,7 +2826,7 @@ impl OracleStrategySubmissionV1 {
         let value = Self {
             schema_version: SCHEMA_V1,
             run: run.identity()?,
-            item: run.item(),
+            dimension: run.dimension(),
             result,
         };
         value.validate()?;
@@ -1922,8 +2838,8 @@ impl OracleStrategySubmissionV1 {
         self.run
     }
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
-        self.item
+    pub const fn dimension(&self) -> ContentId<OracleDimensionArtifact> {
+        self.dimension
     }
     #[must_use]
     pub const fn result(&self) -> &OracleStrategySubmissionOutcomeV1 {
@@ -1938,36 +2854,71 @@ impl OracleStrategySubmissionV1 {
     fn validate(&self) -> Result<(), OracleFrameworkError> {
         require_v1(self.schema_version)?;
         match &self.result {
-            OracleStrategySubmissionOutcomeV1::Contribute { elements } => {
+            OracleStrategySubmissionOutcomeV1::Contribute { items, elements } => {
+                let item_ids = items
+                    .iter()
+                    .map(|item| {
+                        if item.dimension() != self.dimension {
+                            return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                        }
+                        item.identity()
+                    })
+                    .collect::<Result<HashSet<_>, _>>()?;
+                if items.is_empty() || item_ids.len() != items.len() {
+                    return Err(OracleFrameworkError::OracleItemSetInvalid);
+                }
                 let ids = elements
                     .iter()
                     .map(|element| {
                         element.validate()?;
-                        if element.item != self.item || element.run != self.run {
+                        if !item_ids.contains(&element.item) || element.run != self.run {
                             return Err(OracleFrameworkError::PortfolioElementBindingMismatch);
                         }
                         element.identity()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                validate_content_ids(&ids, "strategy contribution")
+                validate_content_ids(&ids, "strategy contribution")?;
+                if item_ids
+                    .iter()
+                    .any(|item| !elements.iter().any(|element| element.item == *item))
+                {
+                    return Err(OracleFrameworkError::OracleItemSetInvalid);
+                }
+                Ok(())
             }
             OracleStrategySubmissionOutcomeV1::RequestExperiment { request } => {
-                if request.item() != self.item || request.run() != self.run {
+                if request.dimension() != self.dimension || request.run() != self.run {
                     return Err(OracleFrameworkError::ExperimentBindingMismatch);
                 }
                 Ok(())
             }
-            OracleStrategySubmissionOutcomeV1::PreserveUnknown { evidence } => {
+            OracleStrategySubmissionOutcomeV1::PreserveUnknown { items, evidence } => {
+                let item_ids = items
+                    .iter()
+                    .map(|item| {
+                        if item.dimension() != self.dimension {
+                            return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                        }
+                        item.identity()
+                    })
+                    .collect::<Result<HashSet<_>, _>>()?;
                 let ids = evidence
                     .iter()
                     .map(|value| {
-                        if value.item() != self.item || value.run() != self.run {
+                        if !item_ids.contains(&value.item()) || value.run() != self.run {
                             return Err(OracleFrameworkError::StrategyRunBindingMismatch);
                         }
                         value.identity()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                validate_content_ids(&ids, "strategy unknown evidence")
+                validate_content_ids(&ids, "strategy unknown evidence")?;
+                if items.is_empty()
+                    || item_ids.len() != items.len()
+                    || evidence.len() != items.len()
+                {
+                    return Err(OracleFrameworkError::OracleItemSetInvalid);
+                }
+                Ok(())
             }
         }
     }
@@ -1979,7 +2930,7 @@ impl TryFrom<OracleStrategySubmissionWire> for OracleStrategySubmissionV1 {
         let value = Self {
             schema_version: wire.schema_version,
             run: wire.run,
-            item: wire.item,
+            dimension: wire.dimension,
             result: wire.result,
         };
         value.validate()?;
@@ -2020,7 +2971,9 @@ pub enum OracleObligationResolutionV1 {
         observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
     },
     Contributed {
-        run: ContentId<OracleStrategyRunArtifact>,
+        runs: Vec<ContentId<OracleStrategyRunArtifact>>,
+        accepted_items: Vec<ContentId<OracleAcceptedItemArtifact>>,
+        items: Vec<OracleItemV1>,
         elements: Vec<ContentId<OraclePortfolioElementArtifact>>,
         observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
     },
@@ -2030,6 +2983,7 @@ pub enum OracleObligationResolutionV1 {
         observations: Vec<ContentId<OracleExplorationObservationArtifact>>,
     },
     Unknown {
+        items: Vec<OracleItemV1>,
         evidence: Vec<ContentId<OracleUnknownEvidenceArtifact>>,
     },
     Unsupported {
@@ -2056,14 +3010,14 @@ impl OracleObligationResolutionV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OracleObligationEntryV1 {
-    item: OracleWorkItemV1,
+    dimension: OracleDimensionV1,
     resolution: OracleObligationResolutionV1,
 }
 
 impl OracleObligationEntryV1 {
     #[must_use]
-    pub const fn item(&self) -> &OracleWorkItemV1 {
-        &self.item
+    pub const fn dimension(&self) -> &OracleDimensionV1 {
+        &self.dimension
     }
     #[must_use]
     pub const fn resolution(&self) -> &OracleObligationResolutionV1 {
@@ -2071,7 +3025,7 @@ impl OracleObligationEntryV1 {
     }
 }
 
-/// Immutable-snapshot durable exploration ledger. Every revision retains all work items.
+/// Immutable-snapshot durable exploration ledger. Every revision retains all dimensions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OracleExplorationLedgerV1 {
     schema_version: u16,
@@ -2098,11 +3052,11 @@ struct OracleExplorationLedgerWire {
 impl OracleExplorationLedgerV1 {
     pub fn open(
         workspace_id: ContentId<OracleWorkspaceArtifact>,
-        work_items: Vec<OracleWorkItemV1>,
+        dimensions: Vec<OracleDimensionV1>,
         catalog: &OracleStrategyCatalogV1,
     ) -> Result<Self, OracleFrameworkError> {
-        validate_strict(&work_items, "oracle work items")?;
-        for item in &work_items {
+        validate_strict(&dimensions, "oracle dimensions")?;
+        for item in &dimensions {
             if catalog.eligible(item).is_empty() {
                 return Err(OracleFrameworkError::MissingStrategy {
                     plane: item.plane,
@@ -2116,10 +3070,10 @@ impl OracleExplorationLedgerV1 {
             workspace: workspace_id,
             parent: None,
             revision: OracleExplorationRevision::new(1)?,
-            entries: work_items
+            entries: dimensions
                 .into_iter()
                 .map(|item| OracleObligationEntryV1 {
-                    item,
+                    dimension: item,
                     resolution: OracleObligationResolutionV1::Pending,
                 })
                 .collect(),
@@ -2158,14 +3112,14 @@ impl OracleExplorationLedgerV1 {
         if self.strategy_runs_started >= budget.strategy_runs.get() {
             return Err(OracleFrameworkError::StrategyBudgetExhausted);
         }
-        let index = self.entry_index(run.item())?;
+        let index = self.entry_index(run.dimension())?;
         if !matches!(
             self.entries[index].resolution,
             OracleObligationResolutionV1::Pending
         ) {
             return Err(OracleFrameworkError::InvalidLedgerTransition);
         }
-        run.validate_against(self.workspace, &self.entries[index].item, catalog)?;
+        run.validate_against(self.workspace, &self.entries[index].dimension, catalog)?;
         let run_id = run.identity()?;
         let strategy = run.strategy().clone();
         self.revise(|next| {
@@ -2182,14 +3136,14 @@ impl OracleExplorationLedgerV1 {
     /// Projects Controller-produced effect observations into the exact active strategy run.
     pub fn record_strategy_observations(
         &self,
-        item: ContentId<OracleWorkItemArtifact>,
+        dimension: ContentId<OracleDimensionArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
         observations: &[OracleExplorationObservationV1],
     ) -> Result<Self, OracleFrameworkError> {
         if observations.is_empty()
             || observations
                 .iter()
-                .any(|observation| observation.item() != item || observation.run() != run)
+                .any(|observation| observation.dimension() != dimension || observation.run() != run)
         {
             return Err(OracleFrameworkError::ObservationBindingMismatch);
         }
@@ -2199,7 +3153,7 @@ impl OracleExplorationLedgerV1 {
             .collect::<Result<Vec<_>, _>>()?;
         new_ids.sort_by_key(ContentId::to_wire);
         validate_content_ids(&new_ids, "strategy observations")?;
-        let index = self.entry_index(item)?;
+        let index = self.entry_index(dimension)?;
         let OracleObligationResolutionV1::Running {
             run: active,
             observations: current,
@@ -2234,7 +3188,7 @@ impl OracleExplorationLedgerV1 {
         {
             return Err(OracleFrameworkError::ExperimentBindingMismatch);
         }
-        let index = self.entry_index(request.item())?;
+        let index = self.entry_index(request.dimension())?;
         let OracleObligationResolutionV1::Running {
             run: active,
             strategy,
@@ -2270,7 +3224,7 @@ impl OracleExplorationLedgerV1 {
         if self.experiments_started >= budget.experiments.get() {
             return Err(OracleFrameworkError::ExperimentBudgetExhausted);
         }
-        let index = self.entry_index(request.item())?;
+        let index = self.entry_index(request.dimension())?;
         let OracleObligationResolutionV1::NeedsExperiment {
             run,
             strategy,
@@ -2306,7 +3260,7 @@ impl OracleExplorationLedgerV1 {
         receipt: &TrustedOracleWorkerReceiptV1,
         observation: &OracleExplorationObservationV1,
     ) -> Result<Self, OracleFrameworkError> {
-        let index = self.entry_index(request.item())?;
+        let index = self.entry_index(request.dimension())?;
         let OracleObligationResolutionV1::AwaitingExperiment {
             run,
             strategy,
@@ -2322,7 +3276,7 @@ impl OracleExplorationLedgerV1 {
         }
         let observation_id = observation.identity()?;
         if observation.schema_version != SCHEMA_V1
-            || observation.item != request.item()
+            || observation.dimension != request.dimension()
             || observation.run != *run
             || !observation.validates_worker_binding(request, receipt)?
         {
@@ -2349,13 +3303,29 @@ impl OracleExplorationLedgerV1 {
     /// Freezes proposal elements from a running strategy without granting admission authority.
     pub fn record_contribution(
         &self,
-        item: ContentId<OracleWorkItemArtifact>,
+        dimension: ContentId<OracleDimensionArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
+        items: &[OracleItemV1],
         elements: &[OraclePortfolioElementV1],
     ) -> Result<Self, OracleFrameworkError> {
-        if elements
+        let item_ids = items
             .iter()
-            .any(|element| element.item != item || element.run != run)
+            .map(|item| {
+                if item.dimension() != dimension {
+                    return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                }
+                item.identity()
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+        validate_strict(items, "Oracle items")?;
+        if items.is_empty()
+            || item_ids.len() != items.len()
+            || elements
+                .iter()
+                .any(|element| !item_ids.contains(&element.item) || element.run != run)
+            || item_ids
+                .iter()
+                .any(|item| !elements.iter().any(|element| element.item == *item))
         {
             return Err(OracleFrameworkError::PortfolioElementBindingMismatch);
         }
@@ -2372,7 +3342,7 @@ impl OracleExplorationLedgerV1 {
             .collect::<Result<Vec<_>, _>>()?;
         element_ids.sort_by_key(ContentId::to_wire);
         validate_content_ids(&element_ids, "portfolio contribution")?;
-        let index = self.entry_index(item)?;
+        let index = self.entry_index(dimension)?;
         let OracleObligationResolutionV1::Running {
             run: active,
             observations,
@@ -2402,7 +3372,9 @@ impl OracleExplorationLedgerV1 {
                 }
             } else {
                 OracleObligationResolutionV1::Contributed {
-                    run,
+                    runs: vec![run],
+                    accepted_items: Vec::new(),
+                    items: items.to_vec(),
                     elements: element_ids,
                     observations,
                 }
@@ -2414,13 +3386,26 @@ impl OracleExplorationLedgerV1 {
     /// Preserves an evidenced unknown rather than allowing a strategy to silently skip a cell.
     pub fn record_unknown(
         &self,
-        item: ContentId<OracleWorkItemArtifact>,
+        dimension: ContentId<OracleDimensionArtifact>,
         run: ContentId<OracleStrategyRunArtifact>,
+        items: &[OracleItemV1],
         evidence: &[OracleUnknownEvidenceV1],
     ) -> Result<Self, OracleFrameworkError> {
+        let item_ids = items
+            .iter()
+            .map(|item| {
+                if item.dimension() != dimension {
+                    return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                }
+                item.identity()
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+        validate_strict(items, "unknown Oracle items")?;
         if evidence
             .iter()
-            .any(|value| value.item() != item || value.run() != run)
+            .any(|value| !item_ids.contains(&value.item()) || value.run() != run)
+            || items.is_empty()
+            || evidence.len() != items.len()
         {
             return Err(OracleFrameworkError::StrategyRunBindingMismatch);
         }
@@ -2430,7 +3415,7 @@ impl OracleExplorationLedgerV1 {
             .collect::<Result<Vec<_>, _>>()?;
         evidence_ids.sort_by_key(ContentId::to_wire);
         validate_content_ids(&evidence_ids, "unknown evidence")?;
-        let index = self.entry_index(item)?;
+        let index = self.entry_index(dimension)?;
         let OracleObligationResolutionV1::Running {
             run: active,
             ref observations,
@@ -2452,6 +3437,7 @@ impl OracleExplorationLedgerV1 {
         }
         self.revise(|next| {
             next.entries[index].resolution = OracleObligationResolutionV1::Unknown {
+                items: items.to_vec(),
                 evidence: evidence_ids,
             };
             Ok(())
@@ -2467,21 +3453,21 @@ impl OracleExplorationLedgerV1 {
     ) -> Result<Self, OracleFrameworkError> {
         submission.validate()?;
         if run.identity()? != submission.run()
-            || run.item() != submission.item()
+            || run.dimension() != submission.dimension()
             || run.workspace() != self.workspace
             || workspace.identity()? != self.workspace
         {
             return Err(OracleFrameworkError::StrategyRunBindingMismatch);
         }
         match submission.result() {
-            OracleStrategySubmissionOutcomeV1::Contribute { elements } => {
-                self.record_contribution(run.item(), submission.run(), elements)
+            OracleStrategySubmissionOutcomeV1::Contribute { items, elements } => {
+                self.record_contribution(run.dimension(), submission.run(), items, elements)
             }
             OracleStrategySubmissionOutcomeV1::RequestExperiment { request } => {
                 self.request_experiment(request, workspace)
             }
-            OracleStrategySubmissionOutcomeV1::PreserveUnknown { evidence } => {
-                self.record_unknown(run.item(), submission.run(), evidence)
+            OracleStrategySubmissionOutcomeV1::PreserveUnknown { items, evidence } => {
+                self.record_unknown(run.dimension(), submission.run(), items, evidence)
             }
         }
     }
@@ -2505,7 +3491,7 @@ impl OracleExplorationLedgerV1 {
                 return Ok(OracleExplorationNextActionV1::BudgetExhausted);
             }
             return Ok(OracleExplorationNextActionV1::AuthorizeExperiment {
-                item: entry.item.clone(),
+                dimension: entry.dimension.clone(),
                 request,
             });
         }
@@ -2517,16 +3503,16 @@ impl OracleExplorationLedgerV1 {
             if self.strategy_runs_started >= budget.strategy_runs.get() {
                 return Ok(OracleExplorationNextActionV1::BudgetExhausted);
             }
-            let strategies = catalog.eligible(&entry.item);
+            let strategies = catalog.eligible(&entry.dimension);
             if strategies.is_empty() {
                 return Err(OracleFrameworkError::MissingStrategy {
-                    plane: entry.item.plane,
-                    concern: entry.item.concern,
-                    role: entry.item.role,
+                    plane: entry.dimension.plane,
+                    concern: entry.dimension.concern,
+                    role: entry.dimension.role,
                 });
             }
             return Ok(OracleExplorationNextActionV1::RunStrategy {
-                item: entry.item.clone(),
+                dimension: entry.dimension.clone(),
                 eligible_strategies: strategies,
             });
         }
@@ -2556,9 +3542,9 @@ impl OracleExplorationLedgerV1 {
         let items: Vec<_> = self
             .entries
             .iter()
-            .map(|entry| entry.item.clone())
+            .map(|entry| entry.dimension.clone())
             .collect();
-        validate_strict(&items, "oracle ledger work items")?;
+        validate_strict(&items, "oracle ledger dimensions")?;
         for entry in &self.entries {
             match &entry.resolution {
                 OracleObligationResolutionV1::Contributed { elements, .. }
@@ -2568,11 +3554,27 @@ impl OracleExplorationLedgerV1 {
                     return Err(OracleFrameworkError::Empty("portfolio contribution"));
                 }
                 OracleObligationResolutionV1::Contributed {
+                    runs,
+                    accepted_items,
+                    items,
                     elements,
                     observations,
                     ..
+                } => {
+                    validate_content_ids(runs, "Oracle contribution runs")?;
+                    validate_content_id_order(accepted_items, "accepted Oracle item lineage")?;
+                    validate_strict(items, "Oracle items")?;
+                    let dimension = entry.dimension.identity()?;
+                    if items.iter().any(|item| item.dimension() != dimension) {
+                        return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                    }
+                    if accepted_items.len() > items.len() {
+                        return Err(OracleFrameworkError::OracleItemSetInvalid);
+                    }
+                    validate_content_ids(elements, "portfolio elements")?;
+                    validate_content_id_order(observations, "exploration observations")?;
                 }
-                | OracleObligationResolutionV1::CoverageGap {
+                OracleObligationResolutionV1::CoverageGap {
                     elements,
                     observations,
                     ..
@@ -2580,8 +3582,17 @@ impl OracleExplorationLedgerV1 {
                     validate_content_ids(elements, "portfolio elements")?;
                     validate_content_id_order(observations, "exploration observations")?;
                 }
-                OracleObligationResolutionV1::Unknown { evidence }
-                | OracleObligationResolutionV1::Unsupported { evidence } => {
+                OracleObligationResolutionV1::Unknown {
+                    items, evidence, ..
+                } => {
+                    validate_strict(items, "unknown Oracle items")?;
+                    let dimension = entry.dimension.identity()?;
+                    if items.iter().any(|item| item.dimension() != dimension) {
+                        return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                    }
+                    validate_content_ids(evidence, "unknown evidence")?;
+                }
+                OracleObligationResolutionV1::Unsupported { evidence } => {
                     validate_content_ids(evidence, "unknown evidence")?;
                 }
                 OracleObligationResolutionV1::Running { observations, .. }
@@ -2597,12 +3608,17 @@ impl OracleExplorationLedgerV1 {
 
     fn entry_index(
         &self,
-        item: ContentId<OracleWorkItemArtifact>,
+        dimension: ContentId<OracleDimensionArtifact>,
     ) -> Result<usize, OracleFrameworkError> {
         self.entries
             .iter()
-            .position(|entry| entry.item.identity().is_ok_and(|identity| identity == item))
-            .ok_or(OracleFrameworkError::UnknownWorkItem)
+            .position(|entry| {
+                entry
+                    .dimension
+                    .identity()
+                    .is_ok_and(|identity| identity == dimension)
+            })
+            .ok_or(OracleFrameworkError::UnknownDimension)
     }
 
     fn revise(
@@ -2649,133 +3665,17 @@ impl<'de> Deserialize<'de> for OracleExplorationLedgerV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OracleExplorationNextActionV1 {
     RunStrategy {
-        item: OracleWorkItemV1,
+        dimension: OracleDimensionV1,
         eligible_strategies: Vec<OracleStrategyName>,
     },
     AuthorizeExperiment {
-        item: OracleWorkItemV1,
+        dimension: OracleDimensionV1,
         request: ContentId<OracleExperimentRequestArtifact>,
     },
     AwaitObservation,
     FreezePortfolio,
     BudgetExhausted,
 }
-
-/// Architectural decision selected from one recovered Oracle Exploration state.
-pub enum OracleExplorationDirectiveV1<StrategyAction, ExperimentAction, Waiting> {
-    RunStrategy(StrategyAction),
-    AuthorizeControllerExperiment(ExperimentAction),
-    AwaitObservation(Waiting),
-    FreezePortfolio,
-    BudgetExhausted,
-}
-
-/// A complete proposal or an explicit non-successful stopping boundary.
-pub enum OracleExplorationRunOutcomeV1<Portfolio, Waiting> {
-    Portfolio(Portfolio),
-    AwaitingObservation(Waiting),
-    BudgetExhausted,
-}
-
-/// Ports for the readable, strategy-independent Oracle Exploration business loop.
-pub trait OracleExplorationStages: Send {
-    type Error: Send;
-    type AdmittedIntent: Send + Sync;
-    type Workspace: Send + Sync;
-    type Claims: Send + Sync;
-    type WorkItems: Send + Sync;
-    type Exploration: Send;
-    type StrategyAction: Send;
-    type ExperimentAction: Send;
-    type Waiting: Send;
-    type Portfolio: Send;
-
-    fn freeze_oracle_workspace(
-        &mut self,
-        intent: &Self::AdmittedIntent,
-    ) -> impl Future<Output = Result<Self::Workspace, Self::Error>> + Send;
-    fn derive_oracle_claims(
-        &mut self,
-        workspace: &Self::Workspace,
-        intent: &Self::AdmittedIntent,
-    ) -> Result<Self::Claims, Self::Error>;
-    fn derive_oracle_work_items(
-        &mut self,
-        workspace: &Self::Workspace,
-        claims: &Self::Claims,
-    ) -> Result<Self::WorkItems, Self::Error>;
-    fn open_or_recover_oracle_exploration(
-        &mut self,
-        workspace: &Self::Workspace,
-        work_items: &Self::WorkItems,
-    ) -> Result<Self::Exploration, Self::Error>;
-    #[allow(
-        clippy::type_complexity,
-        reason = "the directive keeps three authority-distinct action types"
-    )]
-    fn select_next_oracle_action(
-        &mut self,
-        exploration: &Self::Exploration,
-    ) -> Result<
-        OracleExplorationDirectiveV1<Self::StrategyAction, Self::ExperimentAction, Self::Waiting>,
-        Self::Error,
-    >;
-    fn run_oracle_strategy(
-        &mut self,
-        workspace: &Self::Workspace,
-        exploration: Self::Exploration,
-        action: Self::StrategyAction,
-    ) -> impl Future<Output = Result<Self::Exploration, Self::Error>> + Send;
-    fn authorize_and_run_oracle_experiment(
-        &mut self,
-        workspace: &Self::Workspace,
-        exploration: Self::Exploration,
-        action: Self::ExperimentAction,
-    ) -> impl Future<Output = Result<Self::Exploration, Self::Error>> + Send;
-    fn freeze_oracle_portfolio(
-        &mut self,
-        workspace: Self::Workspace,
-        exploration: Self::Exploration,
-    ) -> Result<Self::Portfolio, Self::Error>;
-}
-
-/// Runs Oracle Exploration as a readable architecture skeleton.
-pub async fn run_oracle_exploration<S: OracleExplorationStages>(
-    stages: &mut S,
-    intent: &S::AdmittedIntent,
-) -> Result<OracleExplorationRunOutcomeV1<S::Portfolio, S::Waiting>, S::Error> {
-    let workspace = stages.freeze_oracle_workspace(intent).await?;
-    let claims = stages.derive_oracle_claims(&workspace, intent)?;
-    let work_items = stages.derive_oracle_work_items(&workspace, &claims)?;
-    let mut exploration = stages.open_or_recover_oracle_exploration(&workspace, &work_items)?;
-
-    loop {
-        match stages.select_next_oracle_action(&exploration)? {
-            OracleExplorationDirectiveV1::RunStrategy(action) => {
-                exploration = stages
-                    .run_oracle_strategy(&workspace, exploration, action)
-                    .await?;
-            }
-            OracleExplorationDirectiveV1::AuthorizeControllerExperiment(action) => {
-                exploration = stages
-                    .authorize_and_run_oracle_experiment(&workspace, exploration, action)
-                    .await?;
-            }
-            OracleExplorationDirectiveV1::AwaitObservation(waiting) => {
-                return Ok(OracleExplorationRunOutcomeV1::AwaitingObservation(waiting));
-            }
-            OracleExplorationDirectiveV1::FreezePortfolio => {
-                return Ok(OracleExplorationRunOutcomeV1::Portfolio(
-                    stages.freeze_oracle_portfolio(workspace, exploration)?,
-                ));
-            }
-            OracleExplorationDirectiveV1::BudgetExhausted => {
-                return Ok(OracleExplorationRunOutcomeV1::BudgetExhausted);
-            }
-        }
-    }
-}
-
 /// Frozen proposal preserves every resolved obligation, including unknowns and policy waivers.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OraclePortfolioProposalV1 {
@@ -2783,6 +3683,8 @@ pub struct OraclePortfolioProposalV1 {
     workspace: ContentId<OracleWorkspaceArtifact>,
     ledger: ContentId<OracleExplorationLedgerArtifact>,
     entries: Vec<OracleObligationEntryV1>,
+    accepted_items: Vec<OracleAcceptedItemV1>,
+    elements: Vec<OraclePortfolioElementV1>,
 }
 
 #[derive(Deserialize)]
@@ -2792,23 +3694,117 @@ struct OraclePortfolioProposalWire {
     workspace: ContentId<OracleWorkspaceArtifact>,
     ledger: ContentId<OracleExplorationLedgerArtifact>,
     entries: Vec<OracleObligationEntryV1>,
+    accepted_items: Vec<OracleAcceptedItemV1>,
+    elements: Vec<OraclePortfolioElementV1>,
 }
 
 impl OraclePortfolioProposalV1 {
-    pub fn freeze(ledger: &OracleExplorationLedgerV1) -> Result<Self, OracleFrameworkError> {
-        if ledger
-            .entries
+    /// Mechanically assembles only independently approved exact item revisions.
+    pub fn assemble_reviewed(
+        workspace: &OracleWorkspaceV1,
+        mut dimensions: Vec<OracleDimensionV1>,
+        accepted_items: Vec<OracleAcceptedItemV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        dimensions.sort();
+        validate_strict(&dimensions, "reviewed Oracle dimensions")?;
+        let mut identified_items = accepted_items
+            .into_iter()
+            .map(|accepted| Ok((accepted.identity()?.to_wire(), accepted)))
+            .collect::<Result<Vec<_>, OracleFrameworkError>>()?;
+        identified_items.sort_by(|left, right| left.0.cmp(&right.0));
+        let accepted_items = identified_items
+            .into_iter()
+            .map(|(_, accepted)| accepted)
+            .collect::<Vec<_>>();
+        let accepted_item_ids = accepted_items
             .iter()
-            .any(|entry| !entry.resolution.is_terminal())
-        {
-            return Err(OracleFrameworkError::ExplorationIncomplete);
+            .map(OracleAcceptedItemV1::identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        validate_content_ids(&accepted_item_ids, "reviewed Oracle items")?;
+
+        let mut elements = Vec::new();
+        let mut entries = Vec::new();
+        for dimension in dimensions {
+            let dimension_id = dimension.identity()?;
+            let accepted = accepted_items
+                .iter()
+                .filter(|accepted| accepted.item().dimension() == dimension_id)
+                .collect::<Vec<_>>();
+            if accepted.is_empty() {
+                return Err(OracleFrameworkError::OracleItemSetInvalid);
+            }
+            let mut items = accepted
+                .iter()
+                .map(|accepted| accepted.item().clone())
+                .collect::<Vec<_>>();
+            items.sort();
+            let mut runs = accepted
+                .iter()
+                .map(|accepted| accepted.run())
+                .collect::<Vec<_>>();
+            runs.sort_by_key(ContentId::to_wire);
+            runs.dedup();
+            let mut accepted_ids = accepted
+                .iter()
+                .map(|accepted| accepted.identity())
+                .collect::<Result<Vec<_>, _>>()?;
+            accepted_ids.sort_by_key(ContentId::to_wire);
+            let mut entry_elements = Vec::new();
+            for accepted in accepted {
+                let item = accepted.item().identity()?;
+                for plan in accepted.plans() {
+                    let element = OraclePortfolioElementV1::new(
+                        item,
+                        accepted.run(),
+                        OraclePortfolioElementKindV1::CheckPlan(plan.identity()?),
+                        Vec::new(),
+                    )?;
+                    entry_elements.push(element.identity()?);
+                    elements.push(element);
+                }
+            }
+            entry_elements.sort_by_key(ContentId::to_wire);
+            entries.push(OracleObligationEntryV1 {
+                dimension,
+                resolution: OracleObligationResolutionV1::Contributed {
+                    runs,
+                    accepted_items: accepted_ids,
+                    items,
+                    elements: entry_elements,
+                    observations: Vec::new(),
+                },
+            });
         }
-        Ok(Self {
+        let mut identified_elements = elements
+            .into_iter()
+            .map(|element| Ok((element.identity()?.to_wire(), element)))
+            .collect::<Result<Vec<_>, OracleFrameworkError>>()?;
+        identified_elements.sort_by(|left, right| left.0.cmp(&right.0));
+        let elements = identified_elements
+            .into_iter()
+            .map(|(_, element)| element)
+            .collect();
+        let run_count = u32::try_from(accepted_items.len())
+            .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?;
+        let ledger = OracleExplorationLedgerV1 {
             schema_version: SCHEMA_V1,
-            workspace: ledger.workspace,
+            workspace: workspace.identity()?,
+            parent: None,
+            revision: OracleExplorationRevision::new(1)?,
+            entries,
+            strategy_runs_started: run_count,
+            experiments_started: 0,
+        };
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            workspace: workspace.identity()?,
             ledger: ledger.identity()?,
-            entries: ledger.entries.clone(),
-        })
+            entries: ledger.entries,
+            accepted_items,
+            elements,
+        };
+        value.validate()?;
+        Ok(value)
     }
 
     #[must_use]
@@ -2820,6 +3816,27 @@ impl OraclePortfolioProposalV1 {
     pub fn entries(&self) -> &[OracleObligationEntryV1] {
         &self.entries
     }
+
+    #[must_use]
+    pub fn accepted_items(&self) -> &[OracleAcceptedItemV1] {
+        &self.accepted_items
+    }
+
+    #[must_use]
+    pub fn elements(&self) -> &[OraclePortfolioElementV1] {
+        &self.elements
+    }
+
+    /// Every independently reviewable/admissible item, in canonical dimension/item order.
+    pub fn items(&self) -> impl Iterator<Item = &OracleItemV1> {
+        self.entries
+            .iter()
+            .flat_map(|entry| match &entry.resolution {
+                OracleObligationResolutionV1::Contributed { items, .. }
+                | OracleObligationResolutionV1::Unknown { items, .. } => items.as_slice(),
+                _ => &[],
+            })
+    }
     pub fn identity(
         &self,
     ) -> Result<ContentId<OraclePortfolioProposalArtifact>, OracleFrameworkError> {
@@ -2827,19 +3844,72 @@ impl OraclePortfolioProposalV1 {
     }
     fn validate(&self) -> Result<(), OracleFrameworkError> {
         require_v1(self.schema_version)?;
-        if self
-            .entries
-            .iter()
-            .any(|entry| !entry.resolution.is_terminal())
-        {
+        if self.entries.iter().any(|entry| {
+            !matches!(
+                entry.resolution,
+                OracleObligationResolutionV1::Contributed { .. }
+            )
+        }) {
             return Err(OracleFrameworkError::ExplorationIncomplete);
         }
-        let items: Vec<_> = self
+        let dimensions: Vec<_> = self
             .entries
             .iter()
-            .map(|entry| entry.item.clone())
+            .map(|entry| entry.dimension.clone())
             .collect();
-        validate_strict(&items, "portfolio work items")
+        validate_strict(&dimensions, "portfolio dimensions")?;
+        let mut all_items = HashSet::new();
+        let mut ledger_accepted_items = Vec::new();
+        let mut ledger_elements = Vec::new();
+        for entry in &self.entries {
+            if let OracleObligationResolutionV1::Contributed {
+                accepted_items,
+                items,
+                elements,
+                ..
+            } = &entry.resolution
+            {
+                validate_strict(items, "portfolio Oracle items")?;
+                if accepted_items.len() != items.len() {
+                    return Err(OracleFrameworkError::OracleItemSetInvalid);
+                }
+                ledger_accepted_items.extend(accepted_items.iter().copied());
+                ledger_elements.extend(elements.iter().copied());
+                for item in items {
+                    if item.dimension() != entry.dimension.identity()?
+                        || !all_items.insert(item.identity()?)
+                    {
+                        return Err(OracleFrameworkError::OracleItemBindingMismatch);
+                    }
+                }
+            }
+        }
+        ledger_accepted_items.sort_by_key(ContentId::to_wire);
+        ledger_elements.sort_by_key(ContentId::to_wire);
+        let mut accepted_ids = self
+            .accepted_items
+            .iter()
+            .map(OracleAcceptedItemV1::identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        accepted_ids.sort_by_key(ContentId::to_wire);
+        let mut element_ids = self
+            .elements
+            .iter()
+            .map(OraclePortfolioElementV1::identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        element_ids.sort_by_key(ContentId::to_wire);
+        if accepted_ids != ledger_accepted_items || element_ids != ledger_elements {
+            return Err(OracleFrameworkError::PortfolioElementBindingMismatch);
+        }
+        let accepted_item_ids = self
+            .accepted_items
+            .iter()
+            .map(|accepted| accepted.item().identity())
+            .collect::<Result<HashSet<_>, _>>()?;
+        if accepted_item_ids != all_items {
+            return Err(OracleFrameworkError::OracleItemBindingMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -2851,6 +3921,8 @@ impl TryFrom<OraclePortfolioProposalWire> for OraclePortfolioProposalV1 {
             workspace: wire.workspace,
             ledger: wire.ledger,
             entries: wire.entries,
+            accepted_items: wire.accepted_items,
+            elements: wire.elements,
         };
         value.validate()?;
         Ok(value)
@@ -2863,6 +3935,634 @@ impl<'de> Deserialize<'de> for OraclePortfolioProposalV1 {
         D: Deserializer<'de>,
     {
         OraclePortfolioProposalWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Cross-item issue class considered only after every exact item draft passed its own Review.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OraclePortfolioCoherenceIssueClassV1 {
+    ContradictoryItems,
+    DuplicateCoverage,
+    ConflictingPassConditions,
+    CrossPlaneGap,
+    JointCoverageGap,
+}
+
+/// Non-empty canonical set of existing Oracle items affected by one cross-item finding.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct OracleAffectedItemSetV1(Vec<ContentId<OracleItemArtifact>>);
+
+impl OracleAffectedItemSetV1 {
+    pub fn new(
+        mut items: Vec<ContentId<OracleItemArtifact>>,
+    ) -> Result<Self, OracleFrameworkError> {
+        items.sort_by_key(ContentId::to_wire);
+        validate_content_ids(&items, "affected Oracle item set")?;
+        Ok(Self(items))
+    }
+
+    #[must_use]
+    pub fn items(&self) -> &[ContentId<OracleItemArtifact>] {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleAffectedItemSetV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(Vec::<ContentId<OracleItemArtifact>>::deserialize(
+            deserializer,
+        )?)
+        .map_err(de::Error::custom)
+    }
+}
+
+/// One actionable semantic relationship failure over a non-empty exact item set.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OraclePortfolioCoherenceFindingV1 {
+    affected_items: OracleAffectedItemSetV1,
+    issue: OraclePortfolioCoherenceIssueClassV1,
+    explanation: OracleReviewExplanation,
+    required_change: OracleReviewRequiredChange,
+}
+
+impl OraclePortfolioCoherenceFindingV1 {
+    #[must_use]
+    pub const fn new(
+        affected_items: OracleAffectedItemSetV1,
+        issue: OraclePortfolioCoherenceIssueClassV1,
+        explanation: OracleReviewExplanation,
+        required_change: OracleReviewRequiredChange,
+    ) -> Self {
+        Self {
+            affected_items,
+            issue,
+            explanation,
+            required_change,
+        }
+    }
+
+    #[must_use]
+    pub const fn affected_items(&self) -> &OracleAffectedItemSetV1 {
+        &self.affected_items
+    }
+
+    #[must_use]
+    pub const fn issue(&self) -> OraclePortfolioCoherenceIssueClassV1 {
+        self.issue
+    }
+
+    #[must_use]
+    pub const fn explanation(&self) -> &OracleReviewExplanation {
+        &self.explanation
+    }
+
+    #[must_use]
+    pub const fn required_change(&self) -> &OracleReviewRequiredChange {
+        &self.required_change
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "decision", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum OraclePortfolioCoherenceDecisionV1 {
+    Approved,
+    NeedsRevision {
+        findings: Vec<OraclePortfolioCoherenceFindingV1>,
+    },
+}
+
+/// Narrow semantic Review of cross-item relationships in one exact mechanically assembled
+/// portfolio. It grants neither control receipt nor Admission authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OraclePortfolioCoherenceReviewV1 {
+    schema_version: u16,
+    portfolio: ContentId<OraclePortfolioProposalArtifact>,
+    decision: OraclePortfolioCoherenceDecisionV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OraclePortfolioCoherenceReviewWire {
+    schema_version: u16,
+    portfolio: ContentId<OraclePortfolioProposalArtifact>,
+    decision: OraclePortfolioCoherenceDecisionV1,
+}
+
+impl OraclePortfolioCoherenceReviewV1 {
+    pub fn approved(portfolio: &OraclePortfolioProposalV1) -> Result<Self, OracleFrameworkError> {
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            portfolio: portfolio.identity()?,
+            decision: OraclePortfolioCoherenceDecisionV1::Approved,
+        })
+    }
+
+    pub fn needs_revision(
+        portfolio: &OraclePortfolioProposalV1,
+        findings: Vec<OraclePortfolioCoherenceFindingV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        let mut encoded = findings
+            .into_iter()
+            .map(|finding| {
+                cairn_codec::to_vec(&finding)
+                    .map(|bytes| (bytes, finding))
+                    .map_err(|error| OracleFrameworkError::Codec(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        encoded.sort_by(|left, right| left.0.cmp(&right.0));
+        if encoded.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(OracleFrameworkError::ReviewFindingsInvalid);
+        }
+        let findings = encoded.into_iter().map(|(_, finding)| finding).collect();
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            portfolio: portfolio.identity()?,
+            decision: OraclePortfolioCoherenceDecisionV1::NeedsRevision { findings },
+        };
+        value.validate_against(portfolio)?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn portfolio(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.portfolio
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> &OraclePortfolioCoherenceDecisionV1 {
+        &self.decision
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OraclePortfolioCoherenceReviewArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    pub fn validate_against(
+        &self,
+        portfolio: &OraclePortfolioProposalV1,
+    ) -> Result<(), OracleFrameworkError> {
+        self.validate()?;
+        if self.portfolio != portfolio.identity()? {
+            return Err(OracleFrameworkError::ReviewProposalMismatch);
+        }
+        let item_ids = portfolio
+            .accepted_items()
+            .iter()
+            .map(|accepted| accepted.item().identity())
+            .collect::<Result<HashSet<_>, _>>()?;
+        if let OraclePortfolioCoherenceDecisionV1::NeedsRevision { findings } = &self.decision {
+            if findings.iter().any(|finding| {
+                finding
+                    .affected_items()
+                    .items()
+                    .iter()
+                    .any(|item| !item_ids.contains(item))
+            }) {
+                return Err(OracleFrameworkError::ReviewFindingsInvalid);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        if let OraclePortfolioCoherenceDecisionV1::NeedsRevision { findings } = &self.decision {
+            if findings.is_empty() {
+                return Err(OracleFrameworkError::ReviewFindingsInvalid);
+            }
+            let encoded = findings
+                .iter()
+                .map(cairn_codec::to_vec)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?;
+            if encoded.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(OracleFrameworkError::ReviewFindingsInvalid);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OraclePortfolioCoherenceReviewWire> for OraclePortfolioCoherenceReviewV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OraclePortfolioCoherenceReviewWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            portfolio: wire.portfolio,
+            decision: wire.decision,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OraclePortfolioCoherenceReviewV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OraclePortfolioCoherenceReviewWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Exact portfolio state allowed to proceed to qualified controls only after the narrow
+/// cross-item Review approved that same immutable proposal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleCoherentPortfolioV1 {
+    schema_version: u16,
+    proposal: OraclePortfolioProposalV1,
+    review: OraclePortfolioCoherenceReviewV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleCoherentPortfolioWire {
+    schema_version: u16,
+    proposal: OraclePortfolioProposalV1,
+    review: OraclePortfolioCoherenceReviewV1,
+}
+
+impl OracleCoherentPortfolioV1 {
+    pub fn new(
+        proposal: &OraclePortfolioProposalV1,
+        review: &OraclePortfolioCoherenceReviewV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        review.validate_against(proposal)?;
+        if !matches!(
+            review.decision(),
+            OraclePortfolioCoherenceDecisionV1::Approved
+        ) {
+            return Err(OracleFrameworkError::ReviewCannotApproveUnresolved);
+        }
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            proposal: proposal.clone(),
+            review: review.clone(),
+        })
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> &OraclePortfolioProposalV1 {
+        &self.proposal
+    }
+
+    #[must_use]
+    pub const fn review(&self) -> &OraclePortfolioCoherenceReviewV1 {
+        &self.review
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleCoherentPortfolioArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        self.review.validate_against(&self.proposal)?;
+        if !matches!(
+            self.review.decision(),
+            OraclePortfolioCoherenceDecisionV1::Approved
+        ) {
+            return Err(OracleFrameworkError::ReviewCannotApproveUnresolved);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleCoherentPortfolioWire> for OracleCoherentPortfolioV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleCoherentPortfolioWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            proposal: wire.proposal,
+            review: wire.review,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleCoherentPortfolioV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleCoherentPortfolioWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Review issue class for one exact Oracle item.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleReviewIssueClassV1 {
+    UnresolvedUnknown,
+    ConcernMismatch,
+    UnsupportedEvidence,
+    ObjectiveIncomplete,
+    SetupIncomplete,
+    ObservationUnexecutable,
+    PassConditionAmbiguous,
+}
+
+/// Actionable reviewer feedback bound to one exact item.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OracleReviewFindingV1 {
+    #[serde(rename = "item_id")]
+    item: ContentId<OracleItemArtifact>,
+    issue: OracleReviewIssueClassV1,
+    explanation: OracleReviewExplanation,
+    required_change: OracleReviewRequiredChange,
+}
+
+impl OracleReviewFindingV1 {
+    #[must_use]
+    pub const fn new(
+        item: ContentId<OracleItemArtifact>,
+        issue: OracleReviewIssueClassV1,
+        explanation: OracleReviewExplanation,
+        required_change: OracleReviewRequiredChange,
+    ) -> Self {
+        Self {
+            item,
+            issue,
+            explanation,
+            required_change,
+        }
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn issue(&self) -> OracleReviewIssueClassV1 {
+        self.issue
+    }
+
+    #[must_use]
+    pub fn explanation(&self) -> &OracleReviewExplanation {
+        &self.explanation
+    }
+
+    #[must_use]
+    pub fn required_change(&self) -> &OracleReviewRequiredChange {
+        &self.required_change
+    }
+}
+
+/// Independent Review of one exact Oracle item draft revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleItemReviewV1 {
+    schema_version: u16,
+    item: ContentId<OracleItemArtifact>,
+    draft: ContentId<OracleItemDraftArtifact>,
+    decision: OracleItemReviewDecisionV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "decision", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum OracleItemReviewDecisionV1 {
+    Approved,
+    NeedsRevision {
+        findings: Vec<OracleReviewFindingV1>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleItemReviewWire {
+    schema_version: u16,
+    item: ContentId<OracleItemArtifact>,
+    draft: ContentId<OracleItemDraftArtifact>,
+    decision: OracleItemReviewDecisionV1,
+}
+
+impl OracleItemReviewV1 {
+    pub fn approved(draft: &OracleItemDraftV1) -> Result<Self, OracleFrameworkError> {
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            item: draft.item().identity()?,
+            draft: draft.identity()?,
+            decision: OracleItemReviewDecisionV1::Approved,
+        })
+    }
+
+    pub fn needs_revision(
+        draft: &OracleItemDraftV1,
+        findings: Vec<OracleReviewFindingV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        let item = draft.item().identity()?;
+        if findings.is_empty() || findings.iter().any(|finding| finding.item() != item) {
+            return Err(OracleFrameworkError::ReviewFindingsInvalid);
+        }
+        let mut encoded = findings
+            .into_iter()
+            .map(|finding| {
+                cairn_codec::to_vec(&finding)
+                    .map(|encoded| (encoded, finding))
+                    .map_err(|error| OracleFrameworkError::Codec(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, OracleFrameworkError>>()?;
+        encoded.sort_by(|left, right| left.0.cmp(&right.0));
+        if encoded.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(OracleFrameworkError::ReviewFindingsInvalid);
+        }
+        let findings = encoded.into_iter().map(|(_, finding)| finding).collect();
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            item,
+            draft: draft.identity()?,
+            decision: OracleItemReviewDecisionV1::NeedsRevision { findings },
+        })
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
+        self.item
+    }
+
+    #[must_use]
+    pub const fn draft(&self) -> ContentId<OracleItemDraftArtifact> {
+        self.draft
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> &OracleItemReviewDecisionV1 {
+        &self.decision
+    }
+
+    pub fn identity(&self) -> Result<ContentId<OracleItemReviewArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    pub fn validate_against(&self, draft: &OracleItemDraftV1) -> Result<(), OracleFrameworkError> {
+        self.validate()?;
+        if self.item != draft.item().identity()? || self.draft != draft.identity()? {
+            return Err(OracleFrameworkError::ReviewProposalMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        match &self.decision {
+            OracleItemReviewDecisionV1::Approved => Ok(()),
+            OracleItemReviewDecisionV1::NeedsRevision { findings } => {
+                if findings.is_empty() || findings.iter().any(|finding| finding.item() != self.item)
+                {
+                    return Err(OracleFrameworkError::ReviewFindingsInvalid);
+                }
+                let encoded = findings
+                    .iter()
+                    .map(cairn_codec::to_vec)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?;
+                if encoded.windows(2).any(|pair| pair[0] >= pair[1]) {
+                    return Err(OracleFrameworkError::ReviewFindingsInvalid);
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl TryFrom<OracleItemReviewWire> for OracleItemReviewV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleItemReviewWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            item: wire.item,
+            draft: wire.draft,
+            decision: wire.decision,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleItemReviewV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleItemReviewWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Item authority granted only by an independent approval of the exact draft revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleAcceptedItemV1 {
+    schema_version: u16,
+    draft: OracleItemDraftV1,
+    review: OracleItemReviewV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleAcceptedItemWire {
+    schema_version: u16,
+    draft: OracleItemDraftV1,
+    review: OracleItemReviewV1,
+}
+
+impl OracleAcceptedItemV1 {
+    pub fn new(
+        draft: &OracleItemDraftV1,
+        review: &OracleItemReviewV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        review.validate_against(draft)?;
+        if !matches!(review.decision(), OracleItemReviewDecisionV1::Approved) {
+            return Err(OracleFrameworkError::ReviewCannotApproveUnresolved);
+        }
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            draft: draft.clone(),
+            review: review.clone(),
+        })
+    }
+
+    #[must_use]
+    pub const fn item(&self) -> &OracleItemV1 {
+        self.draft.item()
+    }
+
+    #[must_use]
+    pub const fn draft(&self) -> &OracleItemDraftV1 {
+        &self.draft
+    }
+
+    #[must_use]
+    pub const fn review(&self) -> &OracleItemReviewV1 {
+        &self.review
+    }
+
+    #[must_use]
+    pub const fn run(&self) -> ContentId<OracleStrategyRunArtifact> {
+        self.draft.run()
+    }
+
+    #[must_use]
+    pub fn plans(&self) -> &[OracleCheckPlanV1] {
+        self.draft.plans()
+    }
+
+    pub fn identity(&self) -> Result<ContentId<OracleAcceptedItemArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        self.draft.validate()?;
+        self.review.validate_against(&self.draft)?;
+        if !matches!(self.review.decision(), OracleItemReviewDecisionV1::Approved) {
+            return Err(OracleFrameworkError::ReviewCannotApproveUnresolved);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleAcceptedItemWire> for OracleAcceptedItemV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleAcceptedItemWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            draft: wire.draft,
+            review: wire.review,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleAcceptedItemV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleAcceptedItemWire::deserialize(deserializer)?
             .try_into()
             .map_err(de::Error::custom)
     }
@@ -3104,14 +4804,14 @@ impl<'de> Deserialize<'de> for OracleAdmissionMechanismCatalogV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OracleControlObligationV1 {
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     control: OracleControlFamilyV1,
     mechanism: ContentId<OracleQualifiedMechanismArtifact>,
 }
 
 impl OracleControlObligationV1 {
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
         self.item
     }
 
@@ -3153,10 +4853,10 @@ impl OracleAdmissionAttemptV1 {
         mechanisms: &OracleAdmissionMechanismCatalogV1,
     ) -> Result<Self, OracleFrameworkError> {
         let mut required_controls = Vec::new();
-        for entry in proposal.entries() {
+        for item in proposal.items() {
             for control in policy.required_controls() {
                 required_controls.push(OracleControlObligationV1 {
-                    item: entry.item().identity()?,
+                    item: item.identity()?,
                     control: *control,
                     mechanism: mechanisms
                         .mechanism(*control)
@@ -3282,42 +4982,125 @@ pub enum OracleControlResultV1 {
     Unavailable,
 }
 
-/// Controller-validated receipt for one exact portfolio work item and control family.
+/// Bounded, non-authoritative diagnostic projected from one exact trusted execution receipt.
+/// Artifact identities preserve access to the original untrusted output without logging it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleControlFailureClassV1 {
+    /// The honest control rejected the submitted Oracle artifact itself.
+    OracleArtifactRejected,
+    /// A negative control accepted the deliberately invalid challenge it was required to reject.
+    NegativeChallengeAccepted,
+    /// The qualified mechanism violated its own control protocol.
+    MechanismProtocolViolation,
+    /// Worker execution failed before a trustworthy control decision was available.
+    ExecutionFailure,
+}
+
+impl OracleControlFailureClassV1 {
+    #[must_use]
+    pub const fn requires_oracle_revision(self) -> bool {
+        matches!(self, Self::OracleArtifactRejected)
+    }
+
+    #[must_use]
+    pub const fn requires_control_reconciliation(self) -> bool {
+        !self.requires_oracle_revision()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OracleControlDiagnosticV1 {
+    failure_class: OracleControlFailureClassV1,
+    summary: OracleControlDiagnosticSummary,
+    stdout: ContentId<ExecutionStdoutArtifact>,
+    stderr: ContentId<ExecutionStderrArtifact>,
+}
+
+impl OracleControlDiagnosticV1 {
+    #[must_use]
+    pub const fn new(
+        failure_class: OracleControlFailureClassV1,
+        summary: OracleControlDiagnosticSummary,
+        stdout: ContentId<ExecutionStdoutArtifact>,
+        stderr: ContentId<ExecutionStderrArtifact>,
+    ) -> Self {
+        Self {
+            failure_class,
+            summary,
+            stdout,
+            stderr,
+        }
+    }
+
+    #[must_use]
+    pub const fn failure_class(&self) -> OracleControlFailureClassV1 {
+        self.failure_class
+    }
+
+    #[must_use]
+    pub const fn summary(&self) -> &OracleControlDiagnosticSummary {
+        &self.summary
+    }
+
+    #[must_use]
+    pub const fn stdout(&self) -> ContentId<ExecutionStdoutArtifact> {
+        self.stdout
+    }
+
+    #[must_use]
+    pub const fn stderr(&self) -> ContentId<ExecutionStderrArtifact> {
+        self.stderr
+    }
+}
+
+/// Controller-validated receipt for one exact portfolio item and control family.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OracleControlReceiptV1 {
     proposal: ContentId<OraclePortfolioProposalArtifact>,
-    item: ContentId<OracleWorkItemArtifact>,
+    item: ContentId<OracleItemArtifact>,
     control: OracleControlFamilyV1,
     mechanism: ContentId<OracleQualifiedMechanismArtifact>,
     receipt: ContentId<TrustedOracleControlReceiptArtifact>,
     result: OracleControlResultV1,
+    diagnostic: Option<OracleControlDiagnosticV1>,
 }
 
 impl OracleControlReceiptV1 {
-    #[must_use]
-    pub const fn new(
+    pub fn new(
         proposal: ContentId<OraclePortfolioProposalArtifact>,
-        item: ContentId<OracleWorkItemArtifact>,
+        item: ContentId<OracleItemArtifact>,
         control: OracleControlFamilyV1,
         mechanism: ContentId<OracleQualifiedMechanismArtifact>,
         receipt: ContentId<TrustedOracleControlReceiptArtifact>,
         result: OracleControlResultV1,
-    ) -> Self {
-        Self {
+        diagnostic: Option<OracleControlDiagnosticV1>,
+    ) -> Result<Self, OracleFrameworkError> {
+        if (result == OracleControlResultV1::Passed) != diagnostic.is_none()
+            || diagnostic
+                .as_ref()
+                .is_some_and(|diagnostic| !failure_class_matches_control(control, diagnostic))
+        {
+            return Err(OracleFrameworkError::AdmissionEvidenceBindingMismatch);
+        }
+        Ok(Self {
             proposal,
             item,
             control,
             mechanism,
             receipt,
             result,
-        }
+            diagnostic,
+        })
     }
 
     pub fn from_trusted_observation(
         proposal: ContentId<OraclePortfolioProposalArtifact>,
         run: &OracleControlRunV1,
         observation: &TrustedOracleControlObservationV1,
+        failure_class: Option<OracleControlFailureClassV1>,
     ) -> Result<Self, OracleFrameworkError> {
         if observation.run()
             != run
@@ -3326,16 +5109,50 @@ impl OracleControlReceiptV1 {
         {
             return Err(OracleFrameworkError::ReceiptBindingMismatch);
         }
-        Ok(Self {
+        if (observation.result() == OracleControlResultV1::Passed) != failure_class.is_none() {
+            return Err(OracleFrameworkError::AdmissionEvidenceBindingMismatch);
+        }
+        let diagnostic = failure_class
+            .map(|failure_class| {
+                let receipt = observation.receipt();
+                let explanation = match failure_class {
+                    OracleControlFailureClassV1::OracleArtifactRejected => {
+                        "the honest control rejected the submitted Oracle artifact"
+                    }
+                    OracleControlFailureClassV1::NegativeChallengeAccepted => {
+                        "the negative control accepted its deliberately invalid challenge"
+                    }
+                    OracleControlFailureClassV1::MechanismProtocolViolation => {
+                        "the qualified mechanism violated its control protocol"
+                    }
+                    OracleControlFailureClassV1::ExecutionFailure => {
+                        "Worker execution failed before a trustworthy control decision"
+                    }
+                };
+                Ok::<_, OracleFrameworkError>(OracleControlDiagnosticV1::new(
+                    failure_class,
+                    OracleControlDiagnosticSummary::new(format!(
+                        "{explanation}; control {:?}, outcome {:?}, exit code {:?}; inspect the exact stdout/stderr artifacts",
+                        run.obligation().control(),
+                        receipt.outcome(),
+                        receipt.exit_code(),
+                    ))?,
+                    receipt.stdout_id(),
+                    receipt.stderr_id(),
+                ))
+            })
+            .transpose()?;
+        Self::new(
             proposal,
-            item: run.obligation().item(),
-            control: run.obligation().control(),
-            mechanism: run.obligation().mechanism(),
-            receipt: observation
+            run.obligation().item(),
+            run.obligation().control(),
+            run.obligation().mechanism(),
+            observation
                 .identity()
                 .map_err(|error| OracleFrameworkError::Codec(error.to_string()))?,
-            result: observation.result(),
-        })
+            observation.result(),
+            diagnostic,
+        )
     }
 
     #[must_use]
@@ -3344,7 +5161,7 @@ impl OracleControlReceiptV1 {
     }
 
     #[must_use]
-    pub const fn item(&self) -> ContentId<OracleWorkItemArtifact> {
+    pub const fn item(&self) -> ContentId<OracleItemArtifact> {
         self.item
     }
 
@@ -3366,6 +5183,71 @@ impl OracleControlReceiptV1 {
     #[must_use]
     pub const fn result(&self) -> OracleControlResultV1 {
         self.result
+    }
+
+    #[must_use]
+    pub const fn diagnostic(&self) -> Option<&OracleControlDiagnosticV1> {
+        self.diagnostic.as_ref()
+    }
+
+    #[must_use]
+    pub fn failure_class(&self) -> Option<OracleControlFailureClassV1> {
+        self.diagnostic
+            .as_ref()
+            .map(OracleControlDiagnosticV1::failure_class)
+    }
+}
+
+fn control_requires_revision(receipt: &OracleControlReceiptV1) -> bool {
+    receipt.result() == OracleControlResultV1::Failed
+        && receipt
+            .failure_class()
+            .is_some_and(OracleControlFailureClassV1::requires_oracle_revision)
+}
+
+fn control_requires_reconciliation(receipt: &OracleControlReceiptV1) -> bool {
+    receipt.result() == OracleControlResultV1::Failed
+        && receipt
+            .failure_class()
+            .is_some_and(OracleControlFailureClassV1::requires_control_reconciliation)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleControlReceiptWire {
+    proposal: ContentId<OraclePortfolioProposalArtifact>,
+    item: ContentId<OracleItemArtifact>,
+    control: OracleControlFamilyV1,
+    mechanism: ContentId<OracleQualifiedMechanismArtifact>,
+    receipt: ContentId<TrustedOracleControlReceiptArtifact>,
+    result: OracleControlResultV1,
+    diagnostic: Option<OracleControlDiagnosticV1>,
+}
+
+impl TryFrom<OracleControlReceiptWire> for OracleControlReceiptV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleControlReceiptWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.proposal,
+            wire.item,
+            wire.control,
+            wire.mechanism,
+            wire.receipt,
+            wire.result,
+            wire.diagnostic,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleControlReceiptV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleControlReceiptWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
     }
 }
 
@@ -3449,6 +5331,12 @@ impl OracleAdmissionEvidenceV1 {
             .map(OracleControlReceiptV1::receipt)
             .collect::<HashSet<_>>();
         if receipt_identities.len() != self.receipts.len()
+            || self.receipts.iter().any(|receipt| {
+                (receipt.result == OracleControlResultV1::Passed) != receipt.diagnostic.is_none()
+                    || receipt.diagnostic.as_ref().is_some_and(|diagnostic| {
+                        !failure_class_matches_control(receipt.control, diagnostic)
+                    })
+            })
             || self.receipts.windows(2).any(|pair| {
                 pair[0].item.to_wire() > pair[1].item.to_wire()
                     || (pair[0].item == pair[1].item && pair[0].control >= pair[1].control)
@@ -3457,6 +5345,25 @@ impl OracleAdmissionEvidenceV1 {
             return Err(OracleFrameworkError::DuplicateControlReceipt);
         }
         Ok(())
+    }
+}
+
+fn failure_class_matches_control(
+    control: OracleControlFamilyV1,
+    diagnostic: &OracleControlDiagnosticV1,
+) -> bool {
+    match diagnostic.failure_class() {
+        OracleControlFailureClassV1::OracleArtifactRejected => {
+            control == OracleControlFamilyV1::Honest
+        }
+        OracleControlFailureClassV1::NegativeChallengeAccepted => matches!(
+            control,
+            OracleControlFamilyV1::Mutant
+                | OracleControlFamilyV1::Hidden
+                | OracleControlFamilyV1::Bypass
+        ),
+        OracleControlFailureClassV1::MechanismProtocolViolation
+        | OracleControlFailureClassV1::ExecutionFailure => true,
     }
 }
 
@@ -3498,9 +5405,9 @@ pub enum OracleClaimAdmissionStatusV1 {
 pub struct OracleClaimAdmissionV1 {
     claim: ContentId<OracleClaimArtifact>,
     status: OracleClaimAdmissionStatusV1,
-    admitted_items: Vec<ContentId<OracleWorkItemArtifact>>,
-    unresolved_items: Vec<ContentId<OracleWorkItemArtifact>>,
-    rejected_items: Vec<ContentId<OracleWorkItemArtifact>>,
+    admitted_items: Vec<ContentId<OracleItemArtifact>>,
+    unresolved_items: Vec<ContentId<OracleItemArtifact>>,
+    rejected_items: Vec<ContentId<OracleItemArtifact>>,
 }
 
 impl OracleClaimAdmissionV1 {
@@ -3515,24 +5422,24 @@ impl OracleClaimAdmissionV1 {
     }
 
     #[must_use]
-    pub fn admitted_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+    pub fn admitted_items(&self) -> &[ContentId<OracleItemArtifact>] {
         &self.admitted_items
     }
 
     #[must_use]
-    pub fn unresolved_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+    pub fn unresolved_items(&self) -> &[ContentId<OracleItemArtifact>] {
         &self.unresolved_items
     }
 
     #[must_use]
-    pub fn rejected_items(&self) -> &[ContentId<OracleWorkItemArtifact>] {
+    pub fn rejected_items(&self) -> &[ContentId<OracleItemArtifact>] {
         &self.rejected_items
     }
 
     fn validate(&self) -> Result<(), OracleFrameworkError> {
-        validate_content_id_order(&self.admitted_items, "admitted Oracle work items")?;
-        validate_content_id_order(&self.unresolved_items, "unresolved Oracle work items")?;
-        validate_content_id_order(&self.rejected_items, "rejected Oracle work items")?;
+        validate_content_id_order(&self.admitted_items, "admitted Oracle dimensions")?;
+        validate_content_id_order(&self.unresolved_items, "unresolved Oracle dimensions")?;
+        validate_content_id_order(&self.rejected_items, "rejected Oracle dimensions")?;
         let all: HashSet<_> = self
             .admitted_items
             .iter()
@@ -3660,10 +5567,271 @@ impl<'de> Deserialize<'de> for OracleAdmissionOutcomeV1 {
     }
 }
 
+/// Exact Admission feedback consumed by the affected Oracle item developer loops.
+///
+/// The complete attempt, outcome, and receipt lineage is carried in the artifact, so a failed
+/// qualified control cannot degrade into a bare status or be applied to a sibling item.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleRevisionRequestV1 {
+    schema_version: u16,
+    attempt: Box<OracleAdmissionAttemptV1>,
+    outcome: Box<OracleAdmissionOutcomeV1>,
+    evidence: Box<OracleAdmissionEvidenceV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleRevisionRequestWire {
+    schema_version: u16,
+    attempt: Box<OracleAdmissionAttemptV1>,
+    outcome: Box<OracleAdmissionOutcomeV1>,
+    evidence: Box<OracleAdmissionEvidenceV1>,
+}
+
+impl OracleRevisionRequestV1 {
+    pub fn from_admission(
+        attempt: OracleAdmissionAttemptV1,
+        outcome: OracleAdmissionOutcomeV1,
+        evidence: OracleAdmissionEvidenceV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        if outcome.attempt() != attempt.identity()?
+            || evidence.attempt() != attempt.identity()?
+            || outcome.evidence() != evidence.identity()?
+            || outcome
+                .claims()
+                .iter()
+                .all(|claim| claim.status() == OracleClaimAdmissionStatusV1::Admitted)
+            || !evidence.receipts().iter().any(control_requires_revision)
+            || evidence
+                .receipts()
+                .iter()
+                .any(control_requires_reconciliation)
+            || has_unavailable_or_missing(&attempt, &evidence)
+        {
+            return Err(OracleFrameworkError::RevisionRequestInvalid);
+        }
+        Ok(Self {
+            schema_version: SCHEMA_V1,
+            attempt: Box::new(attempt),
+            outcome: Box::new(outcome),
+            evidence: Box::new(evidence),
+        })
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> &OracleAdmissionAttemptV1 {
+        &self.attempt
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> &OracleAdmissionOutcomeV1 {
+        &self.outcome
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &OracleAdmissionEvidenceV1 {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.outcome.proposal()
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleRevisionRequestArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        if self.outcome.attempt() != self.attempt.identity()?
+            || self.evidence.attempt() != self.attempt.identity()?
+            || self.outcome.evidence() != self.evidence.identity()?
+            || self
+                .outcome
+                .claims()
+                .iter()
+                .all(|claim| claim.status() == OracleClaimAdmissionStatusV1::Admitted)
+            || !self
+                .evidence
+                .receipts()
+                .iter()
+                .any(control_requires_revision)
+            || self
+                .evidence
+                .receipts()
+                .iter()
+                .any(control_requires_reconciliation)
+            || has_unavailable_or_missing(&self.attempt, &self.evidence)
+        {
+            return Err(OracleFrameworkError::RevisionRequestInvalid);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleRevisionRequestWire> for OracleRevisionRequestV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleRevisionRequestWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            attempt: wire.attempt,
+            outcome: wire.outcome,
+            evidence: wire.evidence,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleRevisionRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleRevisionRequestWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// Exact Controller reconciliation request for mechanism-owned failures and missing or unavailable
+/// control observations.
+/// It is intentionally not consumable by an Oracle item developer Agent Loop.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleControlReconciliationRequestV1 {
+    schema_version: u16,
+    attempt: Box<OracleAdmissionAttemptV1>,
+    outcome: Box<OracleAdmissionOutcomeV1>,
+    evidence: Box<OracleAdmissionEvidenceV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleControlReconciliationRequestWire {
+    schema_version: u16,
+    attempt: Box<OracleAdmissionAttemptV1>,
+    outcome: Box<OracleAdmissionOutcomeV1>,
+    evidence: Box<OracleAdmissionEvidenceV1>,
+}
+
+impl OracleControlReconciliationRequestV1 {
+    pub fn from_admission(
+        attempt: OracleAdmissionAttemptV1,
+        outcome: OracleAdmissionOutcomeV1,
+        evidence: OracleAdmissionEvidenceV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            attempt: Box::new(attempt),
+            outcome: Box::new(outcome),
+            evidence: Box::new(evidence),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> &OracleAdmissionAttemptV1 {
+        &self.attempt
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> &OracleAdmissionOutcomeV1 {
+        &self.outcome
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &OracleAdmissionEvidenceV1 {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<OraclePortfolioProposalArtifact> {
+        self.outcome.proposal()
+    }
+
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleControlReconciliationRequestArtifact>, OracleFrameworkError> {
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        let attempt_id = self.attempt.identity()?;
+        let unavailable_or_missing = has_unavailable_or_missing(&self.attempt, &self.evidence);
+        let mechanism_failure = self
+            .evidence
+            .receipts()
+            .iter()
+            .any(control_requires_reconciliation);
+        if self.outcome.attempt() != attempt_id
+            || self.evidence.attempt() != attempt_id
+            || self.outcome.evidence() != self.evidence.identity()?
+            || self
+                .outcome
+                .claims()
+                .iter()
+                .all(|claim| claim.status() == OracleClaimAdmissionStatusV1::Admitted)
+            || (!unavailable_or_missing && !mechanism_failure)
+        {
+            return Err(OracleFrameworkError::RevisionRequestInvalid);
+        }
+        Ok(())
+    }
+}
+
+fn has_unavailable_or_missing(
+    attempt: &OracleAdmissionAttemptV1,
+    evidence: &OracleAdmissionEvidenceV1,
+) -> bool {
+    attempt.required_controls().iter().any(|obligation| {
+        evidence
+            .receipts()
+            .iter()
+            .find(|receipt| {
+                receipt.item() == obligation.item()
+                    && receipt.control() == obligation.control()
+                    && receipt.mechanism() == obligation.mechanism()
+            })
+            .is_none_or(|receipt| receipt.result() == OracleControlResultV1::Unavailable)
+    })
+}
+
+impl TryFrom<OracleControlReconciliationRequestWire> for OracleControlReconciliationRequestV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleControlReconciliationRequestWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            attempt: wire.attempt,
+            outcome: wire.outcome,
+            evidence: wire.evidence,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleControlReconciliationRequestV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleControlReconciliationRequestWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
 type AdmissionBuckets = (
-    Vec<ContentId<OracleWorkItemArtifact>>,
-    Vec<ContentId<OracleWorkItemArtifact>>,
-    Vec<ContentId<OracleWorkItemArtifact>>,
+    Vec<ContentId<OracleItemArtifact>>,
+    Vec<ContentId<OracleItemArtifact>>,
+    Vec<ContentId<OracleItemArtifact>>,
 );
 
 /// Mechanically recomputes admitted/partial/rejected claims. Missing controls remain partial.
@@ -3679,9 +5847,8 @@ pub fn recompute_oracle_admission(
     let receipts = evidence.receipts();
     let proposal_id = proposal.identity()?;
     let known_items: HashSet<_> = proposal
-        .entries
-        .iter()
-        .map(|entry| entry.item.identity())
+        .items()
+        .map(OracleItemV1::identity)
         .collect::<Result<_, _>>()?;
     let mut receipt_map = HashMap::new();
     for receipt in receipts {
@@ -3696,42 +5863,43 @@ pub fn recompute_oracle_admission(
 
     let mut by_claim: Vec<(ContentId<OracleClaimArtifact>, AdmissionBuckets)> = Vec::new();
     for entry in &proposal.entries {
-        let item_id = entry.item.identity()?;
+        let OracleObligationResolutionV1::Contributed { items, .. } = &entry.resolution else {
+            return Err(OracleFrameworkError::AdmissionOutcomeInvalid);
+        };
         let buckets = if let Some((_, buckets)) = by_claim
             .iter_mut()
-            .find(|(claim, _)| *claim == entry.item.claim)
+            .find(|(claim, _)| *claim == entry.dimension.claim)
         {
             buckets
         } else {
             let new_index = by_claim.len();
-            by_claim.push((entry.item.claim, AdmissionBuckets::default()));
+            by_claim.push((entry.dimension.claim, AdmissionBuckets::default()));
             &mut by_claim[new_index].1
         };
-        if !matches!(
-            entry.resolution,
-            OracleObligationResolutionV1::Contributed { .. }
-        ) {
-            buckets.1.push(item_id);
-            continue;
-        }
-        let mut missing = false;
-        let mut failed = false;
-        for control in policy.required_controls() {
-            match receipt_map
-                .get(&(item_id, *control))
-                .map(|receipt| receipt.result)
-            {
-                Some(OracleControlResultV1::Passed) => {}
-                Some(OracleControlResultV1::Failed) => failed = true,
-                Some(OracleControlResultV1::Unavailable) | None => missing = true,
+        for item in items {
+            let item_id = item.identity()?;
+            let mut missing = false;
+            let mut failed = false;
+            for control in policy.required_controls() {
+                match receipt_map.get(&(item_id, *control)) {
+                    Some(receipt) if receipt.result == OracleControlResultV1::Passed => {}
+                    Some(receipt) if receipt.result == OracleControlResultV1::Failed => {
+                        if control_requires_revision(receipt) {
+                            failed = true;
+                        } else {
+                            missing = true;
+                        }
+                    }
+                    Some(_) | None => missing = true,
+                }
             }
-        }
-        if failed {
-            buckets.2.push(item_id);
-        } else if missing {
-            buckets.1.push(item_id);
-        } else {
-            buckets.0.push(item_id);
+            if failed {
+                buckets.2.push(item_id);
+            } else if missing {
+                buckets.1.push(item_id);
+            } else {
+                buckets.0.push(item_id);
+            }
         }
     }
 
@@ -3840,6 +6008,8 @@ pub enum OracleFrameworkError {
     UnsupportedSchema,
     #[error("invalid {0}")]
     InvalidLabel(&'static str),
+    #[error("invalid {0}")]
+    InvalidText(&'static str),
     #[error("{0} must not be empty")]
     Empty(&'static str),
     #[error("{0} must be positive")]
@@ -3860,8 +6030,8 @@ pub enum OracleFrameworkError {
     StrategyExecutorMismatch,
     #[error("Oracle strategy tool catalog changed the current-V1 capability surface")]
     StrategyToolCatalogDrift,
-    #[error("oracle work item plane does not match its concern")]
-    WorkItemPlaneMismatch,
+    #[error("oracle dimension plane does not match its concern")]
+    DimensionPlaneMismatch,
     #[error("oracle exploration revision overflowed")]
     RevisionOverflow,
     #[error("oracle exploration revision and parent lineage disagree")]
@@ -3870,7 +6040,7 @@ pub enum OracleFrameworkError {
     StrategyBudgetExhausted,
     #[error("oracle exploration experiment budget is exhausted")]
     ExperimentBudgetExhausted,
-    #[error("strategy is not eligible for the exact work item")]
+    #[error("strategy is not eligible for the exact dimension")]
     IneligibleStrategy,
     #[error("oracle exploration ledger transition is invalid")]
     InvalidLedgerTransition,
@@ -3878,14 +6048,18 @@ pub enum OracleFrameworkError {
     StrategyRunBindingMismatch,
     #[error("oracle experiment request binding changed")]
     ExperimentBindingMismatch,
-    #[error("oracle work item is not in the exploration ledger")]
-    UnknownWorkItem,
+    #[error("oracle dimension is not in the exploration ledger")]
+    UnknownDimension,
     #[error("oracle experiment observation is duplicated")]
     DuplicateObservation,
     #[error("oracle experiment observation binding changed")]
     ObservationBindingMismatch,
     #[error("Oracle portfolio element cell or strategy-run binding changed")]
     PortfolioElementBindingMismatch,
+    #[error("Oracle item is bound to another Controller-derived dimension")]
+    OracleItemBindingMismatch,
+    #[error("Oracle item set must be non-empty, unique, and every item must own material")]
+    OracleItemSetInvalid,
     #[error("coverage-gap material cannot be mixed with positive Oracle contributions")]
     MixedCoverageGapContribution,
     #[error("no strategy implements {plane:?}/{concern:?}/{role:?}")]
@@ -3898,10 +6072,18 @@ pub enum OracleFrameworkError {
     ExplorationIncomplete,
     #[error("control receipt is bound to another portfolio proposal")]
     ReceiptBindingMismatch,
-    #[error("duplicate control receipt for one work item and family")]
+    #[error("duplicate control receipt for one item and family")]
     DuplicateControlReceipt,
     #[error("Oracle admission outcome structure is inconsistent")]
     AdmissionOutcomeInvalid,
+    #[error("Oracle Review cannot approve a portfolio with unresolved obligations")]
+    ReviewCannotApproveUnresolved,
+    #[error("Oracle Review findings must be non-empty, exact, unique dimension issues")]
+    ReviewFindingsInvalid,
+    #[error("Oracle Review is bound to another portfolio proposal")]
+    ReviewProposalMismatch,
+    #[error("Oracle Revision request must carry a failed gate's exact feedback lineage")]
+    RevisionRequestInvalid,
     #[error("oracle framework codec failed: {0}")]
     Codec(String),
     #[error(transparent)]
@@ -3975,9 +6157,156 @@ pub fn archive_oracle_framework_artifact<A: ContentType, S: ContentStore>(
 
 #[cfg(test)]
 mod tests {
-    use std::future::ready;
-
     use super::*;
+
+    fn item_plan(item: &OracleItemV1, objective: &str) -> OracleCheckPlanV1 {
+        OracleCheckPlanV1::new(
+            item.identity().expect("item identity"),
+            OracleCheckMethodV1::StaticAnalysis,
+            OracleCheckObjective::new(objective).expect("objective"),
+            OracleCheckSetup::new("Inspect the exact task-local implementation.").expect("setup"),
+            OracleCheckObservation::new("Record the implementation property.")
+                .expect("observation"),
+            OracleCheckPassCondition::new("The property matches the admitted contract.")
+                .expect("pass condition"),
+            vec![OracleCheckEvidenceV1::AdmittedIntent {
+                contract: ContentId::derive(b"admitted-intent").expect("intent identity"),
+            }],
+        )
+        .expect("plan")
+    }
+
+    #[test]
+    #[allow(
+        clippy::similar_names,
+        clippy::too_many_lines,
+        reason = "sibling and revision labels keep the exact lineage matrix legible"
+    )]
+    fn item_revision_and_review_lineage_cannot_cross_siblings_or_revisions() {
+        let dimension = OracleDimensionV1::new(
+            ContentId::derive(b"claim").expect("claim identity"),
+            OracleConcernV1::ObservableOutputs,
+            OracleStrategyRoleV1::Synthesis,
+        );
+        let dimension_id = dimension.identity().expect("dimension identity");
+        let item_a = OracleItemV1::new(
+            dimension_id,
+            OracleItemStatement::new("Validate the primary result.").expect("statement"),
+        )
+        .expect("item");
+        let item_b = OracleItemV1::new(
+            dimension_id,
+            OracleItemStatement::new("Validate the boundary behavior.").expect("statement"),
+        )
+        .expect("item");
+        let draft_a1 = OracleItemDraftV1::initial(
+            item_a.clone(),
+            ContentId::derive(b"run-a1").expect("run identity"),
+            vec![item_plan(&item_a, "Establish the primary result.")],
+        )
+        .expect("initial draft A");
+        let draft_b1 = OracleItemDraftV1::initial(
+            item_b.clone(),
+            ContentId::derive(b"run-b1").expect("run identity"),
+            vec![item_plan(&item_b, "Establish the boundary behavior.")],
+        )
+        .expect("initial draft B");
+        let item_a_id = item_a.identity().expect("item A identity");
+        let feedback_a1 = OracleItemReviewV1::needs_revision(
+            &draft_a1,
+            vec![
+                OracleReviewFindingV1::new(
+                    item_a_id,
+                    OracleReviewIssueClassV1::SetupIncomplete,
+                    OracleReviewExplanation::new("The setup omits one required input.")
+                        .expect("explanation"),
+                    OracleReviewRequiredChange::new("Specify every required input.")
+                        .expect("required change"),
+                ),
+                OracleReviewFindingV1::new(
+                    item_a_id,
+                    OracleReviewIssueClassV1::SetupIncomplete,
+                    OracleReviewExplanation::new("The setup omits the launch shape.")
+                        .expect("explanation"),
+                    OracleReviewRequiredChange::new("Specify the launch shape.")
+                        .expect("required change"),
+                ),
+            ],
+        )
+        .expect("review feedback");
+
+        assert!(matches!(
+            feedback_a1.validate_against(&draft_b1),
+            Err(OracleFrameworkError::ReviewProposalMismatch)
+        ));
+
+        let draft_a2 = OracleItemDraftV1::revise(
+            &draft_a1,
+            ContentId::derive(b"run-a2").expect("run identity"),
+            vec![item_plan(
+                &item_a,
+                "Establish the corrected primary result.",
+            )],
+        )
+        .expect("revised draft A");
+        assert_eq!(
+            draft_a2.parent(),
+            Some(draft_a1.identity().expect("draft A1 identity"))
+        );
+        assert_eq!(draft_a2.revision().get(), 2);
+        assert!(matches!(
+            feedback_a1.validate_against(&draft_a2),
+            Err(OracleFrameworkError::ReviewProposalMismatch)
+        ));
+
+        let accepted_a = OracleAcceptedItemV1::new(
+            &draft_a2,
+            &OracleItemReviewV1::approved(&draft_a2).expect("approval A"),
+        )
+        .expect("accepted A");
+        let accepted_b = OracleAcceptedItemV1::new(
+            &draft_b1,
+            &OracleItemReviewV1::approved(&draft_b1).expect("approval B"),
+        )
+        .expect("accepted B");
+        assert_eq!(accepted_a.draft(), &draft_a2);
+        assert_eq!(accepted_b.draft(), &draft_b1);
+
+        let workspace = OracleWorkspaceV1::new(&OracleWorkspaceInput {
+            task_id: TaskId::new(),
+            admitted_intent: id("admitted intent"),
+            sir_input: id("sir input"),
+            sir_task_bundle: id("sir task bundle"),
+            source: id("source"),
+            documentation: id("documentation"),
+            build_and_tests: id("build and tests"),
+            knowledge: id("knowledge"),
+            research_tools: id("research tools"),
+            experiment_tools: id("experiment tools"),
+            capability_grant: id("capability grant"),
+            coverage_policy: id("coverage policy"),
+            strategy_catalog: id("strategy catalog"),
+            budget: OracleExplorationBudgetV1 {
+                strategy_runs: OracleStrategyRunLimit::new(2).expect("run limit"),
+                experiments: OracleExperimentLimit::new(1).expect("experiment limit"),
+                item_discovery_revisions: OracleItemDiscoveryRevisionLimit::new(4)
+                    .expect("item discovery revision limit"),
+                item_revisions: OracleItemRevisionLimit::new(4).expect("item revision limit"),
+            },
+        });
+        let proposal = OraclePortfolioProposalV1::assemble_reviewed(
+            &workspace,
+            vec![dimension],
+            vec![accepted_a, accepted_b],
+        )
+        .expect("reviewed portfolio");
+        assert_eq!(proposal.accepted_items().len(), 2);
+        assert_eq!(proposal.elements().len(), 2);
+        let persisted = serde_json::to_value(&proposal).expect("proposal json");
+        let restored: OraclePortfolioProposalV1 =
+            serde_json::from_value(persisted).expect("reviewed proposal roundtrip");
+        assert_eq!(restored, proposal);
+    }
 
     fn id<A: ContentType>(label: &str) -> ContentId<A> {
         ContentId::derive(label.as_bytes()).expect("id")
@@ -3985,6 +6314,63 @@ mod tests {
 
     fn claim(label: &str) -> ContentId<OracleClaimArtifact> {
         id(label)
+    }
+
+    fn oracle_item(dimension: &OracleDimensionV1, statement: &str) -> OracleItemV1 {
+        OracleItemV1::new(
+            dimension.identity().expect("dimension id"),
+            OracleItemStatement::new(statement).expect("item statement"),
+        )
+        .expect("Oracle item")
+    }
+
+    fn test_workspace() -> OracleWorkspaceV1 {
+        OracleWorkspaceV1::new(&OracleWorkspaceInput {
+            task_id: TaskId::new(),
+            admitted_intent: id("admitted-intent"),
+            sir_input: id("sir-input"),
+            sir_task_bundle: id("sir-task-bundle"),
+            source: id("source"),
+            documentation: id("documentation"),
+            build_and_tests: id("build-and-tests"),
+            knowledge: id("knowledge"),
+            research_tools: id("research-tools"),
+            experiment_tools: id("experiment-tools"),
+            capability_grant: id("capability-grant"),
+            coverage_policy: id("coverage-policy"),
+            strategy_catalog: id("strategy-catalog"),
+            budget: OracleExplorationBudgetV1 {
+                strategy_runs: OracleStrategyRunLimit::new(8).expect("run limit"),
+                experiments: OracleExperimentLimit::new(2).expect("experiment limit"),
+                item_discovery_revisions: OracleItemDiscoveryRevisionLimit::new(4)
+                    .expect("item discovery revision limit"),
+                item_revisions: OracleItemRevisionLimit::new(4).expect("item revision limit"),
+            },
+        })
+    }
+
+    fn accepted_item(item: &OracleItemV1, run_label: &str) -> OracleAcceptedItemV1 {
+        let draft = OracleItemDraftV1::initial(
+            item.clone(),
+            id(run_label),
+            vec![item_plan(item, "Establish the exact item obligation.")],
+        )
+        .expect("item draft");
+        let review = OracleItemReviewV1::approved(&draft).expect("item approval");
+        OracleAcceptedItemV1::new(&draft, &review).expect("accepted item")
+    }
+
+    fn reviewed_proposal(
+        dimension: OracleDimensionV1,
+        items: Vec<OracleItemV1>,
+    ) -> OraclePortfolioProposalV1 {
+        let accepted = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| accepted_item(&item, &format!("run-{index}")))
+            .collect();
+        OraclePortfolioProposalV1::assemble_reviewed(&test_workspace(), vec![dimension], accepted)
+            .expect("reviewed proposal")
     }
 
     fn admission_context(
@@ -4067,17 +6453,17 @@ mod tests {
         );
         let mut claims = vec![claim("claim-a"), claim("claim-b")];
         claims.sort_by_key(ContentId::to_wire);
-        let items = derive_oracle_work_items(&claims, &policy).expect("items");
+        let items = derive_oracle_dimensions(&claims, &policy).expect("items");
 
         assert_eq!(items.len(), claims.len() * policy.concerns().len() * 2);
         for claim in claims {
             for concern in policy.concerns() {
-                assert!(items.contains(&OracleWorkItemV1::new(
+                assert!(items.contains(&OracleDimensionV1::new(
                     claim,
                     *concern,
                     OracleStrategyRoleV1::Synthesis
                 )));
-                assert!(items.contains(&OracleWorkItemV1::new(
+                assert!(items.contains(&OracleDimensionV1::new(
                     claim,
                     *concern,
                     OracleStrategyRoleV1::Adversarial
@@ -4108,12 +6494,19 @@ mod tests {
     }
 
     #[test]
-    fn exploration_cannot_open_when_any_work_item_has_no_strategy() {
+    fn persisted_workspace_cannot_disable_the_item_revision_bound() {
+        let mut json = serde_json::to_value(test_workspace()).expect("workspace json");
+        json["budget"]["item_revisions"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<OracleWorkspaceV1>(json).is_err());
+    }
+
+    #[test]
+    fn exploration_cannot_open_when_any_dimension_has_no_strategy() {
         let policy = OracleCoveragePolicyV1::new(
             OracleCoverageProfileV1::Correctness,
             OracleAdversarialPolicyV1::RequiredForEveryConcern,
         );
-        let items = derive_oracle_work_items(&[claim("claim-a")], &policy).expect("items");
+        let items = derive_oracle_dimensions(&[claim("claim-a")], &policy).expect("items");
         let catalog = OracleStrategyCatalogV1::new(vec![all_concerns_registration(
             OracleStrategyRoleV1::Synthesis,
             "deterministic-synthesis",
@@ -4130,24 +6523,37 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_ledger_cannot_be_frozen_as_portfolio() {
-        let policy = OracleCoveragePolicyV1::new(
-            OracleCoverageProfileV1::Correctness,
-            OracleAdversarialPolicyV1::NotRequired,
-        );
-        let items = derive_oracle_work_items(&[claim("claim-a")], &policy).expect("items");
-        let catalog = OracleStrategyCatalogV1::new(vec![all_concerns_registration(
+    fn one_dimension_can_publish_many_items_and_controls_expand_per_item() {
+        let dimension = OracleDimensionV1::new(
+            claim("claim-a"),
+            OracleConcernV1::BoundaryAndDegenerateInputs,
             OracleStrategyRoleV1::Synthesis,
-            "deterministic-synthesis",
-        )])
-        .expect("catalog");
-        let ledger =
-            OracleExplorationLedgerV1::open(id("workspace"), items, &catalog).expect("ledger");
+        );
+        let mut items = vec![
+            oracle_item(&dimension, "nominal-domain behavior"),
+            oracle_item(&dimension, "boundary-domain behavior"),
+        ];
+        items.sort();
+        let proposal = reviewed_proposal(dimension, items.clone());
+        assert_eq!(proposal.items().count(), 2);
+        assert_eq!(proposal.accepted_items().len(), 2);
 
-        assert!(matches!(
-            OraclePortfolioProposalV1::freeze(&ledger),
-            Err(OracleFrameworkError::ExplorationIncomplete)
-        ));
+        let (policy, _, attempt) = admission_context(&proposal);
+        assert_eq!(
+            attempt.required_controls().len(),
+            items.len() * policy.required_controls().len()
+        );
+        let controlled_items = attempt
+            .required_controls()
+            .iter()
+            .map(OracleControlObligationV1::item)
+            .collect::<HashSet<_>>();
+        assert_eq!(controlled_items.len(), 2);
+        assert!(
+            items
+                .iter()
+                .all(|item| controlled_items.contains(&item.identity().expect("item identity")))
+        );
     }
 
     #[test]
@@ -4160,7 +6566,7 @@ mod tests {
             OracleCoverageProfileV1::Correctness,
             OracleAdversarialPolicyV1::NotRequired,
         );
-        let items = derive_oracle_work_items(&[claim("claim-a")], &policy).expect("items");
+        let items = derive_oracle_dimensions(&[claim("claim-a")], &policy).expect("items");
         let catalog = OracleStrategyCatalogV1::new(vec![all_concerns_registration(
             OracleStrategyRoleV1::Synthesis,
             "deterministic-synthesis",
@@ -4169,6 +6575,9 @@ mod tests {
         let budget = OracleExplorationBudgetV1 {
             strategy_runs: OracleStrategyRunLimit::new(32).expect("run limit"),
             experiments: OracleExperimentLimit::new(8).expect("experiment limit"),
+            item_discovery_revisions: OracleItemDiscoveryRevisionLimit::new(4)
+                .expect("item discovery revision limit"),
+            item_revisions: OracleItemRevisionLimit::new(4).expect("item revision limit"),
         };
         let experiment_tools = id::<OracleExperimentToolCatalogArtifact>("experiment tools");
         let workspace = OracleWorkspaceV1::new(&OracleWorkspaceInput {
@@ -4189,10 +6598,10 @@ mod tests {
         });
         let workspace_id = workspace.identity().expect("workspace");
         let ledger = OracleExplorationLedgerV1::open(workspace_id, items, &catalog).expect("open");
-        let work_item = ledger.entries()[0].item.clone();
-        let item = work_item.identity().expect("item");
+        let dimension = ledger.entries()[0].dimension.clone();
+        let item = dimension.identity().expect("item");
         let strategy = OracleStrategyName::new("deterministic-synthesis").expect("strategy");
-        let run = OracleStrategyRunV1::new(workspace_id, &work_item, strategy, &catalog)
+        let run = OracleStrategyRunV1::new(workspace_id, &dimension, strategy, &catalog)
             .expect("strategy run");
         let run_id = run.identity().expect("run");
         let request = OracleExperimentRequestV1::new(
@@ -4261,15 +6670,16 @@ mod tests {
         let resumed = authorized
             .record_experiment_observation(&request, &receipt, &observation)
             .expect("observation projection");
+        let proposed_item = oracle_item(&dimension, "reference probe result is preserved");
         let element = OraclePortfolioElementV1::new(
-            item,
+            proposed_item.identity().expect("Oracle item id"),
             run_id,
             OraclePortfolioElementKindV1::Reference(id("reference")),
             vec![observation_id],
         )
         .expect("element");
         let contributed = resumed
-            .record_contribution(item, run_id, &[element])
+            .record_contribution(item, run_id, &[proposed_item], &[element])
             .expect("contribution");
 
         assert_eq!(contributed.revision().get(), 6);
@@ -4304,155 +6714,15 @@ mod tests {
     }
 
     #[test]
-    fn persisted_work_item_cannot_move_a_concern_to_another_plane() {
-        let item = OracleWorkItemV1::new(
+    fn persisted_dimension_cannot_move_a_concern_to_another_plane() {
+        let item = OracleDimensionV1::new(
             claim("claim-a"),
             OracleConcernV1::ObservableOutputs,
             OracleStrategyRoleV1::Synthesis,
         );
         let mut json = serde_json::to_value(item).expect("json");
         json["plane"] = serde_json::json!("input-domain");
-        assert!(serde_json::from_value::<OracleWorkItemV1>(json).is_err());
-    }
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum SkeletonStep {
-        Workspace,
-        Claims,
-        WorkItems,
-        Open,
-        Select,
-        Strategy,
-        Experiment,
-        Portfolio,
-    }
-
-    #[derive(Default)]
-    struct RecordedExplorationStages {
-        trace: Vec<SkeletonStep>,
-    }
-
-    impl OracleExplorationStages for RecordedExplorationStages {
-        type Error = ();
-        type AdmittedIntent = ();
-        type Workspace = ();
-        type Claims = ();
-        type WorkItems = ();
-        type Exploration = u8;
-        type StrategyAction = ();
-        type ExperimentAction = ();
-        type Waiting = ();
-        type Portfolio = ();
-
-        fn freeze_oracle_workspace(
-            &mut self,
-            _intent: &Self::AdmittedIntent,
-        ) -> impl Future<Output = Result<Self::Workspace, Self::Error>> + Send {
-            self.trace.push(SkeletonStep::Workspace);
-            ready(Ok(()))
-        }
-
-        fn derive_oracle_claims(
-            &mut self,
-            _workspace: &Self::Workspace,
-            _intent: &Self::AdmittedIntent,
-        ) -> Result<Self::Claims, Self::Error> {
-            self.trace.push(SkeletonStep::Claims);
-            Ok(())
-        }
-
-        fn derive_oracle_work_items(
-            &mut self,
-            _workspace: &Self::Workspace,
-            _claims: &Self::Claims,
-        ) -> Result<Self::WorkItems, Self::Error> {
-            self.trace.push(SkeletonStep::WorkItems);
-            Ok(())
-        }
-
-        fn open_or_recover_oracle_exploration(
-            &mut self,
-            _workspace: &Self::Workspace,
-            _work_items: &Self::WorkItems,
-        ) -> Result<Self::Exploration, Self::Error> {
-            self.trace.push(SkeletonStep::Open);
-            Ok(0)
-        }
-
-        fn select_next_oracle_action(
-            &mut self,
-            exploration: &Self::Exploration,
-        ) -> Result<
-            OracleExplorationDirectiveV1<
-                Self::StrategyAction,
-                Self::ExperimentAction,
-                Self::Waiting,
-            >,
-            Self::Error,
-        > {
-            self.trace.push(SkeletonStep::Select);
-            Ok(match exploration {
-                0 => OracleExplorationDirectiveV1::RunStrategy(()),
-                1 => OracleExplorationDirectiveV1::AuthorizeControllerExperiment(()),
-                _ => OracleExplorationDirectiveV1::FreezePortfolio,
-            })
-        }
-
-        fn run_oracle_strategy(
-            &mut self,
-            _workspace: &Self::Workspace,
-            _exploration: Self::Exploration,
-            _action: Self::StrategyAction,
-        ) -> impl Future<Output = Result<Self::Exploration, Self::Error>> + Send {
-            self.trace.push(SkeletonStep::Strategy);
-            ready(Ok(1))
-        }
-
-        fn authorize_and_run_oracle_experiment(
-            &mut self,
-            _workspace: &Self::Workspace,
-            _exploration: Self::Exploration,
-            _action: Self::ExperimentAction,
-        ) -> impl Future<Output = Result<Self::Exploration, Self::Error>> + Send {
-            self.trace.push(SkeletonStep::Experiment);
-            ready(Ok(2))
-        }
-
-        fn freeze_oracle_portfolio(
-            &mut self,
-            _workspace: Self::Workspace,
-            _exploration: Self::Exploration,
-        ) -> Result<Self::Portfolio, Self::Error> {
-            self.trace.push(SkeletonStep::Portfolio);
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn readable_exploration_skeleton_keeps_controller_authority_in_the_loop() {
-        let mut stages = RecordedExplorationStages::default();
-        let outcome = super::run_oracle_exploration(&mut stages, &())
-            .await
-            .expect("workflow");
-        assert!(matches!(
-            outcome,
-            OracleExplorationRunOutcomeV1::Portfolio(())
-        ));
-        assert_eq!(
-            stages.trace,
-            vec![
-                SkeletonStep::Workspace,
-                SkeletonStep::Claims,
-                SkeletonStep::WorkItems,
-                SkeletonStep::Open,
-                SkeletonStep::Select,
-                SkeletonStep::Strategy,
-                SkeletonStep::Select,
-                SkeletonStep::Experiment,
-                SkeletonStep::Select,
-                SkeletonStep::Portfolio,
-            ]
-        );
+        assert!(serde_json::from_value::<OracleDimensionV1>(json).is_err());
     }
 
     #[test]
@@ -4487,39 +6757,26 @@ mod tests {
                 .expect("operation intent"),
             ),
         );
-        let item = OracleWorkItemV1::new(
+        let item = OracleDimensionV1::new(
             claim_body.identity().expect("claim id"),
             OracleConcernV1::ObservableOutputs,
             OracleStrategyRoleV1::Synthesis,
         );
-        let material_bytes = b"task-generic admitted reference semantics".to_vec();
-        let reference =
-            ContentId::<ReferenceArtifact>::derive(&material_bytes).expect("reference identity");
-        let element = OraclePortfolioElementV1::new(
-            item.identity().expect("item id"),
-            id("run"),
-            OraclePortfolioElementKindV1::Reference(reference),
-            vec![],
+        let proposed_item = oracle_item(&item, "reference semantics preserve observable output");
+        let item_id = proposed_item.identity().expect("item id");
+        let plan = item_plan(&proposed_item, "Establish the observable output semantics.");
+        let material_bytes = cairn_codec::to_vec(&plan).expect("check plan bytes");
+        let draft =
+            OracleItemDraftV1::initial(proposed_item, id("run"), vec![plan]).expect("item draft");
+        let review = OracleItemReviewV1::approved(&draft).expect("item approval");
+        let accepted = OracleAcceptedItemV1::new(&draft, &review).expect("accepted item");
+        let proposal = OraclePortfolioProposalV1::assemble_reviewed(
+            &test_workspace(),
+            vec![item.clone()],
+            vec![accepted],
         )
-        .expect("portfolio element");
-        let entry = OracleObligationEntryV1 {
-            item: item.clone(),
-            resolution: OracleObligationResolutionV1::Contributed {
-                run: id("run"),
-                elements: vec![element.identity().expect("element id")],
-                observations: vec![],
-            },
-        };
-        let ledger = OracleExplorationLedgerV1 {
-            schema_version: SCHEMA_V1,
-            workspace: id("workspace"),
-            parent: None,
-            revision: OracleExplorationRevision::new(1).expect("revision"),
-            entries: vec![entry],
-            strategy_runs_started: 1,
-            experiments_started: 0,
-        };
-        let proposal = OraclePortfolioProposalV1::freeze(&ledger).expect("proposal");
+        .expect("reviewed proposal");
+        let element = proposal.elements()[0].clone();
         let (policy, mechanisms, attempt) = admission_context(&proposal);
         let no_evidence =
             OracleAdmissionEvidenceV1::new(&attempt, Vec::new()).expect("empty evidence");
@@ -4530,6 +6787,20 @@ mod tests {
             partial.claims[0].status,
             OracleClaimAdmissionStatusV1::Partial
         );
+        assert!(matches!(
+            OracleRevisionRequestV1::from_admission(
+                attempt.clone(),
+                partial.clone(),
+                no_evidence.clone(),
+            ),
+            Err(OracleFrameworkError::RevisionRequestInvalid)
+        ));
+        OracleControlReconciliationRequestV1::from_admission(
+            attempt.clone(),
+            partial.clone(),
+            no_evidence.clone(),
+        )
+        .expect("missing infrastructure evidence requires reconciliation");
         let mut forged = serde_json::to_value(&partial).expect("outcome json");
         forged["claims"][0]["status"] = serde_json::json!("admitted");
         assert!(serde_json::from_value::<OracleAdmissionOutcomeV1>(forged).is_err());
@@ -4543,7 +6814,9 @@ mod tests {
                 .expect("honest mechanism"),
             id("unknown-item-receipt"),
             OracleControlResultV1::Passed,
-        );
+            None,
+        )
+        .expect("control receipt");
         assert!(matches!(
             OracleAdmissionEvidenceV1::new(&attempt, vec![unknown_item_receipt]),
             Err(OracleFrameworkError::AdmissionEvidenceBindingMismatch)
@@ -4553,24 +6826,28 @@ mod tests {
         let duplicate_provenance = vec![
             OracleControlReceiptV1::new(
                 proposal.identity().expect("proposal id"),
-                item.identity().expect("item id"),
+                item_id,
                 OracleControlFamilyV1::Honest,
                 mechanisms
                     .mechanism(OracleControlFamilyV1::Honest)
                     .expect("honest mechanism"),
                 reused_receipt,
                 OracleControlResultV1::Passed,
-            ),
+                None,
+            )
+            .expect("control receipt"),
             OracleControlReceiptV1::new(
                 proposal.identity().expect("proposal id"),
-                item.identity().expect("item id"),
+                item_id,
                 OracleControlFamilyV1::Mutant,
                 mechanisms
                     .mechanism(OracleControlFamilyV1::Mutant)
                     .expect("mutant mechanism"),
                 reused_receipt,
                 OracleControlResultV1::Passed,
-            ),
+                None,
+            )
+            .expect("control receipt"),
         ];
         assert!(matches!(
             OracleAdmissionEvidenceV1::new(&attempt, duplicate_provenance),
@@ -4579,23 +6856,143 @@ mod tests {
 
         let failed = OracleControlReceiptV1::new(
             proposal.identity().expect("proposal id"),
-            item.identity().expect("item id"),
+            item_id,
             OracleControlFamilyV1::Mutant,
             mechanisms
                 .mechanism(OracleControlFamilyV1::Mutant)
                 .expect("mutant mechanism"),
             id("receipt"),
             OracleControlResultV1::Failed,
+            Some(OracleControlDiagnosticV1::new(
+                OracleControlFailureClassV1::NegativeChallengeAccepted,
+                OracleControlDiagnosticSummary::new("mutant control accepted the challenged plan")
+                    .expect("diagnostic summary"),
+                id("stdout"),
+                id("stderr"),
+            )),
+        )
+        .expect("control receipt");
+        let mut forged_failed_receipt = serde_json::to_value(&failed).expect("failed receipt json");
+        forged_failed_receipt["diagnostic"] = serde_json::Value::Null;
+        assert!(
+            serde_json::from_value::<OracleControlReceiptV1>(forged_failed_receipt).is_err(),
+            "persisted failed receipts cannot bypass diagnostic invariants"
+        );
+        let mut forged_failure_owner = serde_json::to_value(&failed).expect("failed receipt json");
+        forged_failure_owner["diagnostic"]["failure_class"] =
+            serde_json::json!("oracle-artifact-rejected");
+        assert!(
+            serde_json::from_value::<OracleControlReceiptV1>(forged_failure_owner).is_err(),
+            "a negative control cannot be persisted as an artifact-owned failure"
+        );
+        let mut negative_receipts = vec![failed];
+        negative_receipts.extend(
+            policy
+                .required_controls()
+                .iter()
+                .filter(|control| **control != OracleControlFamilyV1::Mutant)
+                .map(|control| {
+                    OracleControlReceiptV1::new(
+                        proposal.identity().expect("proposal id"),
+                        item_id,
+                        *control,
+                        mechanisms.mechanism(*control).expect("qualified mechanism"),
+                        id(&format!("negative-control companion {control:?}")),
+                        OracleControlResultV1::Passed,
+                        None,
+                    )
+                    .expect("passed companion receipt")
+                }),
         );
         let failed_evidence =
-            OracleAdmissionEvidenceV1::new(&attempt, vec![failed]).expect("failed evidence");
-        let rejected =
+            OracleAdmissionEvidenceV1::new(&attempt, negative_receipts).expect("failed evidence");
+        let unresolved =
             recompute_oracle_admission(&proposal, &policy, &mechanisms, &attempt, &failed_evidence)
-                .expect("rejected");
+                .expect("unresolved mechanism failure");
+        assert_eq!(
+            unresolved.claims[0].status,
+            OracleClaimAdmissionStatusV1::Partial
+        );
+        assert!(matches!(
+            OracleRevisionRequestV1::from_admission(
+                attempt.clone(),
+                unresolved.clone(),
+                failed_evidence.clone(),
+            ),
+            Err(OracleFrameworkError::RevisionRequestInvalid)
+        ));
+        OracleControlReconciliationRequestV1::from_admission(
+            attempt.clone(),
+            unresolved,
+            failed_evidence.clone(),
+        )
+        .expect("negative challenge acceptance requires mechanism reconciliation");
+
+        let artifact_failure = OracleControlReceiptV1::new(
+            proposal.identity().expect("proposal id"),
+            item_id,
+            OracleControlFamilyV1::Honest,
+            mechanisms
+                .mechanism(OracleControlFamilyV1::Honest)
+                .expect("honest mechanism"),
+            id("artifact-failure-receipt"),
+            OracleControlResultV1::Failed,
+            Some(OracleControlDiagnosticV1::new(
+                OracleControlFailureClassV1::OracleArtifactRejected,
+                OracleControlDiagnosticSummary::new("honest control rejected the plan")
+                    .expect("diagnostic summary"),
+                id("artifact stdout"),
+                id("artifact stderr"),
+            )),
+        )
+        .expect("artifact failure");
+        let mut artifact_receipts = vec![artifact_failure];
+        artifact_receipts.extend(
+            policy
+                .required_controls()
+                .iter()
+                .filter(|control| **control != OracleControlFamilyV1::Honest)
+                .map(|control| {
+                    OracleControlReceiptV1::new(
+                        proposal.identity().expect("proposal id"),
+                        item_id,
+                        *control,
+                        mechanisms.mechanism(*control).expect("qualified mechanism"),
+                        id(&format!("artifact-control companion {control:?}")),
+                        OracleControlResultV1::Passed,
+                        None,
+                    )
+                    .expect("passed companion receipt")
+                }),
+        );
+        let artifact_evidence =
+            OracleAdmissionEvidenceV1::new(&attempt, artifact_receipts).expect("artifact evidence");
+        let rejected = recompute_oracle_admission(
+            &proposal,
+            &policy,
+            &mechanisms,
+            &attempt,
+            &artifact_evidence,
+        )
+        .expect("artifact rejected");
         assert_eq!(
             rejected.claims[0].status,
             OracleClaimAdmissionStatusV1::Rejected
         );
+        OracleRevisionRequestV1::from_admission(
+            attempt.clone(),
+            rejected.clone(),
+            artifact_evidence.clone(),
+        )
+        .expect("artifact control failure requires item revision");
+        assert!(matches!(
+            OracleControlReconciliationRequestV1::from_admission(
+                attempt.clone(),
+                rejected.clone(),
+                artifact_evidence,
+            ),
+            Err(OracleFrameworkError::RevisionRequestInvalid)
+        ));
 
         assert!(matches!(
             crate::CandidateOracleContractV1::derive(&proposal, &partial),
@@ -4607,7 +7004,7 @@ mod tests {
             .map(|control| {
                 OracleControlReceiptV1::new(
                     proposal.identity().expect("proposal id"),
-                    item.identity().expect("item id"),
+                    item_id,
                     *control,
                     mechanisms.mechanism(*control).expect("qualified mechanism"),
                     id(match control {
@@ -4618,7 +7015,9 @@ mod tests {
                         OracleControlFamilyV1::Bypass => "bypass receipt",
                     }),
                     OracleControlResultV1::Passed,
+                    None,
                 )
+                .expect("control receipt")
             })
             .collect();
         let admitted_evidence =
@@ -4659,67 +7058,5 @@ mod tests {
         let mut drifted = serde_json::to_value(&candidate_materials).expect("materials json");
         drifted["elements"][0]["material"]["bytes"][0] = serde_json::json!(0);
         assert!(serde_json::from_value::<crate::CandidateOracleMaterialsV1>(drifted).is_err());
-    }
-
-    #[test]
-    fn admission_never_promotes_a_coverage_gap_even_when_every_control_passes() {
-        let item = OracleWorkItemV1::new(
-            claim("claim-a"),
-            OracleConcernV1::ObservableOutputs,
-            OracleStrategyRoleV1::Synthesis,
-        );
-        let item_id = item.identity().expect("item id");
-        let ledger = OracleExplorationLedgerV1 {
-            schema_version: SCHEMA_V1,
-            workspace: id("workspace"),
-            parent: None,
-            revision: OracleExplorationRevision::new(1).expect("revision"),
-            entries: vec![OracleObligationEntryV1 {
-                item,
-                resolution: OracleObligationResolutionV1::CoverageGap {
-                    run: id("run"),
-                    elements: vec![id("gap element")],
-                    observations: vec![],
-                },
-            }],
-            strategy_runs_started: 1,
-            experiments_started: 0,
-        };
-        let proposal = OraclePortfolioProposalV1::freeze(&ledger).expect("proposal");
-        let proposal_id = proposal.identity().expect("proposal id");
-        let (policy, mechanisms, attempt) = admission_context(&proposal);
-        let receipts = policy
-            .required_controls()
-            .iter()
-            .map(|control| {
-                OracleControlReceiptV1::new(
-                    proposal_id,
-                    item_id,
-                    *control,
-                    mechanisms.mechanism(*control).expect("qualified mechanism"),
-                    id(match control {
-                        OracleControlFamilyV1::MechanismQualification => {
-                            "qualification trusted receipt"
-                        }
-                        OracleControlFamilyV1::Honest => "honest trusted receipt",
-                        OracleControlFamilyV1::Mutant => "mutant trusted receipt",
-                        OracleControlFamilyV1::Hidden => "hidden trusted receipt",
-                        OracleControlFamilyV1::Bypass => "bypass trusted receipt",
-                    }),
-                    OracleControlResultV1::Passed,
-                )
-            })
-            .collect::<Vec<_>>();
-        let evidence =
-            OracleAdmissionEvidenceV1::new(&attempt, receipts).expect("control evidence");
-
-        let outcome =
-            recompute_oracle_admission(&proposal, &policy, &mechanisms, &attempt, &evidence)
-                .expect("admission");
-        assert_eq!(
-            outcome.claims[0].status,
-            OracleClaimAdmissionStatusV1::Partial
-        );
-        assert_eq!(outcome.claims[0].unresolved_items, vec![item_id]);
     }
 }

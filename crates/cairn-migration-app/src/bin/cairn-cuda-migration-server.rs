@@ -1,0 +1,160 @@
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
+
+use cairn_agent::{
+    AdapterVersion, AgentLoopStepLimit, EpisodeBudget, KnowledgeRegistry, ModelOutputTokenLimit,
+    ModelSelection, ModelTemplate, ModelTemplateRegistry, RuntimeModelAlias, RuntimeModelCatalog,
+    SkillRegistry,
+};
+use cairn_migration::{
+    CandidateMechanismCatalogV1, OracleAdmissionPolicyV1, OracleAdversarialPolicyV1,
+    OracleCoveragePolicyV1, OracleCoverageProfileV1, SirTaskLimits, TaskIntentAuthoritySubject,
+};
+use cairn_migration_app::{
+    CudaMigrationApplication, CudaMigrationProductModuleV1, MigrationAgentRuntimeExecutorV1,
+    MigrationCompletionTargetV1, MigrationRuntimeMaterialsV1, OracleControlRunnerV1,
+    OracleControlWorkerConfigV1, migration_product_boundary, migration_tool_registry,
+};
+use cairn_server::{ApplicationName, load_server_config, run_with_application};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProductConfigV1 {
+    schema_version: u16,
+    server_config: PathBuf,
+    app_api_socket: PathBuf,
+    authority_subject: TaskIntentAuthoritySubject,
+    model_template: PathBuf,
+    runtime_model_catalog: PathBuf,
+    credential_base: PathBuf,
+    runtime_model: RuntimeModelAlias,
+    agent_event_database: PathBuf,
+    agent_content_database: PathBuf,
+    agent_content_directory: PathBuf,
+    episode_budget: EpisodeBudget,
+    model_output_tokens: ModelOutputTokenLimit,
+    agent_loop_step_limit: AgentLoopStepLimit,
+    task_limits: SirTaskLimits,
+    inbox_capacity: usize,
+    completion_target: MigrationCompletionTargetV1,
+    oracle_coverage_profile: OracleCoverageProfileV1,
+    oracle_adversarial_policy: OracleAdversarialPolicyV1,
+    oracle_control_worker: OracleControlWorkerConfigV1,
+    candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    if cairn_observability::init("cairn-cuda-migration-server").is_err() {
+        eprintln!("CUDA migration server logging initialization failed");
+        return ExitCode::FAILURE;
+    }
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_error) => {
+            tracing::error!(
+                target: "cairn.migration.process",
+                event = "cuda_migration_process_failed",
+                error_class = "startup-or-runtime",
+                "CUDA migration product process terminated"
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .ok_or("usage: cairn-cuda-migration-server PRODUCT.json")?;
+    if env::args_os().nth(2).is_some() {
+        return Err("usage: cairn-cuda-migration-server PRODUCT.json".into());
+    }
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut config: ProductConfigV1 = serde_json::from_slice(&std::fs::read(&config_path)?)?;
+    if config.schema_version != 1 || config.inbox_capacity == 0 {
+        return Err("invalid current-V1 CUDA migration product configuration".into());
+    }
+    resolve_product_paths(&mut config, base);
+    let server = load_server_config(&config.server_config)?;
+    let template: ModelTemplate = serde_json::from_slice(&std::fs::read(&config.model_template)?)?;
+    let templates = ModelTemplateRegistry::from_templates([template])?;
+    let catalog: RuntimeModelCatalog =
+        serde_json::from_slice(&std::fs::read(&config.runtime_model_catalog)?)?;
+    let model = catalog.resolve(&templates, Some(&config.runtime_model))?;
+    let selection = ModelSelection {
+        provider: model.provider().clone(),
+        model: model.wire_model().clone(),
+        deployment: model.deployment().clone(),
+        adapter_version: AdapterVersion::new("native-protocol-v1")?,
+    };
+    let materials = MigrationRuntimeMaterialsV1::default();
+    let executor = MigrationAgentRuntimeExecutorV1::open(
+        model,
+        selection,
+        config.episode_budget,
+        config.model_output_tokens,
+        config.credential_base,
+        &config.agent_event_database,
+        &config.agent_content_database,
+        &config.agent_content_directory,
+        &server.storage.content_database,
+        &server.storage.content_directory,
+        materials.clone(),
+    )?;
+    let oracle_policy = OracleCoveragePolicyV1::new(
+        config.oracle_coverage_profile,
+        config.oracle_adversarial_policy,
+    );
+    let oracle_catalog = executor.oracle_strategy_catalog(&oracle_policy)?;
+    let oracle_controls = OracleControlRunnerV1::new(server.clone(), config.oracle_control_worker)?;
+    let (api, services, inbox) = migration_product_boundary(
+        config.app_api_socket,
+        &config.authority_subject,
+        config.task_limits,
+        materials,
+        oracle_policy,
+        oracle_catalog,
+        oracle_controls,
+        config.inbox_capacity,
+    )?;
+    let name = ApplicationName::new("cuda-migration")?;
+    let workflow = CudaMigrationApplication::new(
+        name.clone(),
+        services,
+        executor,
+        inbox,
+        migration_tool_registry()?,
+        SkillRegistry::default(),
+        KnowledgeRegistry::default(),
+        config.agent_loop_step_limit,
+        OracleAdmissionPolicyV1::strict(),
+        config.candidate_mechanisms,
+        config.completion_target,
+    );
+    let product = CudaMigrationProductModuleV1::new(name, api, workflow);
+    run_with_application(server, product).await?;
+    Ok(())
+}
+
+fn resolve_product_paths(config: &mut ProductConfigV1, base: &Path) {
+    for path in [
+        &mut config.server_config,
+        &mut config.app_api_socket,
+        &mut config.model_template,
+        &mut config.runtime_model_catalog,
+        &mut config.credential_base,
+        &mut config.agent_event_database,
+        &mut config.agent_content_database,
+        &mut config.agent_content_directory,
+    ] {
+        if path.is_relative() {
+            *path = base.join(&*path);
+        }
+    }
+}

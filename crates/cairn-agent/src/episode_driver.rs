@@ -119,8 +119,10 @@ pub struct AgentWorkerRequestV1 {
     pub operations: Vec<AgentWorkerOperationRequestV1>,
 }
 
+/// Boundary reached after one durable model step and its workflow-local tools have settled.
 #[derive(Debug)]
-pub enum AgentEpisodeDriverOutcomeV1 {
+pub enum AgentEpisodeDriverStepOutcomeV1 {
+    Continue,
     Complete(AgentEpisodeDriverCompletionV1),
     WorkerRequest(AgentWorkerRequestV1),
 }
@@ -205,25 +207,23 @@ enum AgentEpisodeWorkerTransitionV1 {
     WorkerRequest(AgentWorkerRequestV1),
 }
 
-/// Opens and drives one durable Agent episode driver from only the frozen profile and capability surface.
+/// Drives at most one real model/tool step of a durable Agent episode.
 ///
-/// Model dispatch and every workflow-local tool operation receive durable start authority before their
-/// effect. Canonical tool results are archived as provenance-bearing `OperationResult` artifacts
-/// before they are projected into the next native continuation. Mutating or ambiguous external
-/// effects are never executed by the Agent.
+/// Workflow-local tool calls belong to the model step that requested them. `Continue` is returned
+/// only after their results are durably projected and the next model step has authority. External
+/// Worker effects still yield before execution.
 ///
 /// # Errors
 ///
-/// Returns an error when the episode cannot be recovered, persisted, dispatched, decoded, or
-/// advanced through its granted tool surface.
-pub fn drive_agent_episode<E, C, T, G>(
+/// Returns an error when the durable position or the authorized step cannot be driven safely.
+pub fn drive_agent_episode_step<E, C, T, G>(
     events: &mut E,
     content: &mut C,
     transport: &mut T,
     codec: NativeProtocolCodec,
     frozen: &FrozenAgentEpisodeDriverV1,
     gateway: &mut G,
-) -> Result<AgentEpisodeDriverOutcomeV1, AgentEpisodeDriverError>
+) -> Result<AgentEpisodeDriverStepOutcomeV1, AgentEpisodeDriverError>
 where
     E: EventStore,
     C: ContentStore,
@@ -231,7 +231,6 @@ where
     G: ToolGateway,
 {
     let mut position = open_or_recover_agent_episode(events, content, codec, frozen)?;
-
     loop {
         position = match position {
             AgentEpisodeDriverPositionV1::ReadyForAgent(opened) => {
@@ -243,15 +242,20 @@ where
                         AgentEpisodeDriverPositionV1::ReadyForProjection(observed)
                     }
                     AgentEpisodeWorkerTransitionV1::WorkerRequest(request) => {
-                        return Ok(AgentEpisodeDriverOutcomeV1::WorkerRequest(request));
+                        return Ok(AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request));
                     }
                 }
             }
             AgentEpisodeDriverPositionV1::ReadyForProjection(observed) => {
-                project_and_advance(events, content, codec, frozen, observed)?
+                match project_and_advance(events, content, codec, frozen, observed)? {
+                    AgentEpisodeDriverPositionV1::ReadyForAgent(_) => {
+                        return Ok(AgentEpisodeDriverStepOutcomeV1::Continue);
+                    }
+                    other => other,
+                }
             }
             AgentEpisodeDriverPositionV1::Complete(completion) => {
-                return Ok(AgentEpisodeDriverOutcomeV1::Complete(completion));
+                return Ok(AgentEpisodeDriverStepOutcomeV1::Complete(completion));
             }
         };
     }
@@ -339,10 +343,48 @@ fn open_or_recover_agent_episode<E: EventStore, C: ContentStore>(
                 steps_started,
             },
         )),
-        AgentEpisodeState::ReadyToPrepare(_) => Err(AgentEpisodeDriverError::Agent(
-            "Agent recovery stopped between episode advance and model preparation".into(),
-        )),
+        AgentEpisodeState::ReadyToPrepare(authority) => {
+            recover_ready_runtime_episode(events, content, codec, frozen, episode, authority)
+                .map(AgentEpisodeDriverPositionV1::ReadyForAgent)
+        }
     }
+}
+
+fn recover_ready_runtime_episode<E: EventStore, C: ContentStore>(
+    events: &E,
+    content: &mut C,
+    codec: NativeProtocolCodec,
+    frozen: &FrozenAgentEpisodeDriverV1,
+    episode: AgentEpisode,
+    authority: EpisodeStepAuthority,
+) -> Result<OpenedAgentEpisodeV1, AgentEpisodeDriverError> {
+    let pending_results = authority.expected_pending_results().to_vec();
+    let native = if let Some(previous) = authority.previous_step() {
+        let previous_step = AgentStep::new(previous.step_id()).map_err(agent_error)?;
+        let continuation = recover_native_continuation(
+            events,
+            content,
+            codec,
+            &previous_step,
+            previous.model_attempt_id(),
+        )?;
+        let continuation = codec
+            .append_archived_tool_results(content, &continuation, &pending_results)
+            .map_err(agent_error)?;
+        codec
+            .prepare_continuation(&frozen.native_spec, &continuation)
+            .map_err(agent_error)?
+    } else {
+        codec
+            .prepare_initial(&frozen.native_spec, &frozen.user_text)
+            .map_err(agent_error)?
+    };
+    Ok(OpenedAgentEpisodeV1 {
+        episode,
+        authority,
+        native,
+        pending_results,
+    })
 }
 
 fn open_new_runtime_episode<E: EventStore>(
@@ -893,6 +935,156 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
+    fn one_step_driver_returns_to_hooks_between_real_model_turns() {
+        let temporary = tempfile::tempdir().expect("temporary state");
+        let mut content = SqliteContentStore::open(
+            temporary.path().join("content.db"),
+            temporary.path().join("cas"),
+        )
+        .expect("content");
+        let mut events =
+            SqliteEventStore::open(temporary.path().join("events.db")).expect("events");
+        let tool = ToolName::new("read_task_source").expect("tool");
+        let frozen = FrozenAgentEpisodeDriverV1 {
+            task_id: TaskId::new(),
+            episode_id: EpisodeId::new(),
+            role: AgentRoleName::new("generic-step-boundary-control").expect("role"),
+            selection: ModelSelection {
+                provider: ProviderName::new("recorded").expect("provider"),
+                model: ModelName::new("recorded-model").expect("model"),
+                deployment: DeploymentName::new("isolated").expect("deployment"),
+                adapter_version: AdapterVersion::new("native-protocol-v1").expect("adapter"),
+            },
+            budget: EpisodeBudget {
+                step_limit: Some(EpisodeStepLimit::new(2).expect("steps")),
+                tool_operation_limit: Some(EpisodeToolOperationLimit::new(2)),
+                provider_token_limit: None,
+                deadline_unix_ms: None,
+                external_meter_limits: None,
+            },
+            native_spec: NativeRequestSpec {
+                wire_model: ModelName::new("recorded-model").expect("model"),
+                instructions: "Read once, then finish.".into(),
+                tools: vec![NativeToolDefinition {
+                    name: tool.clone(),
+                    description: "Read one bounded task-local source range.".into(),
+                    input_schema: serde_json::json!({
+                        "type":"object",
+                        "properties":{},
+                        "required":[],
+                        "additionalProperties":false
+                    }),
+                    strict: true,
+                }],
+                max_output_tokens: ModelOutputTokenLimit::new(128).expect("output limit"),
+            },
+            user_text: "Inspect the offered task.".into(),
+            instruction: put::<InstructionBlock>(
+                &mut content,
+                &serde_json::json!({"text":"Read once, then finish."}),
+            ),
+            tool_catalog: put::<ToolCatalog>(
+                &mut content,
+                &serde_json::json!({"schema_version":1,"tools":["read_task_source"]}),
+            ),
+            history: put::<HistoryItem>(
+                &mut content,
+                &serde_json::json!({"role":"user","content":"Inspect the offered task."}),
+            ),
+            context: put::<ContextBlock>(
+                &mut content,
+                &serde_json::json!({"schema_version":1,"knowledge_snapshot":{"kind":"empty"}}),
+            ),
+            policy: put::<PolicyDocument>(
+                &mut content,
+                &serde_json::json!({"schema_version":1,"task_reads":"bounded"}),
+            ),
+            capability_grant: AgentStepCapabilityGrantV1::new(vec![ToolRegistration::new(
+                tool,
+                ToolImplementationVersion::new("task-source-v1").expect("version"),
+                ToolEffectClass::ReadOnly,
+            )])
+            .expect("capability grant"),
+        };
+        let tool_response = serde_json::to_vec(&serde_json::json!({
+            "output":[{
+                "type":"function_call",
+                "call_id":"read-source",
+                "name":"read_task_source",
+                "arguments":"{}"
+            }]
+        }))
+        .expect("tool response");
+        let terminal_response = serde_json::to_vec(&serde_json::json!({
+            "output":[{
+                "type":"message",
+                "id":"final",
+                "phase":"final_answer",
+                "role":"assistant",
+                "status":"completed",
+                "content":[{"type":"output_text","text":"done"}]
+            }]
+        }))
+        .expect("terminal response");
+        let dispatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let transport_dispatches = Arc::clone(&dispatches);
+        let mut transport = ScriptedModelTransport::new(
+            move |_: &crate::PreparedModelRequest| -> Result<_, TransportError> {
+                let index = transport_dispatches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ModelTransportResponse::without_usage(if index == 0 {
+                    tool_response.clone()
+                } else {
+                    terminal_response.clone()
+                }))
+            },
+        );
+        let invocations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let gateway_invocations = Arc::clone(&invocations);
+        let mut gateway = crate::ScriptedToolGateway::new(
+            move |_: &PreparedToolOperation| -> Result<_, ToolGatewayError> {
+                gateway_invocations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                CanonicalToolResult::from_value(&serde_json::json!({"lines":["source"]}))
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            },
+        );
+        let codec = NativeProtocolCodec::from_config(&ModelProtocolConfig::OpenAiResponses {
+            store: false,
+            reasoning_replay: ResponsesReasoningReplay::PreserveOutputItems,
+        })
+        .expect("codec");
+
+        let first = drive_agent_episode_step(
+            &mut events,
+            &mut content,
+            &mut transport,
+            codec,
+            &frozen,
+            &mut gateway,
+        )
+        .expect("first real step");
+        assert!(matches!(first, AgentEpisodeDriverStepOutcomeV1::Continue));
+        assert_eq!(dispatches.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(invocations.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let second = drive_agent_episode_step(
+            &mut events,
+            &mut content,
+            &mut transport,
+            codec,
+            &frozen,
+            &mut gateway,
+        )
+        .expect("second real step");
+        let AgentEpisodeDriverStepOutcomeV1::Complete(completion) = second else {
+            panic!("second real model step must terminate the episode")
+        };
+        assert_eq!(completion.reason, EpisodeCompletionReason::Yielded);
+        assert_eq!(completion.steps_started, 2);
+        assert_eq!(dispatches.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn external_effect_proposal_is_durably_bound_but_never_executed_in_workflow() {
         let temporary = tempfile::tempdir().expect("temporary state");
         let mut content = SqliteContentStore::open(
@@ -1011,7 +1203,7 @@ mod tests {
         })
         .expect("codec");
 
-        let outcome = drive_agent_episode(
+        let outcome = drive_agent_episode_step(
             &mut events,
             &mut content,
             &mut transport,
@@ -1020,7 +1212,7 @@ mod tests {
             &mut gateway,
         )
         .expect("workflow must return a Worker request before external authority");
-        let AgentEpisodeDriverOutcomeV1::WorkerRequest(request) = outcome else {
+        let AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) = outcome else {
             panic!("external effect must produce a Worker request")
         };
         assert_eq!(request.episode_id, frozen.episode_id);
@@ -1079,7 +1271,7 @@ mod tests {
         .expect("Controller records observation");
         assert!(controller_invoked.load(std::sync::atomic::Ordering::SeqCst));
 
-        let resumed = drive_agent_episode(
+        let resumed = drive_agent_episode_step(
             &mut events,
             &mut content,
             &mut transport,
@@ -1088,8 +1280,18 @@ mod tests {
             &mut gateway,
         )
         .expect("resume exact episode");
-        let AgentEpisodeDriverOutcomeV1::Complete(completion) = resumed else {
-            panic!("recorded observation must resume to terminal")
+        assert!(matches!(resumed, AgentEpisodeDriverStepOutcomeV1::Continue));
+        let terminal = drive_agent_episode_step(
+            &mut events,
+            &mut content,
+            &mut transport,
+            codec,
+            &frozen,
+            &mut gateway,
+        )
+        .expect("next exact model step");
+        let AgentEpisodeDriverStepOutcomeV1::Complete(completion) = terminal else {
+            panic!("recorded observation must continue to a terminal model step")
         };
         assert_eq!(completion.reason, EpisodeCompletionReason::Yielded);
         assert_eq!(completion.steps_started, 2);
