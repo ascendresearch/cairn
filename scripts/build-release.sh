@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A verification step that cannot run is not a verification step. Every tool the per-binary checks
+# below depend on must be present, or this script reports its own inability rather than producing a
+# bundle whose provenance was never actually checked.
+for tool in readelf sha256sum tar gzip git sort find xargs; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "release build cannot run: $tool is unavailable" >&2
+    exit 2
+  }
+done
+
 readonly EXPECTED_RUST="rustc 1.85.0 (4d91de4e4 2025-02-17)"
 readonly EXPECTED_ZIGBUILD="cargo-zigbuild 0.21.8"
 readonly EXPECTED_ZIG="0.14.1"
@@ -61,19 +71,33 @@ export SOURCE_DATE_EPOCH
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SOURCE_ROOT=/src/cairn -C strip=symbols"
 
 if (($# == 0)); then
-  targets=(aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu)
+  targets=(aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-unknown-linux-musl)
 else
   targets=("$@")
 fi
 for target in "${targets[@]}"; do
+  # A glibc baseline only means something for a dynamically linked target. The musl target is
+  # statically linked and carries its own libc, which is why the NPU host runs it on a glibc older
+  # than this repository can build against; its verification below asserts that independence rather
+  # than a version ceiling.
   case "$target" in
     aarch64-unknown-linux-gnu)
+      build_target="$target.$GLIBC_BASELINE"
+      link_mode="dynamic"
       expected_machine="AArch64"
       expected_interpreter="/lib/ld-linux-aarch64.so.1"
       ;;
     x86_64-unknown-linux-gnu)
+      build_target="$target.$GLIBC_BASELINE"
+      link_mode="dynamic"
       expected_machine="Advanced Micro Devices X86-64"
       expected_interpreter="/lib64/ld-linux-x86-64.so.2"
+      ;;
+    x86_64-unknown-linux-musl)
+      build_target="$target"
+      link_mode="static"
+      expected_machine="Advanced Micro Devices X86-64"
+      expected_interpreter=""
       ;;
     *)
       echo "unsupported release target: $target" >&2
@@ -84,7 +108,7 @@ for target in "${targets[@]}"; do
   cargo zigbuild \
     --locked \
     --release \
-    --target "$target.$GLIBC_BASELINE" \
+    --target "$build_target" \
     --target-dir "$BUILD_ROOT" \
     -p cairn-server \
     -p cairn-worker
@@ -112,31 +136,53 @@ for target in "${targets[@]}"; do
       echo "$binary has interpreter '$interpreter', expected '$expected_interpreter'" >&2
       exit 1
     fi
-    if [[ "$maximum_glibc" != "$GLIBC_BASELINE" ]]; then
-      echo "$binary requires GLIBC_$maximum_glibc, expected maximum GLIBC_$GLIBC_BASELINE" >&2
-      exit 1
+    if [[ "$link_mode" == "dynamic" ]]; then
+      if [[ "$maximum_glibc" != "$GLIBC_BASELINE" ]]; then
+        echo "$binary requires GLIBC_$maximum_glibc, expected maximum GLIBC_$GLIBC_BASELINE" >&2
+        exit 1
+      fi
+      while IFS= read -r needed; do
+        case "$needed" in
+          ld-linux-aarch64.so.1|ld-linux-x86-64.so.2|libc.so.6|libdl.so.2|libgcc_s.so.1|libm.so.6|libpthread.so.0|librt.so.1) ;;
+          *)
+            echo "$binary has unexpected dynamic dependency: $needed" >&2
+            exit 1
+            ;;
+        esac
+      done < <(readelf -d "$binary_path" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
+    else
+      # The whole point of this target is that the host's libc is not involved. Referencing a
+      # versioned glibc symbol, or naming any shared object at all, would mean the binary silently
+      # acquired a host dependency and the NPU host would refuse or fail to load it.
+      if [[ -n "$maximum_glibc" ]]; then
+        echo "$binary is statically linked yet references GLIBC_$maximum_glibc" >&2
+        exit 1
+      fi
+      needed="$(readelf -d "$binary_path" 2>/dev/null | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')"
+      if [[ -n "$needed" ]]; then
+        echo "$binary is statically linked yet depends on: $needed" >&2
+        exit 1
+      fi
     fi
-    while IFS= read -r needed; do
-      case "$needed" in
-        ld-linux-aarch64.so.1|ld-linux-x86-64.so.2|libc.so.6|libdl.so.2|libgcc_s.so.1|libm.so.6|libpthread.so.0|librt.so.1) ;;
-        *)
-          echo "$binary has unexpected dynamic dependency: $needed" >&2
-          exit 1
-          ;;
-      esac
-    done < <(readelf -d "$binary_path" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
   done
+
+  if [[ "$link_mode" == "dynamic" ]]; then
+    glibc_baseline_json="\"$GLIBC_BASELINE\""
+  else
+    glibc_baseline_json="null"
+  fi
 
   server_sha="$(sha256sum "$stage/bin/cairn-server" | cut -d ' ' -f 1)"
   worker_sha="$(sha256sum "$stage/bin/cairn-worker" | cut -d ' ' -f 1)"
   printf '%s\n' \
     '{' \
-    '  "schema_version": 1,' \
+    '  "schema_version": 2,' \
     "  \"commit\": \"$COMMIT\"," \
     "  \"dirty\": $DIRTY," \
     "  \"source_date_epoch\": $SOURCE_DATE_EPOCH," \
     "  \"target\": \"$target\"," \
-    "  \"glibc_baseline\": \"$GLIBC_BASELINE\"," \
+    "  \"link_mode\": \"$link_mode\"," \
+    "  \"glibc_baseline\": $glibc_baseline_json," \
     "  \"rust\": \"1.85.0\"," \
     "  \"cargo_zigbuild\": \"0.21.8\"," \
     "  \"zig\": \"0.14.1\"," \

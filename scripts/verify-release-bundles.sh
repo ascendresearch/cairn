@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+for tool in tar sha256sum git; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "release bundle verification cannot run: $tool is unavailable" >&2
+    exit 2
+  }
+done
+
 readonly BUNDLE_ROOT="${1:-target/release-bundles}"
 readonly COMMIT_SHORT="$(git rev-parse --short=12 HEAD)"
 readonly TARGETS=(
   aarch64-unknown-linux-gnu
   x86_64-unknown-linux-gnu
+  x86_64-unknown-linux-musl
 )
 
 if [[ ! -d "$BUNDLE_ROOT" ]]; then

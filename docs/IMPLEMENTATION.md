@@ -271,10 +271,13 @@ liveness 是否应当离开 durable 事件流是**尚未实施**的第四项：�
 worker 自带的 `expected_platform` 门在第二次尝试中拒绝了 gnu 构建，这道门是对的——
 它把一次「能加载但环境不符」变成了一次明确失败，而不是一次可疑的运行。
 
-**清单没有可执行路径。** `release/toolchain.toml` 与 `release/zig-requirements.txt` 钉住了
-Rust 1.85.0、cargo-zigbuild 0.21.8、zig 0.14.1，但仓库里没有任何脚本使用它们；本次三个目标的构建
-命令是临时拼出来的。这与 3.3 记录的是同一类缺陷：声明存在而通路不存在。补一个发布脚本
-（按清单装工具链、对三个目标构建、产出带 sha256 的产物）属于 P1 的运行时布局范围。
+**发布通路本身是活的，缺的只是 musl 目标。** `scripts/build-release.sh` 实现了清单，
+并接在 `.github/workflows/ci.yml` 与 `release.yml` 上，后者还做两次独立构建并逐字节比对以验证可复现；
+`.github/actions/setup-release-toolchain` 按钉住的版本装工具链。该脚本对每个产物校验 machine、
+interpreter、glibc 上限与动态依赖白名单，并产出 `BUILD-METADATA.json`、`SHA256SUMS` 与可复现 tar。
+它的缺口是显式的：`unsupported release target` 会拒绝 gnu 之外的任何目标，因此产不出 NPU 主机要求的
+musl 二进制。清单与脚本彼此一致，只是相对部署都不完整。本次手工拼命令是在绕开这个缺口，
+不是在替代一个不存在的脚本。
 
 两点结论：
 
@@ -412,13 +415,13 @@ Exit：一个候选经正常入口到达 Ascend build worker 并取回 typed 诊
 3. `log/` 不保留任何诊断正文落点；扩展现有日志隔离检查覆盖新布局。
 4. 项目定义与 intake 冻结：`project.json`，含 `authored_by_agent` 与 `provided`。
 5. 开发数据丢弃重建，不写迁移器（`AGENTS.md` 开发期规则）。
-6. 发布脚本：按 `release/toolchain.toml` 装工具链、对清单所列三个目标构建、产出带 sha256 的产物。
-   理由见 4.3——清单当前没有任何可执行路径，两台主机要求不同的目标环境，手工拼命令已经致过一次停机。
+6. 发布脚本扩展到 musl 目标，理由见 4.3——两台主机要求不同的目标环境，
+   现有脚本只覆盖 gnu，手工绕开这个缺口已经致过一次停机。
 
 规模估计：第 2、4 项为中，其余为小。
 
 Exit：三类材料分树且权限不同；worker 主机上不存在 `packs/` 与 `restricted/`；从任意工作目录启动解析到同一份状态；
-发布脚本能从干净环境产出两台主机各自可运行的 worker 二进制。
+`scripts/build-release.sh` 能产出两台主机各自可运行的 worker 二进制。
 
 ### P2 · 知识与 skill 层（轨道 A）
 
