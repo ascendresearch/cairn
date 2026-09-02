@@ -116,8 +116,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &config.agent_event_database,
         &config.agent_content_database,
         &config.agent_content_directory,
-        &server.storage.content_database,
-        &server.storage.content_directory,
+        &server.content_database(),
+        &server.content_directory(),
         materials.clone(),
         config
             .evidence_experiment_worker

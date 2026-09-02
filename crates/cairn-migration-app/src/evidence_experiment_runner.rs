@@ -116,8 +116,8 @@ impl EvidenceExperimentRunnerV1 {
 
     fn content(&self) -> Result<SqliteContentStore, ToolGatewayError> {
         SqliteContentStore::open(
-            &self.server.storage.content_database,
-            &self.server.storage.content_directory,
+            self.server.content_database(),
+            self.server.content_directory(),
         )
         .map_err(rejected)
     }
@@ -231,8 +231,7 @@ impl EvidenceExperimentRunnerV1 {
         );
         let job = ExecutionJob::new(job_id).map_err(rejected)?;
         loop {
-            let events =
-                SqliteEventStore::open(&self.server.storage.event_database).map_err(rejected)?;
+            let events = SqliteEventStore::open(self.server.event_database()).map_err(rejected)?;
             let content = self.content()?;
             match recover_execution_job(&events, &content, &job).map_err(rejected)? {
                 ExecutionJobState::Completed {

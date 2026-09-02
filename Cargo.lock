@@ -300,6 +300,7 @@ dependencies = [
  "cairn-codec",
  "cairn-control-transport",
  "cairn-execution",
+ "cairn-layout",
  "cairn-observability",
  "cairn-protocol",
  "cairn-record",

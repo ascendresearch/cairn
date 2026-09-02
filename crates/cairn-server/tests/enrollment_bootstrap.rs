@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use cairn_control_transport::{ClientTlsFiles, EnrollmentSecret, ServerTlsFiles, TransportPolicy};
+use cairn_control_transport::{ClientTlsFiles, EnrollmentSecret, TransportPolicy};
 use cairn_execution::{
     AcceleratorDiscoveryCompleteness, ArchitectureName, AuthenticatedWorkerIdentity,
     ExecutionBackend, ExecutionPlatform, ExecutionPlatformRequirement, LogicalCpuCount,
@@ -19,9 +19,9 @@ use cairn_protocol::{
 };
 use cairn_record::{EventStore, StreamId};
 use cairn_server::{
-    EnrollmentServiceConfig, ServerConfig, ServerStorageConfig, assign_enrolled_worker_pool,
-    create_enrollment_bundle, create_rotation_bundle, disable_enrolled_worker,
-    enable_enrolled_worker, revoke_enrollment_authority, revoke_worker_credential,
+    ServerConfig, assign_enrolled_worker_pool, create_enrollment_bundle, create_rotation_bundle,
+    disable_enrolled_worker, enable_enrolled_worker, revoke_enrollment_authority,
+    revoke_worker_credential,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
@@ -37,60 +37,32 @@ use rcgen::{
 static ENROLLMENT_INTEGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the separate-CA bundle, CLI join, exact rerun, and live control session form one proof"
-)]
 async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
 -> Result<(), Box<dyn Error + Send + Sync>> {
     let _integration_guard = ENROLLMENT_INTEGRATION_LOCK.lock().await;
     let directory = tempfile::tempdir()?;
     let pki = test_pki()?;
-    let ca = directory.path().join("ca.pem");
-    let ca_key = directory.path().join("ca-key.pem");
-    let server_certificate = directory.path().join("server.pem");
-    let server_key = directory.path().join("server-key.pem");
-    fs::write(&ca, &pki.ca_certificate)?;
-    fs::write(&ca_key, &pki.ca_private_key)?;
-    fs::write(&server_certificate, &pki.server_certificate)?;
-    fs::write(&server_key, &pki.server_private_key)?;
+    let home = directory.path().join("deployment");
+    prepare_deployment(&home, &pki)?;
     let enrollment_pki = test_pki()?;
-    let enrollment_server_ca = directory.path().join("enrollment-server-ca.pem");
-    let enrollment_server_certificate = directory.path().join("enrollment-server.pem");
-    let enrollment_server_key = directory.path().join("enrollment-server-key.pem");
-    fs::write(&enrollment_server_ca, &enrollment_pki.ca_certificate)?;
     fs::write(
-        &enrollment_server_certificate,
+        home.join("secrets/enrollment-ca.pem"),
+        &enrollment_pki.ca_certificate,
+    )?;
+    fs::write(
+        home.join("secrets/enrollment-server.pem"),
         &enrollment_pki.server_certificate,
     )?;
-    fs::write(&enrollment_server_key, &enrollment_pki.server_private_key)?;
+    fs::write(
+        home.join("secrets/enrollment-server-key.pem"),
+        &enrollment_pki.server_private_key,
+    )?;
     let control = free_address()?;
     let enrollment = free_address()?;
-    let event_database = directory.path().join("controller-events.sqlite3");
-    let content_database = directory.path().join("controller-content.sqlite3");
-    let content_directory = directory.path().join("controller-content");
-    let mut config = server_config(
-        control,
-        enrollment,
-        &ca,
-        &ca_key,
-        &server_certificate,
-        &server_key,
-        &event_database,
-        &content_database,
-        &content_directory,
-    )?;
-    let enrollment_service = config
-        .enrollment_service
-        .as_mut()
-        .expect("enrollment service");
-    enrollment_service
-        .server_ca
-        .clone_from(&enrollment_server_ca);
-    enrollment_service.server_tls = cairn_server::EnrollmentServerTlsFiles {
-        certificate: enrollment_server_certificate,
-        private_key: enrollment_server_key,
-    };
+    let event_database = home.join("store/events.sqlite3");
+    let content_database = home.join("store/content.sqlite3");
+    let content_directory = home.join("store/content");
+    let config = server_config(control, enrollment, &home, Some("enrollment"))?;
     let bundle = create_enrollment_bundle(
         &config,
         WorkerPoolName::new("join-lab")?,
@@ -167,31 +139,15 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     let _integration_guard = ENROLLMENT_INTEGRATION_LOCK.lock().await;
     let directory = tempfile::tempdir()?;
     let pki = test_pki()?;
-    let ca = directory.path().join("ca.pem");
-    let ca_key = directory.path().join("ca-key.pem");
-    let server_certificate = directory.path().join("server.pem");
-    let server_key = directory.path().join("server-key.pem");
-    fs::write(&ca, &pki.ca_certificate)?;
-    fs::write(&ca_key, &pki.ca_private_key)?;
-    fs::write(&server_certificate, &pki.server_certificate)?;
-    fs::write(&server_key, &pki.server_private_key)?;
+    let home = directory.path().join("deployment");
+    prepare_deployment(&home, &pki)?;
 
     let control_a = free_address()?;
     let enrollment_a = free_address()?;
-    let event_database = directory.path().join("controller-events.sqlite3");
-    let content_database = directory.path().join("controller-content.sqlite3");
-    let content_directory = directory.path().join("controller-content");
-    let config_a = server_config(
-        control_a,
-        enrollment_a,
-        &ca,
-        &ca_key,
-        &server_certificate,
-        &server_key,
-        &event_database,
-        &content_database,
-        &content_directory,
-    )?;
+    let event_database = home.join("store/events.sqlite3");
+    let content_database = home.join("store/content.sqlite3");
+    let content_directory = home.join("store/content");
+    let config_a = server_config(control_a, enrollment_a, &home, None)?;
     let pool = WorkerPoolName::new("migration-lab")?;
     let bundle = create_enrollment_bundle(
         &config_a,
@@ -311,17 +267,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     // solely from the durable enrollment stream.
     let control_b = free_address()?;
     let enrollment_b = free_address()?;
-    let config_b = server_config(
-        control_b,
-        enrollment_b,
-        &ca,
-        &ca_key,
-        &server_certificate,
-        &server_key,
-        &event_database,
-        &content_database,
-        &content_directory,
-    )?;
+    let config_b = server_config(control_b, enrollment_b, &home, None)?;
     let authority_config = config_b.clone();
     let server_b = tokio::spawn(cairn_server::run(config_b));
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -587,29 +533,13 @@ async fn a_starting_controller_records_the_end_of_sessions_left_open_by_a_previo
     let _integration_guard = ENROLLMENT_INTEGRATION_LOCK.lock().await;
     let directory = tempfile::tempdir()?;
     let pki = test_pki()?;
-    let ca = directory.path().join("ca.pem");
-    let ca_key = directory.path().join("ca-key.pem");
-    let server_certificate = directory.path().join("server.pem");
-    let server_key = directory.path().join("server-key.pem");
-    fs::write(&ca, &pki.ca_certificate)?;
-    fs::write(&ca_key, &pki.ca_private_key)?;
-    fs::write(&server_certificate, &pki.server_certificate)?;
-    fs::write(&server_key, &pki.server_private_key)?;
-    let event_database = directory.path().join("controller-events.sqlite3");
-    let content_database = directory.path().join("controller-content.sqlite3");
-    let content_directory = directory.path().join("controller-content");
+    let home = directory.path().join("deployment");
+    prepare_deployment(&home, &pki)?;
+    let event_database = home.join("store/events.sqlite3");
+    let content_database = home.join("store/content.sqlite3");
+    let content_directory = home.join("store/content");
 
-    let config = server_config(
-        free_address()?,
-        free_address()?,
-        &ca,
-        &ca_key,
-        &server_certificate,
-        &server_key,
-        &event_database,
-        &content_database,
-        &content_directory,
-    )?;
+    let config = server_config(free_address()?, free_address()?, &home, None)?;
     let bundle = create_enrollment_bundle(
         &config,
         WorkerPoolName::new("crash-lab")?,
@@ -648,13 +578,8 @@ async fn a_starting_controller_records_the_end_of_sessions_left_open_by_a_previo
     let restarted = tokio::spawn(cairn_server::run(server_config(
         free_address()?,
         free_address()?,
-        &ca,
-        &ca_key,
-        &server_certificate,
-        &server_key,
-        &event_database,
-        &content_database,
-        &content_directory,
+        &home,
+        None,
     )?));
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -745,68 +670,83 @@ fn stage_open_worker_session(
     Ok(session.incarnation_id())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test configuration keeps every filesystem and listener authority explicit"
-)]
+/// Lays out one bundled deployment under `home` and writes its PKI into the secret tree.
+fn prepare_deployment(home: &Path, pki: &TestPki) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fs::create_dir_all(home.join("secrets"))?;
+    fs::create_dir_all(home.join("store"))?;
+    fs::write(home.join("secrets/ca.pem"), &pki.ca_certificate)?;
+    fs::write(home.join("secrets/ca-key.pem"), &pki.ca_private_key)?;
+    fs::write(home.join("secrets/server.pem"), &pki.server_certificate)?;
+    fs::write(home.join("secrets/server-key.pem"), &pki.server_private_key)?;
+    Ok(())
+}
+
+/// Builds one controller configuration bound to the deployment rooted at `home`.
+///
+/// `enrollment_pki` names a separate certificate authority for the bootstrap listener, whose files
+/// live beside the control PKI in the secret tree. It is a parameter rather than a field the caller
+/// overrides afterwards, because paths are bound to their tree when the configuration is resolved
+/// and a later assignment would leave a tree-relative name that never gets placed.
 fn server_config(
     listen: std::net::SocketAddr,
     enrollment_listen: std::net::SocketAddr,
-    ca: &Path,
-    ca_key: &Path,
-    server_certificate: &Path,
-    server_key: &Path,
-    event_database: &Path,
-    content_database: &Path,
-    content_directory: &Path,
+    home: &Path,
+    enrollment_pki: Option<&str>,
 ) -> Result<ServerConfig, Box<dyn Error + Send + Sync>> {
-    Ok(ServerConfig {
-        schema_version: 1,
-        listen,
-        tls: ServerTlsFiles {
-            certificate: server_certificate.to_path_buf(),
-            private_key: server_key.to_path_buf(),
-            client_ca: ca.to_path_buf(),
+    let enrollment_ca =
+        enrollment_pki.map_or_else(|| "ca.pem".to_string(), |prefix| format!("{prefix}-ca.pem"));
+    let enrollment_certificate = enrollment_pki.map_or_else(
+        || "server.pem".to_string(),
+        |prefix| format!("{prefix}-server.pem"),
+    );
+    let enrollment_key = enrollment_pki.map_or_else(
+        || "server-key.pem".to_string(),
+        |prefix| format!("{prefix}-server-key.pem"),
+    );
+    // Built by deserialization rather than by a struct literal, so these tests exercise the same
+    // strict decoding a deployment does, including the rejection of unknown fields.
+    let mut config: ServerConfig = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "listen": listen.to_string(),
+        "layout": { "home": home },
+        "tls": {
+            "certificate": "server.pem",
+            "private_key": "server-key.pem",
+            "client_ca": "ca.pem"
         },
-        enrollment_service: Some(EnrollmentServiceConfig {
-            listen: enrollment_listen,
-            public_tcp_address: enrollment_listen.to_string(),
-            websocket_uri: format!("wss://localhost:{}/enrollment", enrollment_listen.port()),
-            server_name: "localhost".into(),
-            server_ca: ca.to_path_buf(),
-            server_tls: cairn_server::EnrollmentServerTlsFiles {
-                certificate: server_certificate.to_path_buf(),
-                private_key: server_key.to_path_buf(),
+        "enrollment_service": {
+            "listen": enrollment_listen.to_string(),
+            "public_tcp_address": enrollment_listen.to_string(),
+            "websocket_uri": format!("wss://localhost:{}/enrollment", enrollment_listen.port()),
+            "server_name": "localhost",
+            "server_ca": enrollment_ca,
+            "server_tls": {
+                "certificate": enrollment_certificate,
+                "private_key": enrollment_key
             },
-            control_endpoint: cairn_server::PublicWorkerControlEndpointConfig {
-                tcp_address: listen.to_string(),
-                websocket_uri: format!("wss://localhost:{}/control", listen.port()),
-                server_name: "localhost".into(),
-                server_ca: ca.to_path_buf(),
+            "control_endpoint": {
+                "tcp_address": listen.to_string(),
+                "websocket_uri": format!("wss://localhost:{}/control", listen.port()),
+                "server_name": "localhost",
+                "server_ca": "ca.pem"
             },
-            issuer_certificate: ca.to_path_buf(),
-            issuer_private_key: ca_key.to_path_buf(),
-            credential_validity_ms: NonZeroU64::new(3_600_000).expect("validity"),
-            rotation_overlap_ms: NonZeroU64::new(500),
-            handshake_timeout_ms: NonZeroU64::new(2_000),
-            diagnostic_byte_limit: NonZeroU64::new(256),
-            transport: TransportPolicy::default(),
-        }),
-        storage: ServerStorageConfig {
-            event_database: event_database.to_path_buf(),
-            content_database: content_database.to_path_buf(),
-            content_directory: content_directory.to_path_buf(),
+            "issuer_certificate": "ca.pem",
+            "issuer_private_key": "ca-key.pem",
+            "credential_validity_ms": 3_600_000,
+            "rotation_overlap_ms": 500,
+            "handshake_timeout_ms": 2_000,
+            "diagnostic_byte_limit": 256
         },
-        protocol_version: WorkerProtocolVersion::new(1)?,
-        scheduler: None,
-        handshake_timeout_ms: NonZeroU64::new(2_000),
-        idle_timeout_ms: None,
-        outbox_poll_interval_ms: None,
-        authority_poll_interval_ms: NonZeroU64::new(25).expect("authority poll"),
-        resource_clock_skew_tolerance_ms: None,
-        transport: TransportPolicy::default(),
-        diagnostic_byte_limit: NonZeroU64::new(256),
-    })
+        "protocol_version": 1,
+        "scheduler": null,
+        "handshake_timeout_ms": 2_000,
+        "idle_timeout_ms": null,
+        "outbox_poll_interval_ms": null,
+        "authority_poll_interval_ms": 25,
+        "diagnostic_byte_limit": 256
+    }))?;
+    config.resolve_layout(None)?;
+    Ok(config)
 }
 
 fn worker_config(

@@ -11,6 +11,7 @@ cairn-agent.workspace = true
 cairn-control-transport.workspace = true
 cairn-codec.workspace = true
 cairn-execution.workspace = true
+cairn-layout.workspace = true
 cairn-observability.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true

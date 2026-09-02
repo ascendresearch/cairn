@@ -6,8 +6,8 @@ use cairn_server::{WorkerRegistryAudit, WorkerRegistryInspection};
 #[test]
 fn registry_query_cli_emits_strict_json_and_missing_entries_fail() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
-    let state = directory.path().join("state");
-    fs::create_dir(&state)?;
+    let home = directory.path().join("deployment");
+    fs::create_dir_all(home.join("store"))?;
     let config = directory.path().join("controller.json");
     fs::write(
         &config,
@@ -22,11 +22,7 @@ fn registry_query_cli_emits_strict_json_and_missing_entries_fail() -> Result<(),
             "protocol_version": 1,
             "schema_version": 1,
             "scheduler": null,
-            "storage": {
-                "content_database": "state/content.sqlite3",
-                "content_directory": "state/content",
-                "event_database": "state/events.sqlite3"
-            },
+            "layout": { "home": home },
             "tls": {
                 "certificate": "unused-controller.pem",
                 "client_ca": "unused-ca.pem",

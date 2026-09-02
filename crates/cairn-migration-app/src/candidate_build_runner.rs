@@ -248,8 +248,7 @@ impl CandidateBuildRunnerV1 {
         };
         let job = ExecutionJob::new(authorized.job_id).map_err(domain)?;
         loop {
-            let events =
-                SqliteEventStore::open(&self.server.storage.event_database).map_err(domain)?;
+            let events = SqliteEventStore::open(self.server.event_database()).map_err(domain)?;
             let content = self.content()?;
             match recover_execution_job(&events, &content, &job).map_err(domain)? {
                 ExecutionJobState::Completed {
@@ -289,8 +288,8 @@ impl CandidateBuildRunnerV1 {
 
     fn content(&self) -> Result<SqliteContentStore, CandidateBuildRunnerError> {
         SqliteContentStore::open(
-            &self.server.storage.content_database,
-            &self.server.storage.content_directory,
+            self.server.content_database(),
+            self.server.content_directory(),
         )
         .map_err(domain)
     }

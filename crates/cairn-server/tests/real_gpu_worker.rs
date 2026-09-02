@@ -31,11 +31,9 @@ fn scheduled_gpu_probe_returns_device_bound_evidence() {
     let config_path = env::var("CAIRN_REAL_CONTROLLER_CONFIG").expect("controller config path");
     let image = env::var("CAIRN_REAL_GPU_IMAGE_ID").expect("full GPU image ID");
     let config = load_config(Path::new(&config_path));
-    let mut content = SqliteContentStore::open(
-        &config.storage.content_database,
-        &config.storage.content_directory,
-    )
-    .expect("controller content store");
+    let mut content =
+        SqliteContentStore::open(config.content_database(), config.content_directory())
+            .expect("controller content store");
     let (input_id, environment_id) = archive_probe_materials(&mut content, image);
     let job_id = JobId::new();
     let contract = gpu_contract(job_id, input_id, environment_id, "bin/probe", 30_000);
@@ -56,11 +54,9 @@ fn scheduled_cuda_reduction_builds_and_passes_release_corpus() {
     let fixture_root = env::var("CAIRN_REAL_CUDA_FIXTURE_ROOT").expect("CUDA fixture root");
     let image = env::var("CAIRN_REAL_GPU_IMAGE_ID").expect("full GPU image ID");
     let config = load_config(Path::new(&config_path));
-    let mut content = SqliteContentStore::open(
-        &config.storage.content_database,
-        &config.storage.content_directory,
-    )
-    .expect("controller content store");
+    let mut content =
+        SqliteContentStore::open(config.content_database(), config.content_directory())
+            .expect("controller content store");
     let (input_id, environment_id) =
         archive_cuda_reduction_materials(&mut content, Path::new(&fixture_root), image);
     assert_eq!(input_id.to_string(), CUDA_REDUCTION_INPUT_ID);
@@ -243,7 +239,7 @@ fn await_gpu_success(
     label: &str,
 ) {
     let job = ExecutionJob::new(job_id).expect("job stream");
-    let events = SqliteEventStore::open(&config.storage.event_database).expect("event store");
+    let events = SqliteEventStore::open(config.event_database()).expect("event store");
     for _ in 0..600 {
         match recover_execution_job(&events, content, &job).expect("recover probe") {
             ExecutionJobState::Completed {
@@ -293,9 +289,9 @@ fn await_gpu_success(
 fn resolve_storage(config: &mut ServerConfig, config_path: &Path) {
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
     for path in [
-        &mut config.storage.event_database,
-        &mut config.storage.content_database,
-        &mut config.storage.content_directory,
+        &mut config.event_database(),
+        &mut config.content_database(),
+        &mut config.content_directory(),
     ] {
         if path.is_relative() {
             *path = base.join(&*path);

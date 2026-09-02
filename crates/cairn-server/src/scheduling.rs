@@ -174,13 +174,11 @@ pub fn schedule_execution_contract_at(
     let scheduler = config.scheduler.ok_or_else(|| {
         ServerError::Configuration("scheduler is disabled in controller configuration".into())
     })?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Scheduling(error.to_string()))?;
-    let mut content = SqliteContentStore::open(
-        &config.storage.content_database,
-        &config.storage.content_directory,
-    )
-    .map_err(|error| ServerError::Scheduling(error.to_string()))?;
+    let mut content =
+        SqliteContentStore::open(config.content_database(), config.content_directory())
+            .map_err(|error| ServerError::Scheduling(error.to_string()))?;
     let registry = EnrollmentRegistry::load(&events, observed_at)
         .map_err(|error| ServerError::Scheduling(error.to_string()))?;
     let candidate_worker_ids: Vec<_> = registry.worker_ids().into_iter().collect();
@@ -194,7 +192,7 @@ pub fn schedule_execution_contract_at(
         "execution scheduling started"
     );
     let authority = ControllerPlacementAuthority {
-        event_database: config.storage.event_database.clone(),
+        event_database: config.event_database().clone(),
     };
 
     let prepared = prepare_execution_job(&mut content, contract)
@@ -373,13 +371,10 @@ pub fn release_execution_reservation_at(
     observed_at: ObservedAtUnixMillis,
 ) -> Result<ReservationReleaseReason, ServerError> {
     config.validate_schema()?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Scheduling(error.to_string()))?;
-    let content = SqliteContentStore::open(
-        &config.storage.content_database,
-        &config.storage.content_directory,
-    )
-    .map_err(|error| ServerError::Scheduling(error.to_string()))?;
+    let content = SqliteContentStore::open(config.content_database(), config.content_directory())
+        .map_err(|error| ServerError::Scheduling(error.to_string()))?;
     release_scheduler_reservation(
         &mut events,
         &content,

@@ -49,6 +49,7 @@ use cairn_execution::{
     record_worker_resource_observation, recover_execution_assignment, register_worker,
     start_accepted_assignment, synchronize_worker_pool_assignment,
 };
+use cairn_layout::{LayoutRole, RuntimeLayout, RuntimeTree, TreeRoots};
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
     EventSequence, ObservedAtUnixMillis, ReservationId, WorkerId,
@@ -73,9 +74,12 @@ use enrollment::{
 pub struct ServerConfig {
     pub schema_version: u16,
     pub listen: SocketAddr,
+    /// Where this deployment's runtime trees live. Absent means every root comes from
+    /// `CAIRN_HOME`.
+    #[serde(default)]
+    pub layout: LayoutConfig,
     pub tls: ServerTlsFiles,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
-    pub storage: ServerStorageConfig,
     pub protocol_version: WorkerProtocolVersion,
     /// Optional generic scheduler service. `null` disables new placement while worker control and
     /// reconciliation remain available.
@@ -91,6 +95,29 @@ pub struct ServerConfig {
     #[serde(default)]
     pub transport: TransportPolicy,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
+    /// Resolved store root. Derived from `layout`, never configured directly, because the files
+    /// inside a tree are that tree's business and repeating their names in every deployment only
+    /// creates three more ways to put durable state somewhere it does not belong.
+    #[serde(skip)]
+    store_root: PathBuf,
+    /// Resolved workspaces root. Derived from `layout` for the same reason as the store root.
+    #[serde(skip)]
+    workspaces_root: PathBuf,
+}
+
+/// Declares where this deployment's runtime trees live.
+///
+/// A bundled deployment names one root and takes the conventional directory under it for each
+/// tree; a system installation names each root. Both are bindings of the same logical roles.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutConfig {
+    /// Single deployment root. When absent, `CAIRN_HOME` supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<PathBuf>,
+    /// Explicit roots, overriding what `home` would give for those trees.
+    #[serde(default, skip_serializing_if = "TreeRoots::is_empty")]
+    pub roots: TreeRoots,
 }
 
 /// Isolated server-authenticated listener and certificate authority used only for bootstrap.
@@ -143,15 +170,6 @@ pub(crate) struct EnrolledWorker {
     pub(crate) pool_assignment_revision: EventId,
 }
 
-/// Controller durable storage locations.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ServerStorageConfig {
-    pub event_database: PathBuf,
-    pub content_database: PathBuf,
-    pub content_directory: PathBuf,
-}
-
 /// Configuration, transport, or durable-domain process failure.
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -194,11 +212,11 @@ fn on_store<T>(work: impl FnOnce() -> T) -> T {
 impl ControllerState {
     fn open(config: &ServerConfig) -> Result<Self, ServerError> {
         let state = Self {
-            events: SqliteEventStore::open(&config.storage.event_database)
+            events: SqliteEventStore::open(config.event_database())
                 .map_err(|error| ServerError::Session(error.to_string()))?,
             content: SqliteContentStore::open(
-                &config.storage.content_database,
-                &config.storage.content_directory,
+                config.content_database(),
+                config.content_directory(),
             )
             .map_err(|error| ServerError::Session(error.to_string()))?,
         };
@@ -585,8 +603,8 @@ pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerErro
             .map_err(|error| ServerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| ServerError::Configuration(error.to_string()))?;
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    config.resolve_paths(base);
+    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
+    config.resolve_layout(environment_home.as_deref())?;
     Ok(config)
 }
 
@@ -601,7 +619,7 @@ pub fn inspect_worker_registry(
     config: &ServerConfig,
 ) -> Result<WorkerRegistryInspection, ServerError> {
     validate_registry_query(config)?;
-    let events = SqliteEventStore::open(&config.storage.event_database)
+    let events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     inspect_registry(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -616,7 +634,7 @@ pub fn inspect_worker_registry(
 /// Returns an error for invalid configuration, storage failure, or contradictory history.
 pub fn audit_worker_registry(config: &ServerConfig) -> Result<WorkerRegistryAudit, ServerError> {
     validate_registry_query(config)?;
-    let events = SqliteEventStore::open(&config.storage.event_database)
+    let events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     audit_registry(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -641,7 +659,7 @@ pub fn create_enrollment_bundle(
         .enrollment_service
         .as_ref()
         .ok_or_else(|| ServerError::Configuration("enrollment_service is not configured".into()))?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     create_offer(&mut events, service, pool, ttl_ms, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -662,7 +680,7 @@ pub fn create_rotation_bundle(
         .enrollment_service
         .as_ref()
         .ok_or_else(|| ServerError::Configuration("enrollment_service is not configured".into()))?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     create_rotation_offer(
         &mut events,
@@ -686,7 +704,7 @@ pub fn revoke_worker_credential(
     command_id: &CommandId,
 ) -> Result<RegistryMutationOutcome, ServerError> {
     config.validate_schema()?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     revoke_credential(&mut events, credential_id, command_id, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -703,7 +721,7 @@ pub fn disable_enrolled_worker(
     command_id: &CommandId,
 ) -> Result<RegistryMutationOutcome, ServerError> {
     config.validate_schema()?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     disable_worker(&mut events, worker_id, command_id, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -721,7 +739,7 @@ pub fn enable_enrolled_worker(
     command_id: &CommandId,
 ) -> Result<RegistryMutationOutcome, ServerError> {
     config.validate_schema()?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     enable_worker(&mut events, worker_id, command_id, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -740,7 +758,7 @@ pub fn assign_enrolled_worker_pool(
     command_id: &CommandId,
 ) -> Result<RegistryMutationOutcome, ServerError> {
     config.validate_schema()?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     assign_worker_pool(&mut events, worker_id, pool, command_id, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -757,7 +775,7 @@ pub fn revoke_enrollment_authority(
     command_id: &CommandId,
 ) -> Result<RegistryMutationOutcome, ServerError> {
     config.validate_schema()?;
-    let mut events = SqliteEventStore::open(&config.storage.event_database)
+    let mut events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     revoke_enrollment(&mut events, enrollment_id, command_id, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))
@@ -772,13 +790,17 @@ pub fn revoke_enrollment_authority(
     clippy::too_many_lines,
     reason = "startup keeps listener, storage, enrollment, and App API lifetimes visibly composed"
 )]
-pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
+pub async fn run(mut config: ServerConfig) -> Result<(), ServerError> {
+    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
+    config.resolve_layout(environment_home.as_deref())?;
+    config.create_process_owned_trees()?;
+    let config = config;
     config.validate()?;
     let tls = config
         .tls
         .load()
         .map_err(|error| ServerError::Startup(error.to_string()))?;
-    let events = SqliteEventStore::open(&config.storage.event_database)
+    let events = SqliteEventStore::open(config.event_database())
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     EnrollmentRegistry::load(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
@@ -986,22 +1008,127 @@ impl ServerConfig {
         Ok(())
     }
 
-    fn resolve_paths(&mut self, base: &Path) {
-        resolve(&mut self.tls.certificate, base);
-        resolve(&mut self.tls.private_key, base);
-        resolve(&mut self.tls.client_ca, base);
-        if let Some(service) = &mut self.enrollment_service {
-            resolve(&mut service.server_ca, base);
-            resolve(&mut service.server_tls.certificate, base);
-            resolve(&mut service.server_tls.private_key, base);
-            resolve(&mut service.control_endpoint.server_ca, base);
-            resolve(&mut service.issuer_certificate, base);
-            resolve(&mut service.issuer_private_key, base);
-        }
-        resolve(&mut self.storage.event_database, base);
-        resolve(&mut self.storage.content_database, base);
-        resolve(&mut self.storage.content_directory, base);
+    /// Returns the durable event journal inside the store tree.
+    #[must_use]
+    pub fn event_database(&self) -> PathBuf {
+        self.store_root.join("events.sqlite3")
     }
+
+    /// Returns the content-addressed store index inside the store tree.
+    #[must_use]
+    pub fn content_database(&self) -> PathBuf {
+        self.store_root.join("content.sqlite3")
+    }
+
+    /// Returns the content-addressed blob directory inside the store tree.
+    #[must_use]
+    pub fn content_directory(&self) -> PathBuf {
+        self.store_root.join("content")
+    }
+
+    /// Creates the trees this process writes into, and only those.
+    ///
+    /// `config/`, `packs/`, `secrets/` and `restricted/` are owned by an administrator or by the
+    /// Admission side. Creating them here would turn a missing deployment into an empty one that
+    /// starts and then fails somewhere less legible, so their absence is left to be reported by
+    /// whatever needs their contents.
+    fn create_process_owned_trees(&self) -> Result<(), ServerError> {
+        for directory in [self.store_root.clone(), self.workspaces_root.clone()] {
+            fs::create_dir_all(&directory).map_err(|error| {
+                ServerError::Configuration(format!(
+                    "cannot create the runtime tree at {}: {error}",
+                    directory.display()
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Returns whether the layout has already been bound to this configuration.
+    ///
+    /// A resolved store root is the evidence, because resolution is what produces it and because
+    /// every path in a resolved configuration is absolute, which the tree resolver rejects. Binding
+    /// twice would therefore be an error rather than a no-op, and callers legitimately arrive from
+    /// two directions: the loader for command-line subcommands, and `run` for a configuration a
+    /// test or embedder constructed directly.
+    #[must_use]
+    fn is_resolved(&self) -> bool {
+        !self.store_root.as_os_str().is_empty()
+    }
+
+    /// Binds every configured path to the tree that owns the material it names.
+    ///
+    /// PKI is named per file because deployments legitimately differ on those names; the store's
+    /// contents are not, because naming them per deployment only creates more ways to put durable
+    /// state somewhere it does not belong.
+    ///
+    /// A configuration built in memory rather than loaded from a file must be bound before it is
+    /// used, because every path in it is relative to a tree until this runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when the trees cannot be resolved into separated absolute
+    /// roots, or when a configured path would leave the tree that owns it.
+    pub fn resolve_layout(&mut self, environment_home: Option<&Path>) -> Result<(), ServerError> {
+        if self.is_resolved() {
+            return Ok(());
+        }
+        let home = self
+            .layout
+            .home
+            .clone()
+            .or_else(|| environment_home.map(Path::to_path_buf));
+        let layout =
+            RuntimeLayout::resolve(LayoutRole::Controller, home.as_deref(), &self.layout.roots)
+                .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        place(&mut self.tls.certificate, &layout, RuntimeTree::Secrets)?;
+        place(&mut self.tls.private_key, &layout, RuntimeTree::Secrets)?;
+        place(&mut self.tls.client_ca, &layout, RuntimeTree::Secrets)?;
+        if let Some(service) = &mut self.enrollment_service {
+            place(&mut service.server_ca, &layout, RuntimeTree::Secrets)?;
+            place(
+                &mut service.server_tls.certificate,
+                &layout,
+                RuntimeTree::Secrets,
+            )?;
+            place(
+                &mut service.server_tls.private_key,
+                &layout,
+                RuntimeTree::Secrets,
+            )?;
+            place(
+                &mut service.control_endpoint.server_ca,
+                &layout,
+                RuntimeTree::Secrets,
+            )?;
+            place(
+                &mut service.issuer_certificate,
+                &layout,
+                RuntimeTree::Secrets,
+            )?;
+            place(
+                &mut service.issuer_private_key,
+                &layout,
+                RuntimeTree::Secrets,
+            )?;
+        }
+        self.store_root = layout
+            .root(RuntimeTree::Store)
+            .map_err(|error| ServerError::Configuration(error.to_string()))?
+            .to_path_buf();
+        self.workspaces_root = layout
+            .root(RuntimeTree::Workspaces)
+            .map_err(|error| ServerError::Configuration(error.to_string()))?
+            .to_path_buf();
+        Ok(())
+    }
+}
+
+fn place(path: &mut PathBuf, layout: &RuntimeLayout, tree: RuntimeTree) -> Result<(), ServerError> {
+    *path = layout
+        .resolve_in(tree, &*path)
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+    Ok(())
 }
 
 async fn enrollment_listener_loop(
@@ -1918,12 +2045,6 @@ fn command(_purpose: &str) -> CommandId {
     CommandId::new()
 }
 
-fn resolve(path: &mut PathBuf, base: &Path) {
-    if path.is_relative() {
-        *path = base.join(&*path);
-    }
-}
-
 fn bound(value: &str, limit: Option<NonZeroU64>) -> String {
     let Some(limit) = limit.and_then(|value| usize::try_from(value.get()).ok()) else {
         return value.to_owned();
@@ -2070,6 +2191,61 @@ mod tests {
                 .expect("enrollment service")
                 .rotation_overlap_ms
                 .is_none()
+        );
+    }
+
+    // The layout is what makes ownership separation a property of the paths rather than of the
+    // person writing the configuration, so the documented deployment has to demonstrate it.
+    #[test]
+    fn the_documented_configuration_places_each_path_in_the_tree_that_owns_it() {
+        let mut config: ServerConfig =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented controller configuration");
+        config.resolve_layout(None).expect("documented layout");
+        assert_eq!(
+            config.event_database(),
+            std::path::Path::new("/srv/cairn/store/events.sqlite3")
+        );
+        assert_eq!(
+            config.tls.client_ca,
+            std::path::Path::new("/srv/cairn/secrets/ca.pem")
+        );
+        assert!(
+            !config.event_database().starts_with("/srv/cairn/secrets"),
+            "durable state must not resolve inside the secret tree"
+        );
+    }
+
+    // The arrangement this rejects is the one the deployment actually had, where the store lived
+    // under the secret tree and silently took its permissions, backup period and access subject.
+    #[test]
+    fn a_store_configured_inside_the_secret_tree_is_refused_at_load() {
+        let mut documented: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented controller configuration");
+        documented["layout"]["roots"] = serde_json::json!({ "store": "/srv/cairn/secrets/state" });
+        let mut config: ServerConfig =
+            serde_json::from_value(documented).expect("parses before it is resolved");
+        let error = config
+            .resolve_layout(None)
+            .expect_err("a store inside the secret tree must not resolve");
+        assert!(
+            error.to_string().contains("lies inside"),
+            "the refusal must name the nesting: {error}"
+        );
+    }
+
+    #[test]
+    fn a_configured_path_may_not_leave_the_tree_that_owns_it() {
+        let mut documented: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented controller configuration");
+        documented["tls"]["client_ca"] = serde_json::json!("../store/ca.pem");
+        let mut config: ServerConfig =
+            serde_json::from_value(documented).expect("parses before it is resolved");
+        assert!(
+            config.resolve_layout(None).is_err(),
+            "a secret-tree path reaching into the store must not resolve"
         );
     }
 

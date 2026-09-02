@@ -4,23 +4,23 @@
   "enrollment_service": {
     "credential_validity_ms": 2592000000,
     "control_endpoint": {
-      "server_ca": "pki/ca.pem",
+      "server_ca": "ca.pem",
       "server_name": "controller.example.test",
       "tcp_address": "controller.example.test:7443",
       "websocket_uri": "wss://controller.example.test:7443/control"
     },
     "diagnostic_byte_limit": 1024,
     "handshake_timeout_ms": 10000,
-    "issuer_certificate": "pki/ca.pem",
-    "issuer_private_key": "pki/ca-key.pem",
+    "issuer_certificate": "ca.pem",
+    "issuer_private_key": "ca-key.pem",
     "listen": "0.0.0.0:7444",
     "public_tcp_address": "controller.example.test:7444",
     "rotation_overlap_ms": 300000,
-    "server_ca": "pki/ca.pem",
+    "server_ca": "ca.pem",
     "server_name": "controller.example.test",
     "server_tls": {
-      "certificate": "pki/controller.pem",
-      "private_key": "pki/controller-key.pem"
+      "certificate": "controller.pem",
+      "private_key": "controller-key.pem"
     },
     "transport": {
       "message_byte_limit": 1048576
@@ -29,11 +29,13 @@
   },
   "handshake_timeout_ms": 10000,
   "idle_timeout_ms": 120000,
+  "layout": {
+    "home": "/srv/cairn"
+  },
   "listen": "0.0.0.0:7443",
   "outbox_poll_interval_ms": 100,
   "protocol_version": 1,
   "resource_clock_skew_tolerance_ms": null,
-  "schema_version": 1,
   "scheduler": {
     "assignment_lease_duration_ms": 120000,
     "assignment_material_byte_limit": 536870912,
@@ -43,15 +45,11 @@
     "policy_version": "stable-worker-id-quantitative-v1",
     "reservation_claim_timeout_ms": 30000
   },
-  "storage": {
-    "content_database": "state/content.sqlite3",
-    "content_directory": "state/content",
-    "event_database": "state/events.sqlite3"
-  },
+  "schema_version": 1,
   "tls": {
-    "certificate": "pki/controller.pem",
-    "client_ca": "pki/ca.pem",
-    "private_key": "pki/controller-key.pem"
+    "certificate": "controller.pem",
+    "client_ca": "ca.pem",
+    "private_key": "controller-key.pem"
   },
   "transport": {
     "message_byte_limit": 1048576
