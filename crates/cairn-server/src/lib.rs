@@ -56,7 +56,7 @@ use cairn_protocol::{
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{net::TcpListener, sync::Mutex, time::Instant};
+use tokio::{net::TcpListener, time::Instant};
 
 use enrollment::{
     EnrollmentError, EnrollmentIssuer, EnrollmentRegistry, create_offer, create_rotation_offer,
@@ -172,9 +172,28 @@ pub enum ServerError {
     RegistryEntryNotFound(String),
 }
 
+/// One connection's own view of durable state.
+///
+/// Each accepted connection opens its own stores. Durable invariants are enforced per stream by
+/// `ExpectedRevision`, inside a `SQLite` transaction, so nothing here needs a process-wide lock; a
+/// shared one would only serialize every session onto whichever thread happened to hold it.
 struct ControllerState {
     events: SqliteEventStore,
     content: SqliteContentStore,
+}
+
+impl ControllerState {
+    fn open(config: &ServerConfig) -> Result<Self, ServerError> {
+        Ok(Self {
+            events: SqliteEventStore::open(&config.storage.event_database)
+                .map_err(|error| ServerError::Session(error.to_string()))?,
+            content: SqliteContentStore::open(
+                &config.storage.content_database,
+                &config.storage.content_directory,
+            )
+            .map_err(|error| ServerError::Session(error.to_string()))?,
+        })
+    }
 }
 
 /// Loads a single JSON configuration argument and runs until process shutdown.
@@ -705,14 +724,7 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     EnrollmentRegistry::load(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
-    let state = Arc::new(Mutex::new(ControllerState {
-        events,
-        content: SqliteContentStore::open(
-            &config.storage.content_database,
-            &config.storage.content_directory,
-        )
-        .map_err(|error| ServerError::Startup(error.to_string()))?,
-    }));
+    drop(events);
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
@@ -732,13 +744,11 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
         let enrollment_listener = TcpListener::bind(service.listen)
             .await
             .map_err(|error| ServerError::Startup(error.to_string()))?;
-        let enrollment_state = Arc::clone(&state);
         let enrollment_config = config.clone();
         tokio::spawn(async move {
             if let Err(error) = enrollment_listener_loop(
                 enrollment_listener,
                 enrollment_tls,
-                enrollment_state,
                 issuer,
                 enrollment_config,
             )
@@ -771,15 +781,8 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
             .map_err(|error| ServerError::Startup(error.to_string()))?;
         let session_config = config.clone();
         let session_tls = Arc::clone(&tls);
-        let session_state = Arc::clone(&state);
         tokio::spawn(async move {
-            if let Err(error) = Box::pin(handle_connection(
-                tcp,
-                session_tls,
-                session_state,
-                session_config,
-            ))
-            .await
+            if let Err(error) = Box::pin(handle_connection(tcp, session_tls, session_config)).await
             {
                 tracing::warn!(
                     target: "cairn.server.session",
@@ -844,6 +847,13 @@ impl ServerConfig {
     /// The values are independent numbers in one file and nothing else states how they relate, so a
     /// deployment can currently express combinations whose behaviour contradicts the name of the
     /// setting that produced it.
+    ///
+    /// One relation deliberately stays outside this check. A reservation must be claimable inside
+    /// its window, and the events that can disturb a placement decision arrive at the worker's
+    /// heartbeat interval, which lives in the worker's own configuration on another host. The
+    /// Controller cannot see that value at load, so `reservation_claim_timeout_ms` should be kept
+    /// below the deployment's heartbeat interval by the operator rather than by this function.
+    /// The deployment observed on 2026-09-02 set both to 30 s.
     fn validate_clock_relations(&self) -> Result<(), ServerError> {
         // A transport that outlives the durable session holds a connection open past the point
         // where the incarnation is considered dead.
@@ -939,7 +949,6 @@ impl ServerConfig {
 async fn enrollment_listener_loop(
     listener: TcpListener,
     tls: Arc<rustls::ServerConfig>,
-    state: Arc<Mutex<ControllerState>>,
     issuer: Arc<EnrollmentIssuer>,
     config: ServerConfig,
 ) -> Result<(), ServerError> {
@@ -958,14 +967,12 @@ async fn enrollment_listener_loop(
             .await
             .map_err(|error| ServerError::Startup(error.to_string()))?;
         let connection_tls = Arc::clone(&tls);
-        let connection_state = Arc::clone(&state);
         let connection_issuer = Arc::clone(&issuer);
         let connection_config = config.clone();
         tokio::spawn(async move {
             if let Err(error) = Box::pin(handle_enrollment_connection(
                 tcp,
                 connection_tls,
-                connection_state,
                 connection_issuer,
                 connection_config,
             ))
@@ -985,7 +992,6 @@ async fn enrollment_listener_loop(
 async fn handle_enrollment_connection(
     tcp: tokio::net::TcpStream,
     tls: Arc<rustls::ServerConfig>,
-    state: Arc<Mutex<ControllerState>>,
     issuer: Arc<EnrollmentIssuer>,
     config: ServerConfig,
 ) -> Result<(), ServerError> {
@@ -993,6 +999,8 @@ async fn handle_enrollment_connection(
         .enrollment_service
         .as_ref()
         .ok_or_else(|| ServerError::Session("enrollment service configuration is absent".into()))?;
+    let mut state = ControllerState::open(&config)?;
+    let state = &mut state;
     let accepted = accept_enrollment_socket(tcp, tls, service.transport);
     let (mut socket, _peer) = Box::pin(timeout_optional(service.handshake_timeout_ms, accepted))
         .await?
@@ -1016,9 +1024,8 @@ async fn handle_enrollment_connection(
         }
     };
     let result = {
-        let mut locked = state.lock().await;
         redeem(
-            &mut locked.events,
+            &mut state.events,
             issuer.as_ref(),
             &request,
             observed_now()?,
@@ -1102,9 +1109,10 @@ async fn write_enrollment_reject(
 async fn handle_connection(
     tcp: tokio::net::TcpStream,
     tls: Arc<rustls::ServerConfig>,
-    state: Arc<Mutex<ControllerState>>,
     config: ServerConfig,
 ) -> Result<(), ServerError> {
+    let mut state = ControllerState::open(&config)?;
+    let state = &mut state;
     let accepted = accept_worker_socket(tcp, tls, config.transport);
     let (mut socket, fingerprint, _peer) =
         Box::pin(timeout_optional(config.handshake_timeout_ms, accepted))
@@ -1132,7 +1140,7 @@ async fn handle_connection(
     };
     // The registry, rather than a startup snapshot, owns current credential and pool authority.
     // This makes administrative lifecycle changes visible to every new handshake immediately.
-    let enrolled_worker = current_enrolled_worker(&state, fingerprint).await?;
+    let enrolled_worker = current_enrolled_worker(state, fingerprint)?;
     let Some(enrolled_worker) = enrolled_worker else {
         reject(
             &mut socket,
@@ -1159,7 +1167,7 @@ async fn handle_connection(
             "certificate and worker identity differ".into(),
         ));
     }
-    if !credential_is_authorized(&state, &enrolled_worker).await? {
+    if !credential_is_authorized(state, &enrolled_worker)? {
         reject(
             &mut socket,
             config.transport,
@@ -1212,8 +1220,7 @@ async fn handle_connection(
     let subject = WorkerAuthenticationSubject::new(enrolled_worker.worker_id.to_string())
         .map_err(|error| ServerError::Session(error.to_string()))?;
     let mut session = {
-        let mut locked = state.lock().await;
-        let ControllerState { events, content } = &mut *locked;
+        let ControllerState { events, content } = &mut *state;
         let registry = EnrollmentRegistry::load(events, now)
             .map_err(|error| ServerError::Session(error.to_string()))?;
         let enrolled_worker = registry
@@ -1304,7 +1311,7 @@ async fn handle_connection(
     let mut acknowledgement_sent = None;
     let outcome = controller_session_loop(
         &mut socket,
-        &state,
+        state,
         &config,
         &connection_id,
         &mut session,
@@ -1314,9 +1321,8 @@ async fn handle_connection(
     )
     .await;
     let disconnect_at = observed_now()?;
-    let mut locked = state.lock().await;
     disconnect_worker(
-        &mut locked.events,
+        &mut state.events,
         &session,
         &command("disconnect"),
         disconnect_at,
@@ -1340,7 +1346,7 @@ async fn handle_connection(
 )]
 async fn controller_session_loop(
     socket: &mut cairn_control_transport::ServerWebSocket,
-    state: &Arc<Mutex<ControllerState>>,
+    state: &mut ControllerState,
     config: &ServerConfig,
     connection_id: &ControlConnectionId,
     session: &mut RegisteredWorkerSession,
@@ -1353,7 +1359,7 @@ async fn controller_session_loop(
         .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
     let mut outbox_cursor: Option<EventSequence> = None;
     loop {
-        if !session_credential_is_authorized(state, session).await? {
+        if !session_credential_is_authorized(state, session)? {
             return Err(ServerError::Session(
                 "worker credential was revoked or worker was disabled".into(),
             ));
@@ -1394,8 +1400,7 @@ async fn controller_session_loop(
             WorkerWireMessage::Heartbeat { availability } => {
                 let now = observed_now()?;
                 {
-                    let mut locked = state.lock().await;
-                    let ControllerState { events, content } = &mut *locked;
+                    let ControllerState { events, content } = &mut *state;
                     *session = record_worker_heartbeat(
                         events,
                         content,
@@ -1432,8 +1437,7 @@ async fn controller_session_loop(
                     config.resource_clock_skew_tolerance_ms,
                 )?;
                 let observation_id = {
-                    let mut locked = state.lock().await;
-                    let ControllerState { events, content } = &mut *locked;
+                    let ControllerState { events, content } = &mut *state;
                     *session = record_worker_resource_observation(
                         events,
                         content,
@@ -1468,7 +1472,7 @@ async fn controller_session_loop(
                 inbound
                     .accept(&frame, *highest_sent)
                     .map_err(|error| ServerError::Session(error.to_string()))?;
-                process_worker_frame(state, config, connection_id, session, &frame).await?;
+                process_worker_frame(state, config, connection_id, session, &frame)?;
                 flush_controller(
                     socket,
                     state,
@@ -1484,10 +1488,9 @@ async fn controller_session_loop(
             }
             WorkerWireMessage::MaterialChunkRequest { request } => {
                 let chunk = {
-                    let locked = state.lock().await;
                     read_assignment_material_chunk(
-                        &locked.events,
-                        &locked.content,
+                        &state.events,
+                        &state.content,
                         session.worker_id(),
                         &request,
                     )
@@ -1508,32 +1511,29 @@ async fn controller_session_loop(
     }
 }
 
-async fn current_enrolled_worker(
-    state: &Arc<Mutex<ControllerState>>,
+fn current_enrolled_worker(
+    state: &mut ControllerState,
     fingerprint: CertificateFingerprint,
 ) -> Result<Option<EnrolledWorker>, ServerError> {
-    let locked = state.lock().await;
-    let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
+    let registry = EnrollmentRegistry::load(&state.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
     Ok(registry.enrolled().get(&fingerprint).cloned())
 }
 
-async fn credential_is_authorized(
-    state: &Arc<Mutex<ControllerState>>,
+fn credential_is_authorized(
+    state: &mut ControllerState,
     worker: &EnrolledWorker,
 ) -> Result<bool, ServerError> {
-    let locked = state.lock().await;
-    let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
+    let registry = EnrollmentRegistry::load(&state.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
     Ok(registry.credential_is_authorized(worker.credential_id, worker.worker_id))
 }
 
-async fn session_credential_is_authorized(
-    state: &Arc<Mutex<ControllerState>>,
+fn session_credential_is_authorized(
+    state: &mut ControllerState,
     session: &RegisteredWorkerSession,
 ) -> Result<bool, ServerError> {
-    let locked = state.lock().await;
-    let registry = EnrollmentRegistry::load(&locked.events, observed_now()?)
+    let registry = EnrollmentRegistry::load(&state.events, observed_now()?)
         .map_err(|error| ServerError::Session(error.to_string()))?;
     Ok(registry.credential_is_authorized(session.credential_id(), session.worker_id()))
 }
@@ -1542,16 +1542,15 @@ async fn session_credential_is_authorized(
     clippy::too_many_lines,
     reason = "worker message validation, durable transition, and correlated lifecycle logging remain one linear trust boundary"
 )]
-async fn process_worker_frame(
-    state: &Arc<Mutex<ControllerState>>,
+fn process_worker_frame(
+    state: &mut ControllerState,
     config: &ServerConfig,
     connection_id: &ControlConnectionId,
     session: &RegisteredWorkerSession,
     frame: &ControlFrame<WorkerControlMessage>,
 ) -> Result<(), ServerError> {
     let now = observed_now()?;
-    let mut locked = state.lock().await;
-    let ControllerState { events, content } = &mut *locked;
+    let ControllerState { events, content } = &mut *state;
     if let Some(acknowledged) = frame.acknowledges_peer_through {
         acknowledge_controller_messages(
             events,
@@ -1723,7 +1722,7 @@ fn ensure_binding(
 )]
 async fn flush_controller(
     socket: &mut cairn_control_transport::ServerWebSocket,
-    state: &Arc<Mutex<ControllerState>>,
+    state: &mut ControllerState,
     config: &ServerConfig,
     connection_id: &ControlConnectionId,
     worker_id: WorkerId,
@@ -1734,11 +1733,10 @@ async fn flush_controller(
 ) -> Result<(), ServerError> {
     let now = observed_now()?;
     let frames = {
-        let mut locked = state.lock().await;
         // The outbox projection is a pure function of the outbox stream. Once this session has
         // projected it, the answer cannot change until the stream advances, so a session that
         // already has nothing to deliver skips the replay instead of repeating it every poll.
-        let advanced = controller_outbox_position(&locked.events, worker_id, *outbox_cursor)
+        let advanced = controller_outbox_position(&state.events, worker_id, *outbox_cursor)
             .map_err(|error| ServerError::Session(error.to_string()))?;
         let frames = if outbox_cursor.is_some() && advanced.is_none() {
             Vec::new()
@@ -1747,7 +1745,7 @@ async fn flush_controller(
                 *outbox_cursor = Some(position);
             }
             deliver_controller_messages(
-                &mut locked.events,
+                &mut state.events,
                 worker_id,
                 config.protocol_version,
                 *connection_id,
@@ -1762,7 +1760,7 @@ async fn flush_controller(
         if let Some(acknowledges) = acknowledgement_only {
             vec![
                 deliver_controller_acknowledgement(
-                    &mut locked.events,
+                    &mut state.events,
                     worker_id,
                     config.protocol_version,
                     *connection_id,
