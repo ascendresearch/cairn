@@ -1,5 +1,6 @@
 //! Task-generic operation semantics promoted by independent Intent Admission.
 
+use cairn_protocol::ContentType;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
@@ -7,6 +8,13 @@ use crate::{
 };
 
 const MAX_AUTHORITY_CLAIMS: usize = 16;
+
+/// First immutable admitted migration-intent contract identity.
+pub enum MigrationIntentContractArtifact {}
+
+impl ContentType for MigrationIntentContractArtifact {
+    const DOMAIN: &'static str = "migration.intent-contract.v1";
+}
 
 /// Exact operation semantics stated or promoted by the authenticated task authority.
 ///

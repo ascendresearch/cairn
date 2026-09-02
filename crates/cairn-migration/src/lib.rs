@@ -7,7 +7,6 @@ mod call_adapter;
 mod candidate_admission;
 mod candidate_build;
 mod candidate_exploration;
-mod collection_oracle;
 mod controller_workflow;
 mod corpus_execution;
 mod corpus_observation;
@@ -16,7 +15,6 @@ mod exact_comparison;
 mod executable_oracle;
 #[cfg(feature = "agent-runtime")]
 mod external_research;
-mod historical;
 mod input_values;
 mod intent_admission;
 mod intent_claim;
@@ -26,10 +24,6 @@ mod memory_surface;
 mod oracle_control;
 mod oracle_exploration;
 mod reasoning_decomposition;
-mod reduction_admission;
-mod reduction_candidate;
-mod reduction_control;
-mod reduction_mutation;
 #[cfg(feature = "agent-runtime")]
 mod role_agent;
 mod sir;
@@ -56,11 +50,9 @@ pub use call_adapter::{
     CallAdapterRequestV1, CallAdapterResultArtifact, CallAdapterResultV1,
     CorpusInvocationIdentityV1, PreparedCallAdapterInput, PreparedCallAdapterJob,
     ValidatedCallAdapterExecution, ValidatedCallAdapterObservation, compose_call_adapter_job,
-    prepare_boundary_call_adapter_input, prepare_collection_output_call_adapter_input,
-    prepare_executable_oracle_call_adapter_input, prepare_input_value_call_adapter_input,
-    prepare_memory_surface_call_adapter_input, validate_boundary_call_adapter_capture,
-    validate_boundary_call_adapter_receipt, validate_collection_output_call_adapter_capture,
-    validate_collection_output_call_adapter_receipt,
+    prepare_boundary_call_adapter_input, prepare_executable_oracle_call_adapter_input,
+    prepare_input_value_call_adapter_input, prepare_memory_surface_call_adapter_input,
+    validate_boundary_call_adapter_capture, validate_boundary_call_adapter_receipt,
     validate_executable_oracle_call_adapter_capture,
     validate_executable_oracle_call_adapter_receipt, validate_input_value_call_adapter_capture,
     validate_input_value_call_adapter_receipt, validate_memory_surface_call_adapter_capture,
@@ -87,20 +79,6 @@ pub use candidate_exploration::{
     CandidateOracleMaterialV1, CandidateOracleMaterialsV1, CandidateProposalArtifact,
     CandidateProposalSubmissionV1, CandidateProposalV1, CandidateSourceFileV1, CandidateSourcePath,
     CandidateSourceText, CandidateWorkspaceArtifact, CandidateWorkspaceV1,
-};
-pub use collection_oracle::{
-    AssembledCollectionF32OracleCaseInput, CollectionF32Bits, CollectionF32InputBufferV1,
-    CollectionF32InputBytesArtifact, CollectionF32InvocationArtifact, CollectionF32InvocationV1,
-    CollectionF32OutputBufferV1, CollectionF32ThresholdBytesArtifact, CollectionF32ThresholdV1,
-    CollectionOracleElementArtifact, CollectionOracleMechanismArtifact,
-    CollectionOutputComparisonEvidenceArtifact, CollectionOutputComparisonEvidenceV1,
-    CollectionOutputComparisonV1, CollectionOutputOracleDecisionArtifact,
-    CollectionOutputOracleDecisionV1, CollectionOutputOracleError, CollectionOutputOraclePolicyV1,
-    CollectionReportedCount, ExpectedCollectionOracleOutputArtifact,
-    ExpectedCollectionOracleOutputV1, MigrationIntentContractArtifact,
-    ObservedCollectionOracleOutputArtifact, ObservedCollectionOracleOutputV1,
-    PreparedCollectionOutputComparisonEvidence, assemble_collection_f32_oracle_case,
-    collection_oracle_mechanism_id, materialize_collection_output_comparison,
 };
 pub use controller_workflow::{
     CandidateAdmissionDispositionV1, CudaMigrationWorkflow, OracleAdmissionDispositionV1,
@@ -156,15 +134,6 @@ pub use external_research::{
     SearchResultLimit, SourcePath, archive_external_test_evidence,
     external_test_search_registration,
 };
-pub use historical::{
-    HistoricalDetectionRequirement, HistoricalDiagnosticClassName, HistoricalFailureClassName,
-    HistoricalFailureContractError, HistoricalFailureCoverageArtifact, HistoricalFailureCoverageV1,
-    HistoricalFailureEvidenceArtifact, HistoricalFailureObligationArtifact,
-    HistoricalFailureObligationV1, HistoricalFailureRecordArtifact, HistoricalFailureRecordInput,
-    HistoricalFailureRecordV1, HistoricalFailureScope, HistoricalObservationClassName,
-    HistoricalObservedFailureArtifact, HistoricalReproductionArtifact, HistoricalValidationStage,
-    MigrationDomainFamilyName, OracleFailureMechanismName, TargetMechanismName,
-};
 pub use input_values::{
     BooleanInputPattern, FloatingDataType, FloatingInputPattern, FloatingInputValueDomainInput,
     FloatingInputValueDomainV1, InputValueCaseTarget, InputValueDerivationPolicy,
@@ -179,7 +148,9 @@ pub use intent_admission::{
     UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserIntentDecisionResponseKind,
     derive_user_intent_decision_requests,
 };
-pub use intent_claim::{AuthoritativeIntentClaimV1, OperationIntentV1};
+pub use intent_claim::{
+    AuthoritativeIntentClaimV1, MigrationIntentContractArtifact, OperationIntentV1,
+};
 pub use intent_promotion::{
     AdmittedIntentDecisionV1, IntentAdmissionPublicOutcomeArtifact, IntentAdmissionPublicOutcomeV1,
     IntentDecisionMaterialV1, IntentPromotionError, IntentUserDecisionGateArtifact,
@@ -269,41 +240,6 @@ pub use oracle_exploration::{
     recompute_oracle_admission, run_independent_oracle_admission,
 };
 pub use reasoning_decomposition::ReasoningDecompositionPolicyV1;
-pub use reduction_admission::{
-    HistoricalReductionAdmissionInputs, PreparedHistoricalReductionAdmission,
-    compose_historical_reduction_admission,
-};
-pub use reduction_candidate::{
-    HistoricalReductionCandidateCaseV1, HistoricalReductionCandidateComparisonArtifact,
-    HistoricalReductionCandidateComparisonV1, HistoricalReductionCandidateInputs,
-    PreparedHistoricalReductionCandidateVerdict, compose_historical_reduction_candidate_verdict,
-};
-pub use reduction_control::{
-    FiniteF32Bits, HistoricalReductionAlgorithm, HistoricalReductionCaptureLimits,
-    HistoricalReductionCaseArtifact, HistoricalReductionCaseComparisonV1,
-    HistoricalReductionCaseEntryV1, HistoricalReductionCaseOutputV1, HistoricalReductionCaseV1,
-    HistoricalReductionControlArtifact, HistoricalReductionControlError,
-    HistoricalReductionControlV1, HistoricalReductionCorpusArtifact, HistoricalReductionCorpusV1,
-    HistoricalReductionCorrectVariantEvidence, HistoricalReductionExecutionPlanArtifact,
-    HistoricalReductionExecutionPlanV1, HistoricalReductionExecutionReceiptArtifact,
-    HistoricalReductionExecutionReceiptV1, HistoricalReductionExecutionSubjectV1,
-    HistoricalReductionFixtureOutputArtifact, HistoricalReductionFixtureOutputV1,
-    HistoricalReductionTrialExpectationV1, HistoricalReductionVariantTrialV1,
-    HistoricalReductionWrongVariantEvidence, PreparedHistoricalReductionControl,
-    PreparedHistoricalReductionCorpus, PreparedHistoricalReductionJob, ReductionUlpDistance,
-    ValidatedHistoricalReductionRun, compose_historical_reduction_control,
-    compute_historical_reduction_fixture_output, compute_historical_reduction_output,
-    prepare_historical_reduction_candidate_job, prepare_historical_reduction_corpus,
-    prepare_historical_reduction_reference_job, prepare_historical_reduction_variant_job,
-    validate_historical_reduction_receipt,
-};
-pub use reduction_mutation::{
-    HistoricalReductionMutationCaseComparisonArtifact, HistoricalReductionMutationCaseComparisonV1,
-    HistoricalReductionMutationInjectionArtifact, HistoricalReductionMutationInjectionV1,
-    HistoricalReductionMutationInputs, HistoricalReductionMutationKind,
-    HistoricalReductionMutationVariantEvidence, PreparedHistoricalReductionMutationGrid,
-    compose_historical_reduction_mutation_grid, prepare_historical_reduction_mutant_set,
-};
 #[cfg(feature = "agent-runtime")]
 pub use role_agent::{
     CandidateExplorationAgentContextV1, CandidateExplorationRoleHooksV1,

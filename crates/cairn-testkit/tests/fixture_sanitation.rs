@@ -23,7 +23,7 @@ fn public_manifest_recomputes_every_fixture_and_scan_is_clean() {
     let fixtures = fixture_root();
     let manifest_bytes = fs::read(fixtures.join("manifest.json")).expect("manifest");
     let manifest = decode_manifest_v1(&manifest_bytes).expect("strict manifest");
-    assert_eq!(manifest.fixtures().len(), 7);
+    assert_eq!(manifest.fixtures().len(), 6);
     manifest.validate_tree(&root).expect("fixture tree");
 
     let profile = profile_bytes();
@@ -36,7 +36,7 @@ fn public_manifest_recomputes_every_fixture_and_scan_is_clean() {
     );
     let report = scan_public_tree(&root, &fixtures, &profile).expect("public scan");
     assert!(report.is_clean(), "findings: {:?}", report.findings());
-    assert_eq!(report.scanned_paths().len(), 10);
+    assert_eq!(report.scanned_paths().len(), 9);
 
     assert!(!fixtures.join("workflows/st1-identity-graph.json").exists());
     assert!(!fixtures.join("st1-identity-graph-plan.md").exists());
