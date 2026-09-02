@@ -122,16 +122,53 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 因此该失败的 failure class 是 **platform fact gap 加 iteration budget**，不是 candidate semantic defect，
 也不是 build plan defect。归因证据保存在对应 episode 的 durable store 中。
 
-### 4.2 设备与工具链现状
+### 4.2 长期运行部署暴露的 Controller 稳态成本缺陷
 
-- Ascend build worker 已 enroll 并多次真实执行，toolchain 为 CANN 9.1.0-beta.1，目标 arch 为 `dav-3510`；
-- 该 worker 为 **build-only**：未声明 device 执行 capability，因此不存在任何 NPU 执行 evidence；
-- 部署侧的 NPU 通道指向一台真实 950PR 主机，enrollment bundle 已签发，但最近一次连接为超时。
-  因此 950PR 执行的阻塞项是**通道与 capability 声明**，不是硬件可得性。这一条改变阶段排序，见第 6 节。
+一个自 2026-08-26 起持续运行的 Controller 进程（无 Worker 连接、无任务）在 6.8 天内：
+
+| 量 | 观测值 |
+| --- | --- |
+| 累计 `rchar` | 24.15 TB（平均 41.2 MB/s，全部命中页缓存） |
+| 累计读系统调用 | 5.9×10⁹（约 10,000 次/秒） |
+| 稳态 CPU | 单个 tokio worker 线程常驻 45–60% |
+| durable event store | 42 MB |
+
+`read_bytes` 仅 16 KB，说明并非磁盘 I/O 而是对已缓存事件存储的反复读取。会话循环按
+`min(outbox_poll_interval_ms, authority_poll_interval_ms)` 每 100 ms 推进一次，
+而每次推进都要重新扫描事件存储以确定待发 outbox。因此**稳态成本随 durable event 数量线性增长**，
+与是否有工作无关。
+
+成本按会话计。观测期内只有一个空闲 worker 会话时单线程常驻 45–60%；2026-09-02 接入第二个 worker 后
+进程占用升至约 70%，两个 tokio worker 线程各自累积可比的 CPU 时间。两个 worker 自身均近乎空闲
+（0.0% 与 0.4%），成本完全在 Controller 侧。
+
+这是单元测试看不见、只有长期真实部署才会暴露的一类缺陷，属于 `EVALUATION.md` 6.4 的 system metrics 范畴。
+修复需要游标或索引，是一个设计决定而不是一次补丁，因此记录为事实并进入 P1 范围，不在 P0 内匆忙处理。
+
+### 4.3 设备与工具链现状
+
+通道已于 2026-09-02 恢复并核验。地址、凭据与 enrollment 材料属于 Secret provider，不进入本仓库。
+
+| 事实 | 观测 |
+| --- | --- |
+| NPU 主机 | 共享，8 张 `Ascend950PR`，驱动 `25.7.rc1.6`；本次观测中 2 张 health 为 `Critical`，多张已被他人占用 HBM |
+| NPU 主机 toolchain | 宿主 CANN 8.5.0；构建镜像内为 **CANN 9.1.0-beta.1**，与 4.1 诊断中的版本一致 |
+| GPU 主机 | 独立主机，`NVIDIA GB10`，worker 自 2026-08-26 持续在线 |
+| 注册 worker | 5 个：`gpu` 2、`npu` 2、`npu-build` 1 |
+| Ascend build worker | 已重新上线并注册，backends `docker-v1`，capabilities `execution.role=build`、`toolchain.vendor=ascend`、`toolchain.architecture=dav-3510`、`toolchain.cann=9.1.0-beta.1` |
+
+两点结论：
+
+- **没有任何 worker 声明 device 执行 capability。** 两个 `npu` 池 worker 的 profile 是 `transport-only`
+  且 `execution.mode` 为 `disabled`。因此 950PR 执行的阻塞项不是硬件可得性，也不再是通道，
+  而是**尚未创建的 device worker 声明**，属于 P5 范围。
+- **当前部署拓扑与 `ARCHITECTURE.md` 10.1 不符。** Controller 仅监听回环地址，worker 经 SSH 反向隧道到达；
+  而 10.1 要求 worker 通过 authenticated encrypted control channel 主动连接 Controller，并明确排除
+  SSH reverse tunnel 作为产品拓扑。这是一处已知偏离，随 P1 的运行时布局一并纠正。
 
 ## 5. 当前关键缺口
 
-按产品价值排序。前三项由本文 4.1 与 4.2 的归因直接决定，与上一版排序不同。第 6 节的阶段划分即这些缺口的施工顺序：
+按产品价值排序。前三项由本文 4.1 与 4.3 的归因直接决定，与上一版排序不同。第 6 节的阶段划分即这些缺口的施工顺序：
 
 1. `CandidateSearchLoopV1` 的 generation/action/immutable-state protocol 与 `ARCHITECTURE.md` 6.2 的 iteration policy；
    当前不存在 observation-bound 的 compile/run/diagnose/repair 循环；
@@ -171,7 +208,7 @@ P0 止血 ─┬─ P1 运行时布局 ─┬─ P2 知识与 skill 层 ──�
          └─ 通道恢复（运维，外部依赖，只阻塞 P5）
 ```
 
-P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复不进入关键路径。P3 不依赖 P1，可与 P1 并行开工。
+P4 只需要 Ascend build worker，不需要 device，因此 4.3 的通道恢复不进入关键路径。P3 不依赖 P1，可与 P1 并行开工。
 
 ### P0 · 止血与清帐
 
@@ -230,9 +267,11 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复
    它记录的是单样本精确比较误拒合法求和顺序、以及 mutation grid 存在依赖用例的盲区。
    该 fixture 随其机制删除，但这两条教训已由 `EVALUATION.md` 5.1 的校准协议以规则形式承载
    （特异性、敏感性、最小可捕获误差量级）。丢失的是一个机器可检的控制，不是这条知识。
-5. 恢复 NPU worker 控制通道并声明 device capability（运维项，与 P1–P3 并行）。
+5. **通道已恢复。** Ascend build worker 已重新上线并注册，见本文 4.3。
+   device capability 声明未完成且不属于本阶段：目前没有任何 worker 声明 device 执行能力，
+   该声明随 P5 的 950PR 执行一并创建。
 
-规模估计：第 5 项为运维。第 1 项的构建半程与第 2、3、4 项已完成。
+规模估计：第 1 项的构建半程与第 2、3、4、5 项已完成；第 1 项的观察半程转入 P5。
 
 已完成部分的附带发现：`scripts/ci.sh` 的行尾空白检查此前使用 `rg`，而该环境未安装 ripgrep，
 `if <command-not-found>` 判定为假因而 `status` 保持 0——该检查从未真正运行过。已改为 POSIX `grep`
@@ -319,7 +358,7 @@ Exit：normal path 产生可重放的 native build success；replay 校验 exact
 
 ### P5 · 纵向 B：950PR correctness
 
-前置项是 worker 通道与 device capability 声明，不是硬件采购（见 4.2）。使用 `compact-above-f32`：
+前置项是 worker 通道与 device capability 声明，不是硬件采购（见 4.3）。使用 `compact-above-f32`：
 它已有 admitted intent 与一次已归因的失败构建，且其输出顺序未被 caller 声明，正适合检验「source 不是 specification」。
 
 1. 声明并验证 NPU worker 的 device 执行 capability，恢复控制通道；
