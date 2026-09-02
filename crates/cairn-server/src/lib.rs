@@ -182,6 +182,16 @@ struct ControllerState {
     content: SqliteContentStore,
 }
 
+/// Runs one synchronous store section without starving the runtime worker it lands on.
+///
+/// The stores are synchronous `SQLite` and the schema sets `synchronous = FULL`, so a commit is an
+/// fsync. Executing that directly inside an `async fn` stalls every other task scheduled on the
+/// same runtime thread, which is why each store section is handed to the runtime as blocking work
+/// rather than simply awaited around.
+fn on_store<T>(work: impl FnOnce() -> T) -> T {
+    tokio::task::block_in_place(work)
+}
+
 impl ControllerState {
     fn open(config: &ServerConfig) -> Result<Self, ServerError> {
         Ok(Self {
@@ -1023,14 +1033,8 @@ async fn handle_enrollment_connection(
             return Err(ServerError::Session("invalid enrollment request".into()));
         }
     };
-    let result = {
-        redeem(
-            &mut state.events,
-            issuer.as_ref(),
-            &request,
-            observed_now()?,
-        )
-    };
+    let redeemed_at = observed_now()?;
+    let result = on_store(|| redeem(&mut state.events, issuer.as_ref(), &request, redeemed_at));
     let credential = match result {
         Ok(credential) => credential,
         Err(error) => {
@@ -1140,7 +1144,7 @@ async fn handle_connection(
     };
     // The registry, rather than a startup snapshot, owns current credential and pool authority.
     // This makes administrative lifecycle changes visible to every new handshake immediately.
-    let enrolled_worker = current_enrolled_worker(state, fingerprint)?;
+    let enrolled_worker = on_store(|| current_enrolled_worker(state, fingerprint))?;
     let Some(enrolled_worker) = enrolled_worker else {
         reject(
             &mut socket,
@@ -1167,7 +1171,7 @@ async fn handle_connection(
             "certificate and worker identity differ".into(),
         ));
     }
-    if !credential_is_authorized(state, &enrolled_worker)? {
+    if !on_store(|| credential_is_authorized(state, &enrolled_worker))? {
         reject(
             &mut socket,
             config.transport,
@@ -1219,7 +1223,7 @@ async fn handle_connection(
     let connection_id = ControlConnectionId::new();
     let subject = WorkerAuthenticationSubject::new(enrolled_worker.worker_id.to_string())
         .map_err(|error| ServerError::Session(error.to_string()))?;
-    let mut session = {
+    let mut session = on_store(|| -> Result<_, ServerError> {
         let ControllerState { events, content } = &mut *state;
         let registry = EnrollmentRegistry::load(events, now)
             .map_err(|error| ServerError::Session(error.to_string()))?;
@@ -1280,8 +1284,8 @@ async fn handle_connection(
             &command("hello-heartbeat"),
             now,
         )
-        .map_err(|error| ServerError::Session(error.to_string()))?
-    };
+        .map_err(|error| ServerError::Session(error.to_string()))
+    })?;
     write_wire_message(
         &mut socket,
         &ControllerWireMessage::Welcome {
@@ -1321,13 +1325,15 @@ async fn handle_connection(
     )
     .await;
     let disconnect_at = observed_now()?;
-    disconnect_worker(
-        &mut state.events,
-        &session,
-        &command("disconnect"),
-        disconnect_at,
-    )
-    .map_err(|error| ServerError::Session(error.to_string()))?;
+    on_store(|| {
+        disconnect_worker(
+            &mut state.events,
+            &session,
+            &command("disconnect"),
+            disconnect_at,
+        )
+        .map_err(|error| ServerError::Session(error.to_string()))
+    })?;
     tracing::info!(
         target: "cairn.server.session",
         event = "worker_session_disconnected",
@@ -1359,7 +1365,7 @@ async fn controller_session_loop(
         .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
     let mut outbox_cursor: Option<EventSequence> = None;
     loop {
-        if !session_credential_is_authorized(state, session)? {
+        if !on_store(|| session_credential_is_authorized(state, session))? {
             return Err(ServerError::Session(
                 "worker credential was revoked or worker was disabled".into(),
             ));
@@ -1399,7 +1405,7 @@ async fn controller_session_loop(
         match message {
             WorkerWireMessage::Heartbeat { availability } => {
                 let now = observed_now()?;
-                {
+                on_store(|| -> Result<(), ServerError> {
                     let ControllerState { events, content } = &mut *state;
                     *session = record_worker_heartbeat(
                         events,
@@ -1410,7 +1416,8 @@ async fn controller_session_loop(
                         now,
                     )
                     .map_err(|error| ServerError::Session(error.to_string()))?;
-                }
+                    Ok(())
+                })?;
                 write_wire_message(
                     socket,
                     &ControllerWireMessage::HeartbeatAccepted { accepted_at: now },
@@ -1436,7 +1443,7 @@ async fn controller_session_loop(
                     observation.observed_at(),
                     config.resource_clock_skew_tolerance_ms,
                 )?;
-                let observation_id = {
+                let observation_id = on_store(|| -> Result<_, ServerError> {
                     let ControllerState { events, content } = &mut *state;
                     *session = record_worker_resource_observation(
                         events,
@@ -1447,8 +1454,8 @@ async fn controller_session_loop(
                         now,
                     )
                     .map_err(|error| ServerError::Session(error.to_string()))?;
-                    session.resource_observation_id()
-                };
+                    Ok(session.resource_observation_id())
+                })?;
                 write_wire_message(
                     socket,
                     &ControllerWireMessage::ResourcesAccepted {
@@ -1472,7 +1479,7 @@ async fn controller_session_loop(
                 inbound
                     .accept(&frame, *highest_sent)
                     .map_err(|error| ServerError::Session(error.to_string()))?;
-                process_worker_frame(state, config, connection_id, session, &frame)?;
+                on_store(|| process_worker_frame(state, config, connection_id, session, &frame))?;
                 flush_controller(
                     socket,
                     state,
@@ -1487,15 +1494,15 @@ async fn controller_session_loop(
                 .await?;
             }
             WorkerWireMessage::MaterialChunkRequest { request } => {
-                let chunk = {
+                let chunk = on_store(|| {
                     read_assignment_material_chunk(
                         &state.events,
                         &state.content,
                         session.worker_id(),
                         &request,
                     )
-                    .map_err(|error| ServerError::Session(error.to_string()))?
-                };
+                    .map_err(|error| ServerError::Session(error.to_string()))
+                })?;
                 write_wire_message(
                     socket,
                     &ControllerWireMessage::MaterialChunk { chunk },
@@ -1732,7 +1739,7 @@ async fn flush_controller(
     outbox_cursor: &mut Option<EventSequence>,
 ) -> Result<(), ServerError> {
     let now = observed_now()?;
-    let frames = {
+    let frames = on_store(|| -> Result<_, ServerError> {
         // The outbox projection is a pure function of the outbox stream. Once this session has
         // projected it, the answer cannot change until the stream advances, so a session that
         // already has nothing to deliver skips the replay instead of repeating it every poll.
@@ -1757,7 +1764,7 @@ async fn flush_controller(
         };
         let acknowledgement_only =
             acknowledges.filter(|value| frames.is_empty() && Some(*value) > *acknowledgement_sent);
-        if let Some(acknowledges) = acknowledgement_only {
+        Ok(if let Some(acknowledges) = acknowledgement_only {
             vec![
                 deliver_controller_acknowledgement(
                     &mut state.events,
@@ -1772,8 +1779,8 @@ async fn flush_controller(
             ]
         } else {
             frames
-        }
-    };
+        })
+    })?;
     for frame in frames {
         write_wire_message(
             socket,

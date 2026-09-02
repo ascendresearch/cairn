@@ -74,4 +74,13 @@ if [[ "$count" -ne "$EXPECTED_ORPHANS" ]]; then
   status=1
 fi
 
+# 3. The controller runs synchronous SQLite inside `on_store`, which is `tokio::task::block_in_place`
+#    and exists only on a multi-threaded runtime. On a current-thread runtime the same call panics,
+#    so a flavor change would move a live failure into production without any ordinary test
+#    noticing: no test covers `main.rs`, and the two integration tests pin their own flavor.
+if grep -rn 'current_thread' crates/cairn-server; then
+  echo "cairn-server must stay on a multi-threaded runtime: on_store uses block_in_place" >&2
+  status=1
+fi
+
 exit "$status"
