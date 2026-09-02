@@ -662,6 +662,7 @@ async fn run_session(
     let hello_observed_at = observed_now()?;
     let hello_resources = HostResourceProbe::probe(&config.resource_probe, hello_observed_at)
         .map_err(|error| WorkerError::Session(error.to_string()))?;
+    let hello_availability = on_store(|| config.availability(journal, identity.worker_id))?;
     write_wire_message(
         &mut socket,
         &WorkerWireMessage::Hello {
@@ -671,7 +672,7 @@ async fn run_session(
                 profile.clone(),
                 hello_resources,
             )),
-            availability: config.availability(journal, identity.worker_id)?,
+            availability: hello_availability,
         },
         config.transport,
     )
@@ -745,10 +746,12 @@ async fn run_session(
         };
         match wake {
             Wake::ExecutionFinished(observation) => {
-                record_execution_observation(journal, execution_tasks, *observation, config)?;
+                on_store(|| {
+                    record_execution_observation(journal, execution_tasks, *observation, config)
+                })?;
             }
             Wake::Heartbeat => {
-                let availability = config.availability(journal, identity.worker_id)?;
+                let availability = on_store(|| config.availability(journal, identity.worker_id))?;
                 write_wire_message(
                     &mut socket,
                     &WorkerWireMessage::Heartbeat {
@@ -861,7 +864,9 @@ where
         tokio::select! {
             output = &mut future => return Ok(output),
             Some(observation) = execution_tasks.receiver.recv() => {
-                record_execution_observation(journal, execution_tasks, *observation, config)?;
+                on_store(|| {
+                    record_execution_observation(journal, execution_tasks, *observation, config)
+                })?;
             }
         }
     }
@@ -877,7 +882,7 @@ async fn receive_and_record_execution(
         .recv()
         .await
         .ok_or_else(|| WorkerError::Session("execution observation channel closed".into()))?;
-    record_execution_observation(journal, execution_tasks, *observation, config)
+    on_store(|| record_execution_observation(journal, execution_tasks, *observation, config))
 }
 
 fn record_execution_observation(
@@ -921,14 +926,16 @@ async fn process_controller_frame(
 ) -> Result<Option<WorkerExecutionAuthority>, WorkerError> {
     let now = observed_now()?;
     if let Some(acknowledged) = frame.acknowledges_peer_through {
-        acknowledge_worker_messages(
-            journal,
-            worker_id,
-            *connection_id,
-            acknowledged,
-            &command("worker-ack"),
-            now,
-        )
+        on_store(|| {
+            acknowledge_worker_messages(
+                journal,
+                worker_id,
+                *connection_id,
+                acknowledged,
+                &command("worker-ack"),
+                now,
+            )
+        })
         .map_err(|error| WorkerError::Session(error.to_string()))?;
     }
     let Some(message) = &frame.message else {
@@ -955,15 +962,17 @@ async fn process_controller_frame(
             let verified =
                 materialize_assignment_offer(socket, content, config, message, contract, materials)
                     .await?;
-            admit_worker_assignment(
-                journal,
-                worker_id,
-                message,
-                &verified,
-                ControlMessageId::new(),
-                &command("admit"),
-                now,
-            )
+            on_store(|| {
+                admit_worker_assignment(
+                    journal,
+                    worker_id,
+                    message,
+                    &verified,
+                    ControlMessageId::new(),
+                    &command("admit"),
+                    now,
+                )
+            })
             .map_err(|error| WorkerError::Session(error.to_string()))?;
             tracing::info!(
                 target: "cairn.worker.assignment",
@@ -985,15 +994,17 @@ async fn process_controller_frame(
                 attempt_id = %binding.attempt_id(),
                 "worker received authoritative execution start"
             );
-            let authority = record_worker_execution_start(
-                journal,
-                content,
-                worker_id,
-                message,
-                config.content.assignment_material_byte_limit,
-                &command("start"),
-                now,
-            )
+            let authority = on_store(|| {
+                record_worker_execution_start(
+                    journal,
+                    content,
+                    worker_id,
+                    message,
+                    config.content.assignment_material_byte_limit,
+                    &command("start"),
+                    now,
+                )
+            })
             .map_err(|error| WorkerError::Session(error.to_string()))?;
             Ok(authority)
         }
@@ -1092,7 +1103,7 @@ async fn materialize_assignment_offer(
         .content
         .transfer_directory
         .join(offer.message_id.as_uuid().to_string());
-    prepare_state_directory(&transfer_directory)?;
+    on_store(|| prepare_state_directory(&transfer_directory))?;
     materialize_assignment_artifact(
         socket,
         content,
@@ -1117,16 +1128,19 @@ async fn materialize_assignment_offer(
         &transfer_directory.join("execution-environment.part"),
     )
     .await?;
-    let verified = verify_persisted_assignment_materials(
-        content,
-        contract,
-        materials,
-        config.content.assignment_material_byte_limit,
-    )
-    .map_err(|error| WorkerError::Session(error.to_string()))?;
-    fs::remove_dir(&transfer_directory).map_err(|error| WorkerError::Session(error.to_string()))?;
-    sync_parent(&transfer_directory)?;
-    Ok(verified)
+    on_store(|| {
+        let verified = verify_persisted_assignment_materials(
+            content,
+            contract,
+            materials,
+            config.content.assignment_material_byte_limit,
+        )
+        .map_err(|error| WorkerError::Session(error.to_string()))?;
+        fs::remove_dir(&transfer_directory)
+            .map_err(|error| WorkerError::Session(error.to_string()))?;
+        sync_parent(&transfer_directory)?;
+        Ok(verified)
+    })
 }
 
 #[expect(
@@ -1144,25 +1158,28 @@ async fn materialize_assignment_artifact<T: ContentType>(
     offered_chunk_size: AssignmentMaterialChunkSize,
     staging_path: &Path,
 ) -> Result<(), WorkerError> {
-    match content.write_to(content_id, &mut std::io::sink()) {
-        Ok(descriptor) if descriptor.byte_len == expected_byte_len => {
-            if staging_path.exists() {
-                fs::remove_file(staging_path)
-                    .map_err(|error| WorkerError::Session(error.to_string()))?;
-                sync_parent(staging_path)?;
+    let already_persisted = on_store(|| -> Result<bool, WorkerError> {
+        match content.write_to(content_id, &mut std::io::sink()) {
+            Ok(descriptor) if descriptor.byte_len == expected_byte_len => {
+                if staging_path.exists() {
+                    fs::remove_file(staging_path)
+                        .map_err(|error| WorkerError::Session(error.to_string()))?;
+                    sync_parent(staging_path)?;
+                }
+                Ok(true)
             }
-            return Ok(());
-        }
-        Ok(_) => {
-            return Err(WorkerError::Session(
+            Ok(_) => Err(WorkerError::Session(
                 "worker-local assignment material length differs from offer".into(),
-            ));
+            )),
+            Err(ContentStoreError::NotFound { .. }) => Ok(false),
+            Err(error) => Err(WorkerError::Session(error.to_string())),
         }
-        Err(ContentStoreError::NotFound { .. }) => {}
-        Err(error) => return Err(WorkerError::Session(error.to_string())),
+    })?;
+    if already_persisted {
+        return Ok(());
     }
 
-    let mut offset = prepare_transfer_file(staging_path, expected_byte_len)?;
+    let mut offset = on_store(|| prepare_transfer_file(staging_path, expected_byte_len))?;
     let chunk_size = config
         .content
         .assignment_material_chunk_size
@@ -1209,24 +1226,27 @@ async fn materialize_assignment_artifact<T: ContentType>(
                 "controller returned an invalid assignment material range".into(),
             ));
         }
-        append_transfer_chunk(staging_path, &chunk.bytes)?;
+        on_store(|| append_transfer_chunk(staging_path, &chunk.bytes))?;
         offset += observed_len;
     }
 
-    let mut staged =
-        fs::File::open(staging_path).map_err(|error| WorkerError::Session(error.to_string()))?;
-    let descriptor = content
-        .put::<T>(&mut staged)
-        .map_err(|error| WorkerError::Session(error.to_string()))?;
-    if descriptor.content_id != *content_id || descriptor.byte_len != expected_byte_len {
+    on_store(|| {
+        let mut staged = fs::File::open(staging_path)
+            .map_err(|error| WorkerError::Session(error.to_string()))?;
+        let descriptor = content
+            .put::<T>(&mut staged)
+            .map_err(|error| WorkerError::Session(error.to_string()))?;
+        if descriptor.content_id != *content_id || descriptor.byte_len != expected_byte_len {
+            fs::remove_file(staging_path)
+                .map_err(|error| WorkerError::Session(error.to_string()))?;
+            sync_parent(staging_path)?;
+            return Err(WorkerError::Session(
+                "assembled assignment material failed its typed content identity".into(),
+            ));
+        }
         fs::remove_file(staging_path).map_err(|error| WorkerError::Session(error.to_string()))?;
-        sync_parent(staging_path)?;
-        return Err(WorkerError::Session(
-            "assembled assignment material failed its typed content identity".into(),
-        ));
-    }
-    fs::remove_file(staging_path).map_err(|error| WorkerError::Session(error.to_string()))?;
-    sync_parent(staging_path)
+        sync_parent(staging_path)
+    })
 }
 
 fn prepare_transfer_file(path: &Path, expected_byte_len: u64) -> Result<u64, WorkerError> {
@@ -1290,29 +1310,33 @@ async fn flush_worker(
     acknowledgement_sent: &mut Option<ControlSequence>,
 ) -> Result<(), WorkerError> {
     let now = observed_now()?;
-    let mut frames = deliver_worker_messages(
-        journal,
-        worker_id,
-        config.profile.protocol_version,
-        *connection_id,
-        acknowledges,
-        &command("deliver"),
-        now,
-    )
+    let mut frames = on_store(|| {
+        deliver_worker_messages(
+            journal,
+            worker_id,
+            config.profile.protocol_version,
+            *connection_id,
+            acknowledges,
+            &command("deliver"),
+            now,
+        )
+    })
     .map_err(|error| WorkerError::Session(error.to_string()))?;
     let acknowledgement_only =
         acknowledges.filter(|value| frames.is_empty() && Some(*value) > *acknowledgement_sent);
     if let Some(acknowledges) = acknowledgement_only {
         frames.push(
-            deliver_worker_acknowledgement(
-                journal,
-                worker_id,
-                config.profile.protocol_version,
-                *connection_id,
-                acknowledges,
-                &command("deliver-ack"),
-                now,
-            )
+            on_store(|| {
+                deliver_worker_acknowledgement(
+                    journal,
+                    worker_id,
+                    config.profile.protocol_version,
+                    *connection_id,
+                    acknowledges,
+                    &command("deliver-ack"),
+                    now,
+                )
+            })
             .map_err(|error| WorkerError::Session(error.to_string()))?,
         );
     }
@@ -2091,6 +2115,17 @@ fn observed_now() -> Result<ObservedAtUnixMillis, WorkerError> {
     let millis = i64::try_from(duration.as_millis())
         .map_err(|_| WorkerError::Session("wall clock exceeds i64 milliseconds".into()))?;
     Ok(ObservedAtUnixMillis::new(millis))
+}
+
+/// Runs one synchronous store or staging section without starving the runtime worker it lands on.
+///
+/// The worker's journal and content store are synchronous `SQLite`, and assignment material
+/// staging is bulk file work: chunk appends, a whole-file hash on `put`, and the `fsync` behind
+/// each. Executing those inside an `async fn` stalls every other task scheduled on the same
+/// runtime thread for the duration, which for a multi-megabyte bundle is the whole transfer.
+/// Each such section is therefore handed to the runtime as blocking work.
+fn on_store<T>(work: impl FnOnce() -> T) -> T {
+    tokio::task::block_in_place(work)
 }
 
 fn command(_purpose: &str) -> CommandId {

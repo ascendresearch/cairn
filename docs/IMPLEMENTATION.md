@@ -221,13 +221,20 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 | --- | --- | --- |
 | outbox 投影引入游标 | 已实施 | 4.2 表：312 次/秒、1.271 MB/s、CPU 1.5%，实测 |
 | 去掉全局锁 | 已实施 | 既有测试 `concurrent_sqlite_placements_cannot_overcommit_quantitative_capacity` 证明并发安全不依赖这把锁：两个 OS 线程、两条连接，落败方由 `RevisionConflict` 拒绝 |
-| 同步存储移出运行时线程 | 已实施 | 具名 `on_store` 包裹 11 处同步存储段，覆盖整个会话生命周期 |
+| 同步存储移出运行时线程 | 已实施 | 具名 `on_store` 包裹 Controller 11 处、Worker 16 处同步段，两侧均覆盖整个会话生命周期 |
+
+同一缺陷在 Worker 侧更重，因此一并修：`cairn-worker` 只有 1 处 `spawn_blocking`（执行任务派发），
+而它的 journal、content store 与物料落盘全部直接跑在 `async fn` 内。物料落盘尤其关键——
+分块追加与 `content.put` 的全量哈希都在会话循环所在的运行时线程上，对一个数 MB 的 bundle
+就是整段传输期间占住该线程。P4 的构建流量正是走这条路径。
 
 `spawn_blocking` 在此不可用：这些段持有 `&mut ControllerState`，无法跨越 `'static + Send` 边界，
 因此适用形式是 `block_in_place`。它要求多线程运行时，在 current-thread 运行时上会 panic——该隐患经
 红验证确认为真实而非理论：把一个测试的 flavor 改为 current_thread 即可立即复现。`main.rs` 没有任何
 测试覆盖，两个集成测试各自钉住自己的 flavor，因此 flavor 变更只会在生产暴露；
-`scripts/check-product-path.sh` 现在拒绝 `cairn-server` 中出现 `current_thread`。
+`scripts/check-product-path.sh` 现在拒绝 `cairn-server` 与 `cairn-worker` 中出现 `current_thread`。
+两个 crate 都只被自身 `main`（`#[tokio::main]` 默认多线程）和 `cairn-server` 的多线程集成测试使用，
+工作区内其余 current-thread 测试所在的三个 crate 都不依赖它们。
 
 去锁与移出运行时线程在当前空闲负载下**均无可测量差异**，这与预期一致：空闲会话几乎不提交。
 进程 CPU 1.5% → 1.4%，落在噪声内；这是 4.2 那组数字里唯一未被窗口选择污染的一项。
