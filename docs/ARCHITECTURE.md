@@ -450,9 +450,17 @@ cairn-server
 applicant code/toolchain/device execution 或真实部署证据需要独立进程/credential。Proposal roles 是 Controller workflow step，
 不是独立 service principal。
 
-控制面的时钟分处两份配置：Controller 持有 session/idle/authority/outbox 与 scheduler 的窗口，Worker 持有心跳周期。
+**一份 store 只由一个 Controller 进程服务。** 这不是部署便利，而是 liveness 语义的前提：会话在有事件说它
+结束之前一直存活，而只有持有 socket 的进程能观察到它结束。新启动的 Controller 据此推断「早于本进程的
+incarnation 一律已结束」并把这些结束记录下来；若第二个进程同时持有 socket，该推断会注销它正在服务的会话。
+store 是本地 SQLite，这条前提与存储拓扑一致。
+
+控制面的时钟分处两份配置：Controller 持有 idle/authority/outbox 与 scheduler 的窗口，Worker 持有心跳周期。
 Controller 内部可自证的关系在配置加载期校验。跨进程的一条不能：**reservation claim 窗口必须小于 Worker 的心跳周期**，
 否则一次普通心跳就落在决定成败的窗口内。该关系由部署者维持，Controller 在 load 时看不到对端取值。
+
+会话存活不再由任何时钟决定。idle timeout 关闭沉默的连接，Controller 随即记录这次会话结束；
+此前另有一条算术过期与之并行，两口钟管同一件事，已删除。
 
 Managed Worker 主动通过 authenticated encrypted control/enrollment channel 连接 Controller；Controller 不反向拨号 Worker，
 不以 SSH reverse tunnel 作为产品拓扑，也不自建 VPN。部署者提供可路由网络和 advertised endpoint；enrollment bundle、private

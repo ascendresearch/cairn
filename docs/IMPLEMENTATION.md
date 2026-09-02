@@ -241,10 +241,42 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 可见的变化只有分布：CPU 不再由单个 tokio 线程独占，而是散在多个线程上（0.3/0.2/0.2/0.2/0.1%）。
 两者改变的是负载下的行为，不是稳态数字。真正的验证要等 P4 的构建流量。
 
-liveness 是否应当离开 durable 事件流是**尚未实施**的第四项：它必须与 progressing 信号和
-`last_seen_at` 的语义拆分一起做，否则会把两个不同的问题绑在一次改动里。
+liveness 已离开 durable 事件流，与 progressing 信号、`last_seen_at` 的语义拆分一并完成，见 4.2.2。
 
 这是单元测试看不见、只有长期真实部署才会暴露的一类缺陷，属于 `EVALUATION.md` 6.4 的 system metrics 范畴。
+
+### 4.2.2 liveness：从算术改为观察
+
+会话此前有两种彼此无关的结束方式。Controller 关闭连接时记录一次 disconnect；与此并行，**每个读者**
+各自重算 `last_seen_at + session_timeout`，超过就宣布过期。后者正是把 keepalive 逼进 durable 流的原因：
+算术需要一个不断前移的时间戳，于是每次心跳都要追加一个「worker 还在」之外没有任何内容的事件。
+一个连续运行一年的 worker 会留下数百万条，而它的每一次完整投影都要重放全部。
+
+改动后 liveness 是一条被记录的事实：会话在有事件说它结束之前一直存活，而只有持有 socket 的 Controller
+能看见它结束，因此也只有它写这条记录。心跳若报告的 availability 与日志中已有的一致，则不追加任何事件——
+Controller 在自己内存里的会话上记下这次到达，「谁还在场」这件事本来就属于持有连接的进程。
+availability 真正发生变化时仍然追加，因为那是 scheduler 要读的证据，不是出勤证明。
+
+崩溃的情形在能回答它的位置回答：新启动的 Controller 对任何早于自身启动的 incarnation 都不持有 socket，
+因此日志里所有仍然打开的会话都已经结束，它在绑定监听器之前把这些结束逐一记录下来。
+
+| 删除 | 原因 |
+| --- | --- |
+| `WORKER_REPLACED` 及其 predecessor-expiry 校验 | 没有算术过期后，前任要么存活（拒绝），要么已结束（普通注册），不存在第三种 |
+| `WorkerSessionState::Expired`、`expiry_at` | 过期不再是一种状态 |
+| `WorkerSessionTimeoutMillis` 及贯穿注册、恢复、池分配、两个 policy 和 server 配置的 `session_timeout` 参数 | 失去全部消费者 |
+| `idle_timeout_ms < session_timeout_ms` 这条时钟关系 | 它存在只因两口钟管同一件事；现在 idle timeout 是唯一的界 |
+
+这条改动带来一个此前隐含、现在承重的前提：**同一份 store 只由一个 Controller 进程服务**。
+启动扫除对「早于本进程的 incarnation 一律已结束」的推断，只有在没有第二个进程同时持有 socket 时才成立。
+
+一处实施缺陷由测试抓出，值得记录：扫除最初写在 `ControllerState::open` 里，而该函数是**每条连接**调用一次的。
+那样既不会在启动时执行，真执行起来还会在每次有 worker 连入时注销其它所有 worker 的会话。
+在此之前没有任何测试覆盖启动扫除——去掉它 CI 依然全绿——这正是本仓库已栽过两次的那类缺陷，
+因此补的是一个 staged orphaned session 的集成测试，而不是一个单元测试。
+
+事件载荷形状已变，既有开发期 store 不可读，按 `AGENTS.md` 丢弃重建而不迁移；因此本次改动
+**尚未部署到线上**，部署需要一次 store 重建与两台 worker 的重新 enrollment。
 
 ### 4.3 设备与工具链现状
 
