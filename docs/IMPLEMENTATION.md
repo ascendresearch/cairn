@@ -258,7 +258,29 @@ liveness 是否应当离开 durable 事件流是**尚未实施**的第四项：�
 | 注册 worker | 5 个：`gpu` 2、`npu` 2、`npu-build` 1 |
 | Ascend build worker | 已重新上线并注册，backends `docker-v1`，capabilities `execution.role=build`、`toolchain.vendor=ascend`、`toolchain.architecture=dav-3510`、`toolchain.cann=9.1.0-beta.1` |
 
-两侧 worker 已于 2026-09-02 一并升级到当前构建（`f4099d3`），构建方式见下。
+三个进程已于 2026-09-02 全部由 systemd 管理，并统一部署到同一个提交：
+
+| 进程 | 主机 | scope | unit | 目标环境 |
+| --- | --- | --- | --- | --- |
+| Controller | 本机 | user（已开 linger） | `cairn-controller-real.service` | x86_64-gnu |
+| Ascend build worker | NPU 主机 | system | `cairn-worker-npu-build.service` | x86_64-**musl** |
+| CUDA worker | GPU 主机 | user（已开 linger） | `cairn-worker-gpu.service` | aarch64-gnu |
+
+三台主机的布局一致：`<prefix>/versions/<commit>/` 为不可变版本目录，`<prefix>/current` 是符号链接，
+回滚是一次链接翻转而不是又一次传输，unit 文件不随版本变化。部署由 `scripts/deploy.sh` 从 release
+bundle 完成，见本节末。
+
+此前每个进程都是手工 `setsid` 加重定向启动的：没有东西负责重启，退出原因不被记录，
+「哪台机器在跑什么」只存在于 shell 历史里。已实测该性质：对构建 worker 发 `SIGKILL` 后
+systemd 在数秒内拉起新进程，`NRestarts` 计为 1，Controller 随即收到重新注册。
+本次迁移期间 Controller 观察到的每一次断连都能对应到一个具体操作，worker 重连耗时 2 至 5 秒。
+
+Controller 的 unit 采用 `ProtectSystem=strict` 并只对其 state 目录开放写入；worker 的 unit
+**刻意不加固**，因为 worker 要 exec 容器工具并按配置选择物料落盘路径，沙箱指令必须先在真实构建上
+验证，未经验证地加上去会以任何测试都覆盖不到的方式破坏构建通路。
+
+两者的 unit 都限制了重启次数。worker 在自己的会话循环内部重连，断连根本不会到达 systemd，
+因此进程退出一定是真故障；不限流的话，一个坏部署会表现为一个看起来正在运行的无限循环。
 
 **发布清单与实际部署不符，这次升级把它暴露出来了。** `release/toolchain.toml` 声明 targets 为
 两个 gnu 三元组、glibc 下限 2.28，但两台主机要的不是同一样东西：GPU 主机（aarch64、glibc 2.39）
