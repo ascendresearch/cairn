@@ -3,3 +3,4 @@
 .cairn/runs/
 *.db-shm
 *.db-wal
+.cairn/corpora/

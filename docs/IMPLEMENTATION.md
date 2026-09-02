@@ -286,69 +286,79 @@ worker 的 `worker.json` 原样保留，因此 backends 与 capabilities 未受�
 稳态下 6 分钟观测事件总数 8 → 8，**增长为 0**；旧设计同期会追加 2 × 12 = 24 条心跳事件。
 每个 worker 流现在恰好 2 条事件：注册，以及第一次携带新 availability 的心跳。
 
-### 4.2.3 P1 运行时布局：已落地部分
+### 4.2.3 运行时布局：由 bootstrap 拥有
 
-`cairn-layout` 解析 10.5 的七棵树，两条不变量使 10.5 的分离成为文件系统事实而不是一条需要记住的规则：
+七棵树来自 10.5,但**创建它们的是一条命令,不是运行时的校验**。这一节记录的是这个结论的来路,
+因为最初的实现走了相反的方向。
 
-- **进程只能命名自己角色拥有的树。** worker 请求 `packs/` 或 `restricted/` 得到错误，为它们配置根会被拒绝
-  而不是被忽略。「被判方不与判官共处一台主机」因此在产出路径的地方被强制，而不是靠人记得。
-- **任何一棵树不得位于另一棵之内。** 这恰好拒绝了此前部署的形态：durable state 位于 secret 树之下，
-  静默继承了属于另一类材料的权限、备份周期与访问主体。包含关系按路径分量判定，因此同名前缀的兄弟目录仍是兄弟。
+最初我把布局做成一个会在运行时校验自身的子系统:树按角色限制谁能命名、任何一棵不得嵌套在另一棵内、
+路径不得逃出所属的树。这些检查合起来 300 多行,而且**都在检查同一份代码刚刚创建出来的东西**。
+真正促成它们的那个缺陷——durable state 位于 secret 树之下——恰恰是因为当时没有创建命令、
+全靠手敲才出现的。也就是说它是 bootstrap 的证据,不是校验器的证据。
 
-配置侧随之简化。store 的三个路径从配置中消失——每个部署重复命名 `events.sqlite3`、`content.sqlite3`
-与 `content/` 换不到布局尚未给出的灵活性，却多出三种把 durable state 放错地方的方式。worker 侧同理，
-`journal_database` 与 content 的三个路径改为从 store 根派生。
+现在的形态:
 
-两类路径**刻意留在树之外**，说清理由本身就是这个区分的意义：`accelerator_sysfs` 指向内核接口，
-executor 的 `command` 指向宿主上的程序，两者都不是本部署拥有的材料。第三种情况看着相似但不是：
-托管身份文档内部的文件名指的是它旁边的文件，因此按该目录解析，用一个以此命名的辅助函数完成。
+- `cairn-server bootstrap <目录> <server-name> <control> <enrollment>` 建树、按材料类设权限、
+  生成自签 CA 与控制器身份、写出配置,create-only,拒绝并入已有目录。
+- `cairn-worker join <bundle> <目录>` 对 worker 做同一件事,树表来自同一处,
+  `packs/` 与 `restricted/` 不在 worker 的表里——这就是「被判方不与判官共处一台主机」在这里的落实方式。
+- `cairn-layout` 只剩树名与权限位,105 行,没有任何运行时校验。
 
-`log/` 目前没有任何消费者，`check-log-isolation.sh` 断言这个数保持为零：加一个文件落点意味着修改这道门，
-而那正是该不变量要求的那次评审。
+配置里的相对路径按**配置文件所在目录**解析,绝对路径原样使用。单根部署因此可以整体搬走而不改一行,
+系统级安装用绝对路径。这是这个仓库原本就有的规则,中途被换成需要一个 crate 去解释的东西,现在换了回来。
 
-**Exit 四条已逐条在生产上验证：**
+**测的是端到端那一条**:跑真实的 bootstrap 命令,再用它产出的东西跑真实的服务。断言目录存在等于检查
+自己刚创建的东西。红验证方式是从树表里去掉一棵,测试立刻失败。
 
-| Exit | 验证 |
-| --- | --- |
-| 三类材料分树且权限不同 | 七棵树就位，`secrets/` 与 `restricted/` 为 700，其余 775；controller 的 unit 只对 `store/`、`workspaces/`、`log/` 开放写入 |
-| worker 主机上不存在 `packs/` 与 `restricted/` | 两台 worker 主机上各自只有 `config/`、`secrets/`、`store/`、`log/` 四棵 |
-| 从任意工作目录启动解析到同一份状态 | 在 `/`、`/tmp`、`/home/dawei` 三处运行 `registry list`，head event id 完全相同 |
-| 发布脚本产出两台主机各自可运行的 worker 二进制 | 本次部署即由 `scripts/build-release.sh` 的三个产物完成 |
+同时删掉的还有 log 树那道门。它断言一棵零文件零消费者的树消费者数为零,今天什么也没保护;
+真正在挡诊断正文进日志的是对 tracing 事件本身的隔离检查,那个留着。
 
-搬迁同时纠正了另一处同类问题：8 个 restricted 语义的 intent 语料此前位于 `.cairn/secrets/` 下且无任何
-代码或配置引用，现已移入 `restricted/` 树。
+一处是设错而不是过度:controller 的 unit 此前只对三棵树开放写入,把 `restricted/` 留成只读,
+而 Admission 侧就是 controller,exposure ledger 要写在那里。已修正。
 
-P1 第 4 项也已完成。`cairn-workspace` 承载项目定义，五个条件决定它能否进入 intake，
-每一条都对应一种没有它就会产生的、无法使用的结果：
+**部署过程中暴露的两个脚本缺陷,都是用它才发现的。**
 
-| 条件 | 缺了会怎样 |
-| --- | --- |
-| 同一文件不得同时属于 `provided` 与 `authored_by_agent` | 构建失败既可能是候选的问题也可能是脚手架的，记录里区分不出来——这恰好取消了设两个集合的意义 |
-| `authored_by_agent` 不得为空 | 可写面为空意味着 Agent 根本无法动作 |
-| 路径只接受一种写法 | 归属靠比较声明的路径决定，同一文件的两种写法会同时落进两个集合而互斥检查看不到冲突 |
-| upstream 必须钉住确切字节 | 分支名指的是「找到源码的方法」而不是「结果所出自的源码」，因此 `main` 与缩写 commit 一律拒绝而不是警告后接受 |
-| schema_version 必须为当前版本 | 与其余 durable 文档一致 |
+其一,「不得覆盖未托管进程」的守卫用 pgrep 的全命令模式去匹配配置文件路径,
+于是任何命令行里提到该路径的进程都算——包括调用部署脚本的那个 shell。它拒绝了一次完全干净的安装。
+改为先按进程名精确匹配再核对命令行,shell 不可能满足。两个方向都验过。
 
-门禁的入口是 `cairn-server project validate`，因为 intake 是一次管理动作，
-不可复现或归属含混的定义必须在任何工作依赖它之前被拒绝。它的测试跑真实二进制、对真实工作区树，
-因为无人能调用的门不是门。已在生产上验证：对一个不存在的项目，它把定义路径解析到
-`<home>/workspaces/<project>/project.json`。
+其二,解释上面那次修复的注释,把旧机制写在了反引号里。远端脚本是未加引号的 heredoc,
+反引号在其中就是命令替换,于是每次渲染脚本 bash 都真的执行一次 `pgrep -f`。
+错误可见但看起来无害,而它悄悄把那条检查清空了。**heredoc 里的注释不是注释。**
 
-### 4.2.4 一处运行中的时钟发现
+还有一处配置认知错误:bootstrap 把给它的地址同时用作监听与对外通告,而这个部署走反向隧道,
+两者不同。第一次 worker enrollment 因此指向了 worker 主机上不存在的端口。bootstrap 的提示已说明这一点。
 
-部署过程中 `tar` 报出时间戳超前，追下去量得：**NPU 主机比 Controller 慢约 93 秒**（GPU 主机快 1.2 秒）。
-该主机 `chronyd` 处于 active 但 `System clock synchronized: no`。这是共享主机，未擅自步进其时钟。
+**现状**:三个进程都在 `e5ea2e2` 上,部署由 bootstrap 产出,两个 worker 经 `join` 一条命令建成后
+合入各自的 profile。生产重启验证通过:两条会话被记录为结束,两个 worker 在 1.2 秒内重新注册。
 
-值得记录的不是这个偏差本身，而是它暴露的不对称：`resource_clock_skew_tolerance_ms` 配置为 2 秒，
-但 `admitted_resource_observation_time` 只约束 worker **超前**；worker 落后时函数直接返回
-Controller 自己的时间。也就是说落后方向不是「未设上限」，而是**被抹掉**——一次 93 秒前的测量会被
-盖上「此刻」的时间戳。对排序而言这是可辩护的选择，但它使 quantitative freshness 检查失去依据：
-`match_quantitative_resources` 拒绝在求值时刻已陈旧的证据，而陈旧性此时已不可见。
+### 4.2.4 一处误放的受限语料
 
-这不在 P1 范围内，因此只记录不修改；它属于 4.2 那一族「两个时钟管同一件事」的问题，
-处理时应与 device capability 声明（P5）一并考虑，因为真正依赖 quantitative freshness 的是那条路径。
+`fixtures/cuda-ascend/intent/reduce-sum-f32/v1/` 是一份冻结语料的**公开半边**,在仓库里受版本控制,
+含真实 CUDA 源码、`public-corpus.json` 与 `restricted-partitions.public.json`。它的**受限半边**
+是 8 个隐藏用例,每个带确切输入位、期望判决与该用例针对的缺陷类型,manifest 上写着
+`exposure_policy: sealed-until-disclosure`。
 
-### 4.3 设备与工具链现状
+我曾把这 8 个文件搬进生产部署的 `restricted/` 树,依据是它们此前躺在一个叫 `secrets` 的目录下、
+而 10.5 说 restricted 不能放在 secret 树里。那是按**目录名与材料类标签**行动,没有先确认它们是什么:
+它们的内容类型是 `testkit.*`,唯一消费者在 `cairn-testkit`,运行时没有任何代码读它。
+现已移回与公开半边路径镜像的位置并 gitignore:
+
+```
+fixtures/cuda-ascend/intent/reduce-sum-f32/v1/     公开半边,在 git 里
+.cairn/corpora/cuda-ascend/intent/reduce-sum-f32/v1/   受限半边,不在 git 里
+```
+
+**为什么怕它被读,值得写下来**,因为它决定了该建什么控制。这些不是保密意义上的秘密,是**测量意义上的**:
+看见输入就能特判;光看见「本用例针对丢输入」就足以让模型避开那一个缺陷而留下整类不被测到;
+而且泄露不可逆——私钥泄露了可以轮换,一条用例只能重写并记下旧的已烧毁,这正是设计里要有 exposure ledger 的原因。
+
+据此重排泄露路径后,结论是**目录权限守的是最弱的一条**。候选跑在 worker 主机的容器里
+（`--read-only --network none --cap-drop ALL --user 65532`,只有 input 只读挂载和 output 两个挂载）,
+它够不着 controller 上的任何东西。真正需要控制的是:每个工具绑定的根,以及物化进 bundle 的内容。
+两者都还不存在,exposure ledger 也没有实现。
+
+### 4.3 设备与工具链现状### 4.3 设备与工具链现状
 
 通道已于 2026-09-02 恢复并核验。地址、凭据与 enrollment 材料属于 Secret provider，不进入本仓库。
 
