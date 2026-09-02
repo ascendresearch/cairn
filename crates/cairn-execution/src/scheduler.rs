@@ -779,8 +779,15 @@ pub fn grant_reserved_assignment<E: EventStore, C: ContentStore, A: WorkerPlacem
             != reservation.worker_resource_observation_revision
         || worker.resource_admission_revision() != reservation.worker_resource_admission_revision
         || worker.availability_id() != Some(reservation.worker_availability_id)
-        || worker.last_seen_at() != reservation.worker_last_seen_at
     {
+        return Err(SchedulerError::StaleCandidate);
+    }
+    // Liveness is already decided above: recover_worker_session returns Live only while the session
+    // has not expired under this policy's session timeout. What the reservation binds here is that
+    // the worker has not gone backwards, not that nothing happened. Requiring equality would make an
+    // ordinary heartbeat invalidate a placement decision, and the claim window is configured equal
+    // to the heartbeat interval, so that equality was a race against liveness rather than a check.
+    if worker.last_seen_at() < reservation.worker_last_seen_at {
         return Err(SchedulerError::StaleCandidate);
     }
     if !authority
@@ -2239,12 +2246,16 @@ mod tests {
             Err(SchedulerError::AuthorityChanged)
         ));
 
+        // Capacity is evidence the placement rested on, so a heartbeat that changes it must force a
+        // fresh decision. The worker's last-seen time is not: liveness is decided separately by
+        // recover_worker_session, and binding it here would make an ordinary heartbeat invalidate a
+        // reservation whose claim window is configured equal to the heartbeat interval.
         authority.set(true);
         record_worker_heartbeat(
             &mut fixture.events,
             &mut fixture.content,
             &worker,
-            &WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+            &WorkerAvailability::new(WorkerHealth::Ready, false, 0, Vec::new())
                 .expect("availability"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(5),
@@ -2270,6 +2281,61 @@ mod tests {
             ),
             Err(SchedulerError::StaleCandidate)
         ));
+    }
+
+    #[test]
+    fn an_unchanged_heartbeat_does_not_invalidate_a_reservation() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let worker = fixture.register(worker_id, 0);
+        let authority = ToggleAuthority::active();
+        let attempt_id = AttemptId::new();
+        let grant = assignment_grant();
+        let record = selected(
+            reserve_worker_placement(
+                &mut fixture.events,
+                &mut fixture.content,
+                attempt_id,
+                fixture.prepared.contract_id(),
+                &fixture.contract,
+                &[worker_id],
+                &authority,
+                scheduler_policy(),
+                PlacementId::new(),
+                ReservationId::new(),
+                grant,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(2),
+            )
+            .expect("reserve"),
+        );
+        let execution_authority = fixture.authorize(attempt_id, 3);
+
+        // The same availability produces the same content identity, so this heartbeat advances only
+        // the worker's last-seen time.
+        record_worker_heartbeat(
+            &mut fixture.events,
+            &mut fixture.content,
+            &worker,
+            &WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+                .expect("availability"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(4),
+        )
+        .expect("liveness heartbeat");
+
+        grant_reserved_assignment(
+            &mut fixture.events,
+            &fixture.content,
+            execution_authority,
+            &record,
+            grant,
+            &authority,
+            session_timeout(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(5),
+        )
+        .expect("a liveness heartbeat must not invalidate the placement decision");
     }
 
     #[test]

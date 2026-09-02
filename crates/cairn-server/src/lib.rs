@@ -839,8 +839,38 @@ impl ServerConfig {
         Ok(())
     }
 
+    /// Checks the relations the separately configured clocks must satisfy.
+    ///
+    /// The values are independent numbers in one file and nothing else states how they relate, so a
+    /// deployment can currently express combinations whose behaviour contradicts the name of the
+    /// setting that produced it.
+    fn validate_clock_relations(&self) -> Result<(), ServerError> {
+        // A transport that outlives the durable session holds a connection open past the point
+        // where the incarnation is considered dead.
+        if self
+            .idle_timeout_ms
+            .is_some_and(|idle| idle.get() >= self.session_timeout_ms.get())
+        {
+            return Err(ServerError::Configuration(
+                "idle_timeout_ms must be below session_timeout_ms so a dead connection closes before its session expires".into(),
+            ));
+        }
+        // The session loop polls at the minimum of the two, so a larger outbox interval is not the
+        // interval the deployment asked for.
+        if self
+            .outbox_poll_interval_ms
+            .is_some_and(|outbox| outbox.get() > self.authority_poll_interval_ms.get())
+        {
+            return Err(ServerError::Configuration(
+                "outbox_poll_interval_ms must not exceed authority_poll_interval_ms, which would silently override it".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), ServerError> {
         self.validate_schema()?;
+        self.validate_clock_relations()?;
         if self.scheduler.as_ref().is_some_and(|scheduler| {
             scheduler.policy_version != SchedulerPolicyVersion::StableWorkerIdQuantitativeV1
         }) {
@@ -1868,6 +1898,39 @@ mod tests {
     use cairn_protocol::ObservedAtUnixMillis;
 
     use super::{ServerConfig, admitted_resource_observation_time, write_new_secret_file};
+
+    #[test]
+    fn related_clocks_are_checked_against_each_other_at_load() {
+        let documented: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+                .expect("documented controller configuration");
+        let config: ServerConfig =
+            serde_json::from_value(documented.clone()).expect("documented configuration");
+        config
+            .validate_clock_relations()
+            .expect("the documented configuration holds every clock relation");
+
+        // A transport that outlives its durable session holds a connection open past the point
+        // where the incarnation is considered dead.
+        let mut inverted = documented.clone();
+        inverted["idle_timeout_ms"] = inverted["session_timeout_ms"].clone();
+        let inverted: ServerConfig =
+            serde_json::from_value(inverted).expect("parses before it is validated");
+        assert!(inverted.validate_clock_relations().is_err());
+
+        // An outbox interval above the authority interval is silently overridden, because the
+        // session loop polls at the minimum of the two.
+        let mut overridden = documented;
+        overridden["outbox_poll_interval_ms"] = serde_json::json!(
+            overridden["authority_poll_interval_ms"]
+                .as_u64()
+                .expect("authority")
+                + 1
+        );
+        let overridden: ServerConfig =
+            serde_json::from_value(overridden).expect("parses before it is validated");
+        assert!(overridden.validate_clock_relations().is_err());
+    }
 
     #[test]
     fn resource_clock_lead_requires_an_explicit_bound() {
