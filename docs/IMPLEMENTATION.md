@@ -472,7 +472,11 @@ Exit：一个候选经正常入口到达 Ascend build worker 并取回 typed 诊
 
 纯搬运，不引入新语义。目标是 `ARCHITECTURE.md` 10.5。
 
-1. `CAIRN_HOME` 解析与六棵树的绝对路径配置，取代当前相对当前工作目录的解析。
+1. `CAIRN_HOME` 解析与 10.5 所列**七**棵树的绝对路径配置。两处前提在开工时校正：树是七棵不是六棵；
+   现有配置里的相对路径解析的基准是**配置文件所在目录**而不是当前工作目录
+   （`cairn-server/src/lib.rs` 与 `cairn-worker/src/lib.rs` 均取 `config_path.parent()`）。
+   因此本项要换掉的不是「相对 cwd」，而是「相对配置文件」——后者把布局绑死在配置文件的摆放位置上，
+   使 10.5 要求的按归属分树无法表达。
 2. 把 `restricted/` 从 `secrets/` 拆出，把 durable state 移出 secret 树。
 3. `log/` 不保留任何诊断正文落点；扩展现有日志隔离检查覆盖新布局。
 4. 项目定义与 intake 冻结：`project.json`，含 `authored_by_agent` 与 `provided`。

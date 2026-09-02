@@ -5,6 +5,7 @@ members = [
     "crates/cairn-codec",
     "crates/cairn-control-transport",
     "crates/cairn-execution",
+    "crates/cairn-layout",
     "crates/cairn-migration",
     "crates/cairn-migration-app",
     "crates/cairn-observability",
@@ -30,6 +31,7 @@ base64 = "0.22.1"
 cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }
+cairn-layout = { path = "crates/cairn-layout" }
 cairn-migration = { path = "crates/cairn-migration", default-features = false }
 cairn-migration-app = { path = "crates/cairn-migration-app" }
 cairn-observability = { path = "crates/cairn-observability" }
