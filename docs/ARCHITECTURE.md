@@ -450,6 +450,13 @@ cairn-server
 applicant code/toolchain/device execution 或真实部署证据需要独立进程/credential。Proposal roles 是 Controller workflow step，
 不是独立 service principal。
 
+部署由 `cairn-server bootstrap` 与 `cairn-worker join` 一次建成:目录、权限、PKI 与配置都由这一条命令产出,
+而不是由部署者按文档手敲。因此运行时不校验布局——校验自己刚创建的东西是同义反复。值得测的是端到端的那条:
+bootstrap 产出的部署能真正启动。
+
+配置里的相对路径按**配置文件所在目录**解析,绝对路径原样使用。前者让单根部署整体搬走而不用改任何一行,
+后者用于 config 与 state 确实分处两地的系统级安装;同一条规则覆盖两种绑定。
+
 **一份 store 只由一个 Controller 进程服务。** 这不是部署便利，而是 liveness 语义的前提：会话在有事件说它
 结束之前一直存活，而只有持有 socket 的进程能观察到它结束。新启动的 Controller 据此推断「早于本进程的
 incarnation 一律已结束」并把这些结束记录下来；若第二个进程同时持有 socket，该推断会注销它正在服务的会话。
@@ -512,7 +519,8 @@ restricted 与 secret 是 10.3 定义的不同材料类，必须是不同的树�
 Worker 主机只需要 `config/`、`store/`、`secrets/` 与 `log/`。Worker 上不存在 `packs/` 与 `restricted/`：被判方不与判官
 共处一台主机，这应当是文件系统事实，而不是一条策略。
 
-`log/` 中不得存在任何可以落下诊断正文的位置。source、prompt、model body、stdout/stderr、hidden 内容与 credential 只能
+`log/` 中不得存在任何可以落下诊断正文的位置。当前所有进程都写各自 supervisor 的 journal,该树没有消费者;
+真正在挡这条的是对 tracing 事件本身的隔离检查,而不是对目录的门禁。source、prompt、model body、stdout/stderr、hidden 内容与 credential 只能
 经 10.3 的显式授权从 store 读取，并受该节的投影上限约束。
 
 ### 10.6 项目工作区

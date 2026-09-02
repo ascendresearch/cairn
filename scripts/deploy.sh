@@ -56,7 +56,10 @@ case "$ROLE" in
     template="deploy/systemd/cairn-controller.service.template"
     unit="cairn-controller-$INSTANCE.service"
     [[ -n "$HOME_ROOT" ]] || { echo "CAIRN_DEPLOY_HOME is required for the controller role" >&2; exit 2; }
-    writable_trees="$HOME_ROOT/store $HOME_ROOT/workspaces $HOME_ROOT/log"
+    # The Admission side is the controller, and it writes the exposure ledger and gate receipts
+    # into `restricted/`. Leaving that read-only was a considered-looking setting that had simply
+    # not accounted for a writer that does not exist yet.
+    writable_trees="$HOME_ROOT/store $HOME_ROOT/workspaces $HOME_ROOT/log $HOME_ROOT/restricted"
     ;;
   worker)
     writable_trees=""
