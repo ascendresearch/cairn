@@ -47,4 +47,22 @@ awk '
   END { exit status }
 ' $sources || status=1
 
+# Nothing may open a file under the log tree.
+#
+# `log/` carries stable identities, counts, states and failure classes, and 10.5 forbids it from
+# holding any place a diagnostic body could land. Source, prompts, model bodies, stdout, stderr,
+# hidden content and credentials are readable only from the store under an explicit authorization,
+# and a file sink under `log/` is how that boundary gets crossed by accident rather than by
+# decision. Every process writes to its supervisor's journal today and no code names this tree at
+# all, so the check is that the count stays zero: adding a sink means editing this gate, which is
+# the review the invariant is asking for.
+log_tree_uses=$(grep -rn 'RuntimeTree::Log' --include='*.rs' crates \
+  | grep -v '^crates/cairn-layout/' \
+  | grep -c . || true)
+if [[ "$log_tree_uses" -ne 0 ]]; then
+  grep -rn 'RuntimeTree::Log' --include='*.rs' crates | grep -v '^crates/cairn-layout/' >&2
+  echo "the log tree has $log_tree_uses consumer(s); a file under log/ must be a reviewed decision, not a diff" >&2
+  status=1
+fi
+
 exit "$status"
