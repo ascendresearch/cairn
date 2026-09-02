@@ -3,6 +3,7 @@ set -euo pipefail
 
 cargo fmt --all --check
 bash scripts/check-log-isolation.sh
+bash scripts/check-product-path.sh
 cargo check --workspace --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features

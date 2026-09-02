@@ -1277,14 +1277,22 @@ where
             .commit_intent_admission(&prepared)
             .await
             .map_err(MigrationApplicationError::product)?;
+        let proposal_id = sir.identity().map_err(MigrationApplicationError::domain)?;
+        let request_batch_id = requests
+            .identity()
+            .map_err(MigrationApplicationError::domain)?;
+        let outcome_id = prepared
+            .public_outcome()
+            .identity()
+            .map_err(MigrationApplicationError::domain)?;
         tracing::info!(
             target: "cairn.migration.admission",
             event = "intent_admission_committed",
             task_id = %task.task_id(),
-            proposal_id = %sir.identity().map_err(MigrationApplicationError::domain)?,
-            request_batch_id = %requests.identity().map_err(MigrationApplicationError::domain)?,
+            proposal_id = %proposal_id,
+            request_batch_id = %request_batch_id,
             request_count = requests.requests().len(),
-            outcome_id = %prepared.public_outcome().identity().map_err(MigrationApplicationError::domain)?,
+            outcome_id = %outcome_id,
             "Intent Admission committed exact authority lineage"
         );
         Ok(AdmittedIntentV1(prepared))

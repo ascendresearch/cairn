@@ -204,8 +204,22 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复
    `record_terminal_outcome` 随之改为 `NotImplemented`，与其两个 candidate 侧同族方法一致——
    在候选通路接通之前，把候选终态标成 Oracle 相位是不诚实的。
 2. **已完成。** 三个引用已删除 test target 的 Ascend 冒烟脚本随之移除；重建 lane 时脚本与 test target 一起产生。
-3. **通路可达性守卫**：断言每一条声明的产品能力存在非测试调用路径，并断言每个 opt-in lane 引用的 test target 真实存在。
-   通路断裂必须使 `scripts/ci.sh` 失败。按 `AGENTS.md` 的说法，加了检查就要指名哪道门消费它。
+3. **已完成。** 新增 `scripts/check-product-path.sh` 并接入 `scripts/ci.sh`，两项断言：
+   每个 opt-in lane 引用的 test target 必须存在；`cairn-migration` 导出的 `pub fn` 中
+   「在定义模块之外没有非测试消费者」的数量必须等于记录基线。基线是记录值不是目标值，
+   只能经一次显式编辑改变，因此失去消费者与采纳孤儿都成为可见事件。刻意不用名字白名单，
+   那种清单会静默变长。两半均已红验：制造悬空 lane 退出 1，摘掉一个真实消费者时计数从 22 变 23 并列出清单。
+
+   开工时发现该缺陷的规模比预期大：仓库的三道文本门此前**全部是死的**。
+   `ci.sh` 的行尾空白检查与 `check-log-isolation.sh` 的两项检查都依赖未安装的 `rg`，
+   而写法均为 `if <command-not-found>`，条件为假因而静默通过。
+   现已全部改用 POSIX 工具，并为每道门加上「依赖工具缺失即以 2 退出」的自检。
+   复活 `check-log-isolation.sh` 当即查出 9 处在其失效期间累积的真实违规：
+   `tracing::` 事件内的可失败 `?` 调用，分布在 `app_api.rs`、`oracle_control_runner.rs` 与
+   `lib.rs`。已把这些计算提升到日志调用之前，而不是放宽该门。
+
+   当前基线本身是一项事实：41 个导出函数中有 22 个没有跨模块的非测试消费者。
+   `d699412` 让构建通路失去消费者不是孤例，而是这个 crate 的常态。
 4. **已完成。** fixture 专用代码按 `AGENTS.md` 的裁决删除，而非迁移：reduction 四个模块、collection oracle、
    随之失去全部消费者的 historical-failure 记录模块、其测试与九个 fixture 二进制，以及 `call_adapter` 中
    fixture 形状的 `CollectionOutput` 变体及其三个函数。通用枚举的其余四个变体不受影响。
@@ -218,7 +232,7 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复
    （特异性、敏感性、最小可捕获误差量级）。丢失的是一个机器可检的控制，不是这条知识。
 5. 恢复 NPU worker 控制通道并声明 device capability（运维项，与 P1–P3 并行）。
 
-规模估计：第 3 项为中，第 5 项为运维。第 1 项的构建半程、第 2、4 项已完成。
+规模估计：第 5 项为运维。第 1 项的构建半程与第 2、3、4 项已完成。
 
 已完成部分的附带发现：`scripts/ci.sh` 的行尾空白检查此前使用 `rg`，而该环境未安装 ripgrep，
 `if <command-not-found>` 判定为假因而 `status` 保持 0——该检查从未真正运行过。已改为 POSIX `grep`

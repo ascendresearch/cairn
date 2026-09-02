@@ -186,12 +186,13 @@ impl OracleControlRunnerV1 {
             ));
         }
         let catalog = OracleAdmissionMechanismCatalogV1::new(registrations).map_err(domain)?;
+        let catalog_id = catalog.identity().map_err(domain)?;
         tracing::info!(
             target: "cairn.migration.oracle-control",
             event = "oracle_control_mechanisms_qualified",
             task_id = %task_id,
             proposal_id = %proposal_id,
-            catalog_id = %catalog.identity().map_err(domain)?,
+            catalog_id = %catalog_id,
             worker_job_id = %qualification.job_id,
             worker_attempt_id = %qualification.attempt_id,
             "Oracle control mechanisms qualified by Worker evidence"

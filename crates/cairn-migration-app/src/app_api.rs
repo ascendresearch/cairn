@@ -506,11 +506,14 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             )?;
             Arc::clone(&state.notify)
         };
+        let proposal_id = proposal
+            .identity()
+            .map_err(MigrationAppApiError::internal)?;
         tracing::info!(
             target: "cairn.migration.app-api",
             event = "intent_review_published",
             task_id = %task.task_id(),
-            proposal_id = %proposal.identity().map_err(MigrationAppApiError::internal)?,
+            proposal_id = %proposal_id,
             request_count = requests.requests().len(),
             "SIR proposal published for task-authority review"
         );
@@ -631,13 +634,24 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             self.oracle_catalog.clone(),
         )?;
         self.transition(task.task_id(), TaskPhaseV1::ExploringOracle, None)?;
+        let workspace_id = workspace
+            .identity()
+            .map_err(MigrationAppApiError::internal)?;
+        let policy_id = self
+            .oracle_policy
+            .identity()
+            .map_err(MigrationAppApiError::internal)?;
+        let strategy_catalog_id = self
+            .oracle_catalog
+            .identity()
+            .map_err(MigrationAppApiError::internal)?;
         tracing::info!(
             target: "cairn.migration.oracle",
             event = "oracle_workspace_frozen",
             task_id = %task.task_id(),
-            workspace_id = %workspace.identity().map_err(MigrationAppApiError::internal)?,
-            policy_id = %self.oracle_policy.identity().map_err(MigrationAppApiError::internal)?,
-            strategy_catalog_id = %self.oracle_catalog.identity().map_err(MigrationAppApiError::internal)?,
+            workspace_id = %workspace_id,
+            policy_id = %policy_id,
+            strategy_catalog_id = %strategy_catalog_id,
             "Oracle Exploration workspace frozen with exact authority bindings"
         );
         Ok(workspace)
@@ -682,11 +696,14 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
     ) -> Result<(), Self::Error> {
         self.materials
             .record_oracle_portfolio(task.task_id(), proposal)?;
+        let portfolio_id = proposal
+            .identity()
+            .map_err(MigrationAppApiError::internal)?;
         tracing::info!(
             target: "cairn.migration.review",
             event = "oracle_portfolio_review_candidate_committed",
             task_id = %task.task_id(),
-            portfolio_id = %proposal.identity().map_err(MigrationAppApiError::internal)?,
+            portfolio_id = %portfolio_id,
             item_count = proposal.accepted_items().len(),
             "exact mechanically assembled Oracle portfolio committed for coherence Review"
         );
