@@ -149,11 +149,43 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 | `execution-job` | 44 |
 | `worker-enrollment-registry` | 10 |
 
-两个数量级的差距来自**心跳与资源观测被写成了 durable event**。liveness 是易失状态，
-不承载 authority，也不需要被重放；把它放进不可变历史，使每一次控制面操作的成本随在线时长增长。
+事件计数的分布确实由心跳主导，但**成本归因不能从计数推断，必须测量**。2026-09-02 用当前构建替换
+该进程后重测，结果推翻了先前的归因：
 
-因此这不是一处补丁，而是两个设计决定：控制面投影是否引入快照或游标；以及 liveness 是否应当离开
-durable 事件流。两者都改变 `AGENTS.md` 所列的内部格式，属于 P1 范围，不在观测当场处理。
+| | 读 syscall | rchar |
+| --- | --- | --- |
+| 旧构建，单会话 | 10,049 次/秒 | 41.2 MB/s |
+| 当前构建，两会话 | 10,545 次/秒 | 43.2 MB/s |
+
+会话游标改动没有改变速率。按字节量重新推算才对上：
+
+| 聚合流 | 事件数 | payload |
+| --- | --- | --- |
+| `execution-worker` | 28,294 | 7.59 MB |
+| `controller-control-outbox` | 9,434 | 2.26 MB |
+| 其余全部 | 118 | 0.07 MB |
+
+热点是 **outbox 流的重放**：会话循环每 100 ms 调用一次 `deliver_controller_messages`，
+它以 `None` 作游标重放整条 outbox 流。2 会话 × 10 Hz × 2.26 MB = 45.3 MB/s，与实测 43.2 MB/s 吻合。
+心跳路径每 30 s 才触及一次 worker 流，改动前的贡献约 0.5 MB/s，占比约 1%。
+
+会话游标那次改动因此是正确但不解决瓶颈的：它移除了心跳的 O(N) 重放，会随 worker 流增长而变得重要，
+但当前的 41 MB/s 从来不是它造成的。
+
+### 4.2.1 阻塞：同步存储运行在异步运行时线程上
+
+`ControllerState` 持有 `SqliteEventStore` 与 `SqliteContentStore`，两者都是同步的，而会话路径的每一次
+`read_stream` / `append` 都直接在 `async fn` 内执行。`cairn-server` 中 `block_in_place` 与
+`spawn_blocking` 的出现次数为 **0**；同一工作区的 `cairn-migration-app` 有 11 处。该模式在本仓库内已知，
+只是没有应用到 Controller。
+
+叠加的第二层是 `tokio::sync::Mutex<ControllerState>`：一把全局锁把所有会话的控制面操作串行化，
+共 11 处获取点。这解释了观测现象——负载并未分散到 17 个运行时线程，而是持锁者独自跑满一个线程。
+因此在数据量增长时，Controller 不是变慢，而是先耗尽单线程再阻塞整个运行时。
+
+因此这不是一处补丁，而是三个设计决定：outbox 投影是否引入游标或改为事件驱动唤醒；liveness 是否
+应当离开 durable 事件流；以及同步存储访问是否必须移出运行时线程并去掉全局锁。三者都改变
+`AGENTS.md` 所列的内部格式或运行拓扑，属于 P1 范围。
 
 成本按会话计。观测期内只有一个空闲 worker 会话时单线程常驻 45–60%；2026-09-02 接入第二个 worker 后
 进程占用升至约 70%，两个 tokio worker 线程各自累积可比的 CPU 时间。两个 worker 自身均近乎空闲
