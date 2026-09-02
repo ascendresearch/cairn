@@ -275,8 +275,16 @@ availability 真正发生变化时仍然追加，因为那是 scheduler 要读�
 在此之前没有任何测试覆盖启动扫除——去掉它 CI 依然全绿——这正是本仓库已栽过两次的那类缺陷，
 因此补的是一个 staged orphaned session 的集成测试，而不是一个单元测试。
 
-事件载荷形状已变，既有开发期 store 不可读，按 `AGENTS.md` 丢弃重建而不迁移；因此本次改动
-**尚未部署到线上**，部署需要一次 store 重建与两台 worker 的重新 enrollment。
+事件载荷形状已变，既有开发期 store 不可读，按 `AGENTS.md` 丢弃重建而不迁移。
+该重建已于 2026-09-02 执行：controller store 清空，两台 worker 重新 enrollment，
+三个进程升级到 `73326fb`。重建前对 controller store 与两个 worker state 做了完整备份并校验可解包。
+worker 的 `worker.json` 原样保留，因此 backends 与 capabilities 未受影响；
+清掉的是各自的 identity、journal 与 content——它们引用的 credential 与 incarnation 已随 store 一并作废。
+重建后注册表只剩两个在跑的 worker，此前 5 条登记里的 3 条陈旧记录随之消失。
+
+**线上直接验证了这次改动要达到的效果。** 两个 worker 心跳周期均为 30 s，
+稳态下 6 分钟观测事件总数 8 → 8，**增长为 0**；旧设计同期会追加 2 × 12 = 24 条心跳事件。
+每个 worker 流现在恰好 2 条事件：注册，以及第一次携带新 availability 的心跳。
 
 ### 4.3 设备与工具链现状
 
