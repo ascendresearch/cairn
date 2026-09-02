@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, io::Cursor};
 
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, CredentialId,
-    EventId, ObservedAtUnixMillis, SchemaName, SchemaVersion, StreamRevision, WorkerId,
-    WorkerIncarnationId,
+    EventId, EventSequence, ObservedAtUnixMillis, SchemaName, SchemaVersion, StreamRevision,
+    WorkerId, WorkerIncarnationId,
 };
 use cairn_record::{
     ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError, ExpectedRevision,
@@ -969,6 +969,9 @@ pub struct RegisteredWorkerSession {
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     availability: Option<WorkerAvailability>,
     last_seen_at: ObservedAtUnixMillis,
+    last_observed_at: ObservedAtUnixMillis,
+    last_event_id: EventId,
+    revision: StreamRevision,
 }
 
 impl RegisteredWorkerSession {
@@ -1461,18 +1464,47 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         .put::<WorkerAvailabilityArtifact>(&mut Cursor::new(bytes))?
         .content_id;
     let stream = worker_stream(session.worker_id)?;
-    let history = events.read_stream(&stream, None)?;
-    let projection = project_worker(&history, session.worker_id)?;
-    ensure_current(session, &projection)?;
-    if projection.availability_id == Some(availability_id) && projection.last_seen_at == observed_at
-    {
-        return materialize_session(content, session.worker_id, projection);
+    // A live session already knows its own stream position. Read only what arrived after it: for a
+    // heartbeat on an unchanged session that is nothing, so the cost does not grow with uptime.
+    // Anything else falls back to the full projection, which keeps every typed failure class that
+    // distinguishes a stale incarnation from an ordinary concurrency conflict.
+    let advanced = !events
+        .read_stream(&stream, Some(session_sequence(session.revision)?))?
+        .is_empty();
+    let projection = if advanced {
+        let history = events.read_stream(&stream, None)?;
+        let projection = project_worker(&history, session.worker_id)?;
+        ensure_current(session, &projection)?;
+        Some(projection)
+    } else {
+        None
+    };
+    let known_availability_id = projection
+        .as_ref()
+        .map_or(session.availability_id, |value| value.availability_id);
+    let known_last_seen_at = projection
+        .as_ref()
+        .map_or(session.last_seen_at, |value| value.last_seen_at);
+    if known_availability_id == Some(availability_id) && known_last_seen_at == observed_at {
+        return match projection {
+            Some(projection) => materialize_session(content, session.worker_id, projection),
+            None => Ok(session.clone()),
+        };
     }
-    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    let last_observed_at = projection
+        .as_ref()
+        .map_or(session.last_observed_at, |value| value.last_observed_at);
+    let parent_event_id = projection
+        .as_ref()
+        .map_or(session.last_event_id, |value| value.last_event_id);
+    let expected_revision = projection
+        .as_ref()
+        .map_or(session.revision, |value| value.revision);
+    ensure_nonregressing(observed_at, last_observed_at)?;
     let event = fact(
         WORKER_HEARTBEAT,
         1,
-        Some(projection.last_event_id),
+        Some(parent_event_id),
         observed_at,
         &HeartbeatPayload {
             worker_id: session.worker_id,
@@ -1480,12 +1512,17 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
             availability_id,
         },
     )?;
-    events.append(
+    let appended = events.append(
         &stream,
-        ExpectedRevision::Exact(projection.revision),
+        ExpectedRevision::Exact(expected_revision),
         command_id,
         &[event],
     )?;
+    let last_event_id = *appended.event_ids.last().ok_or_else(|| {
+        WorkerControlError::InvalidHistory("heartbeat append returned no event identity".into())
+    })?;
+    let revision = StreamRevision::new(appended.last_sequence.get())
+        .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))?;
     Ok(RegisteredWorkerSession {
         worker_id: session.worker_id,
         incarnation_id: session.incarnation_id,
@@ -1502,6 +1539,9 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         availability_id: Some(availability_id),
         availability: Some(availability.clone()),
         last_seen_at: observed_at,
+        last_observed_at: observed_at,
+        last_event_id,
+        revision,
     })
 }
 
@@ -1902,6 +1942,9 @@ fn materialize_session<C: ContentStore>(
         availability_id: projection.availability_id,
         availability,
         last_seen_at: projection.last_seen_at,
+        last_observed_at: projection.last_observed_at,
+        last_event_id: projection.last_event_id,
+        revision: projection.revision,
     })
 }
 
@@ -2099,6 +2142,11 @@ fn project_worker(
         previous = Some(event.event_id);
     }
     projection.ok_or_else(|| WorkerControlError::InvalidHistory("missing registration".into()))
+}
+
+fn session_sequence(revision: StreamRevision) -> Result<EventSequence, WorkerControlError> {
+    EventSequence::new(revision.get())
+        .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))
 }
 
 fn ensure_current(
