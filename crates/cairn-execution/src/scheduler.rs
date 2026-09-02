@@ -162,6 +162,11 @@ pub enum PlacementCandidateRejection {
     WorkerMismatch(WorkerMatchFailure),
     /// Existing durable reservations consume all registered capacity.
     CapacityReserved,
+    /// The worker accounts for fewer free slots than the durable reservation ledger does, once
+    /// reservations it has not yet acknowledged are allowed for. The difference is occupancy the
+    /// controller never reserved, which is a different fact from exhausted capacity and is named
+    /// rather than folded into the same arithmetic.
+    UnreservedWorkerOccupancy,
     /// Existing durable reservations consume requested quantitative resources.
     QuantitativeCapacityReserved,
 }
@@ -226,7 +231,9 @@ pub enum CandidateDisposition {
         reported_available_slots: u16,
         /// Unreleased scheduler reservations already bound to this stable worker.
         active_reservations: u16,
-        /// Reservations not yet reflected in the worker's active-attempt heartbeat set.
+        /// Reservations not yet reflected in the worker's active-attempt heartbeat set. Only used
+        /// to put the worker's reported slot count into the controller's frame before the two are
+        /// compared; it is not a capacity term.
         unreflected_reservations: u16,
         /// Exact quantitative resources this candidate would reserve.
         quantitative_reservation: ReservedWorkerResources,
@@ -940,13 +947,26 @@ fn evaluate_live_candidate<A: WorkerPlacementAuthority>(
         .map_err(|_| {
             SchedulerError::InvalidHistory("unreflected reservation count exceeds u16".into())
         })?;
-        if active_reservation_count >= registered_slots
-            || reported_available_slots == 0
-            || registered_slots.saturating_sub(active_reservation_count) == 0
-            || reported_available_slots.saturating_sub(unreflected_reservations) == 0
-        {
+        // Occupancy is written twice: the controller keeps a durable reservation ledger and the
+        // worker reports its own free slots. Both numbers are needed, because only the ledger
+        // knows about reservations in flight and only the worker knows about occupancy the
+        // controller never created. What must not happen is what used to happen here, where both
+        // were folded into one disjunction and a disagreement between the two arrived under the
+        // same name as ordinary exhausted capacity.
+        //
+        // So they are compared instead. The worker's count is first put into the controller's
+        // frame by allowing for reservations it has not acknowledged yet; a worker that still
+        // accounts for fewer free slots than the ledger does is occupied by something nobody
+        // reserved, and that is reported as itself.
+        let ledger_free_slots = registered_slots.saturating_sub(active_reservation_count);
+        let reported_free_slots = reported_available_slots.saturating_sub(unreflected_reservations);
+        if ledger_free_slots == 0 {
             CandidateDisposition::Rejected {
                 reason: PlacementCandidateRejection::CapacityReserved,
+            }
+        } else if reported_free_slots < ledger_free_slots {
+            CandidateDisposition::Rejected {
+                reason: PlacementCandidateRejection::UnreservedWorkerOccupancy,
             }
         } else if let Some(quantitative_reservation) = plan_quantitative_reservation(
             session.resource_observation(),
@@ -2281,6 +2301,67 @@ mod tests {
             ),
             Err(SchedulerError::StaleCandidate)
         ));
+    }
+
+    // Slot capacity has one authority, the durable reservation ledger. A worker that reports no
+    // free slot while the ledger still has one is reporting occupancy the controller never
+    // reserved, which is a different fact from the ledger being full and must not arrive under the
+    // same name. Collapsing the two is what the removed heartbeat-reconciliation term was
+    // compensating for.
+    #[test]
+    fn unreserved_worker_occupancy_is_detected_and_named() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let worker = fixture.register_with_slots(worker_id, 0, 2);
+        let authority = ToggleAuthority::active();
+
+        // Two registered slots, nothing reserved, and the worker accounts for only one of them as
+        // free. One slot is occupied by work the controller never assigned. A worker reporting
+        // zero would be caught earlier by ordinary contract matching, so the case that reaches
+        // this gate is the partial one.
+        record_worker_heartbeat(
+            &mut fixture.events,
+            &mut fixture.content,
+            &worker,
+            &WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
+                .expect("availability"),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(2),
+        )
+        .expect("partially occupied heartbeat");
+
+        let outcome = reserve_worker_placement(
+            &mut fixture.events,
+            &mut fixture.content,
+            AttemptId::new(),
+            fixture.prepared.contract_id(),
+            &fixture.contract,
+            &[worker_id],
+            &authority,
+            scheduler_policy(),
+            PlacementId::new(),
+            ReservationId::new(),
+            assignment_grant(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(3),
+        )
+        .expect("capacity decision");
+        let PlacementOutcome::NoCandidate(rejected) = outcome else {
+            panic!("a worker occupied by unreserved work must not be selected");
+        };
+        let snapshot =
+            read_snapshot(&fixture.content, rejected.snapshot_id()).expect("rejection snapshot");
+        assert!(
+            matches!(
+                snapshot.candidates()[0].disposition(),
+                CandidateDisposition::Rejected {
+                    reason: PlacementCandidateRejection::UnreservedWorkerOccupancy
+                }
+            ),
+            "the ledger had a free slot, so this rejection is a disagreement with the worker and \
+             not exhausted capacity: {:?}",
+            snapshot.candidates()[0].disposition()
+        );
     }
 
     #[test]
