@@ -13,8 +13,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 
 use cairn_protocol::{
     AggregateId, AggregateKind, AttemptId, CommandId, ContentId, ContentType, ControlConnectionId,
-    ControlMessageId, ControlSequence, EventId, ObservedAtUnixMillis, SchemaName, SchemaVersion,
-    StreamRevision, WorkerId,
+    ControlMessageId, ControlSequence, EventId, EventSequence, ObservedAtUnixMillis, SchemaName,
+    SchemaVersion, StreamRevision, WorkerId,
 };
 use cairn_record::{
     ContentRangeStore, ContentStore, ContentStoreError, EventEnvelope, EventStore, EventStoreError,
@@ -962,6 +962,28 @@ pub fn enqueue_controller_message<E: EventStore>(
     )?;
     events.append(&stream, expected(projection.revision), command_id, &[event])?;
     Ok(ControlEnqueueOutcome::Enqueued)
+}
+
+/// Reports the controller outbox position for one worker when it has advanced past `after`.
+///
+/// The outbox projection is a pure function of this stream, so a caller that already concluded it
+/// has nothing to deliver keeps that conclusion for as long as the stream stands still. Returning
+/// `None` therefore means "nothing changed", not "nothing pending", and lets a session skip a full
+/// replay it would otherwise repeat at its poll interval.
+///
+/// # Errors
+///
+/// Returns an error when the stream identity is invalid or the store cannot be read.
+pub fn controller_outbox_position<E: EventStore>(
+    events: &E,
+    worker_id: WorkerId,
+    after: Option<EventSequence>,
+) -> Result<Option<EventSequence>, ControlProtocolError> {
+    let stream = controller_stream(worker_id)?;
+    Ok(events
+        .read_stream(&stream, after)?
+        .last()
+        .map(|event| event.sequence))
 }
 
 /// Records a fresh connection-local mapping for the next pending controller message. Serial

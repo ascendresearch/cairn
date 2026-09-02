@@ -42,15 +42,16 @@ use cairn_execution::{
     RecordedWorkerAuthenticator, RegisteredWorkerSession, SchedulerPolicyVersion,
     TrustedWorkerPoolAssignment, WorkerAuthenticationSubject, WorkerControlMessage, WorkerPoolName,
     WorkerProtocolVersion, WorkerResultReconciliation, WorkerSessionTimeoutMillis,
-    accept_worker_assignment, acknowledge_controller_messages, deliver_controller_acknowledgement,
-    deliver_controller_messages, disconnect_worker, enqueue_controller_message,
-    execution_start_message, read_assignment_material_chunk, reconcile_worker_result,
-    record_worker_heartbeat, record_worker_resource_observation, recover_execution_assignment,
-    register_worker, start_accepted_assignment, synchronize_worker_pool_assignment,
+    accept_worker_assignment, acknowledge_controller_messages, controller_outbox_position,
+    deliver_controller_acknowledgement, deliver_controller_messages, disconnect_worker,
+    enqueue_controller_message, execution_start_message, read_assignment_material_chunk,
+    reconcile_worker_result, record_worker_heartbeat, record_worker_resource_observation,
+    recover_execution_assignment, register_worker, start_accepted_assignment,
+    synchronize_worker_pool_assignment,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
-    ObservedAtUnixMillis, ReservationId, WorkerId,
+    EventSequence, ObservedAtUnixMillis, ReservationId, WorkerId,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use serde::{Deserialize, Serialize};
@@ -1320,6 +1321,7 @@ async fn controller_session_loop(
     let mut idle_deadline = config
         .idle_timeout_ms
         .map(|limit| Instant::now() + Duration::from_millis(limit.get()));
+    let mut outbox_cursor: Option<EventSequence> = None;
     loop {
         if !session_credential_is_authorized(state, session).await? {
             return Err(ServerError::Session(
@@ -1335,6 +1337,7 @@ async fn controller_session_loop(
             inbound.acknowledge_through(),
             highest_sent,
             acknowledgement_sent,
+            &mut outbox_cursor,
         )
         .await?;
         let read = timeout_at_optional(
@@ -1445,6 +1448,7 @@ async fn controller_session_loop(
                     inbound.acknowledge_through(),
                     highest_sent,
                     acknowledgement_sent,
+                    &mut outbox_cursor,
                 )
                 .await?;
             }
@@ -1696,20 +1700,33 @@ async fn flush_controller(
     acknowledges: Option<ControlSequence>,
     highest_sent: &mut Option<ControlSequence>,
     acknowledgement_sent: &mut Option<ControlSequence>,
+    outbox_cursor: &mut Option<EventSequence>,
 ) -> Result<(), ServerError> {
     let now = observed_now()?;
     let frames = {
         let mut locked = state.lock().await;
-        let frames = deliver_controller_messages(
-            &mut locked.events,
-            worker_id,
-            config.protocol_version,
-            *connection_id,
-            acknowledges,
-            &command("deliver"),
-            now,
-        )
-        .map_err(|error| ServerError::Session(error.to_string()))?;
+        // The outbox projection is a pure function of the outbox stream. Once this session has
+        // projected it, the answer cannot change until the stream advances, so a session that
+        // already has nothing to deliver skips the replay instead of repeating it every poll.
+        let advanced = controller_outbox_position(&locked.events, worker_id, *outbox_cursor)
+            .map_err(|error| ServerError::Session(error.to_string()))?;
+        let frames = if outbox_cursor.is_some() && advanced.is_none() {
+            Vec::new()
+        } else {
+            if let Some(position) = advanced {
+                *outbox_cursor = Some(position);
+            }
+            deliver_controller_messages(
+                &mut locked.events,
+                worker_id,
+                config.protocol_version,
+                *connection_id,
+                acknowledges,
+                &command("deliver"),
+                now,
+            )
+            .map_err(|error| ServerError::Session(error.to_string()))?
+        };
         let acknowledgement_only =
             acknowledges.filter(|value| frames.is_empty() && Some(*value) > *acknowledgement_sent);
         if let Some(acknowledges) = acknowledgement_only {

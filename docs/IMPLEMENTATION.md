@@ -172,6 +172,19 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 会话游标那次改动因此是正确但不解决瓶颈的：它移除了心跳的 O(N) 重放，会随 worker 流增长而变得重要，
 但当前的 41 MB/s 从来不是它造成的。
 
+按测量结果给 outbox 投影加同一形态的游标后，实测（同为两会话）：
+
+| 构建 | 读 syscall | rchar | 进程 CPU |
+| --- | --- | --- | --- |
+| 旧构建（单会话） | 10,049 次/秒 | 41.200 MB/s | 45–60% |
+| 会话游标（两会话） | 10,545 次/秒 | 43.183 MB/s | 20% |
+| outbox 游标（两会话） | 312 次/秒 | 1.271 MB/s | 1.5% |
+
+依据的不变量是：outbox 投影是该流的纯函数，因此「无事可投」的结论在流前进之前不会改变。
+`controller_outbox_position` 只读游标之后的部分，为空即跳过整次重放。
+剩余的 1.27 MB/s 来自仍以 `None` 为游标的 `EnrollmentRegistry::load`（每次循环一次，10 条事件）
+与心跳路径，两者都不随 outbox 增长。
+
 ### 4.2.1 阻塞：同步存储运行在异步运行时线程上
 
 `ControllerState` 持有 `SqliteEventStore` 与 `SqliteContentStore`，两者都是同步的，而会话路径的每一次
