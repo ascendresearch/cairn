@@ -43,7 +43,6 @@
     "policy_version": "stable-worker-id-quantitative-v1",
     "reservation_claim_timeout_ms": 30000
   },
-  "session_timeout_ms": 180000,
   "storage": {
     "content_database": "state/content.sqlite3",
     "content_directory": "state/content",

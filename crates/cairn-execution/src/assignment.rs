@@ -15,8 +15,7 @@ use crate::{
     AssignmentLeaseDurationMillis, ExecutionAttemptAuthority, ExecutionCoordinatorError,
     ExecutionJob, ExecutionJobState, ExecutionReceiptArtifact, JobContractArtifact,
     RegisteredWorkerSession, StartedExecutionAttempt, WorkerControlError, WorkerSessionState,
-    WorkerSessionTimeoutMillis, begin_execution_attempt, match_worker_at, recover_execution_job,
-    recover_worker_session,
+    begin_execution_attempt, match_worker_at, recover_execution_job, recover_worker_session,
 };
 
 const ASSIGNMENT_LEASED: &str = "execution.assignment-leased";
@@ -71,31 +70,18 @@ impl AssignmentControlMessageIds {
     }
 }
 
-/// Configurable liveness policy frozen by the caller for a grant or renewal decision.
+/// Configurable lease timing frozen by the caller for a grant or renewal decision.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssignmentLeasePolicy {
-    session_timeout: WorkerSessionTimeoutMillis,
     lease_duration: AssignmentLeaseDurationMillis,
 }
 
 impl AssignmentLeasePolicy {
-    /// Creates a policy from independently typed session and assignment durations.
+    /// Creates a policy from the assignment lease duration.
     #[must_use]
-    pub const fn new(
-        session_timeout: WorkerSessionTimeoutMillis,
-        lease_duration: AssignmentLeaseDurationMillis,
-    ) -> Self {
-        Self {
-            session_timeout,
-            lease_duration,
-        }
-    }
-
-    /// Returns the worker-session liveness timeout.
-    #[must_use]
-    pub const fn session_timeout(self) -> WorkerSessionTimeoutMillis {
-        self.session_timeout
+    pub const fn new(lease_duration: AssignmentLeaseDurationMillis) -> Self {
+        Self { lease_duration }
     }
 
     /// Returns the assignment lease/renewal duration.
@@ -465,13 +451,7 @@ pub fn grant_assignment_lease<E: EventStore, C: ContentStore>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<LeasedExecutionAssignment, AssignmentControlError> {
-    ensure_live_worker(
-        events,
-        content,
-        worker,
-        grant.policy.session_timeout,
-        observed_at,
-    )?;
+    ensure_live_worker(events, content, worker, observed_at)?;
     match_worker_at(worker, authority.contract(), observed_at)
         .map_err(WorkerControlError::Match)?;
     let binding = AssignmentBinding {
@@ -551,12 +531,11 @@ pub fn accept_assignment<E: EventStore, C: ContentStore>(
     content: &C,
     leased: LeasedExecutionAssignment,
     worker: &RegisteredWorkerSession,
-    session_timeout: WorkerSessionTimeoutMillis,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<AcceptedExecutionAssignment, AssignmentControlError> {
     ensure_claimant(&leased.lease.binding, worker)?;
-    ensure_live_worker(events, content, worker, session_timeout, observed_at)?;
+    ensure_live_worker(events, content, worker, observed_at)?;
     ensure_lease_live(&leased.lease, observed_at)?;
     let event = fact(
         ASSIGNMENT_ACCEPTED,
@@ -592,12 +571,11 @@ pub fn start_accepted_assignment<E: EventStore, C: ContentStore>(
     content: &C,
     accepted: AcceptedExecutionAssignment,
     worker: &RegisteredWorkerSession,
-    session_timeout: WorkerSessionTimeoutMillis,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<StartedExecutionAttempt, AssignmentControlError> {
     ensure_claimant(&accepted.lease.binding, worker)?;
-    ensure_live_worker(events, content, worker, session_timeout, observed_at)?;
+    ensure_live_worker(events, content, worker, observed_at)?;
     ensure_lease_live(&accepted.lease, observed_at)?;
     Ok(begin_execution_attempt(
         events,
@@ -624,7 +602,7 @@ pub fn renew_assignment_lease<E: EventStore, C: ContentStore>(
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<AssignmentLeaseRecord, AssignmentControlError> {
-    ensure_live_worker(events, content, worker, policy.session_timeout, observed_at)?;
+    ensure_live_worker(events, content, worker, observed_at)?;
     let stream = assignment_stream(attempt_id)?;
     let history = events.read_stream(&stream, None)?;
     let projection = project_assignment(&history, attempt_id)?;
@@ -1057,16 +1035,10 @@ fn ensure_live_worker<E: EventStore, C: ContentStore>(
     events: &E,
     content: &C,
     worker: &RegisteredWorkerSession,
-    session_timeout: WorkerSessionTimeoutMillis,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<(), AssignmentControlError> {
-    let WorkerSessionState::Live(current) = recover_worker_session(
-        events,
-        content,
-        worker.worker_id(),
-        session_timeout,
-        observed_at,
-    )?
+    let WorkerSessionState::Live(current) =
+        recover_worker_session(events, content, worker.worker_id(), observed_at)?
     else {
         return Err(AssignmentControlError::StaleWorkerSession);
     };
@@ -1317,7 +1289,6 @@ mod tests {
                 &mut self.content,
                 &mut authenticator,
                 &hello,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(0),
             )
@@ -1393,7 +1364,6 @@ mod tests {
             &fixture.content,
             leased,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(3),
         )
@@ -1403,7 +1373,6 @@ mod tests {
             &fixture.content,
             accepted,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
         )
@@ -1447,15 +1416,8 @@ mod tests {
             .content_id
     }
 
-    fn session_timeout() -> WorkerSessionTimeoutMillis {
-        WorkerSessionTimeoutMillis::new(100).expect("session timeout")
-    }
-
     fn lease_policy() -> AssignmentLeasePolicy {
-        AssignmentLeasePolicy::new(
-            session_timeout(),
-            AssignmentLeaseDurationMillis::new(10).expect("lease duration"),
-        )
+        AssignmentLeasePolicy::new(AssignmentLeaseDurationMillis::new(10).expect("lease duration"))
     }
 
     fn message_ids() -> AssignmentControlMessageIds {
@@ -1494,7 +1456,6 @@ mod tests {
             &fixture.events,
             &fixture.content,
             fixture.worker_id,
-            session_timeout(),
             ObservedAtUnixMillis::new(3),
         )
         .expect("worker") else {
@@ -1592,7 +1553,6 @@ mod tests {
             &fixture.content,
             leased,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(3),
         )
@@ -1602,7 +1562,6 @@ mod tests {
             &fixture.content,
             accepted,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
         )
@@ -1681,7 +1640,6 @@ mod tests {
             &fixture.content,
             leased,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(3),
         )
@@ -1691,7 +1649,6 @@ mod tests {
             &fixture.content,
             accepted,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
         )
@@ -1738,7 +1695,6 @@ mod tests {
             &fixture.content,
             leased,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(3),
         )
@@ -1756,7 +1712,6 @@ mod tests {
                 &fixture.content,
                 accepted,
                 &worker,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(5),
             ),

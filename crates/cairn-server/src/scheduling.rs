@@ -204,10 +204,7 @@ pub fn schedule_execution_contract_at(
         ids.assignment_id,
         ids.lease_id,
         AssignmentControlMessageIds::new(ids.offer_message_id, ids.start_message_id),
-        AssignmentLeasePolicy::new(
-            config.session_timeout_ms,
-            scheduler.assignment_lease_duration_ms,
-        ),
+        AssignmentLeasePolicy::new(scheduler.assignment_lease_duration_ms),
     );
     let placement = reserve_worker_placement(
         &mut events,
@@ -219,7 +216,6 @@ pub fn schedule_execution_contract_at(
         &authority,
         SchedulerPolicy::new(
             scheduler.policy_version,
-            config.session_timeout_ms,
             scheduler.reservation_claim_timeout_ms,
         ),
         ids.placement_id,
@@ -264,7 +260,6 @@ pub fn schedule_execution_contract_at(
                 &placement,
                 assignment_grant,
                 &authority,
-                config.session_timeout_ms,
                 &ids.commands.grant_assignment,
                 observed_at,
             )
@@ -432,9 +427,9 @@ mod tests {
         TargetEnvironmentName, WorkerAuthenticationSubject, WorkerAvailability,
         WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName, WorkerProfile,
         WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
-        WorkerResourceObservation, WorkerResourceSource, WorkerSessionTimeoutMillis,
-        WorkerSlotCount, authorize_execution_attempt, prepare_execution_job,
-        record_worker_heartbeat, register_worker,
+        WorkerResourceObservation, WorkerResourceSource, WorkerSlotCount,
+        authorize_execution_attempt, prepare_execution_job, record_worker_heartbeat,
+        register_worker,
     };
     use cairn_protocol::{ContentType, JobId, WorkerIncarnationId};
     use cairn_record::ContentStore;
@@ -565,13 +560,11 @@ mod tests {
                 credential.pool.clone(),
             ),
         )]);
-        let session_timeout = WorkerSessionTimeoutMillis::new(100).expect("session timeout");
         let registered = register_worker(
             &mut events,
             &mut content,
             &mut authenticator,
             &hello,
-            session_timeout,
             &CommandId::new(),
             ObservedAtUnixMillis::new(3),
         )
@@ -635,7 +628,6 @@ mod tests {
             LeaseId::new(),
             AssignmentControlMessageIds::new(ControlMessageId::new(), ControlMessageId::new()),
             AssignmentLeasePolicy::new(
-                session_timeout,
                 AssignmentLeaseDurationMillis::new(50).expect("lease duration"),
             ),
         );
@@ -649,7 +641,6 @@ mod tests {
             &authority,
             SchedulerPolicy::new(
                 SchedulerPolicyVersion::StableWorkerIdQuantitativeV1,
-                session_timeout,
                 ReservationClaimTimeoutMillis::new(20).expect("claim timeout"),
             ),
             PlacementId::new(),
@@ -684,7 +675,6 @@ mod tests {
             &placement,
             grant,
             &authority,
-            session_timeout,
             &CommandId::new(),
             ObservedAtUnixMillis::new(8),
         ) {

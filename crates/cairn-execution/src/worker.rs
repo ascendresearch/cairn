@@ -17,7 +17,6 @@ use crate::{
 };
 
 const WORKER_REGISTERED: &str = "execution.worker-registered";
-const WORKER_REPLACED: &str = "execution.worker-replaced-after-expiry";
 const WORKER_HEARTBEAT: &str = "execution.worker-heartbeat";
 const WORKER_RESOURCES_OBSERVED: &str = "execution.worker-resources-observed";
 const WORKER_DISCONNECTED: &str = "execution.worker-disconnected";
@@ -165,12 +164,6 @@ positive_worker_quantity!(
     ZeroSlotCount
 );
 positive_worker_quantity!(
-    /// Configurable worker-session liveness timeout.
-    WorkerSessionTimeoutMillis,
-    u64,
-    ZeroSessionTimeout
-);
-positive_worker_quantity!(
     /// Configurable duration of one assignment lease or renewal.
     AssignmentLeaseDurationMillis,
     u64,
@@ -204,9 +197,6 @@ pub enum WorkerValueError {
     /// A worker with no configured capacity cannot register as execution capacity.
     #[error("worker slot count must be greater than zero")]
     ZeroSlotCount,
-    /// Session timeout must be explicitly positive.
-    #[error("worker session timeout must be greater than zero")]
-    ZeroSessionTimeout,
     /// Assignment lease duration must be explicitly positive.
     #[error("assignment lease duration must be greater than zero")]
     ZeroLeaseDuration,
@@ -969,7 +959,6 @@ pub struct RegisteredWorkerSession {
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     availability: Option<WorkerAvailability>,
     availability_observed_at: Option<ObservedAtUnixMillis>,
-    last_liveness_at: ObservedAtUnixMillis,
     last_durable_event_at: ObservedAtUnixMillis,
     last_event_id: EventId,
     revision: StreamRevision,
@@ -1079,36 +1068,39 @@ impl RegisteredWorkerSession {
     pub const fn last_durable_event_at(&self) -> ObservedAtUnixMillis {
         self.last_durable_event_at
     }
-
-    /// Returns when the worker was last proved to be alive.
-    ///
-    /// The sole consumer is session expiry. It is not a progress token and not a freshness stamp
-    /// for any evidence the worker reported; binding a decision to it made an ordinary keepalive
-    /// invalidate that decision.
-    #[must_use]
-    pub const fn last_liveness_at(&self) -> ObservedAtUnixMillis {
-        self.last_liveness_at
-    }
 }
 
 /// Reconstructed worker state at an explicit observed time.
 pub enum WorkerSessionState {
-    /// The current incarnation is within its configured liveness window.
+    /// The current incarnation's session has not ended.
     Live(Box<RegisteredWorkerSession>),
     /// No worker facts exist.
     NotFound,
-    /// The current incarnation explicitly disconnected.
+    /// The current incarnation's session ended.
     Disconnected {
         /// Last registered incarnation.
         incarnation_id: WorkerIncarnationId,
+        /// How that session ended.
+        reason: SessionEndReason,
     },
-    /// The current incarnation exceeded the caller-supplied liveness timeout.
-    Expired {
-        /// Last registered incarnation.
-        incarnation_id: WorkerIncarnationId,
-        /// Exact first millisecond at which the session is no longer live.
-        expired_at: ObservedAtUnixMillis,
-    },
+}
+
+/// Why a worker session ended.
+///
+/// A session ends by an observation, never by arithmetic. The controller holding the socket is the
+/// only party that can see a worker stop answering, so it is the only party that records the fact,
+/// and every reader afterwards reads the record rather than recomputing a deadline from a
+/// timestamp it did not observe.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionEndReason {
+    /// The controller closed the session, because the worker disconnected or went silent past the
+    /// controller's idle bound.
+    Closed,
+    /// A controller found the session still open in the log when it started. No controller process
+    /// holds a socket for an incarnation registered before it began, so that session had already
+    /// ended and only the record of it was missing.
+    Lapsed,
 }
 
 /// Capability or availability reason that prevents placement.
@@ -1227,8 +1219,6 @@ struct RegistrationPayload {
     pool: WorkerPoolName,
     profile_id: ContentId<WorkerProfileArtifact>,
     resource_observation_id: ContentId<WorkerResourceObservationArtifact>,
-    replaced_incarnation_id: Option<WorkerIncarnationId>,
-    predecessor_expired_at: Option<ObservedAtUnixMillis>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1257,6 +1247,7 @@ struct HeartbeatPayload {
 struct DisconnectedPayload {
     worker_id: WorkerId,
     incarnation_id: WorkerIncarnationId,
+    reason: SessionEndReason,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1266,8 +1257,6 @@ struct PoolAssignedPayload {
     previous_pool: WorkerPoolName,
     pool: WorkerPoolName,
     authority_revision: EventId,
-    session_timeout: WorkerSessionTimeoutMillis,
-    predecessor_expired_at: Option<ObservedAtUnixMillis>,
 }
 
 struct WorkerProjection {
@@ -1282,9 +1271,8 @@ struct WorkerProjection {
     resource_admission_revision: Option<EventId>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     availability_observed_at: Option<ObservedAtUnixMillis>,
-    last_liveness_at: ObservedAtUnixMillis,
     last_durable_event_at: ObservedAtUnixMillis,
-    disconnected: bool,
+    ended: Option<SessionEndReason>,
     last_event_id: EventId,
     revision: StreamRevision,
 }
@@ -1303,7 +1291,6 @@ pub fn synchronize_worker_pool_assignment<E: EventStore>(
     events: &mut E,
     worker_id: WorkerId,
     assignment: &TrustedWorkerPoolAssignment,
-    session_timeout: WorkerSessionTimeoutMillis,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<(), WorkerControlError> {
@@ -1317,15 +1304,11 @@ pub fn synchronize_worker_pool_assignment<E: EventStore>(
         return Ok(());
     }
     ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
-    let predecessor_expired_at = if projection.disconnected {
-        None
-    } else {
-        let expired_at = expiry_at(projection.last_liveness_at, session_timeout)?;
-        if observed_at < expired_at {
-            return Err(WorkerControlError::WorkerPoolAssignmentRequiresInactiveSession);
-        }
-        Some(expired_at)
-    };
+    // A live session's pool is immutable, and "live" is now a recorded fact rather than a deadline
+    // this function recomputes from a timestamp it never observed.
+    if projection.ended.is_none() {
+        return Err(WorkerControlError::WorkerPoolAssignmentRequiresInactiveSession);
+    }
     let event = fact(
         WORKER_POOL_ASSIGNED,
         1,
@@ -1336,8 +1319,6 @@ pub fn synchronize_worker_pool_assignment<E: EventStore>(
             previous_pool: projection.pool,
             pool: assignment.pool.clone(),
             authority_revision: assignment.authority_revision,
-            session_timeout,
-            predecessor_expired_at,
         },
     )?;
     events.append(
@@ -1364,7 +1345,6 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
     content: &mut C,
     authenticator: &mut A,
     hello: &WorkerHello,
-    session_timeout: WorkerSessionTimeoutMillis,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<RegisteredWorkerSession, WorkerControlError> {
@@ -1387,16 +1367,8 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         .content_id;
     let stream = worker_stream(hello.worker_id)?;
     let history = events.read_stream(&stream, None)?;
-    let (expected, parent, schema, replaced_incarnation_id, predecessor_expired_at) = if history
-        .is_empty()
-    {
-        (
-            ExpectedRevision::NoStream,
-            None,
-            WORKER_REGISTERED,
-            None,
-            None,
-        )
+    let (expected, parent) = if history.is_empty() {
+        (ExpectedRevision::NoStream, None)
     } else {
         let projection = project_worker(&history, hello.worker_id)?;
         if projection.authentication_subject != *authenticated.subject() {
@@ -1406,9 +1378,12 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             return Err(WorkerControlError::WorkerPoolChanged);
         }
         ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
-        if !projection.disconnected
-            && observed_at.get() < expiry_at(projection.last_liveness_at, session_timeout)?.get()
-        {
+        // The predecessor is either still live, in which case this registration is either the same
+        // incarnation reconnecting or a duplicate, or its session has ended and this is an ordinary
+        // registration over it. There is no third case any more: a session that ended without the
+        // controller noticing does not exist, because a starting controller lapses every session it
+        // finds open before it serves anything.
+        if projection.ended.is_none() {
             if projection.incarnation_id != hello.incarnation_id {
                 return Err(WorkerControlError::DuplicateLiveWorker {
                     worker_id: hello.worker_id,
@@ -1423,26 +1398,13 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             }
             return materialize_session(content, hello.worker_id, projection);
         }
-        if projection.disconnected {
-            (
-                ExpectedRevision::Exact(projection.revision),
-                Some(projection.last_event_id),
-                WORKER_REGISTERED,
-                None,
-                None,
-            )
-        } else {
-            (
-                ExpectedRevision::Exact(projection.revision),
-                Some(projection.last_event_id),
-                WORKER_REPLACED,
-                Some(projection.incarnation_id),
-                Some(expiry_at(projection.last_liveness_at, session_timeout)?),
-            )
-        }
+        (
+            ExpectedRevision::Exact(projection.revision),
+            Some(projection.last_event_id),
+        )
     };
     let event = fact(
-        schema,
+        WORKER_REGISTERED,
         1,
         parent,
         observed_at,
@@ -1454,8 +1416,6 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
             pool: authenticated.pool().clone(),
             profile_id,
             resource_observation_id,
-            replaced_incarnation_id,
-            predecessor_expired_at,
         },
     )?;
     events.append(&stream, expected, command_id, &[event])?;
@@ -1509,21 +1469,21 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
     let known_availability_id = projection
         .as_ref()
         .map_or(session.availability_id, |value| value.availability_id);
-    // Idempotence asks whether this exact availability report was already recorded at this exact
-    // observation, so it compares when the availability was observed. Comparing the liveness stamp
-    // answered a different question that happened to have the same value.
-    let known_availability_observed_at = projection
-        .as_ref()
-        .map_or(session.availability_observed_at, |value| {
-            value.availability_observed_at
-        });
-    if known_availability_id == Some(availability_id)
-        && known_availability_observed_at == Some(observed_at)
-    {
-        return match projection {
-            Some(projection) => materialize_session(content, session.worker_id, projection),
-            None => Ok(session.clone()),
+    // A heartbeat that reports availability the log already holds is a keepalive. It says nothing
+    // the durable record does not already say, and appending it would grow every future projection
+    // of this worker for as long as the worker stays up. So it is not appended.
+    //
+    // The controller still learns from it, and that is where the knowledge belongs: the session it
+    // holds records that the report was seen now. Liveness is something the controller observes on
+    // a socket it owns, not something a later reader can derive from a timestamp in a log, and the
+    // durable stream now carries changes in availability rather than proof of attendance.
+    if known_availability_id == Some(availability_id) {
+        let mut current = match projection {
+            Some(projection) => materialize_session(content, session.worker_id, projection)?,
+            None => session.clone(),
         };
+        current.availability_observed_at = Some(observed_at);
+        return Ok(current);
     }
     let last_durable_event_at = projection
         .as_ref()
@@ -1575,7 +1535,6 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         availability_id: Some(availability_id),
         availability: Some(availability.clone()),
         availability_observed_at: Some(observed_at),
-        last_liveness_at: observed_at,
         last_durable_event_at: observed_at,
         last_event_id,
         revision,
@@ -1719,7 +1678,7 @@ pub fn disconnect_worker<E: EventStore>(
     {
         return Err(WorkerControlError::StaleIncarnation);
     }
-    if projection.disconnected {
+    if projection.ended.is_some() {
         return Ok(());
     }
     ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
@@ -1731,6 +1690,7 @@ pub fn disconnect_worker<E: EventStore>(
         &DisconnectedPayload {
             worker_id: session.worker_id,
             incarnation_id: session.incarnation_id,
+            reason: SessionEndReason::Closed,
         },
     )?;
     events.append(
@@ -1742,7 +1702,55 @@ pub fn disconnect_worker<E: EventStore>(
     Ok(())
 }
 
-/// Reconstructs a worker session and evaluates liveness using an explicit configured timeout.
+/// Records that a worker session found still open at controller startup had already ended.
+///
+/// A controller process holds no socket for any incarnation registered before it began, so every
+/// session left open in the log by a previous process is over; only the record of its end is
+/// missing. Writing that record before serving anything is what lets every later reader decide
+/// liveness by reading history instead of recomputing a deadline it never observed.
+///
+/// Returns whether a session was actually lapsed.
+///
+/// # Errors
+///
+/// Returns an error for contradictory history, regressing time, or storage failure.
+pub fn lapse_worker_session<E: EventStore>(
+    events: &mut E,
+    worker_id: WorkerId,
+    command_id: &CommandId,
+    observed_at: ObservedAtUnixMillis,
+) -> Result<bool, WorkerControlError> {
+    let stream = worker_stream(worker_id)?;
+    let history = events.read_stream(&stream, None)?;
+    if history.is_empty() {
+        return Ok(false);
+    }
+    let projection = project_worker(&history, worker_id)?;
+    if projection.ended.is_some() {
+        return Ok(false);
+    }
+    ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
+    let event = fact(
+        WORKER_DISCONNECTED,
+        1,
+        Some(projection.last_event_id),
+        observed_at,
+        &DisconnectedPayload {
+            worker_id,
+            incarnation_id: projection.incarnation_id,
+            reason: SessionEndReason::Lapsed,
+        },
+    )?;
+    events.append(
+        &stream,
+        ExpectedRevision::Exact(projection.revision),
+        command_id,
+        &[event],
+    )?;
+    Ok(true)
+}
+
+/// Reconstructs a worker session and reports whether its session has ended.
 ///
 /// # Errors
 ///
@@ -1751,7 +1759,6 @@ pub fn recover_worker_session<E: EventStore, C: ContentStore>(
     events: &E,
     content: &C,
     worker_id: WorkerId,
-    session_timeout: WorkerSessionTimeoutMillis,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<WorkerSessionState, WorkerControlError> {
     let history = events.read_stream(&worker_stream(worker_id)?, None)?;
@@ -1760,16 +1767,10 @@ pub fn recover_worker_session<E: EventStore, C: ContentStore>(
     }
     let projection = project_worker(&history, worker_id)?;
     ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
-    if projection.disconnected {
+    if let Some(reason) = projection.ended {
         return Ok(WorkerSessionState::Disconnected {
             incarnation_id: projection.incarnation_id,
-        });
-    }
-    let expired_at = expiry_at(projection.last_liveness_at, session_timeout)?;
-    if observed_at.get() >= expired_at.get() {
-        return Ok(WorkerSessionState::Expired {
-            incarnation_id: projection.incarnation_id,
-            expired_at,
+            reason,
         });
     }
     Ok(WorkerSessionState::Live(Box::new(materialize_session(
@@ -1981,7 +1982,6 @@ fn materialize_session<C: ContentStore>(
         availability_id: projection.availability_id,
         availability,
         availability_observed_at: projection.availability_observed_at,
-        last_liveness_at: projection.last_liveness_at,
         last_durable_event_at: projection.last_durable_event_at,
         last_event_id: projection.last_event_id,
         revision: projection.revision,
@@ -2005,7 +2005,7 @@ fn project_worker(
             return invalid_history("worker event causal chain is invalid");
         }
         match event.schema_name.as_str() {
-            WORKER_REGISTERED | WORKER_REPLACED => {
+            WORKER_REGISTERED => {
                 if event.schema_version.get() != 1 {
                     return invalid_history("worker registration schema version is unsupported");
                 }
@@ -2025,33 +2025,15 @@ fn project_worker(
                 {
                     return invalid_history("worker pool changed in history");
                 }
-                if event.schema_name.as_str() == WORKER_REGISTERED
-                    && projection.as_ref().is_some_and(|state| !state.disconnected)
+                // A registration may only follow a session that ended. The predecessor's end is a
+                // recorded event, so this is a check against the history rather than an expiry
+                // recomputed here from a timestamp and a policy the projector would have to be
+                // told about.
+                if projection
+                    .as_ref()
+                    .is_some_and(|state| state.ended.is_none())
                 {
                     return invalid_history("worker registered over an active incarnation");
-                }
-                if event.schema_name.as_str() == WORKER_REGISTERED
-                    && (payload.replaced_incarnation_id.is_some()
-                        || payload.predecessor_expired_at.is_some())
-                {
-                    return invalid_history(
-                        "ordinary worker registration carries replacement data",
-                    );
-                }
-                if event.schema_name.as_str() == WORKER_REPLACED
-                    && projection.as_ref().is_none_or(|state| {
-                        state.disconnected
-                            || payload.incarnation_id == state.incarnation_id
-                            || payload.replaced_incarnation_id != Some(state.incarnation_id)
-                            || payload.predecessor_expired_at.is_none_or(|expired_at| {
-                                event.observed_at_unix_ms < expired_at.get()
-                                    || expired_at <= state.last_liveness_at
-                            })
-                    })
-                {
-                    return invalid_history(
-                        "worker replacement has no verified expired predecessor",
-                    );
                 }
                 let pool_assignment_revision = projection
                     .as_ref()
@@ -2070,9 +2052,8 @@ fn project_worker(
                     resource_admission_revision: None,
                     availability_id: None,
                     availability_observed_at: None,
-                    last_liveness_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
                     last_durable_event_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
-                    disconnected: false,
+                    ended: None,
                     last_event_id: event.event_id,
                     revision: revision(event)?,
                 });
@@ -2087,18 +2068,10 @@ fn project_worker(
                         "worker pool assignment before registration".into(),
                     )
                 })?;
-                let inactive_is_valid = if state.disconnected {
-                    payload.predecessor_expired_at.is_none()
-                } else if let Some(expired_at) = payload.predecessor_expired_at {
-                    expired_at == expiry_at(state.last_liveness_at, payload.session_timeout)?
-                        && event.observed_at_unix_ms >= expired_at.get()
-                } else {
-                    false
-                };
                 if payload.worker_id != expected_worker_id
                     || payload.previous_pool != state.pool
                     || payload.pool == state.pool
-                    || !inactive_is_valid
+                    || state.ended.is_none()
                     || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history("worker pool assignment contradicts current session");
@@ -2120,7 +2093,7 @@ fn project_worker(
                 })?;
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
-                    || state.disconnected
+                    || state.ended.is_some()
                     || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history("worker heartbeat contradicts current incarnation");
@@ -2128,7 +2101,6 @@ fn project_worker(
                 state.availability_id = Some(payload.availability_id);
                 state.availability_observed_at =
                     Some(ObservedAtUnixMillis::new(event.observed_at_unix_ms));
-                state.last_liveness_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_durable_event_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
@@ -2145,7 +2117,7 @@ fn project_worker(
                 })?;
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
-                    || state.disconnected
+                    || state.ended.is_some()
                     || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history(
@@ -2169,13 +2141,12 @@ fn project_worker(
                 })?;
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
-                    || state.disconnected
+                    || state.ended.is_some()
                     || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history("worker disconnect contradicts current incarnation");
                 }
-                state.disconnected = true;
-                state.last_liveness_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.ended = Some(payload.reason);
                 state.last_durable_event_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
@@ -2212,7 +2183,7 @@ fn ensure_current(
         || projection.profile_id != session.profile_id
         || projection.resource_observation_id != session.resource_observation_id
         || projection.resource_observation_revision != session.resource_observation_revision
-        || projection.disconnected
+        || projection.ended.is_some()
     {
         return Err(WorkerControlError::StaleIncarnation);
     }
@@ -2228,18 +2199,6 @@ fn ensure_nonregressing(
     } else {
         Ok(())
     }
-}
-
-pub(crate) fn expiry_at(
-    base: ObservedAtUnixMillis,
-    duration: WorkerSessionTimeoutMillis,
-) -> Result<ObservedAtUnixMillis, WorkerControlError> {
-    let duration = i64::try_from(duration.get())
-        .map_err(|_| WorkerControlError::InvalidHistory("session timeout exceeds i64".into()))?;
-    base.get()
-        .checked_add(duration)
-        .map(ObservedAtUnixMillis::new)
-        .ok_or_else(|| WorkerControlError::InvalidHistory("session expiry overflowed".into()))
 }
 
 fn worker_stream(worker_id: WorkerId) -> Result<StreamId, WorkerControlError> {
@@ -2507,7 +2466,6 @@ mod tests {
             &mut fixture.content,
             &mut auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -2585,7 +2543,6 @@ mod tests {
             &fixture.events,
             &fixture.content,
             worker_id,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             ObservedAtUnixMillis::new(50),
         )
         .expect("recover") else {
@@ -2662,7 +2619,6 @@ mod tests {
             &mut fixture.content,
             &mut auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -2827,7 +2783,6 @@ mod tests {
             &mut fixture.content,
             &mut auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -2872,7 +2827,6 @@ mod tests {
             &mut fixture.content,
             &mut auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -2890,7 +2844,10 @@ mod tests {
         .expect("refresh");
         assert_eq!(refreshed.profile_id(), profile_id);
         assert_ne!(refreshed.resource_observation_id(), startup_id);
-        assert_eq!(refreshed.last_liveness_at(), ObservedAtUnixMillis::new(0));
+        // A resource refresh is not an availability report, so it must not look like one. The
+        // assertion used to be that it did not advance the liveness stamp; the stamp is gone and
+        // the fact it protected is not.
+        assert_eq!(refreshed.availability_observed_at(), None);
 
         let controller_observation = WorkerResourceObservation::new(
             WorkerResourceSource::ControllerVerified,
@@ -2982,7 +2939,6 @@ mod tests {
             &fixture.events,
             &fixture.content,
             worker_id,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             ObservedAtUnixMillis::new(13),
         )
         .expect("recover") else {
@@ -3008,7 +2964,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_live_identity_is_rejected_and_expired_incarnation_can_be_replaced() {
+    fn a_live_incarnation_blocks_registration_until_its_session_is_recorded_as_ended() {
         let mut fixture = Fixture::new();
         let worker_id = WorkerId::new();
         let first_incarnation = WorkerIncarnationId::new();
@@ -3019,7 +2975,6 @@ mod tests {
             &mut fixture.content,
             &mut auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -3032,23 +2987,67 @@ mod tests {
                 &mut fixture.content,
                 &mut auth,
                 &replacement,
-                WorkerSessionTimeoutMillis::new(100).expect("timeout"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(99),
             ),
             Err(WorkerControlError::DuplicateLiveWorker { live_incarnation, .. })
                 if live_incarnation == first_incarnation
         ));
+
+        // Time alone no longer clears the way. Waiting past any duration leaves the first session
+        // exactly as live as it was, because nothing observed it end. Only a recorded end does,
+        // and a controller that finds a session open at startup is what records one.
+        assert!(matches!(
+            register_worker(
+                &mut fixture.events,
+                &mut fixture.content,
+                &mut auth,
+                &replacement,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(10_000),
+            ),
+            Err(WorkerControlError::DuplicateLiveWorker { .. })
+        ));
+        assert!(
+            lapse_worker_session(
+                &mut fixture.events,
+                worker_id,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(10_001),
+            )
+            .expect("lapse"),
+            "an open session must be lapsed exactly once"
+        );
+        assert!(
+            !lapse_worker_session(
+                &mut fixture.events,
+                worker_id,
+                &CommandId::new(),
+                ObservedAtUnixMillis::new(10_002),
+            )
+            .expect("second lapse"),
+            "a session already recorded as ended must not be ended again"
+        );
+        let WorkerSessionState::Disconnected { reason, .. } = recover_worker_session(
+            &fixture.events,
+            &fixture.content,
+            worker_id,
+            ObservedAtUnixMillis::new(10_003),
+        )
+        .expect("recover") else {
+            panic!("a lapsed session must not read as live");
+        };
+        assert_eq!(reason, SessionEndReason::Lapsed);
+
         let replacement_session = register_worker(
             &mut fixture.events,
             &mut fixture.content,
             &mut auth,
             &replacement,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
-            ObservedAtUnixMillis::new(100),
+            ObservedAtUnixMillis::new(10_004),
         )
-        .expect("replace expired");
+        .expect("register over the ended session");
         assert_ne!(replacement_session.incarnation_id(), first.incarnation_id());
         let availability = WorkerAvailability::new(WorkerHealth::Ready, false, 1, Vec::new())
             .expect("availability");
@@ -3059,7 +3058,7 @@ mod tests {
                 &first,
                 &availability,
                 &CommandId::new(),
-                ObservedAtUnixMillis::new(101),
+                ObservedAtUnixMillis::new(10_005),
             ),
             Err(WorkerControlError::StaleIncarnation)
         ));
@@ -3080,7 +3079,6 @@ mod tests {
             &mut fixture.content,
             &mut first_auth,
             &first_hello,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -3095,7 +3093,6 @@ mod tests {
                 &mut fixture.content,
                 &mut rotated_auth,
                 &first_hello,
-                WorkerSessionTimeoutMillis::new(100).expect("timeout"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(1),
             ),
@@ -3114,7 +3111,6 @@ mod tests {
             &mut fixture.content,
             &mut rotated_auth,
             &WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64")),
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(3),
         )
@@ -3127,7 +3123,6 @@ mod tests {
             &fixture.events,
             &fixture.content,
             worker_id,
-            WorkerSessionTimeoutMillis::new(100).expect("timeout"),
             ObservedAtUnixMillis::new(4),
         )
         .expect("recover rotated session") else {
@@ -3151,7 +3146,6 @@ mod tests {
             &mut fixture.content,
             &mut first_auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -3165,7 +3159,6 @@ mod tests {
                 &mut fixture.content,
                 &mut changed_auth,
                 &replacement,
-                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(10),
             ),
@@ -3184,7 +3177,6 @@ mod tests {
             &mut fixture.content,
             &mut first_auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -3203,7 +3195,6 @@ mod tests {
                 &mut fixture.content,
                 &mut moved,
                 &WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"),),
-                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(10),
             ),
@@ -3222,7 +3213,6 @@ mod tests {
             &mut fixture.content,
             &mut first_auth,
             &hello,
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(0),
         )
@@ -3237,7 +3227,6 @@ mod tests {
                 &mut fixture.events,
                 worker_id,
                 &assignment,
-                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(9),
             ),
@@ -3256,7 +3245,6 @@ mod tests {
             &mut fixture.events,
             worker_id,
             &assignment,
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             &synchronize_command,
             ObservedAtUnixMillis::new(11),
         )
@@ -3265,7 +3253,6 @@ mod tests {
             &mut fixture.events,
             worker_id,
             &assignment,
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             &synchronize_command,
             ObservedAtUnixMillis::new(12),
         )
@@ -3284,7 +3271,6 @@ mod tests {
             &mut fixture.content,
             &mut moved_auth,
             &WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64")),
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             &CommandId::new(),
             ObservedAtUnixMillis::new(13),
         )
@@ -3297,7 +3283,6 @@ mod tests {
             &fixture.events,
             &fixture.content,
             worker_id,
-            WorkerSessionTimeoutMillis::new(10).expect("timeout"),
             ObservedAtUnixMillis::new(14),
         )
         .expect("recover") else {
@@ -3340,7 +3325,6 @@ mod tests {
                 &mut fixture.content,
                 &mut auth,
                 &WorkerHello::new(worker_id, WorkerIncarnationId::new(), forged),
-                WorkerSessionTimeoutMillis::new(10).expect("timeout"),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(0),
             ),

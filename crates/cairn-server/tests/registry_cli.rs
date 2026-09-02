@@ -22,7 +22,6 @@ fn registry_query_cli_emits_strict_json_and_missing_entries_fail() -> Result<(),
             "protocol_version": 1,
             "schema_version": 1,
             "scheduler": null,
-            "session_timeout_ms": 10000,
             "storage": {
                 "content_database": "state/content.sqlite3",
                 "content_directory": "state/content",

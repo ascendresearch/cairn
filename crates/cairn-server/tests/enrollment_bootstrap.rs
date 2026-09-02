@@ -5,11 +5,18 @@ use std::{
 
 use cairn_control_transport::{ClientTlsFiles, EnrollmentSecret, ServerTlsFiles, TransportPolicy};
 use cairn_execution::{
-    ExecutionBackend, ExecutionPlatformRequirement, WorkerAvailability, WorkerBinaryIdentity,
-    WorkerHealth, WorkerPoolName, WorkerProtocolVersion, WorkerSessionState,
-    WorkerSessionTimeoutMillis, WorkerSlotCount, recover_worker_session,
+    AcceleratorDiscoveryCompleteness, ArchitectureName, AuthenticatedWorkerIdentity,
+    ExecutionBackend, ExecutionPlatform, ExecutionPlatformRequirement, LogicalCpuCount,
+    MemoryByteCount, OperatingSystemName, RecordedWorkerAuthenticator, ResourceProbeVersion,
+    ScratchByteCount, SessionEndReason, TargetEnvironmentName, WorkerAuthenticationSubject,
+    WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName,
+    WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
+    WorkerResourceObservation, WorkerResourceSource, WorkerSessionState, WorkerSlotCount,
+    recover_worker_session, register_worker,
 };
-use cairn_protocol::{AggregateId, AggregateKind, CommandId, ObservedAtUnixMillis};
+use cairn_protocol::{
+    AggregateId, AggregateKind, CommandId, ObservedAtUnixMillis, WorkerIncarnationId,
+};
 use cairn_record::{EventStore, StreamId};
 use cairn_server::{
     EnrollmentServiceConfig, ServerConfig, ServerStorageConfig, assign_enrolled_worker_pool,
@@ -133,7 +140,6 @@ async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
         &events,
         &content,
         receipt.worker_id,
-        WorkerSessionTimeoutMillis::new(10_000)?,
         ObservedAtUnixMillis::new(unix_millis()?),
     )?
     else {
@@ -340,7 +346,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         &events,
         &content,
         identity.worker_id,
-        WorkerSessionTimeoutMillis::new(10_000)?,
         ObservedAtUnixMillis::new(unix_millis()?),
     )?;
     let WorkerSessionState::Live(session) = session else {
@@ -356,7 +361,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         &events,
         &content,
         reassigned_identity.worker_id,
-        WorkerSessionTimeoutMillis::new(10_000)?,
         ObservedAtUnixMillis::new(unix_millis()?),
     )?
     else {
@@ -388,7 +392,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         &events,
         &content,
         reassigned_identity.worker_id,
-        WorkerSessionTimeoutMillis::new(10_000)?,
         ObservedAtUnixMillis::new(unix_millis()?),
     )?
     else {
@@ -456,7 +459,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         &events,
         &content,
         identity.worker_id,
-        WorkerSessionTimeoutMillis::new(10_000)?,
         ObservedAtUnixMillis::new(unix_millis()?),
     )?
     else {
@@ -525,7 +527,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
             &events,
             &content,
             identity.worker_id,
-            WorkerSessionTimeoutMillis::new(10_000)?,
             ObservedAtUnixMillis::new(unix_millis()?),
         )?,
         WorkerSessionState::Disconnected { .. }
@@ -536,7 +537,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
             &events,
             &content,
             disabled_identity.worker_id,
-            WorkerSessionTimeoutMillis::new(10_000)?,
             ObservedAtUnixMillis::new(unix_millis()?),
         )?,
         WorkerSessionState::NotFound
@@ -569,6 +569,180 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     server_b.abort();
     server_a.abort();
     Ok(())
+}
+
+// A controller that dies without unwinding never records the end of the sessions it was holding,
+// so the durable log still calls them live. Nothing in the log can distinguish that from a worker
+// that is genuinely still there, and the next controller must not inherit the ambiguity: it holds
+// no socket for any of them, so it closes the book on all of them before it serves anything.
+// Without that, an enrolled worker could never register again after a crash.
+//
+// The crash is staged by writing the open session directly rather than by aborting a server task.
+// The listeners run on detached tasks, so aborting the task returned by `run` leaves the session
+// loop alive, and it then records a perfectly ordinary end when the worker goes away, which is the
+// one thing this test must not observe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_starting_controller_records_the_end_of_sessions_left_open_by_a_previous_process()
+-> Result<(), Box<dyn Error + Send + Sync>> {
+    let _integration_guard = ENROLLMENT_INTEGRATION_LOCK.lock().await;
+    let directory = tempfile::tempdir()?;
+    let pki = test_pki()?;
+    let ca = directory.path().join("ca.pem");
+    let ca_key = directory.path().join("ca-key.pem");
+    let server_certificate = directory.path().join("server.pem");
+    let server_key = directory.path().join("server-key.pem");
+    fs::write(&ca, &pki.ca_certificate)?;
+    fs::write(&ca_key, &pki.ca_private_key)?;
+    fs::write(&server_certificate, &pki.server_certificate)?;
+    fs::write(&server_key, &pki.server_private_key)?;
+    let event_database = directory.path().join("controller-events.sqlite3");
+    let content_database = directory.path().join("controller-content.sqlite3");
+    let content_directory = directory.path().join("controller-content");
+
+    let config = server_config(
+        free_address()?,
+        free_address()?,
+        &ca,
+        &ca_key,
+        &server_certificate,
+        &server_key,
+        &event_database,
+        &content_database,
+        &content_directory,
+    )?;
+    let bundle = create_enrollment_bundle(
+        &config,
+        WorkerPoolName::new("crash-lab")?,
+        NonZeroU64::new(60_000).expect("TTL"),
+    )?;
+    let enrolling = tokio::spawn(cairn_server::run(config.clone()));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let state = directory.path().join("worker-state");
+    let identity = Box::pin(enroll(bundle, &state)).await?;
+    enrolling.abort();
+
+    let orphaned_incarnation = stage_open_worker_session(
+        &event_database,
+        &content_database,
+        &content_directory,
+        identity.worker_id,
+        identity.credential_id,
+    )?;
+    {
+        let events = SqliteEventStore::open(&event_database)?;
+        let content = SqliteContentStore::open(&content_database, &content_directory)?;
+        assert!(
+            matches!(
+                recover_worker_session(
+                    &events,
+                    &content,
+                    identity.worker_id,
+                    ObservedAtUnixMillis::new(unix_millis()?),
+                )?,
+                WorkerSessionState::Live(_)
+            ),
+            "the staged session must read as live, or this test proves nothing"
+        );
+    }
+
+    let restarted = tokio::spawn(cairn_server::run(server_config(
+        free_address()?,
+        free_address()?,
+        &ca,
+        &ca_key,
+        &server_certificate,
+        &server_key,
+        &event_database,
+        &content_database,
+        &content_directory,
+    )?));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let events = SqliteEventStore::open(&event_database)?;
+    let content = SqliteContentStore::open(&content_database, &content_directory)?;
+    let WorkerSessionState::Disconnected {
+        incarnation_id,
+        reason,
+    } = recover_worker_session(
+        &events,
+        &content,
+        identity.worker_id,
+        ObservedAtUnixMillis::new(unix_millis()?),
+    )?
+    else {
+        return Err(
+            "a controller that started over an open session left it open, so the worker holding \
+             that identity could never register again"
+                .into(),
+        );
+    };
+    assert_eq!(incarnation_id, orphaned_incarnation);
+    assert_eq!(reason, SessionEndReason::Lapsed);
+
+    restarted.abort();
+    Ok(())
+}
+
+/// Writes one worker session that is opened and never closed, exactly as a controller that died
+/// mid-flight would leave it.
+fn stage_open_worker_session(
+    event_database: &Path,
+    content_database: &Path,
+    content_directory: &Path,
+    worker_id: cairn_protocol::WorkerId,
+    credential_id: cairn_protocol::CredentialId,
+) -> Result<WorkerIncarnationId, Box<dyn Error + Send + Sync>> {
+    let mut events = SqliteEventStore::open(event_database)?;
+    let mut content = SqliteContentStore::open(content_database, content_directory)?;
+    let profile = WorkerProfile::new(
+        WorkerProtocolVersion::new(1)?,
+        WorkerBinaryIdentity::new("sha256:orphaned-session-fixture")?,
+        WorkerResourceInventory::new(
+            WorkerResourceClaim::new(
+                ExecutionPlatform::new(
+                    ArchitectureName::new("x86_64")?,
+                    OperatingSystemName::new("linux")?,
+                    TargetEnvironmentName::new("gnu")?,
+                ),
+                WorkerResourceSource::BuiltinProbe,
+            ),
+            vec![WorkerResourceClaim::new(
+                ExecutionBackend::new("transport-only")?,
+                WorkerResourceSource::OperatorDeclared,
+            )],
+            Vec::new(),
+            WorkerResourceObservation::new(
+                WorkerResourceSource::BuiltinProbe,
+                ResourceProbeVersion::new("fixture-probe-v1")?,
+                ObservedAtUnixMillis::new(unix_millis()?),
+                None,
+                LogicalCpuCount::new(8)?,
+                MemoryByteCount::new(16 * 1024 * 1024 * 1024)?,
+                ScratchByteCount::new(64 * 1024 * 1024 * 1024)?,
+                AcceleratorDiscoveryCompleteness::Complete,
+                Vec::new(),
+            )?,
+            WorkerSlotCount::new(1)?,
+        )?,
+    )?;
+    let hello = WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile);
+    let mut authenticator = RecordedWorkerAuthenticator::new([(
+        worker_id,
+        AuthenticatedWorkerIdentity::new(
+            WorkerAuthenticationSubject::new(worker_id.to_string())?,
+            credential_id,
+            WorkerPoolName::new("crash-lab")?,
+        ),
+    )]);
+    let session = register_worker(
+        &mut events,
+        &mut content,
+        &mut authenticator,
+        &hello,
+        &CommandId::new(),
+        ObservedAtUnixMillis::new(unix_millis()?),
+    )?;
+    Ok(session.incarnation_id())
 }
 
 #[expect(
@@ -624,7 +798,6 @@ fn server_config(
             content_directory: content_directory.to_path_buf(),
         },
         protocol_version: WorkerProtocolVersion::new(1)?,
-        session_timeout_ms: WorkerSessionTimeoutMillis::new(10_000)?,
         scheduler: None,
         handshake_timeout_ms: NonZeroU64::new(2_000),
         idle_timeout_ms: None,

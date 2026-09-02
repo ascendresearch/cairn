@@ -41,13 +41,13 @@ use cairn_execution::{
     ExecutionAssignmentState, ExecutionCompletion, InboundControlSession,
     RecordedWorkerAuthenticator, RegisteredWorkerSession, SchedulerPolicyVersion,
     TrustedWorkerPoolAssignment, WorkerAuthenticationSubject, WorkerControlMessage, WorkerPoolName,
-    WorkerProtocolVersion, WorkerResultReconciliation, WorkerSessionTimeoutMillis,
-    accept_worker_assignment, acknowledge_controller_messages, controller_outbox_position,
+    WorkerProtocolVersion, WorkerResultReconciliation, accept_worker_assignment,
+    acknowledge_controller_messages, controller_outbox_position,
     deliver_controller_acknowledgement, deliver_controller_messages, disconnect_worker,
-    enqueue_controller_message, execution_start_message, read_assignment_material_chunk,
-    reconcile_worker_result, record_worker_heartbeat, record_worker_resource_observation,
-    recover_execution_assignment, register_worker, start_accepted_assignment,
-    synchronize_worker_pool_assignment,
+    enqueue_controller_message, execution_start_message, lapse_worker_session,
+    read_assignment_material_chunk, reconcile_worker_result, record_worker_heartbeat,
+    record_worker_resource_observation, recover_execution_assignment, register_worker,
+    start_accepted_assignment, synchronize_worker_pool_assignment,
 };
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
@@ -77,7 +77,6 @@ pub struct ServerConfig {
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub storage: ServerStorageConfig,
     pub protocol_version: WorkerProtocolVersion,
-    pub session_timeout_ms: WorkerSessionTimeoutMillis,
     /// Optional generic scheduler service. `null` disables new placement while worker control and
     /// reconciliation remain available.
     #[serde(default)]
@@ -194,7 +193,7 @@ fn on_store<T>(work: impl FnOnce() -> T) -> T {
 
 impl ControllerState {
     fn open(config: &ServerConfig) -> Result<Self, ServerError> {
-        Ok(Self {
+        let state = Self {
             events: SqliteEventStore::open(&config.storage.event_database)
                 .map_err(|error| ServerError::Session(error.to_string()))?,
             content: SqliteContentStore::open(
@@ -202,7 +201,56 @@ impl ControllerState {
                 &config.storage.content_directory,
             )
             .map_err(|error| ServerError::Session(error.to_string()))?,
-        })
+        };
+        Ok(state)
+    }
+
+    /// Closes the book on every session a previous controller process left open.
+    ///
+    /// This process holds no socket for any incarnation registered before it started, so those
+    /// sessions are over whatever the log says; what is missing is the record that they ended.
+    /// Writing it here, before any listener accepts a connection, is what lets every reader
+    /// afterwards decide liveness by reading history rather than by recomputing a deadline it never
+    /// observed. Without it a worker could never register again after a crash, because its previous
+    /// incarnation would read as live forever.
+    ///
+    /// The work is bounded by the number of enrolled workers, not by elapsed time, and a clean
+    /// shutdown leaves nothing to do because each session loop records its own end.
+    fn lapse_sessions_left_open_by_a_previous_process(&mut self) -> Result<(), ServerError> {
+        let observed_at = observed_now()?;
+        let registry = EnrollmentRegistry::load(&self.events, observed_at)
+            .map_err(|error| ServerError::Session(error.to_string()))?;
+        let worker_ids: Vec<WorkerId> = registry
+            .enrolled()
+            .values()
+            .map(|worker| worker.worker_id)
+            .collect();
+        let mut lapsed = 0_usize;
+        for worker_id in worker_ids {
+            if lapse_worker_session(
+                &mut self.events,
+                worker_id,
+                &command("lapse-open-session"),
+                observed_at,
+            )
+            .map_err(|error| ServerError::Session(error.to_string()))?
+            {
+                lapsed += 1;
+                tracing::info!(
+                    target: "cairn.server.startup",
+                    event = "worker_session_lapsed",
+                    worker_id = %worker_id,
+                    "a session left open by a previous controller process was recorded as ended"
+                );
+            }
+        }
+        tracing::info!(
+            target: "cairn.server.startup",
+            event = "open_sessions_lapsed",
+            lapsed,
+            "startup finished closing sessions left open by a previous process"
+        );
+        Ok(())
     }
 }
 
@@ -735,6 +783,10 @@ pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     EnrollmentRegistry::load(&events, observed_now()?)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     drop(events);
+    // Exactly once, and before anything can accept a connection. `ControllerState::open` runs per
+    // connection, so putting this there would both miss startup entirely and, worse, close the
+    // sessions of every other worker each time one connected.
+    ControllerState::open(&config)?.lapse_sessions_left_open_by_a_previous_process()?;
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(|error| ServerError::Startup(error.to_string()))?;
@@ -858,6 +910,12 @@ impl ServerConfig {
     /// deployment can currently express combinations whose behaviour contradicts the name of the
     /// setting that produced it.
     ///
+    /// A relation that used to live here is gone rather than relaxed. `idle_timeout_ms` had to sit
+    /// below `session_timeout_ms` because two clocks governed the same thing: the transport closed
+    /// a silent connection, and separately an arithmetic deadline declared the session dead. There
+    /// is now one bound. The idle timeout closes the connection and the controller records that the
+    /// session ended, so nothing else has to agree with it.
+    ///
     /// One relation deliberately stays outside this check. A reservation must be claimable inside
     /// its window, and the events that can disturb a placement decision arrive at the worker's
     /// heartbeat interval, which lives in the worker's own configuration on another host. The
@@ -865,16 +923,6 @@ impl ServerConfig {
     /// below the deployment's heartbeat interval by the operator rather than by this function.
     /// The deployment observed on 2026-09-02 set both to 30 s.
     fn validate_clock_relations(&self) -> Result<(), ServerError> {
-        // A transport that outlives the durable session holds a connection open past the point
-        // where the incarnation is considered dead.
-        if self
-            .idle_timeout_ms
-            .is_some_and(|idle| idle.get() >= self.session_timeout_ms.get())
-        {
-            return Err(ServerError::Configuration(
-                "idle_timeout_ms must be below session_timeout_ms so a dead connection closes before its session expires".into(),
-            ));
-        }
         // The session loop polls at the minimum of the two, so a larger outbox interval is not the
         // interval the deployment asked for.
         if self
@@ -1244,7 +1292,6 @@ async fn handle_connection(
                 enrolled_worker.pool.clone(),
                 enrolled_worker.pool_assignment_revision,
             ),
-            config.session_timeout_ms,
             &command("sync-worker-pool"),
             now,
         )
@@ -1262,7 +1309,6 @@ async fn handle_connection(
             content,
             &mut authenticator,
             &hello,
-            config.session_timeout_ms,
             &command("register"),
             now,
         )
@@ -1479,7 +1525,7 @@ async fn controller_session_loop(
                 inbound
                     .accept(&frame, *highest_sent)
                     .map_err(|error| ServerError::Session(error.to_string()))?;
-                on_store(|| process_worker_frame(state, config, connection_id, session, &frame))?;
+                on_store(|| process_worker_frame(state, connection_id, session, &frame))?;
                 flush_controller(
                     socket,
                     state,
@@ -1551,7 +1597,6 @@ fn session_credential_is_authorized(
 )]
 fn process_worker_frame(
     state: &mut ControllerState,
-    config: &ServerConfig,
     connection_id: &ControlConnectionId,
     session: &RegisteredWorkerSession,
     frame: &ControlFrame<WorkerControlMessage>,
@@ -1602,16 +1647,15 @@ fn process_worker_frame(
                         lease,
                         session,
                         message,
-                        config.session_timeout_ms,
                         &command("accept"),
                         now,
                     )
                     .map_err(|error| ServerError::Session(error.to_string()))?;
-                    start_and_enqueue_assignment(events, content, accepted, session, config, now)?;
+                    start_and_enqueue_assignment(events, content, accepted, session, now)?;
                 }
                 ExecutionAssignmentState::Accepted(accepted) => {
                     ensure_binding(accepted.lease().binding(), binding)?;
-                    start_and_enqueue_assignment(events, content, accepted, session, config, now)?;
+                    start_and_enqueue_assignment(events, content, accepted, session, now)?;
                 }
                 ExecutionAssignmentState::Running { lease } => {
                     ensure_binding(lease.binding(), binding)?;
@@ -1668,7 +1712,6 @@ fn start_and_enqueue_assignment(
     content: &SqliteContentStore,
     accepted: AcceptedExecutionAssignment,
     session: &RegisteredWorkerSession,
-    config: &ServerConfig,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<(), ServerError> {
     let start = execution_start_message(accepted.lease());
@@ -1677,7 +1720,6 @@ fn start_and_enqueue_assignment(
         content,
         accepted,
         session,
-        config.session_timeout_ms,
         &command("start-attempt"),
         observed_at,
     )
@@ -1914,14 +1956,6 @@ mod tests {
         config
             .validate_clock_relations()
             .expect("the documented configuration holds every clock relation");
-
-        // A transport that outlives its durable session holds a connection open past the point
-        // where the incarnation is considered dead.
-        let mut inverted = documented.clone();
-        inverted["idle_timeout_ms"] = inverted["session_timeout_ms"].clone();
-        let inverted: ServerConfig =
-            serde_json::from_value(inverted).expect("parses before it is validated");
-        assert!(inverted.validate_clock_relations().is_err());
 
         // An outbox interval above the authority interval is silently overridden, because the
         // session loop polls at the minimum of the two.

@@ -21,8 +21,8 @@ use crate::{
     LogicalCpuCount, MemoryByteCount, QuantitativeResourceRequest, RegisteredWorkerSession,
     ReservationClaimTimeoutMillis, ScratchByteCount, WorkerAvailabilityArtifact,
     WorkerControlError, WorkerMatchFailure, WorkerProfileArtifact, WorkerResourceObservation,
-    WorkerResourceObservationArtifact, WorkerSessionState, WorkerSessionTimeoutMillis,
-    grant_assignment_lease, match_worker_at, recover_execution_assignment, recover_worker_session,
+    WorkerResourceObservationArtifact, WorkerSessionState, grant_assignment_lease, match_worker_at,
+    recover_execution_assignment, recover_worker_session,
 };
 
 const PLACEMENT_RECORDED: &str = "execution.placement-recorded";
@@ -47,7 +47,6 @@ pub enum SchedulerPolicyVersion {
 #[serde(deny_unknown_fields)]
 pub struct SchedulerPolicy {
     version: SchedulerPolicyVersion,
-    session_timeout: WorkerSessionTimeoutMillis,
     reservation_claim_timeout: ReservationClaimTimeoutMillis,
 }
 
@@ -56,12 +55,10 @@ impl SchedulerPolicy {
     #[must_use]
     pub const fn new(
         version: SchedulerPolicyVersion,
-        session_timeout: WorkerSessionTimeoutMillis,
         reservation_claim_timeout: ReservationClaimTimeoutMillis,
     ) -> Self {
         Self {
             version,
-            session_timeout,
             reservation_claim_timeout,
         }
     }
@@ -70,12 +67,6 @@ impl SchedulerPolicy {
     #[must_use]
     pub const fn version(self) -> SchedulerPolicyVersion {
         self.version
-    }
-
-    /// Returns the worker-session liveness timeout used for the frozen snapshot.
-    #[must_use]
-    pub const fn session_timeout(self) -> WorkerSessionTimeoutMillis {
-        self.session_timeout
     }
 
     /// Returns the deadline for safely identifying an unclaimed orphan reservation.
@@ -152,10 +143,8 @@ impl PlacementAuthorityError {
 pub enum PlacementCandidateRejection {
     /// No registration facts exist for the requested stable worker.
     NotFound,
-    /// The last registered incarnation disconnected explicitly.
+    /// The last registered incarnation's session ended.
     Disconnected,
-    /// The last registered incarnation exceeded the configured liveness boundary.
-    Expired,
     /// Controller credential/worker authority is inactive.
     AuthorityInactive,
     /// Static or dynamic worker properties do not match the frozen contract.
@@ -567,18 +556,18 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
     let mut sessions = BTreeMap::new();
     let mut entries = Vec::with_capacity(candidates.len());
     for worker_id in candidates {
-        let state = recover_worker_session(
-            events,
-            content,
-            worker_id,
-            policy.session_timeout,
-            observed_at,
-        )?;
+        let state = recover_worker_session(events, content, worker_id, observed_at)?;
         let entry = match state {
             WorkerSessionState::NotFound => {
                 rejected(worker_id, PlacementCandidateRejection::NotFound)
             }
-            WorkerSessionState::Disconnected { incarnation_id } => PlacementCandidateSnapshot {
+            // A session that ended is a session that ended. There is no separate "expired"
+            // outcome any more, because expiry was arithmetic over a timestamp rather than an
+            // observation anyone made.
+            WorkerSessionState::Disconnected {
+                incarnation_id,
+                reason: _,
+            } => PlacementCandidateSnapshot {
                 worker_id,
                 incarnation_id: Some(incarnation_id),
                 credential_id: None,
@@ -591,21 +580,6 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 authority_revision: None,
                 disposition: CandidateDisposition::Rejected {
                     reason: PlacementCandidateRejection::Disconnected,
-                },
-            },
-            WorkerSessionState::Expired { incarnation_id, .. } => PlacementCandidateSnapshot {
-                worker_id,
-                incarnation_id: Some(incarnation_id),
-                credential_id: None,
-                profile_id: None,
-                resource_observation_id: None,
-                resource_observation_revision: None,
-                resource_admission_revision: None,
-                availability_id: None,
-                durable_event_at: None,
-                authority_revision: None,
-                disposition: CandidateDisposition::Rejected {
-                    reason: PlacementCandidateRejection::Expired,
                 },
             },
             WorkerSessionState::Live(session) => evaluate_live_candidate(
@@ -738,7 +712,6 @@ pub fn grant_reserved_assignment<E: EventStore, C: ContentStore, A: WorkerPlacem
     placement: &PlacementRecord,
     assignment_grant: AssignmentLeaseGrant,
     authority: &A,
-    session_timeout: WorkerSessionTimeoutMillis,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<LeasedExecutionAssignment, SchedulerError> {
@@ -748,7 +721,7 @@ pub fn grant_reserved_assignment<E: EventStore, C: ContentStore, A: WorkerPlacem
         .get(&placement.placement_id)
         .filter(|durable| *durable == placement)
         .ok_or_else(|| SchedulerError::InvalidHistory("placement is not durable".into()))?;
-    let snapshot = validate_record_snapshot(content, durable)?;
+    validate_record_snapshot(content, durable)?;
     let reservation = durable
         .reservation
         .as_ref()
@@ -763,18 +736,11 @@ pub fn grant_reserved_assignment<E: EventStore, C: ContentStore, A: WorkerPlacem
         || durable.contract_id != execution_authority.contract_id()
         || reservation.assignment_id != assignment_grant.assignment_id()
         || reservation.lease_id != assignment_grant.lease_id()
-        || snapshot.policy.session_timeout != session_timeout
-        || assignment_grant.policy().session_timeout() != session_timeout
     {
         return invalid_history("placement, execution authority, or assignment grant differs");
     }
-    let WorkerSessionState::Live(worker) = recover_worker_session(
-        events,
-        content,
-        reservation.worker_id,
-        session_timeout,
-        observed_at,
-    )?
+    let WorkerSessionState::Live(worker) =
+        recover_worker_session(events, content, reservation.worker_id, observed_at)?
     else {
         return Err(SchedulerError::StaleCandidate);
     };
@@ -1670,7 +1636,6 @@ mod tests {
                 &mut self.content,
                 &mut authenticator,
                 &hello,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(observed_at),
             )
@@ -1710,14 +1675,9 @@ mod tests {
             .content_id
     }
 
-    fn session_timeout() -> WorkerSessionTimeoutMillis {
-        WorkerSessionTimeoutMillis::new(100).expect("session timeout")
-    }
-
     fn scheduler_policy() -> SchedulerPolicy {
         SchedulerPolicy::new(
             SchedulerPolicyVersion::StableWorkerIdQuantitativeV1,
-            session_timeout(),
             ReservationClaimTimeoutMillis::new(10).expect("claim timeout"),
         )
     }
@@ -1728,7 +1688,6 @@ mod tests {
             LeaseId::new(),
             AssignmentControlMessageIds::new(ControlMessageId::new(), ControlMessageId::new()),
             AssignmentLeasePolicy::new(
-                session_timeout(),
                 AssignmentLeaseDurationMillis::new(20).expect("lease duration"),
             ),
         )
@@ -1854,7 +1813,6 @@ mod tests {
             &record,
             grant,
             &authority_check,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
         )
@@ -2156,7 +2114,6 @@ mod tests {
                 &record,
                 grant,
                 &authority,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(5),
             ),
@@ -2262,7 +2219,6 @@ mod tests {
                 &record,
                 grant,
                 &authority,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(4),
             ),
@@ -2298,7 +2254,6 @@ mod tests {
                 &record,
                 grant,
                 &authority,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(6),
             ),
@@ -2415,7 +2370,6 @@ mod tests {
             &record,
             grant,
             &authority,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(5),
         )
@@ -2457,7 +2411,6 @@ mod tests {
             &record,
             grant,
             &authority_check,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
         )
@@ -2467,7 +2420,6 @@ mod tests {
             &fixture.content,
             leased,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(5),
         )
@@ -2477,7 +2429,6 @@ mod tests {
             &fixture.content,
             accepted,
             &worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(6),
         )
@@ -2554,7 +2505,6 @@ mod tests {
             &record,
             grant,
             &authority_check,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(4),
         )

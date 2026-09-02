@@ -31,8 +31,8 @@ use crate::{
     ExecutionAssignmentState, ExecutionCompletion, ExecutionCoordinatorError,
     ExecutionEnvironmentArtifact, ExecutionInput, ExecutionJob, Executor, ExecutorFailureClass,
     InputBundleArtifact, JobContract, JobContractArtifact, LeasedExecutionAssignment,
-    ReconciledExecutionResult, RegisteredWorkerSession, WorkerSessionTimeoutMillis,
-    accept_assignment, reconcile_execution_result, recover_execution_assignment,
+    ReconciledExecutionResult, RegisteredWorkerSession, accept_assignment,
+    reconcile_execution_result, recover_execution_assignment,
 };
 
 const CONTROLLER_ENQUEUED: &str = "control.controller-message-enqueued";
@@ -1169,17 +1169,12 @@ pub fn pending_controller_messages<E: EventStore>(
 /// # Errors
 ///
 /// Returns an error for a mismatched binding, stale worker/lease, or persistence failure.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "persistence, authority, claimant, message, liveness, command, and time are independent"
-)]
 pub fn accept_worker_assignment<E: EventStore, C: ContentStore>(
     events: &mut E,
     content: &C,
     leased: LeasedExecutionAssignment,
     worker: &RegisteredWorkerSession,
     message: &DurableControlMessage<WorkerControlMessage>,
-    session_timeout: WorkerSessionTimeoutMillis,
     command_id: &CommandId,
     observed_at: ObservedAtUnixMillis,
 ) -> Result<AcceptedExecutionAssignment, ControlProtocolError> {
@@ -1197,7 +1192,6 @@ pub fn accept_worker_assignment<E: EventStore, C: ContentStore>(
         content,
         leased,
         worker,
-        session_timeout,
         command_id,
         observed_at,
     )?)
@@ -2302,10 +2296,9 @@ mod tests {
         SandboxPath, TargetEnvironmentName, TrustedExecutionEvidence, WorkerAuthenticationSubject,
         WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName,
         WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
-        WorkerResourceSource, WorkerSessionState, WorkerSessionTimeoutMillis, WorkerSlotCount,
-        authorize_execution_attempt, grant_assignment_lease, prepare_execution_job,
-        record_worker_heartbeat, recover_execution_job, recover_worker_session, register_worker,
-        start_accepted_assignment,
+        WorkerResourceSource, WorkerSessionState, WorkerSlotCount, authorize_execution_attempt,
+        grant_assignment_lease, prepare_execution_job, record_worker_heartbeat,
+        recover_execution_job, recover_worker_session, register_worker, start_accepted_assignment,
     };
 
     struct Fixture {
@@ -2455,7 +2448,6 @@ mod tests {
                 &mut self.content,
                 &mut authenticator,
                 &hello,
-                session_timeout(),
                 &CommandId::new(),
                 ObservedAtUnixMillis::new(0),
             )
@@ -2543,15 +2535,8 @@ mod tests {
         WorkerProtocolVersion::new(1).expect("protocol")
     }
 
-    fn session_timeout() -> WorkerSessionTimeoutMillis {
-        WorkerSessionTimeoutMillis::new(10_000).expect("session timeout")
-    }
-
     fn lease_policy() -> AssignmentLeasePolicy {
-        AssignmentLeasePolicy::new(
-            session_timeout(),
-            AssignmentLeaseDurationMillis::new(1_000).expect("lease"),
-        )
+        AssignmentLeasePolicy::new(AssignmentLeaseDurationMillis::new(1_000).expect("lease"))
     }
 
     #[test]
@@ -2810,7 +2795,6 @@ mod tests {
             &fixture.controller_events,
             &fixture.content,
             fixture.worker_id,
-            session_timeout(),
             ObservedAtUnixMillis::new(5),
         )
         .expect("recover worker") else {
@@ -2825,7 +2809,6 @@ mod tests {
                 .message
                 .as_ref()
                 .expect("accepted message"),
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(5),
         )
@@ -2882,7 +2865,6 @@ mod tests {
             &fixture.content,
             accepted,
             &recovered_worker,
-            session_timeout(),
             &CommandId::new(),
             ObservedAtUnixMillis::new(6),
         )
