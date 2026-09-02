@@ -286,6 +286,41 @@ worker 的 `worker.json` 原样保留，因此 backends 与 capabilities 未受�
 稳态下 6 分钟观测事件总数 8 → 8，**增长为 0**；旧设计同期会追加 2 × 12 = 24 条心跳事件。
 每个 worker 流现在恰好 2 条事件：注册，以及第一次携带新 availability 的心跳。
 
+### 4.2.3 P1 运行时布局：已落地部分
+
+`cairn-layout` 解析 10.5 的七棵树，两条不变量使 10.5 的分离成为文件系统事实而不是一条需要记住的规则：
+
+- **进程只能命名自己角色拥有的树。** worker 请求 `packs/` 或 `restricted/` 得到错误，为它们配置根会被拒绝
+  而不是被忽略。「被判方不与判官共处一台主机」因此在产出路径的地方被强制，而不是靠人记得。
+- **任何一棵树不得位于另一棵之内。** 这恰好拒绝了此前部署的形态：durable state 位于 secret 树之下，
+  静默继承了属于另一类材料的权限、备份周期与访问主体。包含关系按路径分量判定，因此同名前缀的兄弟目录仍是兄弟。
+
+配置侧随之简化。store 的三个路径从配置中消失——每个部署重复命名 `events.sqlite3`、`content.sqlite3`
+与 `content/` 换不到布局尚未给出的灵活性，却多出三种把 durable state 放错地方的方式。worker 侧同理，
+`journal_database` 与 content 的三个路径改为从 store 根派生。
+
+两类路径**刻意留在树之外**，说清理由本身就是这个区分的意义：`accelerator_sysfs` 指向内核接口，
+executor 的 `command` 指向宿主上的程序，两者都不是本部署拥有的材料。第三种情况看着相似但不是：
+托管身份文档内部的文件名指的是它旁边的文件，因此按该目录解析，用一个以此命名的辅助函数完成。
+
+`log/` 目前没有任何消费者，`check-log-isolation.sh` 断言这个数保持为零：加一个文件落点意味着修改这道门，
+而那正是该不变量要求的那次评审。
+
+**Exit 四条已逐条在生产上验证：**
+
+| Exit | 验证 |
+| --- | --- |
+| 三类材料分树且权限不同 | 七棵树就位，`secrets/` 与 `restricted/` 为 700，其余 775；controller 的 unit 只对 `store/`、`workspaces/`、`log/` 开放写入 |
+| worker 主机上不存在 `packs/` 与 `restricted/` | 两台 worker 主机上各自只有 `config/`、`secrets/`、`store/`、`log/` 四棵 |
+| 从任意工作目录启动解析到同一份状态 | 在 `/`、`/tmp`、`/home/dawei` 三处运行 `registry list`，head event id 完全相同 |
+| 发布脚本产出两台主机各自可运行的 worker 二进制 | 本次部署即由 `scripts/build-release.sh` 的三个产物完成 |
+
+搬迁同时纠正了另一处同类问题：8 个 restricted 语义的 intent 语料此前位于 `.cairn/secrets/` 下且无任何
+代码或配置引用，现已移入 `restricted/` 树。
+
+尚未完成的是 P1 第 4 项（`project.json` 与 intake 冻结）。它不在本阶段 Exit 内，
+其消费者在 P4，因此单独推进而不是塞进这次搬运。
+
 ### 4.3 设备与工具链现状
 
 通道已于 2026-09-02 恢复并核验。地址、凭据与 enrollment 材料属于 Secret provider，不进入本仓库。
