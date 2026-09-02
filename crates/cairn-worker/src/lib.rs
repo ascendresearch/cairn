@@ -34,7 +34,6 @@ use cairn_execution::{
     recover_started_worker_executions, validate_assignment_material_manifest,
     verify_persisted_assignment_materials,
 };
-use cairn_layout::{LayoutConfig, LayoutRole, RuntimeLayout, RuntimeTree};
 use cairn_protocol::{
     CommandId, ContentId, ContentType, ControlConnectionId, ControlMessageId, ControlSequence,
     CredentialId, EnrollmentId, ObservedAtUnixMillis, WorkerId, WorkerIncarnationId,
@@ -69,9 +68,6 @@ pub struct WorkerConfig {
     pub profile: WorkerProfileConfig,
     #[serde(default)]
     pub expected_platform: ExecutionPlatformRequirement,
-    /// Where this worker's runtime trees live.
-    #[serde(default)]
-    pub layout: LayoutConfig,
     pub resource_probe: ResourceProbeConfig,
     pub availability: WorkerAvailability,
     pub content: WorkerContentConfig,
@@ -84,11 +80,9 @@ pub struct WorkerConfig {
     pub reconnect_delay_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
-    /// Resolved store root. Derived from `layout`, never configured directly: a worker's own
-    /// journal, content and working areas are its business, and naming them per deployment only
-    /// adds ways to scatter them outside the tree that owns them.
-    #[serde(skip)]
-    store_root: PathBuf,
+    /// Root of this worker's durable store tree. One root rather than a path per file: a
+    /// worker's journal, content and working areas are its own business.
+    pub store_root: PathBuf,
 }
 
 /// Worker-local verified assignment-content storage and ingress budget.
@@ -295,8 +289,8 @@ pub async fn run_from_arguments(
             .map_err(|error| WorkerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
-    config.resolve_layout(environment_home.as_deref())?;
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+    config.resolve_paths(base);
     Box::pin(run(config)).await
 }
 
@@ -310,10 +304,7 @@ pub async fn run_from_arguments(
     clippy::too_many_lines,
     reason = "the worker incarnation/reconnect lifecycle includes paired operational events at its durable boundaries"
 )]
-pub async fn run(mut config: WorkerConfig) -> Result<(), WorkerError> {
-    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
-    config.resolve_layout(environment_home.as_deref())?;
-    let config = config;
+pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
     let profile = config.runtime_profile()?;
     config.validate(&profile)?;
     let mut incarnation_id = WorkerIncarnationId::new();
@@ -627,56 +618,27 @@ impl WorkerConfig {
         self.store_root.join("transfers")
     }
 
-    /// Returns whether the layout has already been bound to this configuration.
-    #[must_use]
-    fn is_resolved(&self) -> bool {
-        !self.store_root.as_os_str().is_empty()
-    }
-
-    /// Binds every configured path to the tree that owns the material it names.
+    /// Resolves every configured path against the directory holding the configuration file.
     ///
-    /// A worker owns four trees and cannot name the two that belong to its judge. Its identity
-    /// material resolves in `secrets/`; its journal, content and working areas resolve in `store/`.
-    /// The accelerator sysfs path is deliberately excluded: it names a kernel interface on the
-    /// host, not material this deployment owns, and forcing it into a tree would be wrong.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error when the trees cannot be resolved into separated absolute
-    /// roots, or when a configured path would leave the tree that owns it.
-    pub fn resolve_layout(&mut self, environment_home: Option<&Path>) -> Result<(), WorkerError> {
-        if self.is_resolved() {
-            return Ok(());
-        }
-        let home = self
-            .layout
-            .home
-            .clone()
-            .or_else(|| environment_home.map(Path::to_path_buf));
-        let layout =
-            RuntimeLayout::resolve(LayoutRole::Worker, home.as_deref(), &self.layout.roots)
-                .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    /// A bundled deployment names its trees relatively, so the whole thing can be moved without
+    /// editing a line. Two paths are deliberately untouched by any tree convention:
+    /// `accelerator_sysfs` names a kernel interface and the executor's command names a program on
+    /// the host, and neither is material this deployment owns.
+    fn resolve_paths(&mut self, base: &Path) {
         match &mut self.identity {
             WorkerIdentityConfig::External { tls, .. } => {
-                place(&mut tls.certificate, &layout, RuntimeTree::Secrets)?;
-                place(&mut tls.private_key, &layout, RuntimeTree::Secrets)?;
-                place(&mut tls.server_ca, &layout, RuntimeTree::Secrets)?;
+                beside(&mut tls.certificate, base);
+                beside(&mut tls.private_key, base);
+                beside(&mut tls.server_ca, base);
             }
-            WorkerIdentityConfig::Managed { state_directory } => {
-                place(state_directory, &layout, RuntimeTree::Secrets)?;
-            }
+            WorkerIdentityConfig::Managed { state_directory } => beside(state_directory, base),
         }
-        place(
-            &mut self.resource_probe.scratch_path,
-            &layout,
-            RuntimeTree::Store,
-        )?;
-        self.execution.place_state(&layout)?;
-        self.store_root = layout
-            .root(RuntimeTree::Store)
-            .map_err(|error| WorkerError::Configuration(error.to_string()))?
-            .to_path_buf();
-        Ok(())
+        beside(&mut self.store_root, base);
+        beside(&mut self.resource_probe.scratch_path, base);
+        self.execution.resolve_paths(base);
+        if let Some(path) = &mut self.resource_probe.accelerator_sysfs {
+            beside(path, base);
+        }
     }
 
     fn availability(
@@ -1471,11 +1433,14 @@ pub async fn join_from_bundle(
     let state_directory = state_directory
         .canonicalize()
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    // The state directory becomes this worker's deployment root, so its identity lands in the
-    // secret tree and its journal, content and working areas in the store tree.
+    // The state directory becomes this worker's deployment root: identity lands in the secret
+    // tree and journal, content and working areas in the store tree. The trees a worker is laid
+    // out in come from one list, and `packs/` and `restricted/` are absent from it, which is how
+    // "a judged party does not share a host with its judge" holds here.
+    for tree in cairn_layout::RuntimeTree::WORKER {
+        create_tree(&state_directory.join(tree.directory_name()), tree.mode())?;
+    }
     let identity_directory = state_directory.join("secrets/identity");
-    prepare_state_directory(&state_directory.join("secrets"))?;
-    prepare_state_directory(&state_directory.join("store"))?;
     prepare_state_directory(&state_directory.join("store/scratch"))?;
     let identity = Box::pin(enroll(bundle, &identity_directory)).await?;
     let config_path = state_directory.join("worker.json");
@@ -1486,7 +1451,7 @@ pub async fn join_from_bundle(
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         )
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-        existing.resolve_layout(Some(&state_directory))?;
+        existing.resolve_paths(&state_directory);
         validate_join_configuration(&existing, &identity_directory, &control)?;
         let profile = existing.runtime_profile()?;
         existing.validate(&profile)?;
@@ -1498,9 +1463,9 @@ pub async fn join_from_bundle(
         });
     }
 
-    let config = generated_join_configuration(&state_directory, &control)?;
+    let config = generated_join_configuration(&control)?;
     let mut resolved = config.clone();
-    resolved.resolve_layout(None)?;
+    resolved.resolve_paths(&state_directory);
     validate_join_configuration(&resolved, &identity_directory, &control)?;
     let profile = resolved.runtime_profile()?;
     resolved.validate(&profile)?;
@@ -1519,21 +1484,16 @@ pub async fn join_from_bundle(
 }
 
 fn generated_join_configuration(
-    home: &Path,
     control: &cairn_control_transport::WorkerControlEndpoint,
 ) -> Result<WorkerConfig, WorkerError> {
     Ok(WorkerConfig {
         schema_version: 1,
-        layout: LayoutConfig {
-            home: Some(home.to_path_buf()),
-            roots: cairn_layout::TreeRoots::new(),
-        },
         controller: ControllerEndpoint {
             tcp_address: control.tcp_address.clone(),
             websocket_uri: control.websocket_uri.clone(),
         },
         identity: WorkerIdentityConfig::Managed {
-            state_directory: PathBuf::from("identity"),
+            state_directory: PathBuf::from("secrets/identity"),
         },
         profile: WorkerProfileConfig {
             schema_version: 1,
@@ -1550,7 +1510,7 @@ fn generated_join_configuration(
         },
         expected_platform: ExecutionPlatformRequirement::default(),
         resource_probe: ResourceProbeConfig {
-            scratch_path: PathBuf::from("scratch"),
+            scratch_path: PathBuf::from("store/scratch"),
             accelerator_sysfs: Some(PathBuf::from("/sys/class/accel")),
             freshness_ms: None,
             refresh_interval_ms: None,
@@ -1573,7 +1533,7 @@ fn generated_join_configuration(
             .ok_or_else(|| WorkerError::Configuration("invalid identity poll interval".into()))?,
         reconnect_delay_ms: NonZeroU64::new(1_000),
         transport: TransportPolicy::default(),
-        store_root: PathBuf::new(),
+        store_root: PathBuf::from("store"),
     })
 }
 
@@ -2203,17 +2163,21 @@ fn command(_purpose: &str) -> CommandId {
     CommandId::new()
 }
 
+fn create_tree(path: &Path, mode: u32) -> Result<(), WorkerError> {
+    fs::create_dir_all(path).map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    }
+    Ok(())
+}
+
 fn beside(path: &mut PathBuf, directory: &Path) {
     if path.is_relative() {
         *path = directory.join(&*path);
     }
-}
-
-fn place(path: &mut PathBuf, layout: &RuntimeLayout, tree: RuntimeTree) -> Result<(), WorkerError> {
-    *path = layout
-        .resolve_in(tree, &*path)
-        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -2237,8 +2201,7 @@ mod tests {
         let mut config: WorkerConfig =
             serde_json::from_str(include_str!("../../../config/worker.example.json"))
                 .expect("documented worker configuration");
-        config.layout.home = Some(directory.path().to_path_buf());
-        config.resolve_layout(None).expect("documented layout");
+        config.resolve_paths(directory.path());
         (directory, config)
     }
 
@@ -2279,23 +2242,6 @@ mod tests {
         assert!(
             !config.journal_database().starts_with(home.join("secrets")),
             "durable state must not resolve inside the secret tree"
-        );
-    }
-
-    #[test]
-    fn a_worker_configuration_cannot_reach_into_a_tree_it_does_not_own() {
-        let directory = tempfile::tempdir().expect("deployment root");
-        let mut config: WorkerConfig =
-            serde_json::from_str(include_str!("../../../config/worker.example.json"))
-                .expect("documented worker configuration");
-        config.layout.home = Some(directory.path().to_path_buf());
-        config.layout.roots.insert(
-            cairn_layout::RuntimeTree::Restricted,
-            directory.path().join("restricted"),
-        );
-        assert!(
-            config.resolve_layout(None).is_err(),
-            "a worker naming its judge's tree must be refused rather than ignored"
         );
     }
 

@@ -22,11 +22,12 @@ fn registry_query_cli_emits_strict_json_and_missing_entries_fail() -> Result<(),
             "protocol_version": 1,
             "schema_version": 1,
             "scheduler": null,
-            "layout": { "home": home },
+            "store_root": home.join("store"),
+            "workspaces_root": home.join("workspaces"),
             "tls": {
-                "certificate": "unused-controller.pem",
-                "client_ca": "unused-ca.pem",
-                "private_key": "unused-controller-key.pem"
+                "certificate": home.join("secrets/unused-controller.pem"),
+                "client_ca": home.join("secrets/unused-ca.pem"),
+                "private_key": home.join("secrets/unused-controller-key.pem")
             },
             "transport": { "message_byte_limit": null }
         }))?,

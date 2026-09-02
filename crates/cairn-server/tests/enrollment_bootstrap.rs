@@ -710,33 +710,34 @@ fn server_config(
     );
     // Built by deserialization rather than by a struct literal, so these tests exercise the same
     // strict decoding a deployment does, including the rejection of unknown fields.
-    let mut config: ServerConfig = serde_json::from_value(serde_json::json!({
+    let config: ServerConfig = serde_json::from_value(serde_json::json!({
         "schema_version": 1,
         "listen": listen.to_string(),
-        "layout": { "home": home },
+        "store_root": home.join("store"),
+        "workspaces_root": home.join("workspaces"),
         "tls": {
-            "certificate": "server.pem",
-            "private_key": "server-key.pem",
-            "client_ca": "ca.pem"
+            "certificate": home.join("secrets/server.pem"),
+            "private_key": home.join("secrets/server-key.pem"),
+            "client_ca": home.join("secrets/ca.pem")
         },
         "enrollment_service": {
             "listen": enrollment_listen.to_string(),
             "public_tcp_address": enrollment_listen.to_string(),
             "websocket_uri": format!("wss://localhost:{}/enrollment", enrollment_listen.port()),
             "server_name": "localhost",
-            "server_ca": enrollment_ca,
+            "server_ca": home.join("secrets").join(&enrollment_ca),
             "server_tls": {
-                "certificate": enrollment_certificate,
-                "private_key": enrollment_key
+                "certificate": home.join("secrets").join(&enrollment_certificate),
+                "private_key": home.join("secrets").join(&enrollment_key)
             },
             "control_endpoint": {
                 "tcp_address": listen.to_string(),
                 "websocket_uri": format!("wss://localhost:{}/control", listen.port()),
                 "server_name": "localhost",
-                "server_ca": "ca.pem"
+                "server_ca": home.join("secrets/ca.pem")
             },
-            "issuer_certificate": "ca.pem",
-            "issuer_private_key": "ca-key.pem",
+            "issuer_certificate": home.join("secrets/ca.pem"),
+            "issuer_private_key": home.join("secrets/ca-key.pem"),
             "credential_validity_ms": 3_600_000,
             "rotation_overlap_ms": 500,
             "handshake_timeout_ms": 2_000,
@@ -750,7 +751,6 @@ fn server_config(
         "authority_poll_interval_ms": 25,
         "diagnostic_byte_limit": 256
     }))?;
-    config.resolve_layout(None)?;
     Ok(config)
 }
 
@@ -765,14 +765,14 @@ fn worker_config(
     control: std::net::SocketAddr,
     home: &Path,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
-    let mut config: WorkerConfig = serde_json::from_value(serde_json::json!({
+    let config: WorkerConfig = serde_json::from_value(serde_json::json!({
         "schema_version": 1,
-        "layout": { "home": home },
         "controller": {
             "tcp_address": control.to_string(),
             "websocket_uri": format!("wss://localhost:{}/control", control.port())
         },
-        "identity": { "mode": "managed", "state_directory": "identity" },
+        "store_root": home.join("store"),
+        "identity": { "mode": "managed", "state_directory": home.join("secrets/identity") },
         "profile": {
             "schema_version": 1,
             "protocol_version": 1,
@@ -782,7 +782,7 @@ fn worker_config(
             "max_concurrency": 1
         },
         "resource_probe": {
-            "scratch_path": "scratch",
+            "scratch_path": home.join("store/scratch"),
             "accelerator_sysfs": null,
             "freshness_ms": null,
             "refresh_interval_ms": null,
@@ -805,7 +805,6 @@ fn worker_config(
         "identity_poll_interval_ms": 25,
         "reconnect_delay_ms": 25
     }))?;
-    config.resolve_layout(None)?;
     Ok(config)
 }
 

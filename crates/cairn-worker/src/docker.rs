@@ -116,22 +116,17 @@ impl WorkerExecutionConfig {
         }
     }
 
-    /// Binds the executor's own working area to the store tree.
+    /// Resolves the executor's own working area against the configuration directory.
     ///
     /// `command` is deliberately untouched: it names a program on the host, not material this
-    /// deployment owns, and placing it in a tree would be wrong in the same way as placing a sysfs
-    /// path there.
-    pub(crate) fn place_state(
-        &mut self,
-        layout: &cairn_layout::RuntimeLayout,
-    ) -> Result<(), super::WorkerError> {
+    /// deployment owns.
+    pub(crate) fn resolve_paths(&mut self, base: &Path) {
         if let Self::Docker {
             state_directory, ..
         } = self
         {
-            super::place(state_directory, layout, cairn_layout::RuntimeTree::Store)?;
+            super::beside(state_directory, base);
         }
-        Ok(())
     }
 }
 

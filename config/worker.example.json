@@ -25,13 +25,10 @@
   "heartbeat_interval_ms": 30000,
   "identity": {
     "mode": "managed",
-    "state_directory": "identity"
+    "state_directory": "secrets/identity"
   },
   "identity_poll_interval_ms": 1000,
   "idle_timeout_ms": 120000,
-  "layout": {
-    "home": "/srv/cairn"
-  },
   "profile": {
     "backends": [
       "transport-only"
@@ -54,9 +51,10 @@
     },
     "freshness_ms": null,
     "refresh_interval_ms": null,
-    "scratch_path": "scratch"
+    "scratch_path": "store/scratch"
   },
   "schema_version": 1,
+  "store_root": "store",
   "transport": {
     "message_byte_limit": 1048576
   }

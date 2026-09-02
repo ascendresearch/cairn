@@ -1,6 +1,7 @@
 //! Domain-neutral Cairn service host for worker control, scheduling, and application lifecycles.
 
 mod application;
+pub mod bootstrap;
 mod enrollment;
 mod scheduling;
 
@@ -49,7 +50,6 @@ use cairn_execution::{
     record_worker_resource_observation, recover_execution_assignment, register_worker,
     start_accepted_assignment, synchronize_worker_pool_assignment,
 };
-use cairn_layout::{LayoutConfig, LayoutRole, RuntimeLayout, RuntimeTree};
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
     EventSequence, ObservedAtUnixMillis, ReservationId, WorkerId,
@@ -75,10 +75,6 @@ use enrollment::{
 pub struct ServerConfig {
     pub schema_version: u16,
     pub listen: SocketAddr,
-    /// Where this deployment's runtime trees live. Absent means every root comes from
-    /// `CAIRN_HOME`.
-    #[serde(default)]
-    pub layout: LayoutConfig,
     pub tls: ServerTlsFiles,
     pub enrollment_service: Option<EnrollmentServiceConfig>,
     pub protocol_version: WorkerProtocolVersion,
@@ -96,14 +92,12 @@ pub struct ServerConfig {
     #[serde(default)]
     pub transport: TransportPolicy,
     pub diagnostic_byte_limit: Option<NonZeroU64>,
-    /// Resolved store root. Derived from `layout`, never configured directly, because the files
-    /// inside a tree are that tree's business and repeating their names in every deployment only
-    /// creates three more ways to put durable state somewhere it does not belong.
-    #[serde(skip)]
-    store_root: PathBuf,
-    /// Resolved workspaces root. Derived from `layout` for the same reason as the store root.
-    #[serde(skip)]
-    workspaces_root: PathBuf,
+    /// Root of the durable store tree. One root rather than a path per file: the names inside are
+    /// this tree's business, and repeating them per deployment only creates more ways to scatter
+    /// durable state.
+    pub store_root: PathBuf,
+    /// Root of the project workspaces tree.
+    pub workspaces_root: PathBuf,
 }
 
 /// Isolated server-authenticated listener and certificate authority used only for bootstrap.
@@ -160,7 +154,7 @@ pub(crate) struct EnrolledWorker {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id> | cairn-server project validate <config.json> <project>"
+        "usage: cairn-server <config.json> | cairn-server bootstrap <directory> <server-name> <control-address> <enrollment-address> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id> | cairn-server project validate <config.json> <project>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -345,6 +339,33 @@ pub async fn run_from_arguments(
             "scheduler reservation released"
         );
         return Ok(());
+    }
+    if first == "bootstrap" {
+        let directory = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let server_name = arguments
+            .next()
+            .ok_or(ServerError::Usage)?
+            .into_string()
+            .map_err(|_| ServerError::Usage)?;
+        let control_address = arguments
+            .next()
+            .ok_or(ServerError::Usage)?
+            .into_string()
+            .map_err(|_| ServerError::Usage)?;
+        let enrollment_address = arguments
+            .next()
+            .ok_or(ServerError::Usage)?
+            .into_string()
+            .map_err(|_| ServerError::Usage)?;
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        return bootstrap::run(
+            &directory,
+            &server_name,
+            &control_address,
+            &enrollment_address,
+        );
     }
     if first == "registry" {
         return run_registry_command(&mut arguments);
@@ -608,8 +629,8 @@ pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerErro
             .map_err(|error| ServerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| ServerError::Configuration(error.to_string()))?;
-    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
-    config.resolve_layout(environment_home.as_deref())?;
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+    config.resolve_paths(base);
     Ok(config)
 }
 
@@ -849,11 +870,7 @@ pub fn revoke_enrollment_authority(
     clippy::too_many_lines,
     reason = "startup keeps listener, storage, enrollment, and App API lifetimes visibly composed"
 )]
-pub async fn run(mut config: ServerConfig) -> Result<(), ServerError> {
-    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
-    config.resolve_layout(environment_home.as_deref())?;
-    config.create_process_owned_trees()?;
-    let config = config;
+pub async fn run(config: ServerConfig) -> Result<(), ServerError> {
     config.validate()?;
     let tls = config
         .tls
@@ -1085,109 +1102,32 @@ impl ServerConfig {
         self.store_root.join("content")
     }
 
-    /// Creates the trees this process writes into, and only those.
+    /// Resolves every configured path against the directory holding the configuration file.
     ///
-    /// `config/`, `packs/`, `secrets/` and `restricted/` are owned by an administrator or by the
-    /// Admission side. Creating them here would turn a missing deployment into an empty one that
-    /// starts and then fails somewhere less legible, so their absence is left to be reported by
-    /// whatever needs their contents.
-    fn create_process_owned_trees(&self) -> Result<(), ServerError> {
-        for directory in [self.store_root.clone(), self.workspaces_root.clone()] {
-            fs::create_dir_all(&directory).map_err(|error| {
-                ServerError::Configuration(format!(
-                    "cannot create the runtime tree at {}: {error}",
-                    directory.display()
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Returns whether the layout has already been bound to this configuration.
-    ///
-    /// A resolved store root is the evidence, because resolution is what produces it and because
-    /// every path in a resolved configuration is absolute, which the tree resolver rejects. Binding
-    /// twice would therefore be an error rather than a no-op, and callers legitimately arrive from
-    /// two directions: the loader for command-line subcommands, and `run` for a configuration a
-    /// test or embedder constructed directly.
-    #[must_use]
-    fn is_resolved(&self) -> bool {
-        !self.store_root.as_os_str().is_empty()
-    }
-
-    /// Binds every configured path to the tree that owns the material it names.
-    ///
-    /// PKI is named per file because deployments legitimately differ on those names; the store's
-    /// contents are not, because naming them per deployment only creates more ways to put durable
-    /// state somewhere it does not belong.
-    ///
-    /// A configuration built in memory rather than loaded from a file must be bound before it is
-    /// used, because every path in it is relative to a tree until this runs.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error when the trees cannot be resolved into separated absolute
-    /// roots, or when a configured path would leave the tree that owns it.
-    pub fn resolve_layout(&mut self, environment_home: Option<&Path>) -> Result<(), ServerError> {
-        if self.is_resolved() {
-            return Ok(());
-        }
-        let home = self
-            .layout
-            .home
-            .clone()
-            .or_else(|| environment_home.map(Path::to_path_buf));
-        let layout =
-            RuntimeLayout::resolve(LayoutRole::Controller, home.as_deref(), &self.layout.roots)
-                .map_err(|error| ServerError::Configuration(error.to_string()))?;
-        place(&mut self.tls.certificate, &layout, RuntimeTree::Secrets)?;
-        place(&mut self.tls.private_key, &layout, RuntimeTree::Secrets)?;
-        place(&mut self.tls.client_ca, &layout, RuntimeTree::Secrets)?;
+    /// A bundled deployment names its trees relatively, so the whole tree can be moved or copied
+    /// without editing a line. A system installation names them absolutely, where the
+    /// configuration and the state genuinely live in different places. One rule covers both.
+    fn resolve_paths(&mut self, base: &Path) {
+        resolve(&mut self.store_root, base);
+        resolve(&mut self.workspaces_root, base);
+        resolve(&mut self.tls.certificate, base);
+        resolve(&mut self.tls.private_key, base);
+        resolve(&mut self.tls.client_ca, base);
         if let Some(service) = &mut self.enrollment_service {
-            place(&mut service.server_ca, &layout, RuntimeTree::Secrets)?;
-            place(
-                &mut service.server_tls.certificate,
-                &layout,
-                RuntimeTree::Secrets,
-            )?;
-            place(
-                &mut service.server_tls.private_key,
-                &layout,
-                RuntimeTree::Secrets,
-            )?;
-            place(
-                &mut service.control_endpoint.server_ca,
-                &layout,
-                RuntimeTree::Secrets,
-            )?;
-            place(
-                &mut service.issuer_certificate,
-                &layout,
-                RuntimeTree::Secrets,
-            )?;
-            place(
-                &mut service.issuer_private_key,
-                &layout,
-                RuntimeTree::Secrets,
-            )?;
+            resolve(&mut service.server_ca, base);
+            resolve(&mut service.server_tls.certificate, base);
+            resolve(&mut service.server_tls.private_key, base);
+            resolve(&mut service.control_endpoint.server_ca, base);
+            resolve(&mut service.issuer_certificate, base);
+            resolve(&mut service.issuer_private_key, base);
         }
-        self.store_root = layout
-            .root(RuntimeTree::Store)
-            .map_err(|error| ServerError::Configuration(error.to_string()))?
-            .to_path_buf();
-        self.workspaces_root = layout
-            .root(RuntimeTree::Workspaces)
-            .map_err(|error| ServerError::Configuration(error.to_string()))?
-            .to_path_buf();
-        Ok(())
     }
 }
 
-fn place(path: &mut PathBuf, layout: &RuntimeLayout, tree: RuntimeTree) -> Result<(), ServerError> {
-    *path = layout
-        .resolve_in(tree, &*path)
-        .map_err(|error| ServerError::Configuration(error.to_string()))?;
-    Ok(())
+fn resolve(path: &mut PathBuf, base: &Path) {
+    if path.is_relative() {
+        *path = base.join(&*path);
+    }
 }
 
 async fn enrollment_listener_loop(
@@ -2253,59 +2193,27 @@ mod tests {
         );
     }
 
-    // The layout is what makes ownership separation a property of the paths rather than of the
-    // person writing the configuration, so the documented deployment has to demonstrate it.
+    // A bundled deployment names its trees relatively, so the whole thing can be moved without
+    // editing a line. That only holds if resolution is anchored to the configuration file itself.
     #[test]
-    fn the_documented_configuration_places_each_path_in_the_tree_that_owns_it() {
-        let mut config: ServerConfig =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
-                .expect("documented controller configuration");
-        config.resolve_layout(None).expect("documented layout");
+    fn a_relative_configuration_resolves_beside_its_own_file() {
+        let directory = tempfile::tempdir().expect("deployment root");
+        let config_path = directory.path().join("controller.json");
+        std::fs::write(
+            &config_path,
+            include_str!("../../../config/controller.example.json"),
+        )
+        .expect("write documented configuration");
+        let config = super::load_server_config(&config_path).expect("documented configuration");
         assert_eq!(
             config.event_database(),
-            std::path::Path::new("/srv/cairn/store/events.sqlite3")
+            directory.path().join("store/events.sqlite3")
         );
         assert_eq!(
             config.tls.client_ca,
-            std::path::Path::new("/srv/cairn/secrets/ca.pem")
+            directory.path().join("secrets/ca.pem")
         );
-        assert!(
-            !config.event_database().starts_with("/srv/cairn/secrets"),
-            "durable state must not resolve inside the secret tree"
-        );
-    }
-
-    // The arrangement this rejects is the one the deployment actually had, where the store lived
-    // under the secret tree and silently took its permissions, backup period and access subject.
-    #[test]
-    fn a_store_configured_inside_the_secret_tree_is_refused_at_load() {
-        let mut documented: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
-                .expect("documented controller configuration");
-        documented["layout"]["roots"] = serde_json::json!({ "store": "/srv/cairn/secrets/state" });
-        let mut config: ServerConfig =
-            serde_json::from_value(documented).expect("parses before it is resolved");
-        let error = config
-            .resolve_layout(None)
-            .expect_err("a store inside the secret tree must not resolve");
-        assert!(
-            error.to_string().contains("lies inside"),
-            "the refusal must name the nesting: {error}"
-        );
-    }
-
-    #[test]
-    fn a_configured_path_may_not_leave_the_tree_that_owns_it() {
-        let mut documented: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
-                .expect("documented controller configuration");
-        documented["tls"]["client_ca"] = serde_json::json!("../store/ca.pem");
-        let mut config: ServerConfig =
-            serde_json::from_value(documented).expect("parses before it is resolved");
-        assert!(
-            config.resolve_layout(None).is_err(),
-            "a secret-tree path reaching into the store must not resolve"
-        );
+        assert_eq!(config.workspaces_root, directory.path().join("workspaces"));
     }
 
     #[cfg(unix)]
