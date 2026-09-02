@@ -258,6 +258,24 @@ liveness 是否应当离开 durable 事件流是**尚未实施**的第四项：�
 | 注册 worker | 5 个：`gpu` 2、`npu` 2、`npu-build` 1 |
 | Ascend build worker | 已重新上线并注册，backends `docker-v1`，capabilities `execution.role=build`、`toolchain.vendor=ascend`、`toolchain.architecture=dav-3510`、`toolchain.cann=9.1.0-beta.1` |
 
+两侧 worker 已于 2026-09-02 一并升级到当前构建（`f4099d3`），构建方式见下。
+
+**发布清单与实际部署不符，这次升级把它暴露出来了。** `release/toolchain.toml` 声明 targets 为
+两个 gnu 三元组、glibc 下限 2.28，但两台主机要的不是同一样东西：GPU 主机（aarch64、glibc 2.39）
+的 worker 配置要求 `aarch64/linux/gnu`，NPU 主机（x86_64、glibc **2.34**）的配置要求
+`x86_64/linux/musl`。清单里没有 musl 目标，因此按清单构建产不出 NPU 主机能用的二进制。
+已补上 `x86_64-unknown-linux-musl`。
+
+代价是真实的：直接用本机 `cargo build --release`（glibc 2.43）产出的二进制在 NPU 主机上以
+`GLIBC_2.38 not found` 立即退出，构建 worker 因此短暂离线，用旧二进制恢复后才走通正确路径。
+worker 自带的 `expected_platform` 门在第二次尝试中拒绝了 gnu 构建，这道门是对的——
+它把一次「能加载但环境不符」变成了一次明确失败，而不是一次可疑的运行。
+
+**清单没有可执行路径。** `release/toolchain.toml` 与 `release/zig-requirements.txt` 钉住了
+Rust 1.85.0、cargo-zigbuild 0.21.8、zig 0.14.1，但仓库里没有任何脚本使用它们；本次三个目标的构建
+命令是临时拼出来的。这与 3.3 记录的是同一类缺陷：声明存在而通路不存在。补一个发布脚本
+（按清单装工具链、对三个目标构建、产出带 sha256 的产物）属于 P1 的运行时布局范围。
+
 两点结论：
 
 - **没有任何 worker 声明 device 执行 capability。** 两个 `npu` 池 worker 的 profile 是 `transport-only`
@@ -394,10 +412,13 @@ Exit：一个候选经正常入口到达 Ascend build worker 并取回 typed 诊
 3. `log/` 不保留任何诊断正文落点；扩展现有日志隔离检查覆盖新布局。
 4. 项目定义与 intake 冻结：`project.json`，含 `authored_by_agent` 与 `provided`。
 5. 开发数据丢弃重建，不写迁移器（`AGENTS.md` 开发期规则）。
+6. 发布脚本：按 `release/toolchain.toml` 装工具链、对清单所列三个目标构建、产出带 sha256 的产物。
+   理由见 4.3——清单当前没有任何可执行路径，两台主机要求不同的目标环境，手工拼命令已经致过一次停机。
 
 规模估计：第 2、4 项为中，其余为小。
 
-Exit：三类材料分树且权限不同；worker 主机上不存在 `packs/` 与 `restricted/`；从任意工作目录启动解析到同一份状态。
+Exit：三类材料分树且权限不同；worker 主机上不存在 `packs/` 与 `restricted/`；从任意工作目录启动解析到同一份状态；
+发布脚本能从干净环境产出两台主机各自可运行的 worker 二进制。
 
 ### P2 · 知识与 skill 层（轨道 A）
 
