@@ -136,8 +136,16 @@ fi
 # Two processes sharing one worker identity and one durable state directory is a corruption, not a
 # race worth resolving automatically. Refuse instead, and name the process the operator has to stop.
 if ! "\${systemctl_cmd[@]}" is-active --quiet "\$unit" 2>/dev/null; then
-  existing="\$(pgrep -f -- "$CONFIG" || true)"
-  if [[ -n "\$existing" ]]; then
+  # Matched by process name and then by command line, never by a pgrep full-command pattern alone:
+  # a pattern that is a path matches every shell that merely mentions it, including the one running
+  # this script. Backticks are deliberately absent here; inside this heredoc they would run.
+  existing=""
+  for candidate in \$(pgrep -x "$binary" 2>/dev/null || true); do
+    if tr '\\0' ' ' < "/proc/\$candidate/cmdline" 2>/dev/null | grep -qF -- "$CONFIG"; then
+      existing="\$existing \$candidate"
+    fi
+  done
+  if [[ -n "\${existing// /}" ]]; then
     echo "an unmanaged process is already running with this configuration: \$existing" >&2
     echo "stop it before placing $CONFIG under systemd" >&2
     exit 1

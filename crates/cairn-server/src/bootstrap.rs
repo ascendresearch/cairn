@@ -71,6 +71,11 @@ pub fn run(
     println!("The certificate authority in secrets/ is self-signed and names {server_name}.");
     println!("Replace it with your own before this deployment issues credentials you rely on.");
     println!();
+    println!("The addresses given are used both to listen and to advertise. A deployment that");
+    println!("reaches the controller through a tunnel or a proxy sees different ones, and the");
+    println!("advertised pair lives in enrollment_service.public_tcp_address and");
+    println!("enrollment_service.control_endpoint.tcp_address.");
+    println!();
     println!("Start it with:");
     println!("  cairn-server {}", config_path.display());
     Ok(())
