@@ -72,6 +72,26 @@ fn project_intake_admits_a_complete_definition_and_refuses_an_ambiguous_one()
             .as_ref()
     );
 
+    // Laying the workspace out is a separate act from admitting the definition, and it creates
+    // every area up front: whoever creates a directory decides what it is for, and leaving that to
+    // whoever writes first means nobody decided.
+    let initialized = Command::new(env!("CARGO_BIN_EXE_cairn-server"))
+        .args(["project", "init"])
+        .arg(&config)
+        .arg("reduce-sum-f32")
+        .output()?;
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    for area in ["source", "port", "evidence", "reports", "tasks"] {
+        assert!(
+            home.join("workspaces/reduce-sum-f32").join(area).is_dir(),
+            "{area} must exist once the workspace is laid out"
+        );
+    }
+
     // The same definition with one file claimed by both sets must not enter intake, because a
     // build failure under it could be the candidate's fault or the scaffolding's.
     document["provided"] = serde_json::json!(["bin/run", "source/kernel.cpp"]);

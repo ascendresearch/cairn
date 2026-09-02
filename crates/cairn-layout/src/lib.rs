@@ -82,6 +82,56 @@ impl fmt::Display for RuntimeTree {
     }
 }
 
+/// One area inside a project workspace.
+///
+/// A workspace is the root directory of one operator's migration and holds several different
+/// things: the frozen source, the ported kernel under git, the process evidence, the exports and
+/// the per-task manifests. They are separate areas because different operations reach different
+/// ones, not because it is tidy.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceArea {
+    /// The frozen upstream source, read and never written.
+    Source,
+    /// The ported kernel under git. Candidate revisions are its commits.
+    Port,
+    /// Projections of build, measurement and profiling evidence.
+    Evidence,
+    /// Exported artefacts.
+    Reports,
+    /// One manifest per task.
+    Tasks,
+}
+
+impl WorkspaceArea {
+    /// Returns the directory name this area takes under a workspace root.
+    #[must_use]
+    pub const fn directory_name(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Port => "port",
+            Self::Evidence => "evidence",
+            Self::Reports => "reports",
+            Self::Tasks => "tasks",
+        }
+    }
+
+    /// Every area a workspace is laid out in.
+    pub const ALL: &'static [Self] = &[
+        Self::Source,
+        Self::Port,
+        Self::Evidence,
+        Self::Reports,
+        Self::Tasks,
+    ];
+}
+
+impl fmt::Display for WorkspaceArea {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.directory_name())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

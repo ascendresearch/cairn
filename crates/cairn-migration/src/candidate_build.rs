@@ -451,3 +451,117 @@ pub enum CandidateBuildError {
     #[error("generic Candidate build plan is invalid or noncanonical")]
     InvalidGenericPlan,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use cairn_execution::{
+        CapturePolicy, DiagnosticByteLimit, DockerImageId, EvidenceByteLimit,
+        ExecutionTimeoutMillis, NetworkPolicy, OutputByteLimit, WorkerPoolName,
+    };
+
+    use super::{
+        CandidateBuildPlanV1, GENERIC_CANDIDATE_PUBLICATION_PATH, InputBundleEntry,
+        prepare_generic_candidate_build_job,
+    };
+    use crate::CandidateProposalV1;
+    use cairn_protocol::JobId;
+
+    const RUNNER: &[u8] = b"#!/bin/sh\nexit 0\n";
+
+    fn proposal_bytes() -> Vec<u8> {
+        cairn_codec::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "oracle_contract": "cairn:v1:sha256:migration.candidate-oracle-contract.v1:1111111111111111111111111111111111111111111111111111111111111111",
+            "episode_id": "episode:01a03de1-61ff-7322-a40f-4be3a6f0104e",
+            "model_configuration": "cairn:v1:sha256:agent.resolved-runtime-model.v1:2222222222222222222222222222222222222222222222222222222222222222",
+            "submission": {
+                "schema_version": 1,
+                "files": [
+                    { "path": "include/kernel.h", "source": "#pragma once\n" },
+                    { "path": "kernel.cpp", "source": "int main() { return 0; }\n" }
+                ],
+                "primary_source": "kernel.cpp",
+                "explanation": "a minimal port used to pin what a build bundle may contain"
+            }
+        }))
+        .expect("proposal bytes")
+    }
+
+    fn plan() -> CandidateBuildPlanV1 {
+        CandidateBuildPlanV1::new(
+            DockerImageId::new(
+                "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            )
+            .expect("image"),
+            RUNNER.to_vec(),
+            vec![WorkerPoolName::new("npu-build").expect("pool")],
+            Vec::new(),
+            ExecutionTimeoutMillis::new(60_000).expect("timeout"),
+            CapturePolicy::new(
+                OutputByteLimit::new(1024).expect("stdout"),
+                OutputByteLimit::new(1024).expect("stderr"),
+                DiagnosticByteLimit::new(1024).expect("diagnostic"),
+                EvidenceByteLimit::new(4096).expect("evidence"),
+                Vec::new(),
+            )
+            .expect("capture"),
+            NetworkPolicy::Disabled,
+        )
+        .expect("plan")
+    }
+
+    // A build bundle is mounted read-only at the candidate's own `/input`, so anything that reaches
+    // it reaches the candidate. Nothing stops that at run time: the container isolates the
+    // candidate from everything except what we hand it deliberately.
+    //
+    // What keeps oracle material out is that assembly can only draw from two places, the build
+    // recipe the controller supplies and the candidate's own submission, because those are its only
+    // inputs. This pins that: every file in the bundle is accounted for by one of them, so a third
+    // source becomes a failing test rather than a leak nobody notices.
+    #[test]
+    fn every_file_in_a_build_bundle_is_accounted_for_by_its_two_declared_sources() {
+        let bytes = proposal_bytes();
+        let proposal: CandidateProposalV1 = cairn_codec::from_slice(&bytes).expect("proposal");
+        let proposal_id = proposal.identity().expect("proposal identity");
+        let prepared =
+            prepare_generic_candidate_build_job(JobId::new(), &bytes, proposal_id, plan())
+                .expect("prepared build job");
+
+        let declared: BTreeSet<String> = proposal
+            .submission()
+            .files()
+            .iter()
+            .map(|file| format!("source/{}", file.path().as_str()))
+            .collect();
+
+        let mut unaccounted = Vec::new();
+        for entry in prepared.input_bundle.entries() {
+            let InputBundleEntry::File { path, bytes, .. } = entry else {
+                continue;
+            };
+            let path = path.as_str();
+            let accounted = match path {
+                "bin/run" => bytes.as_slice() == RUNNER,
+                GENERIC_CANDIDATE_PUBLICATION_PATH => {
+                    bytes.as_slice() == proposal_bytes().as_slice()
+                }
+                other => declared.contains(other),
+            };
+            if !accounted {
+                unaccounted.push(path.to_owned());
+            }
+        }
+        assert!(
+            unaccounted.is_empty(),
+            "a build bundle may only carry the controller's runner, the candidate's own proposal, \
+             and the files the candidate submitted; these came from somewhere else: {unaccounted:?}"
+        );
+        assert_eq!(
+            declared.len(),
+            2,
+            "the fixture must declare files to account for"
+        );
+    }
+}

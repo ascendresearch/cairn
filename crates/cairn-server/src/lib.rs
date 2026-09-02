@@ -154,7 +154,7 @@ pub(crate) struct EnrolledWorker {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server bootstrap <directory> <server-name> <control-address> <enrollment-address> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id> | cairn-server project validate <config.json> <project>"
+        "usage: cairn-server <config.json> | cairn-server bootstrap <directory> <server-name> <control-address> <enrollment-address> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id> | cairn-server project validate|init <config.json> <project>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -371,9 +371,12 @@ pub async fn run_from_arguments(
         return run_registry_command(&mut arguments);
     }
     if first == "project" {
-        if arguments.next().as_deref() != Some(std::ffi::OsStr::new("validate")) {
-            return Err(ServerError::Usage);
-        }
+        let action = arguments.next().ok_or(ServerError::Usage)?;
+        let initialize = match action.to_str() {
+            Some("validate") => false,
+            Some("init") => true,
+            _ => return Err(ServerError::Usage),
+        };
         let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
         let project = ProjectName::new(
             arguments
@@ -386,7 +389,12 @@ pub async fn run_from_arguments(
         if arguments.next().is_some() {
             return Err(ServerError::Usage);
         }
-        let admitted = admit_project_definition(&load_server_config(&config_path)?, &project)?;
+        let config = load_server_config(&config_path)?;
+        let admitted = if initialize {
+            initialize_project_workspace(&config, &project)?
+        } else {
+            admit_project_definition(&config, &project)?
+        };
         return write_json_stdout(&admitted);
     }
     if first == "enrollment" {
@@ -634,6 +642,29 @@ pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerErro
     Ok(config)
 }
 
+/// Lays out one admitted project's workspace.
+///
+/// A workspace holds several different things and each operation reaches one of them, so the areas
+/// exist before anything writes into them, for the same reason the deployment trees do: whoever
+/// creates a directory decides what it is for, and leaving that to whoever writes first means
+/// nobody decided.
+///
+/// # Errors
+///
+/// Returns an error when the definition cannot enter intake, or a directory cannot be created.
+pub fn initialize_project_workspace(
+    config: &ServerConfig,
+    project: &ProjectName,
+) -> Result<AdmittedProject, ServerError> {
+    let admitted = admit_project_definition(config, project)?;
+    for area in cairn_layout::WorkspaceArea::ALL {
+        let path = admitted.workspace.join(area.directory_name());
+        fs::create_dir_all(&path)
+            .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?;
+    }
+    Ok(admitted)
+}
+
 /// What one project definition declares, once every intake condition has been checked.
 #[derive(Debug, Serialize)]
 pub struct AdmittedProject {
@@ -647,6 +678,8 @@ pub struct AdmittedProject {
     pub provided: usize,
     /// The agent's entire writable surface.
     pub authored_by_agent: usize,
+    /// The areas this project's workspace is laid out in.
+    pub areas: Vec<String>,
 }
 
 /// Checks whether one project definition may enter intake, and reports what it declares.
@@ -685,6 +718,10 @@ pub fn admit_project_definition(
         upstream: definition.source.upstream,
         provided: definition.provided.len(),
         authored_by_agent: definition.authored_by_agent.len(),
+        areas: cairn_layout::WorkspaceArea::ALL
+            .iter()
+            .map(|area| area.directory_name().to_owned())
+            .collect(),
     })
 }
 
