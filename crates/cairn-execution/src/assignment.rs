@@ -658,7 +658,14 @@ pub fn renew_assignment_lease<E: EventStore, C: ContentStore>(
     let availability = worker.availability().ok_or(WorkerControlError::Match(
         crate::WorkerMatchFailure::MissingAvailability,
     ))?;
-    if worker.last_seen_at() < projection.last_observed_at {
+    // Renewal needs the availability report to be at least as recent as the assignment state it
+    // would renew. That is a question about the age of the report, not about whether the worker is
+    // still there, so it asks when the availability was observed rather than borrowing the
+    // liveness stamp that happens to advance alongside it.
+    if worker
+        .availability_observed_at()
+        .is_none_or(|observed_at| observed_at < projection.last_observed_at)
+    {
         return Err(AssignmentControlError::StaleHeartbeat);
     }
     if !availability

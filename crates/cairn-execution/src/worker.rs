@@ -968,8 +968,9 @@ pub struct RegisteredWorkerSession {
     resource_observation: WorkerResourceObservation,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
     availability: Option<WorkerAvailability>,
-    last_seen_at: ObservedAtUnixMillis,
-    last_observed_at: ObservedAtUnixMillis,
+    availability_observed_at: Option<ObservedAtUnixMillis>,
+    last_liveness_at: ObservedAtUnixMillis,
+    last_durable_event_at: ObservedAtUnixMillis,
     last_event_id: EventId,
     revision: StreamRevision,
 }
@@ -1059,10 +1060,34 @@ impl RegisteredWorkerSession {
         self.availability.as_ref()
     }
 
-    /// Returns the registration/heartbeat observation used for liveness.
+    /// Returns when the availability evidence this session carries was observed, if any.
+    ///
+    /// This is the age of the availability report, not of the session. A decision that needs the
+    /// worker's reported slots or active attempts to be recent asks this; a decision about whether
+    /// the worker is still there asks [`Self::last_liveness_at`]. They advance together today
+    /// because the same heartbeat carries both, and they are separate because the questions are.
     #[must_use]
-    pub const fn last_seen_at(&self) -> ObservedAtUnixMillis {
-        self.last_seen_at
+    pub const fn availability_observed_at(&self) -> Option<ObservedAtUnixMillis> {
+        self.availability_observed_at
+    }
+
+    /// Returns the observation time of the most recent durable fact about this worker.
+    ///
+    /// This is the stream's monotonicity frontier, not a liveness signal. A decision that needs
+    /// the worker's durable record to have moved forward rather than backward asks this.
+    #[must_use]
+    pub const fn last_durable_event_at(&self) -> ObservedAtUnixMillis {
+        self.last_durable_event_at
+    }
+
+    /// Returns when the worker was last proved to be alive.
+    ///
+    /// The sole consumer is session expiry. It is not a progress token and not a freshness stamp
+    /// for any evidence the worker reported; binding a decision to it made an ordinary keepalive
+    /// invalidate that decision.
+    #[must_use]
+    pub const fn last_liveness_at(&self) -> ObservedAtUnixMillis {
+        self.last_liveness_at
     }
 }
 
@@ -1256,8 +1281,9 @@ struct WorkerProjection {
     resource_observation_revision: EventId,
     resource_admission_revision: Option<EventId>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
-    last_seen_at: ObservedAtUnixMillis,
-    last_observed_at: ObservedAtUnixMillis,
+    availability_observed_at: Option<ObservedAtUnixMillis>,
+    last_liveness_at: ObservedAtUnixMillis,
+    last_durable_event_at: ObservedAtUnixMillis,
     disconnected: bool,
     last_event_id: EventId,
     revision: StreamRevision,
@@ -1290,11 +1316,11 @@ pub fn synchronize_worker_pool_assignment<E: EventStore>(
     if projection.pool == assignment.pool {
         return Ok(());
     }
-    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
     let predecessor_expired_at = if projection.disconnected {
         None
     } else {
-        let expired_at = expiry_at(projection.last_seen_at, session_timeout)?;
+        let expired_at = expiry_at(projection.last_liveness_at, session_timeout)?;
         if observed_at < expired_at {
             return Err(WorkerControlError::WorkerPoolAssignmentRequiresInactiveSession);
         }
@@ -1361,59 +1387,60 @@ pub fn register_worker<E: EventStore, C: ContentStore, A: WorkerAuthenticator>(
         .content_id;
     let stream = worker_stream(hello.worker_id)?;
     let history = events.read_stream(&stream, None)?;
-    let (expected, parent, schema, replaced_incarnation_id, predecessor_expired_at) =
-        if history.is_empty() {
+    let (expected, parent, schema, replaced_incarnation_id, predecessor_expired_at) = if history
+        .is_empty()
+    {
+        (
+            ExpectedRevision::NoStream,
+            None,
+            WORKER_REGISTERED,
+            None,
+            None,
+        )
+    } else {
+        let projection = project_worker(&history, hello.worker_id)?;
+        if projection.authentication_subject != *authenticated.subject() {
+            return Err(WorkerControlError::AuthenticationSubjectChanged);
+        }
+        if projection.pool != *authenticated.pool() {
+            return Err(WorkerControlError::WorkerPoolChanged);
+        }
+        ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
+        if !projection.disconnected
+            && observed_at.get() < expiry_at(projection.last_liveness_at, session_timeout)?.get()
+        {
+            if projection.incarnation_id != hello.incarnation_id {
+                return Err(WorkerControlError::DuplicateLiveWorker {
+                    worker_id: hello.worker_id,
+                    live_incarnation: projection.incarnation_id,
+                });
+            }
+            if projection.profile_id != profile_id {
+                return Err(WorkerControlError::IncarnationProfileChanged);
+            }
+            if projection.credential_id != authenticated.credential_id() {
+                return Err(WorkerControlError::IncarnationCredentialChanged);
+            }
+            return materialize_session(content, hello.worker_id, projection);
+        }
+        if projection.disconnected {
             (
-                ExpectedRevision::NoStream,
-                None,
+                ExpectedRevision::Exact(projection.revision),
+                Some(projection.last_event_id),
                 WORKER_REGISTERED,
                 None,
                 None,
             )
         } else {
-            let projection = project_worker(&history, hello.worker_id)?;
-            if projection.authentication_subject != *authenticated.subject() {
-                return Err(WorkerControlError::AuthenticationSubjectChanged);
-            }
-            if projection.pool != *authenticated.pool() {
-                return Err(WorkerControlError::WorkerPoolChanged);
-            }
-            ensure_nonregressing(observed_at, projection.last_observed_at)?;
-            if !projection.disconnected
-                && observed_at.get() < expiry_at(projection.last_seen_at, session_timeout)?.get()
-            {
-                if projection.incarnation_id != hello.incarnation_id {
-                    return Err(WorkerControlError::DuplicateLiveWorker {
-                        worker_id: hello.worker_id,
-                        live_incarnation: projection.incarnation_id,
-                    });
-                }
-                if projection.profile_id != profile_id {
-                    return Err(WorkerControlError::IncarnationProfileChanged);
-                }
-                if projection.credential_id != authenticated.credential_id() {
-                    return Err(WorkerControlError::IncarnationCredentialChanged);
-                }
-                return materialize_session(content, hello.worker_id, projection);
-            }
-            if projection.disconnected {
-                (
-                    ExpectedRevision::Exact(projection.revision),
-                    Some(projection.last_event_id),
-                    WORKER_REGISTERED,
-                    None,
-                    None,
-                )
-            } else {
-                (
-                    ExpectedRevision::Exact(projection.revision),
-                    Some(projection.last_event_id),
-                    WORKER_REPLACED,
-                    Some(projection.incarnation_id),
-                    Some(expiry_at(projection.last_seen_at, session_timeout)?),
-                )
-            }
-        };
+            (
+                ExpectedRevision::Exact(projection.revision),
+                Some(projection.last_event_id),
+                WORKER_REPLACED,
+                Some(projection.incarnation_id),
+                Some(expiry_at(projection.last_liveness_at, session_timeout)?),
+            )
+        }
+    };
     let event = fact(
         schema,
         1,
@@ -1482,25 +1509,34 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
     let known_availability_id = projection
         .as_ref()
         .map_or(session.availability_id, |value| value.availability_id);
-    let known_last_seen_at = projection
+    // Idempotence asks whether this exact availability report was already recorded at this exact
+    // observation, so it compares when the availability was observed. Comparing the liveness stamp
+    // answered a different question that happened to have the same value.
+    let known_availability_observed_at = projection
         .as_ref()
-        .map_or(session.last_seen_at, |value| value.last_seen_at);
-    if known_availability_id == Some(availability_id) && known_last_seen_at == observed_at {
+        .map_or(session.availability_observed_at, |value| {
+            value.availability_observed_at
+        });
+    if known_availability_id == Some(availability_id)
+        && known_availability_observed_at == Some(observed_at)
+    {
         return match projection {
             Some(projection) => materialize_session(content, session.worker_id, projection),
             None => Ok(session.clone()),
         };
     }
-    let last_observed_at = projection
+    let last_durable_event_at = projection
         .as_ref()
-        .map_or(session.last_observed_at, |value| value.last_observed_at);
+        .map_or(session.last_durable_event_at, |value| {
+            value.last_durable_event_at
+        });
     let parent_event_id = projection
         .as_ref()
         .map_or(session.last_event_id, |value| value.last_event_id);
     let expected_revision = projection
         .as_ref()
         .map_or(session.revision, |value| value.revision);
-    ensure_nonregressing(observed_at, last_observed_at)?;
+    ensure_nonregressing(observed_at, last_durable_event_at)?;
     let event = fact(
         WORKER_HEARTBEAT,
         1,
@@ -1538,8 +1574,9 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
         resource_observation: session.resource_observation.clone(),
         availability_id: Some(availability_id),
         availability: Some(availability.clone()),
-        last_seen_at: observed_at,
-        last_observed_at: observed_at,
+        availability_observed_at: Some(observed_at),
+        last_liveness_at: observed_at,
+        last_durable_event_at: observed_at,
         last_event_id,
         revision,
     })
@@ -1625,7 +1662,7 @@ fn record_admitted_resource_observation<E: EventStore, C: ContentStore>(
     let history = events.read_stream(&stream, None)?;
     let projection = project_worker(&history, session.worker_id)?;
     ensure_current(session, &projection)?;
-    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
     if projection.resource_observation_id == resource_observation_id {
         return materialize_session(content, session.worker_id, projection);
     }
@@ -1685,7 +1722,7 @@ pub fn disconnect_worker<E: EventStore>(
     if projection.disconnected {
         return Ok(());
     }
-    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
     let event = fact(
         WORKER_DISCONNECTED,
         1,
@@ -1722,13 +1759,13 @@ pub fn recover_worker_session<E: EventStore, C: ContentStore>(
         return Ok(WorkerSessionState::NotFound);
     }
     let projection = project_worker(&history, worker_id)?;
-    ensure_nonregressing(observed_at, projection.last_observed_at)?;
+    ensure_nonregressing(observed_at, projection.last_durable_event_at)?;
     if projection.disconnected {
         return Ok(WorkerSessionState::Disconnected {
             incarnation_id: projection.incarnation_id,
         });
     }
-    let expired_at = expiry_at(projection.last_seen_at, session_timeout)?;
+    let expired_at = expiry_at(projection.last_liveness_at, session_timeout)?;
     if observed_at.get() >= expired_at.get() {
         return Ok(WorkerSessionState::Expired {
             incarnation_id: projection.incarnation_id,
@@ -1749,7 +1786,9 @@ pub fn match_worker(
     session: &RegisteredWorkerSession,
     contract: &JobContract,
 ) -> Result<(), WorkerMatchFailure> {
-    match_worker_at(session, contract, session.last_seen_at)
+    // Evaluated as of the most recent durable evidence about this worker. The liveness stamp used
+    // to stand in for that, which quietly tied quantitative freshness to keepalive arrival.
+    match_worker_at(session, contract, session.last_durable_event_at)
 }
 
 /// Matches a contract and rejects quantitative evidence stale at the caller's observation time.
@@ -1941,8 +1980,9 @@ fn materialize_session<C: ContentStore>(
         resource_observation,
         availability_id: projection.availability_id,
         availability,
-        last_seen_at: projection.last_seen_at,
-        last_observed_at: projection.last_observed_at,
+        availability_observed_at: projection.availability_observed_at,
+        last_liveness_at: projection.last_liveness_at,
+        last_durable_event_at: projection.last_durable_event_at,
         last_event_id: projection.last_event_id,
         revision: projection.revision,
     })
@@ -2005,7 +2045,7 @@ fn project_worker(
                             || payload.replaced_incarnation_id != Some(state.incarnation_id)
                             || payload.predecessor_expired_at.is_none_or(|expired_at| {
                                 event.observed_at_unix_ms < expired_at.get()
-                                    || expired_at <= state.last_seen_at
+                                    || expired_at <= state.last_liveness_at
                             })
                     })
                 {
@@ -2029,8 +2069,9 @@ fn project_worker(
                     resource_observation_revision: event.event_id,
                     resource_admission_revision: None,
                     availability_id: None,
-                    last_seen_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
-                    last_observed_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
+                    availability_observed_at: None,
+                    last_liveness_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
+                    last_durable_event_at: ObservedAtUnixMillis::new(event.observed_at_unix_ms),
                     disconnected: false,
                     last_event_id: event.event_id,
                     revision: revision(event)?,
@@ -2049,7 +2090,7 @@ fn project_worker(
                 let inactive_is_valid = if state.disconnected {
                     payload.predecessor_expired_at.is_none()
                 } else if let Some(expired_at) = payload.predecessor_expired_at {
-                    expired_at == expiry_at(state.last_seen_at, payload.session_timeout)?
+                    expired_at == expiry_at(state.last_liveness_at, payload.session_timeout)?
                         && event.observed_at_unix_ms >= expired_at.get()
                 } else {
                     false
@@ -2058,13 +2099,13 @@ fn project_worker(
                     || payload.previous_pool != state.pool
                     || payload.pool == state.pool
                     || !inactive_is_valid
-                    || event.observed_at_unix_ms < state.last_observed_at.get()
+                    || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history("worker pool assignment contradicts current session");
                 }
                 state.pool = payload.pool.clone();
                 state.pool_assignment_revision = Some(payload.authority_revision);
-                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_durable_event_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
                 bound_pool = Some(payload.pool);
@@ -2080,13 +2121,15 @@ fn project_worker(
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
                     || state.disconnected
-                    || event.observed_at_unix_ms < state.last_observed_at.get()
+                    || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history("worker heartbeat contradicts current incarnation");
                 }
                 state.availability_id = Some(payload.availability_id);
-                state.last_seen_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
-                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.availability_observed_at =
+                    Some(ObservedAtUnixMillis::new(event.observed_at_unix_ms));
+                state.last_liveness_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_durable_event_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
             }
@@ -2103,7 +2146,7 @@ fn project_worker(
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
                     || state.disconnected
-                    || event.observed_at_unix_ms < state.last_observed_at.get()
+                    || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history(
                         "worker resource observation contradicts current incarnation",
@@ -2112,7 +2155,7 @@ fn project_worker(
                 state.resource_observation_id = payload.resource_observation_id;
                 state.resource_observation_revision = event.event_id;
                 state.resource_admission_revision = payload.admission_evidence_revision;
-                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_durable_event_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
             }
@@ -2127,13 +2170,13 @@ fn project_worker(
                 if payload.worker_id != expected_worker_id
                     || payload.incarnation_id != state.incarnation_id
                     || state.disconnected
-                    || event.observed_at_unix_ms < state.last_observed_at.get()
+                    || event.observed_at_unix_ms < state.last_durable_event_at.get()
                 {
                     return invalid_history("worker disconnect contradicts current incarnation");
                 }
                 state.disconnected = true;
-                state.last_seen_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
-                state.last_observed_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_liveness_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
+                state.last_durable_event_at = ObservedAtUnixMillis::new(event.observed_at_unix_ms);
                 state.last_event_id = event.event_id;
                 state.revision = revision(event)?;
             }
@@ -2451,10 +2494,12 @@ mod tests {
         )])
     }
 
-    #[test]
-    fn authenticated_profile_and_heartbeat_survive_restart_and_match() {
-        let mut fixture = Fixture::new();
-        let worker_id = WorkerId::new();
+    // Registration alone carries no availability, so a contract cannot be matched until the first
+    // heartbeat supplies one.
+    fn registered_and_available(
+        fixture: &mut Fixture,
+        worker_id: WorkerId,
+    ) -> (RegisteredWorkerSession, WorkerAvailability) {
         let hello = WorkerHello::new(worker_id, WorkerIncarnationId::new(), profile("x86_64"));
         let mut auth = authenticator(worker_id, "spiffe://cairn/worker/one");
         let session = register_worker(
@@ -2482,6 +2527,14 @@ mod tests {
             ObservedAtUnixMillis::new(10),
         )
         .expect("heartbeat");
+        (session, available)
+    }
+
+    #[test]
+    fn an_authenticated_profile_matches_a_contract_on_every_static_dimension() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let (session, _available) = registered_and_available(&mut fixture, worker_id);
         assert!(match_worker(&session, &contract("x86_64", "fixture")).is_ok());
         assert!(matches!(
             match_worker(&session, &contract("aarch64", "fixture")),
@@ -2519,6 +2572,13 @@ mod tests {
             match_worker(&session, &contract("x86_64", "another-pool")),
             Err(WorkerMatchFailure::Pool(pool)) if pool == "fixture"
         ));
+    }
+
+    #[test]
+    fn a_restart_recovers_the_stream_position_the_heartbeat_path_appends_against() {
+        let mut fixture = Fixture::new();
+        let worker_id = WorkerId::new();
+        let (session, available) = registered_and_available(&mut fixture, worker_id);
 
         fixture.reopen();
         let WorkerSessionState::Live(recovered) = recover_worker_session(
@@ -2544,7 +2604,10 @@ mod tests {
         // carry a stale parent and revision.
         assert_eq!(recovered.last_event_id, session.last_event_id);
         assert_eq!(recovered.revision, session.revision);
-        assert_eq!(recovered.last_observed_at, session.last_observed_at);
+        assert_eq!(
+            recovered.last_durable_event_at,
+            session.last_durable_event_at
+        );
         let busy = WorkerAvailability::new(WorkerHealth::Ready, false, 0, Vec::new())
             .expect("availability");
         let after_restart = record_worker_heartbeat(
@@ -2827,7 +2890,7 @@ mod tests {
         .expect("refresh");
         assert_eq!(refreshed.profile_id(), profile_id);
         assert_ne!(refreshed.resource_observation_id(), startup_id);
-        assert_eq!(refreshed.last_seen_at(), ObservedAtUnixMillis::new(0));
+        assert_eq!(refreshed.last_liveness_at(), ObservedAtUnixMillis::new(0));
 
         let controller_observation = WorkerResourceObservation::new(
             WorkerResourceSource::ControllerVerified,

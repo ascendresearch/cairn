@@ -257,7 +257,7 @@ pub struct PlacementCandidateSnapshot {
     resource_observation_revision: Option<EventId>,
     resource_admission_revision: Option<EventId>,
     availability_id: Option<ContentId<WorkerAvailabilityArtifact>>,
-    last_seen_at: Option<ObservedAtUnixMillis>,
+    durable_event_at: Option<ObservedAtUnixMillis>,
     authority_revision: Option<EventId>,
     disposition: CandidateDisposition,
 }
@@ -337,7 +337,7 @@ struct ReservationBinding {
     worker_resource_observation_revision: EventId,
     worker_resource_admission_revision: Option<EventId>,
     worker_availability_id: ContentId<WorkerAvailabilityArtifact>,
-    worker_last_seen_at: ObservedAtUnixMillis,
+    worker_durable_event_at: ObservedAtUnixMillis,
     claim_deadline: ObservedAtUnixMillis,
     resources: ReservedWorkerResources,
 }
@@ -587,7 +587,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 resource_observation_revision: None,
                 resource_admission_revision: None,
                 availability_id: None,
-                last_seen_at: None,
+                durable_event_at: None,
                 authority_revision: None,
                 disposition: CandidateDisposition::Rejected {
                     reason: PlacementCandidateRejection::Disconnected,
@@ -602,7 +602,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 resource_observation_revision: None,
                 resource_admission_revision: None,
                 availability_id: None,
-                last_seen_at: None,
+                durable_event_at: None,
                 authority_revision: None,
                 disposition: CandidateDisposition::Rejected {
                     reason: PlacementCandidateRejection::Expired,
@@ -686,7 +686,7 @@ pub fn reserve_worker_placement<E: EventStore, C: ContentStore, A: WorkerPlaceme
                 worker_resource_observation_revision: session.resource_observation_revision(),
                 worker_resource_admission_revision: session.resource_admission_revision(),
                 worker_availability_id: availability_id,
-                worker_last_seen_at: session.last_seen_at(),
+                worker_durable_event_at: session.last_durable_event_at(),
                 claim_deadline,
                 resources: quantitative_reservation.clone(),
             })
@@ -791,10 +791,13 @@ pub fn grant_reserved_assignment<E: EventStore, C: ContentStore, A: WorkerPlacem
     }
     // Liveness is already decided above: recover_worker_session returns Live only while the session
     // has not expired under this policy's session timeout. What the reservation binds here is that
-    // the worker has not gone backwards, not that nothing happened. Requiring equality would make an
-    // ordinary heartbeat invalidate a placement decision, and the claim window is configured equal
-    // to the heartbeat interval, so that equality was a race against liveness rather than a check.
-    if worker.last_seen_at() < reservation.worker_last_seen_at {
+    // the worker's durable record has not gone backwards, not that nothing happened. Requiring
+    // equality would make an ordinary heartbeat invalidate a placement decision, and the claim
+    // window is configured equal to the heartbeat interval, so that equality was a race against
+    // liveness rather than a check. This asks the stream frontier rather than the liveness stamp,
+    // because "has not regressed" is a question about the record, not about whether the worker is
+    // still there.
+    if worker.last_durable_event_at() < reservation.worker_durable_event_at {
         return Err(SchedulerError::StaleCandidate);
     }
     if !authority
@@ -998,7 +1001,7 @@ fn evaluate_live_candidate<A: WorkerPlacementAuthority>(
         resource_observation_revision: Some(session.resource_observation_revision()),
         resource_admission_revision: session.resource_admission_revision(),
         availability_id: session.availability_id(),
-        last_seen_at: Some(session.last_seen_at()),
+        durable_event_at: Some(session.last_durable_event_at()),
         authority_revision: authority_observation.evidence_revision(),
         disposition,
     })
@@ -1017,7 +1020,7 @@ fn rejected(
         resource_observation_revision: None,
         resource_admission_revision: None,
         availability_id: None,
-        last_seen_at: None,
+        durable_event_at: None,
         authority_revision: None,
         disposition: CandidateDisposition::Rejected { reason },
     }
@@ -1201,7 +1204,7 @@ fn validate_record_snapshot<C: ContentStore>(
             || selected.resource_admission_revision
                 != reservation.worker_resource_admission_revision
             || selected.availability_id != Some(reservation.worker_availability_id)
-            || selected.last_seen_at != Some(reservation.worker_last_seen_at)
+            || selected.durable_event_at != Some(reservation.worker_durable_event_at)
             || reservation.claim_deadline <= snapshot.observed_at
         {
             return invalid_history("reservation contradicts selected candidate evidence");
