@@ -23,7 +23,10 @@ for file in README.md docs/*.md; do
   done < <(sed -n 's/.*](\([^)]*\)).*/\1/p' "$file")
 done
 
-if rg -n '[[:blank:]]+$' README.md LICENSE .github config model-templates docs crates scripts release Cargo.toml rustfmt.toml rust-toolchain.toml; then
+if grep -rnI --exclude-dir=target '[[:blank:]]\+$' \
+  README.md AGENTS.md LICENSE .github config model-templates docs crates scripts release \
+  Cargo.toml rustfmt.toml rust-toolchain.toml; then
+  echo "trailing whitespace above" >&2
   status=1
 fi
 
