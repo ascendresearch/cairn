@@ -157,6 +157,22 @@ pub enum LayoutError {
 /// Explicit per-tree roots, overriding what a single deployment root would give.
 pub type TreeRoots = BTreeMap<RuntimeTree, PathBuf>;
 
+/// Declares where a deployment's runtime trees live.
+///
+/// A bundled deployment names one root and takes the conventional directory under it for each
+/// tree; a system installation names each root. Both are bindings of the same logical roles, which
+/// is why one type expresses both rather than two configuration shapes existing side by side.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutConfig {
+    /// Single deployment root. When absent, `CAIRN_HOME` supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<PathBuf>,
+    /// Explicit roots, overriding what `home` would give for those trees.
+    #[serde(default, skip_serializing_if = "TreeRoots::is_empty")]
+    pub roots: TreeRoots,
+}
+
 /// Absolute, mutually disjoint roots for the trees one process owns.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeLayout {

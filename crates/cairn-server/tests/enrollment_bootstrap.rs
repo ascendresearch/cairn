@@ -1,18 +1,21 @@
 use std::{
-    error::Error, fs, net::TcpListener as StdTcpListener, num::NonZeroU64, path::Path,
+    error::Error,
+    fs,
+    net::TcpListener as StdTcpListener,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
-use cairn_control_transport::{ClientTlsFiles, EnrollmentSecret, TransportPolicy};
+use cairn_control_transport::{ClientTlsFiles, EnrollmentSecret};
 use cairn_execution::{
     AcceleratorDiscoveryCompleteness, ArchitectureName, AuthenticatedWorkerIdentity,
-    ExecutionBackend, ExecutionPlatform, ExecutionPlatformRequirement, LogicalCpuCount,
-    MemoryByteCount, OperatingSystemName, RecordedWorkerAuthenticator, ResourceProbeVersion,
-    ScratchByteCount, SessionEndReason, TargetEnvironmentName, WorkerAuthenticationSubject,
-    WorkerAvailability, WorkerBinaryIdentity, WorkerHealth, WorkerHello, WorkerPoolName,
-    WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim, WorkerResourceInventory,
-    WorkerResourceObservation, WorkerResourceSource, WorkerSessionState, WorkerSlotCount,
-    recover_worker_session, register_worker,
+    ExecutionBackend, ExecutionPlatform, LogicalCpuCount, MemoryByteCount, OperatingSystemName,
+    RecordedWorkerAuthenticator, ResourceProbeVersion, ScratchByteCount, SessionEndReason,
+    TargetEnvironmentName, WorkerAuthenticationSubject, WorkerBinaryIdentity, WorkerHealth,
+    WorkerHello, WorkerPoolName, WorkerProfile, WorkerProtocolVersion, WorkerResourceClaim,
+    WorkerResourceInventory, WorkerResourceObservation, WorkerResourceSource, WorkerSessionState,
+    WorkerSlotCount, recover_worker_session, register_worker,
 };
 use cairn_protocol::{
     AggregateId, AggregateKind, CommandId, ObservedAtUnixMillis, WorkerIncarnationId,
@@ -25,9 +28,7 @@ use cairn_server::{
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
 use cairn_worker::{
-    ControllerEndpoint, ExpectedResourceConstraints, ResourceProbeConfig, WorkerConfig,
-    WorkerExecutionConfig, WorkerIdentityConfig, WorkerProfileConfig, enroll, join_from_bundle,
-    rollback_rotation, rotate,
+    WorkerConfig, WorkerIdentityConfig, enroll, join_from_bundle, rollback_rotation, rotate,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -93,12 +94,14 @@ async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
     fs::write(state.join("worker.json"), &operator_config)?;
     let receipt = Box::pin(join_from_bundle(&bundle_path, &state)).await?;
     assert_eq!(receipt.config_path, state.join("worker.json"));
-    assert!(state.join("identity/worker-key.pem").is_file());
-    assert!(state.join("identity/identity.json").is_file());
-    assert!(state.join("scratch").is_dir());
-    assert!(state.join("content.sqlite3").is_file());
-    assert!(state.join("content").is_dir());
-    assert!(state.join("transfers").is_dir());
+    // One command produces a deployment, not a pile of files: identity lands in the secret tree
+    // and everything this worker writes lands in the store tree.
+    assert!(state.join("secrets/identity/worker-key.pem").is_file());
+    assert!(state.join("secrets/identity/identity.json").is_file());
+    assert!(state.join("store/scratch").is_dir());
+    assert!(state.join("store/content.sqlite3").is_file());
+    assert!(state.join("store/content").is_dir());
+    assert!(state.join("store/transfers").is_dir());
     assert_eq!(fs::read(&receipt.config_path)?, operator_config);
 
     let worker = tokio::spawn(cairn_worker::run_from_arguments([
@@ -166,7 +169,8 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
     let server_a = tokio::spawn(cairn_server::run(config_a));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let state = directory.path().join("managed-worker");
+    let state_home = directory.path().join("managed-worker");
+    let state = prepare_worker_home(&state_home)?;
     let identity = Box::pin(enroll(bundle.clone(), &state)).await?;
     assert_eq!(identity.pool, pool);
     assert!(state.join("worker-key.pem").is_file());
@@ -253,14 +257,16 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         pool.clone(),
         NonZeroU64::new(60_000).expect("TTL"),
     )?;
-    let disabled_state = directory.path().join("disabled-worker");
+    let disabled_home = directory.path().join("disabled-worker");
+    let disabled_state = prepare_worker_home(&disabled_home)?;
     let disabled_identity = Box::pin(enroll(disabled_bundle, &disabled_state)).await?;
     let reassigned_bundle = create_enrollment_bundle(
         &issuance_config,
         pool.clone(),
         NonZeroU64::new(60_000).expect("TTL"),
     )?;
-    let reassigned_state = directory.path().join("reassigned-worker");
+    let reassigned_home = directory.path().join("reassigned-worker");
+    let reassigned_state = prepare_worker_home(&reassigned_home)?;
     let reassigned_identity = Box::pin(enroll(reassigned_bundle, &reassigned_state)).await?;
 
     // A fresh controller instance reconstructs certificate -> stable WorkerId/pool authorization
@@ -276,13 +282,13 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
         disabled_identity.worker_id,
         &CommandId::new(),
     )?;
-    let mut disabled_worker_config = worker_config(control_b, &disabled_state)?;
+    let mut disabled_worker_config = worker_config(control_b, &disabled_home)?;
     disabled_worker_config.reconnect_delay_ms = None;
     let disabled_worker = tokio::spawn(cairn_worker::run(disabled_worker_config));
-    let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, &state)?));
+    let worker = tokio::spawn(cairn_worker::run(worker_config(control_b, &state_home)?));
     let reassigned_worker = tokio::spawn(cairn_worker::run(worker_config(
         control_b,
-        &reassigned_state,
+        &reassigned_home,
     )?));
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -421,7 +427,7 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
             .to_string()
             .contains("overlap has elapsed")
     );
-    let mut retired_config = worker_config(control_b, &state)?;
+    let mut retired_config = worker_config(control_b, &state_home)?;
     retired_config.identity = WorkerIdentityConfig::External {
         worker_id: identity.worker_id,
         tls: ClientTlsFiles {
@@ -431,7 +437,6 @@ async fn one_shot_bootstrap_survives_response_loss_and_controller_restart()
             server_name: identity.tls.server_name.clone(),
         },
     };
-    retired_config.journal_database = directory.path().join("retired-worker.sqlite3");
     retired_config.reconnect_delay_ms = None;
     assert!(
         Box::pin(cairn_worker::run(retired_config))
@@ -749,58 +754,59 @@ fn server_config(
     Ok(config)
 }
 
+/// Lays out one worker deployment under `home` and returns its identity directory.
+fn prepare_worker_home(home: &Path) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
+    fs::create_dir_all(home.join("secrets"))?;
+    fs::create_dir_all(home.join("store/scratch"))?;
+    Ok(home.join("secrets/identity"))
+}
+
 fn worker_config(
     control: std::net::SocketAddr,
-    state_directory: &std::path::Path,
+    home: &Path,
 ) -> Result<WorkerConfig, Box<dyn Error + Send + Sync>> {
-    let journal_database = state_directory.join("worker-journal.sqlite3");
-    Ok(WorkerConfig {
-        schema_version: 1,
-        controller: ControllerEndpoint {
-            tcp_address: control.to_string(),
-            websocket_uri: format!("wss://localhost:{}/control", control.port()),
+    let mut config: WorkerConfig = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "layout": { "home": home },
+        "controller": {
+            "tcp_address": control.to_string(),
+            "websocket_uri": format!("wss://localhost:{}/control", control.port())
         },
-        identity: WorkerIdentityConfig::Managed {
-            state_directory: state_directory.to_path_buf(),
+        "identity": { "mode": "managed", "state_directory": "identity" },
+        "profile": {
+            "schema_version": 1,
+            "protocol_version": 1,
+            "binary_identity": "sha256:enrollment-test",
+            "backends": ["transport-only"],
+            "capabilities": [],
+            "max_concurrency": 1
         },
-        profile: WorkerProfileConfig {
-            schema_version: 1,
-            protocol_version: WorkerProtocolVersion::new(1)?,
-            binary_identity: WorkerBinaryIdentity::new("sha256:enrollment-test")?,
-            backends: vec![ExecutionBackend::new("transport-only")?],
-            capabilities: Vec::new(),
-            max_concurrency: WorkerSlotCount::new(1)?,
+        "resource_probe": {
+            "scratch_path": "scratch",
+            "accelerator_sysfs": null,
+            "freshness_ms": null,
+            "refresh_interval_ms": null,
+            "expected": {}
         },
-        expected_platform: ExecutionPlatformRequirement::default(),
-        resource_probe: ResourceProbeConfig {
-            scratch_path: journal_database
-                .parent()
-                .expect("journal parent")
-                .to_path_buf(),
-            accelerator_sysfs: None,
-            freshness_ms: None,
-            refresh_interval_ms: None,
-            expected: ExpectedResourceConstraints::default(),
+        "availability": {
+            "health": "unavailable",
+            "draining": true,
+            "available_slots": 0,
+            "active_attempts": []
         },
-        availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())?,
-        journal_database,
-        content: cairn_worker::WorkerContentConfig {
-            database: state_directory.join("content.sqlite3"),
-            directory: state_directory.join("content"),
-            transfer_directory: state_directory.join("transfers"),
-            assignment_material_byte_limit: None,
-            assignment_material_chunk_size: cairn_execution::AssignmentMaterialChunkSize::new(
-                16 * 1024,
-            )?,
+        "content": {
+            "assignment_material_byte_limit": null,
+            "assignment_material_chunk_size": 16_384
         },
-        execution: WorkerExecutionConfig::Disabled,
-        handshake_timeout_ms: NonZeroU64::new(2_000),
-        idle_timeout_ms: None,
-        heartbeat_interval_ms: NonZeroU64::new(50),
-        identity_poll_interval_ms: NonZeroU64::new(25).expect("identity poll"),
-        reconnect_delay_ms: NonZeroU64::new(25),
-        transport: TransportPolicy::default(),
-    })
+        "execution": { "mode": "disabled" },
+        "handshake_timeout_ms": 2_000,
+        "idle_timeout_ms": null,
+        "heartbeat_interval_ms": 50,
+        "identity_poll_interval_ms": 25,
+        "reconnect_delay_ms": 25
+    }))?;
+    config.resolve_layout(None)?;
+    Ok(config)
 }
 
 fn free_address() -> Result<std::net::SocketAddr, Box<dyn Error + Send + Sync>> {

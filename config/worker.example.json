@@ -5,34 +5,33 @@
     "draining": true,
     "health": "unavailable"
   },
+  "content": {
+    "assignment_material_byte_limit": 536870912,
+    "assignment_material_chunk_size": 262144
+  },
   "controller": {
     "tcp_address": "controller.example.test:7443",
     "websocket_uri": "wss://controller.example.test:7443/control"
   },
-  "content": {
-    "assignment_material_byte_limit": 536870912,
-    "assignment_material_chunk_size": 262144,
-    "database": "state/content.sqlite3",
-    "directory": "state/content",
-    "transfer_directory": "state/transfers"
+  "execution": {
+    "mode": "disabled"
   },
   "expected_platform": {
     "architecture": null,
     "operating_system": "linux",
     "target_environment": "gnu"
   },
-  "execution": {
-    "mode": "disabled"
-  },
   "handshake_timeout_ms": 10000,
   "heartbeat_interval_ms": 30000,
-  "identity_poll_interval_ms": 1000,
   "identity": {
     "mode": "managed",
-    "state_directory": "state/identity"
+    "state_directory": "identity"
   },
+  "identity_poll_interval_ms": 1000,
   "idle_timeout_ms": 120000,
-  "journal_database": "state/worker.sqlite3",
+  "layout": {
+    "home": "/srv/cairn"
+  },
   "profile": {
     "backends": [
       "transport-only"
@@ -43,6 +42,7 @@
     "protocol_version": 1,
     "schema_version": 1
   },
+  "reconnect_delay_ms": 1000,
   "resource_probe": {
     "accelerator_sysfs": "/sys/class/accel",
     "expected": {
@@ -54,9 +54,8 @@
     },
     "freshness_ms": null,
     "refresh_interval_ms": null,
-    "scratch_path": "."
+    "scratch_path": "scratch"
   },
-  "reconnect_delay_ms": 1000,
   "schema_version": 1,
   "transport": {
     "message_byte_limit": 1048576

@@ -49,7 +49,7 @@ use cairn_execution::{
     record_worker_resource_observation, recover_execution_assignment, register_worker,
     start_accepted_assignment, synchronize_worker_pool_assignment,
 };
-use cairn_layout::{LayoutRole, RuntimeLayout, RuntimeTree, TreeRoots};
+use cairn_layout::{LayoutConfig, LayoutRole, RuntimeLayout, RuntimeTree};
 use cairn_protocol::{
     CommandId, ControlConnectionId, ControlSequence, CredentialId, EnrollmentId, EventId,
     EventSequence, ObservedAtUnixMillis, ReservationId, WorkerId,
@@ -103,21 +103,6 @@ pub struct ServerConfig {
     /// Resolved workspaces root. Derived from `layout` for the same reason as the store root.
     #[serde(skip)]
     workspaces_root: PathBuf,
-}
-
-/// Declares where this deployment's runtime trees live.
-///
-/// A bundled deployment names one root and takes the conventional directory under it for each
-/// tree; a system installation names each root. Both are bindings of the same logical roles.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LayoutConfig {
-    /// Single deployment root. When absent, `CAIRN_HOME` supplies it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub home: Option<PathBuf>,
-    /// Explicit roots, overriding what `home` would give for those trees.
-    #[serde(default, skip_serializing_if = "TreeRoots::is_empty")]
-    pub roots: TreeRoots,
 }
 
 /// Isolated server-authenticated listener and certificate authority used only for bootstrap.

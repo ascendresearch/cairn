@@ -34,6 +34,7 @@ use cairn_execution::{
     recover_started_worker_executions, validate_assignment_material_manifest,
     verify_persisted_assignment_materials,
 };
+use cairn_layout::{LayoutConfig, LayoutRole, RuntimeLayout, RuntimeTree};
 use cairn_protocol::{
     CommandId, ContentId, ContentType, ControlConnectionId, ControlMessageId, ControlSequence,
     CredentialId, EnrollmentId, ObservedAtUnixMillis, WorkerId, WorkerIncarnationId,
@@ -68,9 +69,11 @@ pub struct WorkerConfig {
     pub profile: WorkerProfileConfig,
     #[serde(default)]
     pub expected_platform: ExecutionPlatformRequirement,
+    /// Where this worker's runtime trees live.
+    #[serde(default)]
+    pub layout: LayoutConfig,
     pub resource_probe: ResourceProbeConfig,
     pub availability: WorkerAvailability,
-    pub journal_database: PathBuf,
     pub content: WorkerContentConfig,
     #[serde(default)]
     pub execution: WorkerExecutionConfig,
@@ -81,15 +84,17 @@ pub struct WorkerConfig {
     pub reconnect_delay_ms: Option<NonZeroU64>,
     #[serde(default)]
     pub transport: TransportPolicy,
+    /// Resolved store root. Derived from `layout`, never configured directly: a worker's own
+    /// journal, content and working areas are its business, and naming them per deployment only
+    /// adds ways to scatter them outside the tree that owns them.
+    #[serde(skip)]
+    store_root: PathBuf,
 }
 
 /// Worker-local verified assignment-content storage and ingress budget.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerContentConfig {
-    pub database: PathBuf,
-    pub directory: PathBuf,
-    pub transfer_directory: PathBuf,
     /// Aggregate input-bundle plus environment bytes; `null` disables this budget.
     pub assignment_material_byte_limit: Option<AssignmentMaterialByteLimit>,
     /// Positive maximum raw bytes requested in one resumable chunk.
@@ -290,8 +295,8 @@ pub async fn run_from_arguments(
             .map_err(|error| WorkerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    config.resolve_paths(base);
+    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
+    config.resolve_layout(environment_home.as_deref())?;
     Box::pin(run(config)).await
 }
 
@@ -305,16 +310,20 @@ pub async fn run_from_arguments(
     clippy::too_many_lines,
     reason = "the worker incarnation/reconnect lifecycle includes paired operational events at its durable boundaries"
 )]
-pub async fn run(config: WorkerConfig) -> Result<(), WorkerError> {
+pub async fn run(mut config: WorkerConfig) -> Result<(), WorkerError> {
+    let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
+    config.resolve_layout(environment_home.as_deref())?;
+    let config = config;
     let profile = config.runtime_profile()?;
     config.validate(&profile)?;
     let mut incarnation_id = WorkerIncarnationId::new();
     let mut bound_credential = None;
-    let mut journal = SqliteEventStore::open(&config.journal_database)
+    let mut journal = SqliteEventStore::open(config.journal_database())
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    let mut content = SqliteContentStore::open(&config.content.database, &config.content.directory)
-        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    prepare_state_directory(&config.content.transfer_directory)?;
+    let mut content =
+        SqliteContentStore::open(config.content_database(), config.content_directory())
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    prepare_state_directory(&config.transfer_directory())?;
     if let WorkerExecutionConfig::Docker {
         state_directory, ..
     } = &config.execution
@@ -446,9 +455,11 @@ impl WorkerConfig {
                     ));
                 }
                 validate_managed_material(state_directory, &identity)?;
-                resolve(&mut identity.tls.certificate, state_directory);
-                resolve(&mut identity.tls.private_key, state_directory);
-                resolve(&mut identity.tls.server_ca, state_directory);
+                // These names live inside the identity document and refer to files beside it, so
+                // they are resolved against that directory rather than against a tree.
+                beside(&mut identity.tls.certificate, state_directory);
+                beside(&mut identity.tls.private_key, state_directory);
+                beside(&mut identity.tls.server_ca, state_directory);
                 Ok(ResolvedWorkerIdentity {
                     worker_id: identity.worker_id,
                     credential_id: Some(identity.credential_id),
@@ -592,24 +603,80 @@ impl WorkerConfig {
         Ok(())
     }
 
-    fn resolve_paths(&mut self, base: &Path) {
+    /// Returns this worker's durable journal inside the store tree.
+    #[must_use]
+    pub fn journal_database(&self) -> PathBuf {
+        self.store_root.join("journal.sqlite3")
+    }
+
+    /// Returns the worker-local content index inside the store tree.
+    #[must_use]
+    pub fn content_database(&self) -> PathBuf {
+        self.store_root.join("content.sqlite3")
+    }
+
+    /// Returns the worker-local content blob directory inside the store tree.
+    #[must_use]
+    pub fn content_directory(&self) -> PathBuf {
+        self.store_root.join("content")
+    }
+
+    /// Returns the staging directory assignment material is assembled in.
+    #[must_use]
+    pub fn transfer_directory(&self) -> PathBuf {
+        self.store_root.join("transfers")
+    }
+
+    /// Returns whether the layout has already been bound to this configuration.
+    #[must_use]
+    fn is_resolved(&self) -> bool {
+        !self.store_root.as_os_str().is_empty()
+    }
+
+    /// Binds every configured path to the tree that owns the material it names.
+    ///
+    /// A worker owns four trees and cannot name the two that belong to its judge. Its identity
+    /// material resolves in `secrets/`; its journal, content and working areas resolve in `store/`.
+    /// The accelerator sysfs path is deliberately excluded: it names a kernel interface on the
+    /// host, not material this deployment owns, and forcing it into a tree would be wrong.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when the trees cannot be resolved into separated absolute
+    /// roots, or when a configured path would leave the tree that owns it.
+    pub fn resolve_layout(&mut self, environment_home: Option<&Path>) -> Result<(), WorkerError> {
+        if self.is_resolved() {
+            return Ok(());
+        }
+        let home = self
+            .layout
+            .home
+            .clone()
+            .or_else(|| environment_home.map(Path::to_path_buf));
+        let layout =
+            RuntimeLayout::resolve(LayoutRole::Worker, home.as_deref(), &self.layout.roots)
+                .map_err(|error| WorkerError::Configuration(error.to_string()))?;
         match &mut self.identity {
             WorkerIdentityConfig::External { tls, .. } => {
-                resolve(&mut tls.certificate, base);
-                resolve(&mut tls.private_key, base);
-                resolve(&mut tls.server_ca, base);
+                place(&mut tls.certificate, &layout, RuntimeTree::Secrets)?;
+                place(&mut tls.private_key, &layout, RuntimeTree::Secrets)?;
+                place(&mut tls.server_ca, &layout, RuntimeTree::Secrets)?;
             }
-            WorkerIdentityConfig::Managed { state_directory } => resolve(state_directory, base),
+            WorkerIdentityConfig::Managed { state_directory } => {
+                place(state_directory, &layout, RuntimeTree::Secrets)?;
+            }
         }
-        resolve(&mut self.journal_database, base);
-        resolve(&mut self.content.database, base);
-        resolve(&mut self.content.directory, base);
-        resolve(&mut self.content.transfer_directory, base);
-        self.execution.resolve_paths(base);
-        resolve(&mut self.resource_probe.scratch_path, base);
-        if let Some(path) = &mut self.resource_probe.accelerator_sysfs {
-            resolve(path, base);
-        }
+        place(
+            &mut self.resource_probe.scratch_path,
+            &layout,
+            RuntimeTree::Store,
+        )?;
+        self.execution.place_state(&layout)?;
+        self.store_root = layout
+            .root(RuntimeTree::Store)
+            .map_err(|error| WorkerError::Configuration(error.to_string()))?
+            .to_path_buf();
+        Ok(())
     }
 
     fn availability(
@@ -1016,7 +1083,8 @@ fn spawn_worker_execution(
     authority: WorkerExecutionTaskAuthority,
     sender: tokio::sync::mpsc::UnboundedSender<Box<WorkerExecutionObservation>>,
 ) {
-    let content_config = config.content.clone();
+    let content_database = config.content_database();
+    let content_directory = config.content_directory();
     let execution_config = config.execution.clone();
     tokio::task::spawn_blocking(move || {
         let observation = match (authority, &execution_config) {
@@ -1033,8 +1101,7 @@ fn spawn_worker_execution(
                 authority,
             ),
             (authority, WorkerExecutionConfig::Docker { .. }) => {
-                match SqliteContentStore::open(&content_config.database, &content_config.directory)
-                {
+                match SqliteContentStore::open(&content_database, &content_directory) {
                     Ok(content) => match DockerExecutor::from_config(&content, &execution_config) {
                         Ok(mut executor) => match authority {
                             WorkerExecutionTaskAuthority::Fresh(authority) => {
@@ -1100,8 +1167,7 @@ async fn materialize_assignment_offer(
     )
     .map_err(|error| WorkerError::Session(error.to_string()))?;
     let transfer_directory = config
-        .content
-        .transfer_directory
+        .transfer_directory()
         .join(offer.message_id.as_uuid().to_string());
     on_store(|| prepare_state_directory(&transfer_directory))?;
     materialize_assignment_artifact(
@@ -1405,9 +1471,12 @@ pub async fn join_from_bundle(
     let state_directory = state_directory
         .canonicalize()
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    let identity_directory = state_directory.join("identity");
-    let scratch_directory = state_directory.join("scratch");
-    prepare_state_directory(&scratch_directory)?;
+    // The state directory becomes this worker's deployment root, so its identity lands in the
+    // secret tree and its journal, content and working areas in the store tree.
+    let identity_directory = state_directory.join("secrets/identity");
+    prepare_state_directory(&state_directory.join("secrets"))?;
+    prepare_state_directory(&state_directory.join("store"))?;
+    prepare_state_directory(&state_directory.join("store/scratch"))?;
     let identity = Box::pin(enroll(bundle, &identity_directory)).await?;
     let config_path = state_directory.join("worker.json");
 
@@ -1417,7 +1486,7 @@ pub async fn join_from_bundle(
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
         )
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-        existing.resolve_paths(&state_directory);
+        existing.resolve_layout(Some(&state_directory))?;
         validate_join_configuration(&existing, &identity_directory, &control)?;
         let profile = existing.runtime_profile()?;
         existing.validate(&profile)?;
@@ -1429,15 +1498,15 @@ pub async fn join_from_bundle(
         });
     }
 
-    let config = generated_join_configuration(&control)?;
+    let config = generated_join_configuration(&state_directory, &control)?;
     let mut resolved = config.clone();
-    resolved.resolve_paths(&state_directory);
+    resolved.resolve_layout(None)?;
     validate_join_configuration(&resolved, &identity_directory, &control)?;
     let profile = resolved.runtime_profile()?;
     resolved.validate(&profile)?;
-    SqliteContentStore::open(&resolved.content.database, &resolved.content.directory)
+    SqliteContentStore::open(resolved.content_database(), resolved.content_directory())
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    prepare_state_directory(&resolved.content.transfer_directory)?;
+    prepare_state_directory(&resolved.transfer_directory())?;
     let bytes = serde_json::to_vec_pretty(&config)
         .map_err(|error| WorkerError::Configuration(error.to_string()))?;
     persist_exact(&config_path, &bytes, false)?;
@@ -1450,10 +1519,15 @@ pub async fn join_from_bundle(
 }
 
 fn generated_join_configuration(
+    home: &Path,
     control: &cairn_control_transport::WorkerControlEndpoint,
 ) -> Result<WorkerConfig, WorkerError> {
     Ok(WorkerConfig {
         schema_version: 1,
+        layout: LayoutConfig {
+            home: Some(home.to_path_buf()),
+            roots: cairn_layout::TreeRoots::new(),
+        },
         controller: ControllerEndpoint {
             tcp_address: control.tcp_address.clone(),
             websocket_uri: control.websocket_uri.clone(),
@@ -1484,11 +1558,7 @@ fn generated_join_configuration(
         },
         availability: WorkerAvailability::new(WorkerHealth::Unavailable, true, 0, Vec::new())
             .map_err(|error| WorkerError::Configuration(error.to_string()))?,
-        journal_database: PathBuf::from("worker.sqlite3"),
         content: WorkerContentConfig {
-            database: PathBuf::from("content.sqlite3"),
-            directory: PathBuf::from("content"),
-            transfer_directory: PathBuf::from("transfers"),
             assignment_material_byte_limit: AssignmentMaterialByteLimit::new(512 * 1024 * 1024)
                 .map(Some)
                 .map_err(|error| WorkerError::Configuration(error.to_string()))?,
@@ -1503,6 +1573,7 @@ fn generated_join_configuration(
             .ok_or_else(|| WorkerError::Configuration("invalid identity poll interval".into()))?,
         reconnect_delay_ms: NonZeroU64::new(1_000),
         transport: TransportPolicy::default(),
+        store_root: PathBuf::new(),
     })
 }
 
@@ -2132,10 +2203,17 @@ fn command(_purpose: &str) -> CommandId {
     CommandId::new()
 }
 
-fn resolve(path: &mut PathBuf, base: &Path) {
+fn beside(path: &mut PathBuf, directory: &Path) {
     if path.is_relative() {
-        *path = base.join(&*path);
+        *path = directory.join(&*path);
     }
+}
+
+fn place(path: &mut PathBuf, layout: &RuntimeLayout, tree: RuntimeTree) -> Result<(), WorkerError> {
+    *path = layout
+        .resolve_in(tree, &*path)
+        .map_err(|error| WorkerError::Configuration(error.to_string()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2147,13 +2225,26 @@ mod tests {
         WorkerHealth, WorkerResourceSource,
     };
 
-    use super::{DockerAcceleratorConfig, WorkerConfig, WorkerExecutionConfig};
+    use super::{
+        DockerAcceleratorConfig, WorkerConfig, WorkerExecutionConfig, WorkerIdentityConfig,
+    };
+
+    /// Decodes the documented worker configuration and binds it to a throwaway deployment root,
+    /// because a resolved configuration is the only kind a worker ever runs with.
+    fn documented_configuration() -> (tempfile::TempDir, WorkerConfig) {
+        let directory = tempfile::tempdir().expect("deployment root");
+        std::fs::create_dir_all(directory.path().join("store/scratch")).expect("store tree");
+        let mut config: WorkerConfig =
+            serde_json::from_str(include_str!("../../../config/worker.example.json"))
+                .expect("documented worker configuration");
+        config.layout.home = Some(directory.path().to_path_buf());
+        config.resolve_layout(None).expect("documented layout");
+        (directory, config)
+    }
 
     #[test]
     fn documented_configuration_is_strictly_decodable() {
-        let config: WorkerConfig =
-            serde_json::from_str(include_str!("../../../config/worker.example.json"))
-                .expect("documented worker configuration");
+        let (_directory, config) = documented_configuration();
         let profile = config.runtime_profile().expect("runtime profile");
         assert_eq!(
             profile.resources().platform().source(),
@@ -2168,11 +2259,49 @@ mod tests {
         );
     }
 
+    // Identity is secret material and a journal is durable state, so they must land in different
+    // trees with different permissions. This asserts the wiring, which is the part a refactor can
+    // silently get wrong; that the trees are separated at all is the layout's own invariant.
     #[test]
-    fn expected_platform_fails_closed_instead_of_overriding_detection() {
+    fn identity_lands_in_the_secret_tree_and_durable_state_in_the_store_tree() {
+        let (directory, config) = documented_configuration();
+        let home = directory.path();
+        assert_eq!(
+            config.journal_database(),
+            home.join("store/journal.sqlite3")
+        );
+        assert_eq!(config.content_directory(), home.join("store/content"));
+        assert_eq!(config.transfer_directory(), home.join("store/transfers"));
+        let WorkerIdentityConfig::Managed { state_directory } = &config.identity else {
+            panic!("the documented worker uses a managed identity");
+        };
+        assert_eq!(state_directory, &home.join("secrets/identity"));
+        assert!(
+            !config.journal_database().starts_with(home.join("secrets")),
+            "durable state must not resolve inside the secret tree"
+        );
+    }
+
+    #[test]
+    fn a_worker_configuration_cannot_reach_into_a_tree_it_does_not_own() {
+        let directory = tempfile::tempdir().expect("deployment root");
         let mut config: WorkerConfig =
             serde_json::from_str(include_str!("../../../config/worker.example.json"))
                 .expect("documented worker configuration");
+        config.layout.home = Some(directory.path().to_path_buf());
+        config.layout.roots.insert(
+            cairn_layout::RuntimeTree::Restricted,
+            directory.path().join("restricted"),
+        );
+        assert!(
+            config.resolve_layout(None).is_err(),
+            "a worker naming its judge's tree must be refused rather than ignored"
+        );
+    }
+
+    #[test]
+    fn expected_platform_fails_closed_instead_of_overriding_detection() {
+        let (_directory, mut config) = documented_configuration();
         config.expected_platform = ExecutionPlatformRequirement::new(
             Some(ArchitectureName::new("definitely-not-the-host").expect("architecture")),
             None,
@@ -2183,12 +2312,10 @@ mod tests {
 
     #[test]
     fn docker_activation_is_one_coherent_invariant() {
-        let mut config: WorkerConfig =
-            serde_json::from_str(include_str!("../../../config/worker.example.json"))
-                .expect("documented worker configuration");
+        let (directory, mut config) = documented_configuration();
         config.execution = WorkerExecutionConfig::Docker {
             command: PathBuf::from("/usr/bin/docker"),
-            state_directory: PathBuf::from("state/docker"),
+            state_directory: directory.path().join("store/execution"),
             accelerator: DockerAcceleratorConfig::None,
             poll_interval_ms: NonZeroU64::new(10).expect("poll interval"),
             logical_cpu_limit: None,
