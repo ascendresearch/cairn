@@ -177,9 +177,21 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复
 
 当前代码树在端到端能力上弱于 2026-08-29 的代码树，而 `scripts/ci.sh` 全绿。先使该情形不可再现。
 
-1. 接通 normal path 上的候选构建通路：`prepare_generic_candidate_build_job` 获得非测试消费者，
-   `authorize_candidate_build`、`observe_candidate_on_worker` 与 `record_terminal_outcome`
-   落真实实现，不再只有测试替身。该通路的类型与作业组装已存在，缺的是 `d699412` 移除的那一段消费者。
+1. **构建半程已完成。** `prepare_generic_candidate_build_job` 现有非测试消费者
+   `CandidateBuildRunnerV1`；`authorize_candidate_build` 物化并归档 exact build job，
+   `observe_candidate_on_worker` 把它调度到 ordinary Worker 并折回 trusted receipt，
+   产出带 job / attempt / request / receipt identity 与 outcome、exit code 的 typed observation。
+   构建配方由 Controller 配置提供而非 Candidate 产出：Candidate 只贡献 `source/` 下的文件，
+   `bin/run` 来自部署。Candidate 因此无法选择自己的构建路径，这正是区分 native build 与
+   冒名的 host fallback 的那道控制。
+
+   **观察半程仍 fail closed。** 拿到构建 receipt 之后，没有任何 qualified Candidate mechanism
+   可以对已构建产物作出判断，因此返回 `CandidateMechanismExecutionUnavailable`。
+   这与 Oracle 侧的 `OracleSemanticMechanismUnavailable` 同源，属于 P5 范围。
+   在它接通前，本阶段能证明的只有「exact artifact 在 exact 环境中编译与否」，不构成任何语义结论。
+
+   `record_terminal_outcome` 仍为 `NotImplemented`：候选终态相位尚未定义，
+   在定义前记录终态会产生假报告。
 
    已先行完成的一步：删除 `continue_after_oracle_admission` 及其全部相关逻辑。
    该分支允许工作流在 Oracle Admission 之后直接产出终态而完全不经过 candidate，
@@ -206,14 +218,15 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复
    （特异性、敏感性、最小可捕获误差量级）。丢失的是一个机器可检的控制，不是这条知识。
 5. 恢复 NPU worker 控制通道并声明 device capability（运维项，与 P1–P3 并行）。
 
-规模估计：第 1、3 项为中，第 5 项为运维。第 2、4 项已完成。
+规模估计：第 3 项为中，第 5 项为运维。第 1 项的构建半程、第 2、4 项已完成。
 
 已完成部分的附带发现：`scripts/ci.sh` 的行尾空白检查此前使用 `rg`，而该环境未安装 ripgrep，
 `if <command-not-found>` 判定为假因而 `status` 保持 0——该检查从未真正运行过。已改为 POSIX `grep`
 并把 `AGENTS.md` 纳入覆盖，且按纪律红验：故意引入行尾空白后检查确实失败，撤销后通过。
 这是 `ARCHITECTURE.md` 3.6 所说情形的一个实例，也是 P0 第 3 项要覆盖的同一类缺陷。
 
-Exit：一个候选经正常入口到达 Ascend build worker 并取回 typed 诊断；删除任一端到端环节会使 `scripts/ci.sh` 失败；
+Exit：一个候选经正常入口到达 Ascend build worker 并取回 typed 诊断（构建半程已具备，
+待真实 worker 上验证）；删除任一端到端环节会使 `scripts/ci.sh` 失败；
 `cairn-migration` 的公开 API 不再包含 fixture 身份。
 
 ### P1 · 运行时布局

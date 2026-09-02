@@ -15,7 +15,8 @@ use cairn_migration::{
     TaskIntentAuthoritySubject,
 };
 use cairn_migration_app::{
-    CudaMigrationApplication, CudaMigrationProductModuleV1, EvidenceExperimentWorkerConfigV1,
+    CandidateBuildRunnerV1, CandidateBuildWorkerConfigV1, CudaMigrationApplication,
+    CudaMigrationProductModuleV1, EvidenceExperimentWorkerConfigV1,
     MigrationAgentRuntimeExecutorV1, MigrationRoleAttemptLimitV1, MigrationRuntimeMaterialsV1,
     OracleControlRunnerV1, OracleControlWorkerConfigV1, migration_product_boundary,
     migration_tool_registry,
@@ -48,6 +49,7 @@ struct ProductConfigV1 {
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
     evidence_experiment_worker: Option<EvidenceExperimentWorkerConfigV1>,
     oracle_control_worker: OracleControlWorkerConfigV1,
+    candidate_build_worker: Option<CandidateBuildWorkerConfigV1>,
     candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
 }
 
@@ -57,7 +59,7 @@ async fn main() -> ExitCode {
         eprintln!("CUDA migration server logging initialization failed");
         return ExitCode::FAILURE;
     }
-    match run().await {
+    match Box::pin(run()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(_error) => {
             tracing::error!(
@@ -127,6 +129,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     let oracle_catalog = executor.oracle_strategy_catalog(&oracle_policy)?;
     let oracle_controls = OracleControlRunnerV1::new(server.clone(), config.oracle_control_worker)?;
+    let candidate_build = config
+        .candidate_build_worker
+        .map(|worker| CandidateBuildRunnerV1::new(server.clone(), worker))
+        .transpose()?;
     let (api, services, inbox) = migration_product_boundary(
         config.app_api_socket,
         &config.authority_subject,
@@ -135,6 +141,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         oracle_policy,
         oracle_catalog,
         oracle_controls,
+        candidate_build,
         config.reasoning_decomposition,
         config.inbox_capacity,
     )?;

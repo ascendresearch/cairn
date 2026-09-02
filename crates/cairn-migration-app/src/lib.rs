@@ -1,12 +1,17 @@
 //! CUDA migration product composition above the domain-neutral server host.
 
 mod app_api;
+mod candidate_build_runner;
 mod oracle_control_runner;
 mod runtime_agent;
 
 pub use app_api::{
     CudaMigrationProductModuleV1, MigrationAppApiError, MigrationAppApiV1,
     MigrationProductServicesV1, SubmittedMigrationTaskV1, migration_product_boundary,
+};
+pub use candidate_build_runner::{
+    AuthorizedCandidateBuildV1, CandidateBuildObservationV1, CandidateBuildRunnerError,
+    CandidateBuildRunnerV1, CandidateBuildWorkerConfigV1,
 };
 pub use oracle_control_runner::{
     OracleControlRunnerError, OracleControlRunnerV1, OracleControlWorkerConfigV1,

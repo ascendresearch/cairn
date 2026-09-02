@@ -34,11 +34,11 @@ use tokio::{
 };
 
 use crate::{
-    AdmittedIntentV1, AdmittedOracleV1, AuthorizedIntentDecisionV1, CudaMigrationApplication,
-    CudaMigrationProductServices, FrozenMigrationTaskV1, MigrationAgentRuntimeExecutorV1,
-    MigrationProductServiceError, MigrationRuntimeMaterialsV1, MigrationTaskRequest,
-    MigrationTerminalOutcomeV1, MigrationWorkflowFailureClassV1, OracleControlRunnerError,
-    OracleControlRunnerV1,
+    AdmittedIntentV1, AdmittedOracleV1, AuthorizedCandidateBuildV1, AuthorizedIntentDecisionV1,
+    CandidateBuildRunnerV1, CudaMigrationApplication, CudaMigrationProductServices,
+    FrozenMigrationTaskV1, MigrationAgentRuntimeExecutorV1, MigrationProductServiceError,
+    MigrationRuntimeMaterialsV1, MigrationTaskRequest, MigrationTerminalOutcomeV1,
+    MigrationWorkflowFailureClassV1, OracleControlRunnerError, OracleControlRunnerV1,
 };
 
 /// Exact request admitted by the App API and sent to the product workflow inbox.
@@ -292,6 +292,7 @@ pub struct MigrationProductServicesV1 {
     oracle_policy: OracleCoveragePolicyV1,
     oracle_catalog: OracleStrategyCatalogV1,
     oracle_controls: OracleControlRunnerV1,
+    candidate_build: Option<CandidateBuildRunnerV1>,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
 }
 
@@ -376,6 +377,7 @@ pub fn migration_product_boundary(
     oracle_policy: OracleCoveragePolicyV1,
     oracle_catalog: OracleStrategyCatalogV1,
     oracle_controls: OracleControlRunnerV1,
+    candidate_build: Option<CandidateBuildRunnerV1>,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
     inbox_capacity: usize,
 ) -> Result<
@@ -405,6 +407,7 @@ pub fn migration_product_boundary(
             oracle_policy,
             oracle_catalog,
             oracle_controls,
+            candidate_build,
             reasoning_decomposition,
         },
         receiver,
@@ -413,7 +416,7 @@ pub fn migration_product_boundary(
 
 impl CudaMigrationProductServices for MigrationProductServicesV1 {
     type Request = SubmittedMigrationTaskV1;
-    type CandidateBuildAuthority = ();
+    type CandidateBuildAuthority = AuthorizedCandidateBuildV1;
     type Error = MigrationAppApiError;
 
     async fn freeze_task(
@@ -767,20 +770,41 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         _intent: &AdmittedIntentV1,
         _oracle: &AdmittedOracleV1,
         _contract: &CandidateOracleContractV1,
-        _candidate: &CandidateProposalV1,
+        candidate: &CandidateProposalV1,
         _attempt: &CandidateAdmissionAttemptV1,
     ) -> Result<Self::CandidateBuildAuthority, Self::Error> {
-        Err(MigrationAppApiError::NotImplemented("Candidate build"))
+        self.candidate_build
+            .as_ref()
+            .ok_or(MigrationAppApiError::CandidateBuildWorkerUnavailable)?
+            .authorize(candidate)
+            .map_err(MigrationAppApiError::internal)
     }
 
     async fn observe_candidate_on_worker(
         &mut self,
-        _authority: Self::CandidateBuildAuthority,
+        authority: Self::CandidateBuildAuthority,
         _attempt: &CandidateAdmissionAttemptV1,
     ) -> Result<CandidateAdmissionEvidenceV1, Self::Error> {
-        Err(MigrationAppApiError::NotImplemented(
-            "Candidate observation",
-        ))
+        let observation = self
+            .candidate_build
+            .as_ref()
+            .ok_or(MigrationAppApiError::CandidateBuildWorkerUnavailable)?
+            .observe(authority)
+            .await
+            .map_err(MigrationAppApiError::internal)?;
+        tracing::info!(
+            target: "cairn.migration.candidate",
+            event = "candidate_build_observed",
+            worker_job_id = %observation.job_id(),
+            worker_attempt_id = %observation.attempt_id(),
+            build_request = %observation.request(),
+            receipt_id = %observation.receipt_id(),
+            outcome = ?observation.receipt().outcome(),
+            exit_code = ?observation.receipt().exit_code(),
+            compiled = observation.compiled(),
+            "candidate build reached a terminal Worker receipt"
+        );
+        Err(MigrationAppApiError::CandidateMechanismExecutionUnavailable)
     }
 
     async fn record_terminal_outcome(
@@ -1177,6 +1201,10 @@ pub enum MigrationAppApiError {
     NotImplemented(&'static str),
     #[error("no candidate-facing executable Oracle mechanism is available")]
     OracleSemanticMechanismUnavailable,
+    #[error("no candidate build worker is configured")]
+    CandidateBuildWorkerUnavailable,
+    #[error("no qualified Candidate mechanism can observe the built artifact")]
+    CandidateMechanismExecutionUnavailable,
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1204,6 +1232,10 @@ impl MigrationAppApiError {
             Self::StatePoisoned => "state-poisoned",
             Self::NotImplemented(_) => "not-implemented",
             Self::OracleSemanticMechanismUnavailable => "oracle-semantic-mechanism-unavailable",
+            Self::CandidateBuildWorkerUnavailable => "candidate-build-worker-unavailable",
+            Self::CandidateMechanismExecutionUnavailable => {
+                "candidate-mechanism-execution-unavailable"
+            }
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1221,6 +1253,8 @@ impl MigrationAppApiError {
             | Self::StatePoisoned
             | Self::NotImplemented(_)
             | Self::OracleSemanticMechanismUnavailable
+            | Self::CandidateBuildWorkerUnavailable
+            | Self::CandidateMechanismExecutionUnavailable
             | Self::Io(_)
             | Self::Internal(_) => AppApiErrorCodeV1::Internal,
         }
