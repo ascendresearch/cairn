@@ -24,8 +24,9 @@ Required environment:
 
 Optional environment:
   CAIRN_DEPLOY_SCOPE    system | user            (default: system)
-  CAIRN_DEPLOY_STATE    absolute state directory (controller only; the unit is granted write
-                        access to exactly this path and the rest of the filesystem stays read-only)
+  CAIRN_DEPLOY_HOME     absolute deployment root (controller only; the unit is granted write
+                        access to exactly the trees it owns and writes, and the rest of the
+                        filesystem stays read-only)
 USAGE
   exit 2
 }
@@ -47,16 +48,18 @@ readonly PREFIX="${CAIRN_DEPLOY_PREFIX:?CAIRN_DEPLOY_PREFIX is required}"
 readonly CONFIG="${CAIRN_DEPLOY_CONFIG:?CAIRN_DEPLOY_CONFIG is required}"
 readonly WORKDIR="${CAIRN_DEPLOY_WORKDIR:?CAIRN_DEPLOY_WORKDIR is required}"
 readonly SCOPE="${CAIRN_DEPLOY_SCOPE:-system}"
-readonly STATE="${CAIRN_DEPLOY_STATE:-}"
+readonly HOME_ROOT="${CAIRN_DEPLOY_HOME:-}"
 
 case "$ROLE" in
   controller)
     binary="cairn-server"
     template="deploy/systemd/cairn-controller.service.template"
     unit="cairn-controller-$INSTANCE.service"
-    [[ -n "$STATE" ]] || { echo "CAIRN_DEPLOY_STATE is required for the controller role" >&2; exit 2; }
+    [[ -n "$HOME_ROOT" ]] || { echo "CAIRN_DEPLOY_HOME is required for the controller role" >&2; exit 2; }
+    writable_trees="$HOME_ROOT/store $HOME_ROOT/workspaces $HOME_ROOT/log"
     ;;
   worker)
+    writable_trees=""
     binary="cairn-worker"
     template="deploy/systemd/cairn-worker.service.template"
     unit="cairn-worker-$INSTANCE.service"
@@ -91,7 +94,7 @@ rendered="$(sed \
   -e "s|@BINARY@|$PREFIX/current/bin/$binary|g" \
   -e "s|@CONFIG@|$CONFIG|g" \
   -e "s|@WORKING_DIRECTORY@|$WORKDIR|g" \
-  -e "s|@STATE_DIRECTORY@|$STATE|g" \
+  -e "s|@WRITABLE_TREES@|$writable_trees|g" \
   -e "s|@WANTED_BY@|$wanted_by|g" \
   "$template")"
 

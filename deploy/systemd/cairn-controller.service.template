@@ -25,7 +25,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=@STATE_DIRECTORY@
+# Write access is granted to exactly the trees this process owns and writes. `secrets/` stays
+# readable but not writable, and `packs/` and `restricted/` are neither.
+ReadWritePaths=@WRITABLE_TREES@
 
 [Install]
 WantedBy=@WANTED_BY@
