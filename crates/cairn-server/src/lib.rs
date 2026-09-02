@@ -55,6 +55,7 @@ use cairn_protocol::{
     EventSequence, ObservedAtUnixMillis, ReservationId, WorkerId,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
+use cairn_workspace::ProjectName;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::TcpListener, time::Instant};
@@ -159,7 +160,7 @@ pub(crate) struct EnrolledWorker {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id>"
+        "usage: cairn-server <config.json> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id> | cairn-server project validate <config.json> <project>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -347,6 +348,25 @@ pub async fn run_from_arguments(
     }
     if first == "registry" {
         return run_registry_command(&mut arguments);
+    }
+    if first == "project" {
+        if arguments.next().as_deref() != Some(std::ffi::OsStr::new("validate")) {
+            return Err(ServerError::Usage);
+        }
+        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
+        let project = ProjectName::new(
+            arguments
+                .next()
+                .ok_or(ServerError::Usage)?
+                .into_string()
+                .map_err(|_| ServerError::Usage)?,
+        )
+        .map_err(|error| ServerError::Configuration(error.to_string()))?;
+        if arguments.next().is_some() {
+            return Err(ServerError::Usage);
+        }
+        let admitted = admit_project_definition(&load_server_config(&config_path)?, &project)?;
+        return write_json_stdout(&admitted);
     }
     if first == "enrollment" {
         let action = arguments.next().ok_or(ServerError::Usage)?;
@@ -591,6 +611,60 @@ pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerErro
     let environment_home = std::env::var_os(cairn_layout::HOME_VARIABLE).map(PathBuf::from);
     config.resolve_layout(environment_home.as_deref())?;
     Ok(config)
+}
+
+/// What one project definition declares, once every intake condition has been checked.
+#[derive(Debug, Serialize)]
+pub struct AdmittedProject {
+    /// Stable project identity.
+    pub project: String,
+    /// Absolute workspace directory inside the workspaces tree.
+    pub workspace: PathBuf,
+    /// Upstream the frozen source is taken from.
+    pub upstream: cairn_workspace::UpstreamIdentity,
+    /// Files the product supplies, which the agent may read and may not write.
+    pub provided: usize,
+    /// The agent's entire writable surface.
+    pub authored_by_agent: usize,
+}
+
+/// Checks whether one project definition may enter intake, and reports what it declares.
+///
+/// This is the administrator-facing boundary the gate belongs at: intake is an administrative act,
+/// and a definition that cannot be reproduced or whose file ownership is ambiguous has to be
+/// refused before any work rests on it rather than after.
+///
+/// # Errors
+///
+/// Returns an error when the definition is missing, undecodable, or fails an intake condition.
+pub fn admit_project_definition(
+    config: &ServerConfig,
+    project: &ProjectName,
+) -> Result<AdmittedProject, ServerError> {
+    let workspace = cairn_workspace::project_directory(&config.workspaces_root, project);
+    let path = cairn_workspace::definition_path(&config.workspaces_root, project);
+    let definition: cairn_workspace::ProjectDefinition = serde_json::from_slice(
+        &fs::read(&path)
+            .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?,
+    )
+    .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?;
+    definition
+        .validate()
+        .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?;
+    if definition.project != *project {
+        return Err(ServerError::Configuration(format!(
+            "{} declares project {} but sits in the workspace of {project}",
+            path.display(),
+            definition.project
+        )));
+    }
+    Ok(AdmittedProject {
+        project: definition.project.to_string(),
+        workspace,
+        upstream: definition.source.upstream,
+        provided: definition.provided.len(),
+        authored_by_agent: definition.authored_by_agent.len(),
+    })
 }
 
 /// Reconstructs the canonical current worker and credential registry view.
