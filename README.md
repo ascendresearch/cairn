@@ -24,6 +24,7 @@ real toolchains and hardware.
 The runtime model is therefore a per-task reasoning and generation actor, not an authority:
 
 - model-backed strategies inspect unfamiliar code and propose intent, experiments and candidates;
+- target knowledge and skills reach those strategies as trust-tagged, target-scoped projections;
 - the Controller freezes inputs, revisions, budgets, capabilities and workflow transitions;
 - managed Workers compile, run, sanitize and profile exact artifacts;
 - mechanical Admission gates recompute what may be trusted from frozen policy and receipts.
@@ -68,6 +69,10 @@ Cairn is pre-release. The durable Agent runtime, typed records, managed executio
 CLI/server entry path, intent and Oracle workflow pieces, and several mechanical boundaries exist.
 The first complete CUDA-to-Ascend C migration package has **not** been produced. There is no current
 claim of native build success, NPU correctness, target performance or end-to-end product success.
+
+The candidate build path is currently not wired in the working tree, and the next milestone builds the
+Controller-owned search loop, the runtime layout and the target knowledge layer before re-running the
+vertical.
 
 See [current implementation status](docs/IMPLEMENTATION.md) for the exact evidence boundary.
 

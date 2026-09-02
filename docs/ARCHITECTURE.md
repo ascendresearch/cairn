@@ -79,6 +79,14 @@ intent、Oracle、candidate、target、policy 和 proposal-invisible controls。
 wire/storage raw representation 只存在于 codec 或 persistence 边界，进入领域逻辑前立即验证。反序列化必须重跑构造器
 invariant。容易混淆的类型应有 compile-fail 或等价静态边界测试。
 
+### 3.6 Gate 必须能被诚实满足
+
+一个无法经诚实路径满足的 gate 不会拦住任何人，只会被绕过去。任何要求某类证据的 gate，都必须存在一条产生该类证据的
+授权路径。产品自身维护 knowledge、skill 或 policy 时走的必须是同一条路径；只有 builder 能用的旁门等于没有 gate。
+
+Gate 只看得见来到它面前的东西。因此每一道 gate 必须能被反向运行，对已经入库的记录重算同一判据；读取端与审计端共用
+同一个状态推导函数，不得各自解释同一字段。没有审计员的账本不是一道 gate。
+
 ## 4. 四个产品平面
 
 | 平面 | 回答的问题 | 主要产物 |
@@ -174,6 +182,23 @@ Search generation 只有在没有 pending Worker job、未消费的 authorized r
 内容的 revision，并且 stopping/budget policy 给出机械结论后才能关闭。Qualification failure 若继续开发，必须创建新的
 generation；旧 generation 不恢复，反馈只按 exposure policy 投影。
 
+#### Iteration policy
+
+Loop 由 Controller 拥有；模型拥有的只是每一步的决策。以下策略属于 Controller，不属于模型，也不属于 prompt：
+
+- **迭代预算是产品参数。** 单轮 episode 不构成搜索。observation-bound 的 compile / run / diagnose / repair 迭代预算按
+  task 与 stage 配置。可修复率随迭代次数上升并在若干轮后进入平台期，预算应当覆盖平台期，而不是覆盖单次尝试。
+- **重复动作检测。** Controller 对最近若干次 authorized action 计算签名；同一签名重复出现时不再执行，而是把这一事实
+  作为 typed input 返回。模型看不见自己在循环，Controller 看得见。
+- **空提交是故障，不是完成。** 既无 typed proposal 又无文本的 episode step 是一次失败尝试，按重试处理并计入预算，
+  连续超过阈值才终止。reasoning model 可能把全部 output 预算耗在 reasoning 上而不产生任何提交。
+- **预算临界通知。** 剩余预算低于阈值时，Controller 注入一条 typed 通知，使 actor 能够收敛而不是被截断。
+- **证据到达即固化。** authorized receipt 一旦折回，Controller 立即推进并固化 immutable state，不依赖模型在流程末尾
+  主动写回；流程末尾正是预算受限的 actor 最可能到不了的位置。
+
+Controller 不得以在最后一步撤走工具或 schema 的方式结束循环：处于计划中途的模型会把结构化提交降级为自由文本，
+从而同时损失提交与证据。
+
 ### 6.3 Source understanding 与 focused investigation
 
 每次迁移都会发生 source understanding，但不运行 `ShouldStartSir`、readiness assessment 或其他改名后的 mini-SIR。
@@ -235,18 +260,79 @@ Performance verdict 以同一 950PR workload 下的 meaningful baseline 为主�
 measurement method 经 calibrated probe 后，才报告 conditional roofline 或 bottleneck-supported claim；CUDA 与 Ascend 裸耗时
 不能直接比较。Cairn 负责 operator-level evidence，模型/部署级业务接受权仍属于 upstream caller。
 
-### 7.4 Target knowledge
+### 7.4 Target knowledge 与 Skill
 
-低资源 Ascend C context 是第一阶段正确率的输入，不是 Admission evidence。最小 knowledge pack 包含 exact-version 官方文档、
-compile-validated API/primitive examples、measured platform facts、diagnostic recipes 和 optimization motifs。每项 entry 绑定
-provenance、target/version、scope、trust state 和 revalidation trigger。
+Ascend C 的公开语料稀少、文档分散、编译反馈不透明。target knowledge 因此是第一阶段正确率的直接输入，
+而不是 Admission evidence，也不是可以推迟到首个 package 之后的能力。
 
-Episode 只接收获准的 index/summary，并按需读取 exact entry。`OrganicReasoningSafe`、`PolicyChallengeOnly` 和
-`AdmissionRestricted` 是不同 exposure authority；retrieval rank、模型 confidence 和 source reputation 不能提升 trust state 或
-扩张 Worker/tool capability。
+#### 内容分层
 
-成功 fixture 的算法答案、expected output、task identity 或专用 prompt 不得进入 production knowledge。跨任务沉淀只允许
-经过审查的通用方法、原语和 target fact。
+按准入依据分层，不按主题分层：
+
+| 层 | 准入依据 | 写入者 |
+| --- | --- | --- |
+| `platform` | 从 exact toolchain 机器派生，可重新生成，不手工编辑 | 工具 |
+| `fact` | 一条实测声明，绑定一张真实 probe receipt | Agent 或 administrator |
+| `case` | 带边界的观察，形态是「当 Y 发生，观察到 Z」 | Agent |
+| `skill` | 通用工作循环，boundary 必填 | Agent 或 administrator |
+| `recipe` | 已验证的机械变换。当前预留槽位，不实现 | — |
+
+`case` 承载判断维度的证据——值不值得写 kernel、走哪条路、何时停止。该维度没有可机器验证的 judge，是 knowledge
+最需要攒厚的地方。`platform` 与 `fact` 承载正确性与性能维度的输入，该维度有 executable oracle，不需要额外牵引。
+牵引的必要程度与该维度验证器的强度成反比；这是一个按维度调节的产品参数，不是一条全局偏好。
+
+具体打法（选用某个 API、某种 layout）是 `case`，不是 `skill`。`skill` 只结晶跨任务成立的工作循环。
+
+#### 知识包与导入
+
+知识以 pack 为分发单位。pack 是自包含目录，携带 manifest：身份、revision、provenance、上游来源、适用范围
+（soc / arch / toolchain 约束）、逐条 entry 摘要与许可条款。产品代码仓库不携带 knowledge：knowledge 按 target 与
+厂商的时钟衰减，与代码的发布时钟不同，且第三方快照带有独立的再分发条款。
+
+pack 是导入源，不是运行时读取路径。导入把每条 entry 摄入 content store 并铸造一个 pack revision，此后全部投影按
+content identity 取用。由此得到三个性质：
+
+- 修改磁盘上的 pack 文件不产生任何效果，直到重新导入；而导入走的是与 Agent 提名完全相同的 gate（见 3.6）；
+- trust state 绑定 entry 的 content identity，字节变化自动使既有裁决失效；
+- Agent 提名的 fact 与 case 由 Controller 铸造为 local pack revision，不写入 pack 目录。
+
+`applies_to` 是 gate 而不是元数据：任务的 `TargetPlatformContextV1` 不满足其约束的 entry 不得被投影。指向无法获取的
+上游的 pack 是一个赌注，不是事实来源。
+
+导入可以在进程启动时自动发生：扫描 pack 目录、计算摘要、尚未入库的走同一条导入路径并铸造 revision。
+这只是省去一次手工命令，不改变授权路径。被禁止的是**直接从目录供应**：一条 receipt 记录了某个 episode 被投影了
+哪条 entry，若该 entry 只以磁盘文件形式存在，则该 lineage 在文件被修改或删除后不可重建，而塑造过 candidate 的知识
+与 source、toolchain 同属输入闭包。配置钉住摘要而目录内容不符时，报告为漂移并 fail closed，不静默替换。
+
+投影接口按 target 与 exposure 授权返回结果，不提供「返回全部 entry 由调用方自行过滤」的形态。
+过滤发生在子系统内部；一旦调用方能够枚举再自选，`applies_to` 与 exposure 就退化为建议而不是 gate。
+
+#### Trust state
+
+pack 只携带内容，部署拥有信任。任何 pack 都不得自带已验证状态。
+
+| 状态 | 含义 |
+| --- | --- |
+| `Unaudited` | 无人读过。其 supported path 可以遵循，其每一个数字都是假说 |
+| `Reviewed` | 有人读过并给出裁决。这是一个声明，不是一次验证 |
+| `Validated` | 一份存在的证据支撑它，且必须指名覆盖了哪几条 claim |
+| `Refuted` | 一份证据否证了它。产品自有的移出供应；外部的永远与其否证一起供应 |
+
+三种证据形式互不替代：`probe receipt` 支撑关于硬件或 API 的声明；`execution receipt` 支撑关于方法的声明，即一次运行
+真的到达了该程序声称能到达的结果；`derived knowledge` 支撑一条以产出知识为目的的程序。缺少其中任何一种，对应类别的
+声明就没有诚实路径，而按 3.6，没有诚实路径的 gate 会被绕过去。
+
+`Validated` 必须指名 claim。一枚不指名 claim 的徽章是在为整份文档背书，文档中未被检查的部分会在沉默中读起来可信。
+读取时对未覆盖的 claim 显式提示；已覆盖且已验证的部分不加提示。
+
+#### Exposure
+
+`OrganicReasoningSafe`、`PolicyChallengeOnly` 和 `AdmissionRestricted` 是不同 exposure authority。pack 只能在 manifest 中
+请求默认值，实际授予由 Controller 按 policy 绑定。retrieval rank、模型 confidence、来源声誉与作者身份都不能提升 trust
+state 或扩张 Worker/tool capability。provenance 是一个字段，从来不是一个信任等级。
+
+Episode 只接收获准的 index/summary，并按需读取 exact entry。成功 fixture 的算法答案、expected output、task identity 或
+专用 prompt 不得进入 production knowledge。跨任务沉淀只允许经过审查的通用方法、原语和 target fact。
 
 ## 8. Oracle 与验证
 
@@ -393,6 +479,55 @@ model body、stdout/stderr、hidden content 或 credential；只记录稳定 ide
 外部 effect 使用 command→durable authority/event→execution→receipt。Controller restart、Worker disconnect 或 provider timeout
 不能改变已授予 authority。已有 terminal receipt 的 job 不重复执行；retry 创建不同 attempt identity并保持同一 job contract。
 
+### 10.5 运行时布局
+
+运行时状态按归属与可变性切分，不按主题切分：决定权限、备份与升级策略的是「谁写它、它何时变、丢了要不要紧」。
+每棵树的路径独立配置并解析为绝对路径；单根部署与系统安装是同一套逻辑角色的两种绑定，不是两套布局。
+
+| 树 | 拥有者 | 内容 | 材料类 |
+| --- | --- | --- | --- |
+| `config/` | administrator | controller/worker 配置、runtime model、target context、启用的 pack、policy | public |
+| `packs/` | administrator 与 pack 作者 | knowledge 与 skill 的导入源；运行时不读 | public |
+| `store/` | Controller | event、CAS、可重建的派生索引 | public |
+| `restricted/` | Admission 侧 | hidden case、expected value、private mutant、full gate receipt、exposure ledger | restricted |
+| `secrets/` | administrator | PKI、enrollment、credential | secret |
+| `workspaces/` | Controller 写投影，administrator 写项目定义 | 每个待迁移项目一个 | public |
+| `log/` | 各进程 | 稳定 identity、计数、状态与 failure class | public |
+
+restricted 与 secret 是 10.3 定义的不同材料类，必须是不同的树与不同的权限，不得因为都需要保护而合并。durable state
+不得置于 secret 树之下：两者的备份周期、轮换方式与访问主体都不同。派生索引可删除并重建，因此永远不是真相来源。
+
+Worker 主机只需要 `config/`、`store/`、`secrets/` 与 `log/`。Worker 上不存在 `packs/` 与 `restricted/`：被判方不与判官
+共处一台主机，这应当是文件系统事实，而不是一条策略。
+
+`log/` 中不得存在任何可以落下诊断正文的位置。source、prompt、model body、stdout/stderr、hidden 内容与 credential 只能
+经 10.3 的显式授权从 store 读取，并受该节的投影上限约束。
+
+### 10.6 项目工作区
+
+每个待迁移项目拥有一个持久工作区，包含项目定义、冻结的 source、候选修订的 git 投影、development validation bundle
+投影、测量投影、导出物，以及各次任务的清单。
+
+候选修订本身构成不可变 DAG，其 parent lineage 直接映射为 commit parent，因此候选 DAG 与 commit DAG 是同一个 DAG。
+commit trailer 携带 task、candidate revision、parent revision、episode 与 generation identity，使任一 commit 都能回到
+权威记录。分支与标签承载真实语义：冻结的 intake、各 domain 的 Pareto tip、以及某个 qualification epoch 判过的确切修订。
+
+三条边界：
+
+1. **git 是投影，不是权威。** Controller 单向写入；权威记录始终是 store，Admission 读的也是 store。工作区被外部改动时，
+   下一次物化检测到分叉并拒绝，而不是覆盖。任何人可以自由 clone 与修改，因为他修改的是投影。
+2. **构建输入永远不是工作区。** 构建从 store 组装 content-addressed bundle，只读挂载，用完即弃。从长期可变目录构建
+   会使「遗漏一个文件」表现为陈旧成功，而陈旧成功与真实成功不可区分。
+3. **qualification oracle 不进入工作区。** 工作区仅承载 development validation bundle。该边界必须是对物化产物的机械
+   断言，而不是一份需要维护的排除清单。
+
+commit tree 只包含冻结的 source 与候选实际改动的 port，不包含证据，因此 diff 精确等于本次候选的代码改动。测量与
+profiling 不进入 commit tree：其权威副本是 receipt payload 与 CAS blob，工作区只保存可重建的投影，且 profiling 只
+保存结构化解释而不是原始 dump（见 7.3）。
+
+项目定义声明哪些文件由产品提供、哪些由 Agent 撰写。缩小 Agent 的写入面既约束动作空间，也使构建失败可以被归因到
+candidate 本身而不是脚手架。source 的上游标识是 gate：指向无法获取的上游的项目定义不能进入 intake。
+
 ## 11. Fail-closed 终态
 
 合法终态包括：
@@ -433,7 +568,7 @@ exact receipt、authorized user decision 或明确的产品触发条件进入本
 | source、reference、caller 多源冲突 | 不用多数票，无法定位则 `IncompleteSpecification` | evidence-dependency graph 和受控 correlated failures |
 | Intent Admission 最晚时机 | qualification 前必须 admission；高成本 950PR search 可由预算 policy 提前要求 | early/late admission 对返工、问题数和性能搜索成本的比较 |
 | organic 阶段可见的 knowledge/skill | 只允许不会泄露 sealed taxonomy 的内容 | retrieval exposure 消融、leakage controls 和 downstream utility |
-| knowledge/skill 的 trust profile | 未定义前只能指导 exploration，不产生 capability 或 Admission | 按 claim kind/role 区分 official-doc、reviewed、execution-validated evidence 的 controls |
+| knowledge 各 trust state 的实际增益 | 结构由 7.4 规定；各 state 的收益尚未测量，不据此调整 exposure | 按 `Unaudited` / `Reviewed` / `Validated` 分层的 retrieval 消融、下游 compile 与 correctness 收益 |
 | full structured fallback 阈值 | 仅响应 typed gap/severity，不让 Controller 解释语义 | gap severity × defect yield × cost 的预注册实验 |
 | Evidence/Assurance Graph 最小持久化 | 只保存有 consumer/authority/replay/recovery 的节点 | restart、cross-feedback、graph churn 和遗漏率 |
 | Reviewer topology | fresh episode 不自动算独立 | 同模型、异模型、人工和新 evidence channel 的增量 finding/cost |

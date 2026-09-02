@@ -73,6 +73,10 @@ Task identity、split、target、model deployment、knowledge snapshot、budget 
 不同硬件的裸 CUDA/Ascend latency 不作为公平 performance verdict。Target performance 必须相对同 950PR workload 下的有意义
 baseline。
 
+baseline 的选择本身会决定结论的方向，因此必须预注册并说明理由。一个未经调优、未开启目标平台常规加速路径的
+baseline 会系统性地夸大收益；对已有 vendor 实现或框架实现的比较，与对朴素实现的比较，是两个不同的 claim，
+不得互相替代。凡不能给出有意义 baseline 的任务，performance 记为 informational，不进入 promotion claim。
+
 ### 4.2 搜索 treatments
 
 同一 task/budget 至少比较：
@@ -115,6 +119,25 @@ abstention、focused investigation、full structured fallback 和最终 coverage
 - independent reference、high-precision partial reference 或 formal/bounded proof。
 
 Oracle accepted 只表示它在 exact epoch 有资格判断 candidate，不表示 candidate 通过。
+
+#### Oracle 校准协议
+
+一个不会失败的判据不是判据。任何 judge 在被用于裁决之前，必须先按以下顺序自证，且结果与 judge 的 exact 内容绑定：
+
+1. **噪声地板。** 对 reference 至少独立执行两次，取其差异作为地板。地板不是从被判对象取得的。
+2. **退化地板检测。** 若两次 reference 的全部指标差异为零，该地板是一个伪装成地板的零，
+   会把 judge 变成误报机器。此时必须改用一个**良性扰动**取地板，并记录该扰动本身确实产生了差异。
+3. **地板的准确度上界。** 地板的参考实现不得比被判实现在数值上更准确，否则会误杀正确的移植。
+   参考实现的选择必须与被判实现处于可比的数值路径上，并记录该判断的依据。
+4. **特异性。** judge 必须让 reference 对自身通过。注意「judge 让良性运行通过」是同义反复，
+   因为地板正是从良性运行算出来的；有意义的检查是对 reference 自身与对独立重跑。
+5. **敏感性。** judge 必须让一组已知错误的变体全部失败，至少覆盖：单点改动、丢弃末尾、
+   整行置零、交换、非有限值，以及一条按数量级递减的误差阶梯。记录该 judge 能捕获的最小误差量级。
+6. **减弱即声明。** 若新 judge 的敏感性或最小可捕获误差劣于现行 judge，这是一次减弱。减弱被允许，
+   但它是一个 claim，需要与 promotion 同等的证据：一次已知正确、而旧 judge 错误拒绝的运行。
+
+verdict 的类别由 reference 的等级推导，不由任何人填写：independent reference 或 specification 支撑
+`Correctness`；仅与 target 上的既有实现比较只支撑 `NoRegression`，且不得被报告为 correctness。
 
 ### 5.2 Candidate outcomes
 
@@ -210,6 +233,24 @@ first-cause lineage 去重；基础设施失败进入 execution completeness，�
 
 Promotion 只按预声明 claim 计分。运行后挑出的最快 shape、metric 或 workload 只能标为 exploratory；Oracle revision 未完成
 symmetric replay 时 outcome 为 `NotComparable`。
+
+### 6.6 测量有效性
+
+一次时间测量在满足以下条件之前不是证据。这些条件必须记录在 receipt 中，而不是记录在实验说明里。
+
+- **设备占用状态。** 共享设备上的竞争会同时抬高均值并大幅放大方差。receipt 必须记录本次执行时的设备编号、
+  本卡是否空闲以及同机其他设备的占用情况。在非空闲设备上取得的数字标为 `Contended`，不进入 promotion claim。
+- **可测下限。** 短于设备计时分辨率若干倍的 kernel 不可被可靠测量。低于该下限的测量只能报告为
+  `BelowMeasurementFloor`，不得参与比较，也不得通过增大重复次数来假装可测。
+- **缓存与频率状态。** 冷热状态与缓存是否清理会改变一个数量级以上的结果，未清理的片上缓存可以产生
+  超过理论峰值的读数。测量方法必须声明其缓存与频率处理方式，并且同一比较内保持一致。
+- **代理指标的适用条件。** 一个代理指标只有在它所代理的对象确实是瓶颈时才是证据。它陈述的是机制，不是结果。
+  在瓶颈归属未被独立测量之前，不得用代理指标支撑 promotion；由排除法得到的瓶颈判定是断言，不是测量。
+- **分开证明与合并交付。** 一项改动必须在**单独施用**时被证明；多项改动叠加后的总收益不能归因给其中任何一项。
+  叠加后仍需重新验证正确性，因为正确性不组合。
+
+roofline 与 ceiling 只有在计算与访存上限、设备状态和测量方法都经 calibrated probe 之后才可报告。
+在软件管理多级存储的目标上，单一 roofline 假设各层算术强度一致，该假设通常不成立，因此只作分层的定性诊断使用。
 
 ## 7. 实验纪律
 

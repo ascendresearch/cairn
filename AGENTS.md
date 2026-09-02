@@ -26,6 +26,40 @@ uses authorized tools, and proposes intent, Oracle, or candidate artifacts. Ther
   migration nor a disposable experiment. Preserve the smallest task-generic seam that has a real
   consumer, prioritize the end-to-end migration workflow, and expand SIR authority or topology only
   when a later consumer and a sufficiently stable architecture require it.
+- Keep fixture-derived material out of production crates. A control that exists to exercise one known
+  fixture belongs in test targets or test-only crates, not in a product crate's public API, even when
+  it is labelled historical. If a product crate needs it, that is evidence the mechanism is not yet
+  task-generic; fix the mechanism rather than exporting the fixture.
+
+## Gates and ledgers
+
+A gate that cannot be satisfied through an honest path does not stop anyone; it gets routed around.
+These rules apply to the coding agent building Cairn, not only to the runtime model:
+
+- Build the door you would have to walk through yourself, then walk through it. If the product needs
+  to register knowledge, a skill, a policy or a control, it must use the same authorized path the
+  runtime agent uses. A builder-only side entrance means the gate is decorative.
+- Never hand-edit a ledger, a trust record, an audit file or any store the gates read. If the only way
+  to record something is a text editor, the missing authorized path is the bug.
+- Every gate must be runnable backwards over what is already inside, and the reading side and the
+  auditing side must share one state-derivation function. A ledger with no auditor is not a gate.
+- When a check is added, name the gate that consumes it. An alarm nothing is wired to is decoration.
+- A verification that compares a thing to itself verifies nothing. This includes the case where the
+  thing that failed to exist is the change: a transformation that rewrites nothing leaves the subject
+  identical to the reference, and the comparison then passes tautologically.
+- Evidence is what the harness recorded when a tool actually ran. A field an applicant fills in is a
+  claim, never evidence, including when the applicant is this repository's own tooling.
+
+## Knowledge and skill material
+
+- Knowledge and skills ship as packs outside this repository. The repository carries fixtures for
+  testing the application; it does not carry product knowledge.
+- A pack ships content; the deployment owns trust. No pack may declare itself validated, and authorship
+  is a provenance field, never a trust level.
+- A fixture's algorithmic answer, expected output, task identity or bespoke prompt must never enter a
+  pack, a production prompt or a runtime projection.
+- Trust state binds to content identity. Changing the bytes of an entry retires every verdict bound to
+  the previous bytes; do not carry a verdict across an edit.
 
 ## Development-stage versioning and compatibility
 
