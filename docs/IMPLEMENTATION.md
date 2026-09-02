@@ -382,7 +382,24 @@ fixtures/cuda-ascend/intent/reduce-sum-f32/v1/     公开半边,在 git 里
 
 exposure ledger 仍未实现。
 
-### 4.3 设备与工具链现状### 4.3 设备与工具链现状
+### 4.2.6 时钟:一个被抹平的方向,一个不可满足的默认值
+
+部署过程中量到 NPU 主机比 Controller 慢约 93 秒（`chronyd` active 但未同步,共享主机,未擅自步进）。
+追下去发现的是 `admitted_resource_observation_time` 的一处不对称:
+`resource_clock_skew_tolerance_ms` 只约束 worker **超前**;worker 落后时函数直接返回 Controller 自己的时间。
+落后方向不是没有上限,而是**被抹掉**——一次 93 秒前的测量会被盖上「此刻」的时间戳。
+对排序而言这可辩护,但它使 quantitative freshness 失去依据:
+`match_quantitative_resources` 拒绝在求值时刻已陈旧的证据,而陈旧性此时已不可见。
+
+用 bootstrap 重建部署后碰到了同一个函数的另一面。GPU worker 连不上,
+因为示例配置里该容忍度为 `null`,语义是「worker 时钟一毫秒都不许超前」,而它领先 1 到 2 毫秒。
+**这个默认值两台机器之间不可能满足**,此前之所以没出问题,是因为旧部署带着一个早于示例的显式取值。
+示例与线上均已改为 2000 毫秒。
+
+两面同源:落后被静默抹平,超前的默认值严到无法达成。真正修它应与 device capability 声明（P5）
+一并考虑,因为依赖 quantitative freshness 的是那条路径。
+
+### 4.3 设备与工具链现状
 
 通道已于 2026-09-02 恢复并核验。地址、凭据与 enrollment 材料属于 Secret provider，不进入本仓库。
 
