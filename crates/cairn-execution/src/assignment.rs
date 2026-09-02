@@ -219,6 +219,7 @@ pub struct AssignmentLeaseRecord {
     granted_at: ObservedAtUnixMillis,
     renewed_at: ObservedAtUnixMillis,
     expires_at: ObservedAtUnixMillis,
+    deadline_at: ObservedAtUnixMillis,
 }
 
 impl AssignmentLeaseRecord {
@@ -232,6 +233,13 @@ impl AssignmentLeaseRecord {
     #[must_use]
     pub const fn granted_at(&self) -> ObservedAtUnixMillis {
         self.granted_at
+    }
+
+    /// Returns the attempt deadline fixed at grant time from the frozen contract's execution
+    /// timeout. Renewal cannot carry a lease past it.
+    #[must_use]
+    pub const fn deadline_at(&self) -> ObservedAtUnixMillis {
+        self.deadline_at
     }
 
     /// Returns the last successful renewal observation.
@@ -370,6 +378,9 @@ pub enum AssignmentControlError {
     /// The active-attempt snapshot predates the assignment state it would renew.
     #[error("worker heartbeat predates the accepted assignment state")]
     StaleHeartbeat,
+    /// The attempt reached the execution budget its frozen contract declared.
+    #[error("attempt exceeded the execution deadline fixed by its contract")]
+    AttemptDeadlineExceeded,
     /// Lease has elapsed and cannot grant a new action.
     #[error("assignment lease has expired")]
     LeaseExpired,
@@ -387,6 +398,7 @@ struct LeasedPayload {
     binding: AssignmentBinding,
     granted_at: ObservedAtUnixMillis,
     expires_at: ObservedAtUnixMillis,
+    deadline_at: ObservedAtUnixMillis,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -474,12 +486,18 @@ pub fn grant_assignment_lease<E: EventStore, C: ContentStore>(
         offer_message_id: grant.message_ids.offer,
         start_message_id: grant.message_ids.start,
     };
-    let expires_at = lease_expiry_at(observed_at, grant.policy.lease_duration)?;
+    // The lease answers "is the worker still there"; the deadline answers "has this attempt used
+    // up the budget its contract declared". Only the second bounds a worker that stays perfectly
+    // reachable while making no progress, which is why it is fixed here from the frozen contract
+    // rather than recomputed from anything the worker reports later.
+    let deadline_at = attempt_deadline_at(observed_at, authority.contract().resources().timeout())?;
+    let expires_at = lease_expiry_at(observed_at, grant.policy.lease_duration)?.min(deadline_at);
     let lease = AssignmentLeaseRecord {
         binding: binding.clone(),
         granted_at: observed_at,
         renewed_at: observed_at,
         expires_at,
+        deadline_at,
     };
     let stream = assignment_stream(authority.attempt_id())?;
     let history = events.read_stream(&stream, None)?;
@@ -511,6 +529,7 @@ pub fn grant_assignment_lease<E: EventStore, C: ContentStore>(
             binding,
             granted_at: observed_at,
             expires_at,
+            deadline_at,
         },
     )?;
     let outcome = events.append(&stream, expected, command_id, &[event])?;
@@ -610,7 +629,8 @@ pub fn renew_assignment_lease<E: EventStore, C: ContentStore>(
     let history = events.read_stream(&stream, None)?;
     let projection = project_assignment(&history, attempt_id)?;
     ensure_claimant(&projection.lease.binding, worker)?;
-    let expires_at = lease_expiry_at(observed_at, policy.lease_duration)?;
+    let expires_at =
+        lease_expiry_at(observed_at, policy.lease_duration)?.min(projection.lease.deadline_at);
     if projection.lease.renewed_at == observed_at && projection.lease.expires_at == expires_at {
         return Ok(projection.lease);
     }
@@ -618,6 +638,15 @@ pub fn renew_assignment_lease<E: EventStore, C: ContentStore>(
         AssignmentPhase::Accepted => {}
         AssignmentPhase::Expired(_) => return Err(AssignmentControlError::LeaseExpired),
         AssignmentPhase::Leased => return Err(AssignmentControlError::InvalidTransition),
+    }
+    // Every other condition below is evidence that the worker is reachable and still claims the
+    // attempt. None of them is evidence that the attempt advanced, and no such evidence exists:
+    // a wedged compile and a slow one are indistinguishable from outside. The honest control is
+    // therefore a budget rather than a progress detector, and it is enforced here so that the
+    // controller bounds the attempt independently of the worker's own supervisor, which is the
+    // component whose failure this guards against.
+    if observed_at >= projection.lease.deadline_at {
+        return Err(AssignmentControlError::AttemptDeadlineExceeded);
     }
     ensure_lease_live(&projection.lease, observed_at)?;
     if !matches!(
@@ -662,6 +691,7 @@ pub fn renew_assignment_lease<E: EventStore, C: ContentStore>(
         granted_at: projection.lease.granted_at,
         renewed_at: observed_at,
         expires_at,
+        deadline_at: projection.lease.deadline_at,
     })
 }
 
@@ -899,6 +929,7 @@ fn project_assignment(
                         granted_at: payload.granted_at,
                         renewed_at: payload.granted_at,
                         expires_at: payload.expires_at,
+                        deadline_at: payload.deadline_at,
                     },
                     phase: AssignmentPhase::Leased,
                     used_assignments,
@@ -1067,6 +1098,19 @@ fn lease_expiry_at(
         .ok_or_else(|| AssignmentControlError::InvalidHistory("lease expiry overflowed".into()))
 }
 
+fn attempt_deadline_at(
+    base: ObservedAtUnixMillis,
+    timeout: crate::ExecutionTimeoutMillis,
+) -> Result<ObservedAtUnixMillis, AssignmentControlError> {
+    let timeout = i64::try_from(timeout.get()).map_err(|_| {
+        AssignmentControlError::InvalidHistory("execution timeout exceeds i64".into())
+    })?;
+    base.get()
+        .checked_add(timeout)
+        .map(ObservedAtUnixMillis::new)
+        .ok_or_else(|| AssignmentControlError::InvalidHistory("attempt deadline overflowed".into()))
+}
+
 fn assignment_stream(attempt_id: AttemptId) -> Result<StreamId, AssignmentControlError> {
     Ok(StreamId {
         kind: AggregateKind::new("execution-assignment")
@@ -1162,6 +1206,10 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_execution_timeout(1_000)
+        }
+
+        fn with_execution_timeout(timeout_ms: u64) -> Self {
             let directory = tempfile::tempdir().expect("tempdir");
             let content_database = directory.path().join("content.db");
             let event_database = directory.path().join("events.db");
@@ -1182,7 +1230,7 @@ mod tests {
                     SandboxPath::new("work").expect("working directory"),
                 ),
                 ResourceRequest::new(
-                    ExecutionTimeoutMillis::new(1_000).expect("timeout"),
+                    ExecutionTimeoutMillis::new(timeout_ms).expect("timeout"),
                     PlacementRequest::new(
                         ExecutionPlatformRequirement::new(
                             Some(ArchitectureName::new("x86_64").expect("architecture")),
@@ -1299,6 +1347,90 @@ mod tests {
             )
             .expect("authorize")
         }
+    }
+
+    // Renewal's other conditions all establish that the worker is reachable and still claims the
+    // attempt. A worker stuck in a loop satisfies every one of them forever, so without a budget
+    // the lease renews for as long as the process stays up. The contract's execution timeout is
+    // that budget, and the controller has to enforce it itself: the worker's own supervisor is
+    // the component whose failure this exists to survive.
+    #[test]
+    fn a_perfectly_healthy_worker_cannot_renew_past_the_contract_budget() {
+        let mut fixture = Fixture::with_execution_timeout(5);
+        let worker = fixture.register_worker();
+        let worker = fixture.heartbeat(&worker, Vec::new(), 1);
+        let attempt_id = AttemptId::new();
+        let authority = fixture.authority(attempt_id);
+        let leased = grant_assignment_lease(
+            &mut fixture.events,
+            &fixture.content,
+            authority,
+            &worker,
+            AssignmentLeaseGrant::new(
+                AssignmentId::new(),
+                LeaseId::new(),
+                message_ids(),
+                lease_policy(),
+            ),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(2),
+        )
+        .expect("lease");
+        // The lease duration is ten and the budget is five, so the grant is cut to the budget
+        // rather than authorizing work the contract never allowed for.
+        assert_eq!(leased.lease().deadline_at(), ObservedAtUnixMillis::new(7));
+        assert_eq!(leased.lease().expires_at(), ObservedAtUnixMillis::new(7));
+
+        let accepted = accept_assignment(
+            &mut fixture.events,
+            &fixture.content,
+            leased,
+            &worker,
+            session_timeout(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(3),
+        )
+        .expect("accept");
+        start_accepted_assignment(
+            &mut fixture.events,
+            &fixture.content,
+            accepted,
+            &worker,
+            session_timeout(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(4),
+        )
+        .expect("start");
+
+        let worker = fixture.heartbeat(&worker, vec![attempt_id], 5);
+        renew_assignment_lease(
+            &mut fixture.events,
+            &fixture.content,
+            attempt_id,
+            &worker,
+            lease_policy(),
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(5),
+        )
+        .expect("renewal inside the budget");
+
+        // Same worker, same health, same attempt still reported active. Only the budget ran out.
+        let worker = fixture.heartbeat(&worker, vec![attempt_id], 7);
+        assert!(
+            matches!(
+                renew_assignment_lease(
+                    &mut fixture.events,
+                    &fixture.content,
+                    attempt_id,
+                    &worker,
+                    lease_policy(),
+                    &CommandId::new(),
+                    ObservedAtUnixMillis::new(7),
+                ),
+                Err(AssignmentControlError::AttemptDeadlineExceeded)
+            ),
+            "an exhausted budget must be reported as itself, not as an ordinary lease expiry"
+        );
     }
 
     fn put<T: ContentType>(content: &mut SqliteContentStore, bytes: &[u8]) -> ContentId<T> {
