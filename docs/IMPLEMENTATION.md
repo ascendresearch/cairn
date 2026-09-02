@@ -178,8 +178,19 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.2 的通道恢复
 当前代码树在端到端能力上弱于 2026-08-29 的代码树，而 `scripts/ci.sh` 全绿。先使该情形不可再现。
 
 1. 接通 normal path 上的候选构建通路：`prepare_generic_candidate_build_job` 获得非测试消费者，
-   `authorize_candidate_build` 与 `observe_candidate_on_worker` 落真实实现，不再只有测试替身。
-   该通路的类型与作业组装已存在，缺的是 `d699412` 移除的那一段消费者。
+   `authorize_candidate_build`、`observe_candidate_on_worker` 与 `record_terminal_outcome`
+   落真实实现，不再只有测试替身。该通路的类型与作业组装已存在，缺的是 `d699412` 移除的那一段消费者。
+
+   已先行完成的一步：删除 `continue_after_oracle_admission` 及其全部相关逻辑。
+   该分支允许工作流在 Oracle Admission 之后直接产出终态而完全不经过 candidate，
+   由 `MigrationCompletionTargetV1` 这一仅为测试 SIR 与 Oracle 而引入的开关驱动。
+   它使 `run_cuda_migration` 对「完整产品工作流」的声明不成立，也是 `AGENTS.md`
+   所禁止的那类只对 builder 开放的旁门。随之删除 `OracleWorkflowDispositionV1`、
+   终态变体 `OracleAccepted` 及其构造器、server 配置中的 `completion_target` 字段。
+   `MigrationTerminalOutcomeV1` 现在只有 `CandidateAccepted` 一个变体；
+   它会在 `ARCHITECTURE.md` 11 的 fail-closed 终态落地时重新变宽。
+   `record_terminal_outcome` 随之改为 `NotImplemented`，与其两个 candidate 侧同族方法一致——
+   在候选通路接通之前，把候选终态标成 Oracle 相位是不诚实的。
 2. **已完成。** 三个引用已删除 test target 的 Ascend 冒烟脚本随之移除；重建 lane 时脚本与 test target 一起产生。
 3. **通路可达性守卫**：断言每一条声明的产品能力存在非测试调用路径，并断言每个 opt-in lane 引用的 test target 真实存在。
    通路断裂必须使 `scripts/ci.sh` 失败。按 `AGENTS.md` 的说法，加了检查就要指名哪道门消费它。

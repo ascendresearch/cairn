@@ -785,9 +785,11 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
 
     async fn record_terminal_outcome(
         &mut self,
-        outcome: &MigrationTerminalOutcomeV1,
+        _outcome: &MigrationTerminalOutcomeV1,
     ) -> Result<(), Self::Error> {
-        self.transition(outcome.task_id(), TaskPhaseV1::OracleAccepted, None)
+        Err(MigrationAppApiError::NotImplemented(
+            "Terminal outcome recording",
+        ))
     }
 }
 

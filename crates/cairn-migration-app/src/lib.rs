@@ -50,11 +50,11 @@ use cairn_migration::{
     OraclePortfolioCoherenceReviewerRoleHooksV1, OraclePortfolioProposalV1,
     OracleReviewDispositionV1, OracleRevisionRequestV1, OracleWholePortfolioAgentContextV1,
     OracleWholePortfolioLineageV1, OracleWholePortfolioProposalAuthorityV1,
-    OracleWholePortfolioRoleHooksV1, OracleWorkflowDispositionV1, OracleWorkspaceV1,
-    PreparedIntentAdmissionV1, ReasoningDecompositionPolicyV1, SirAgentContextV1, SirRoleHooksV1,
-    SirTaskWorkspace, UserIntentAuthorityGrantV1, UserIntentDecisionRequestV1,
-    UserIntentDecisionV1, derive_user_intent_decision_requests, promote_user_intent,
-    recompute_candidate_admission, recompute_oracle_admission,
+    OracleWholePortfolioRoleHooksV1, OracleWorkspaceV1, PreparedIntentAdmissionV1,
+    ReasoningDecompositionPolicyV1, SirAgentContextV1, SirRoleHooksV1, SirTaskWorkspace,
+    UserIntentAuthorityGrantV1, UserIntentDecisionRequestV1, UserIntentDecisionV1,
+    derive_user_intent_decision_requests, promote_user_intent, recompute_candidate_admission,
+    recompute_oracle_admission,
 };
 use cairn_protocol::{AgentLoopId, ContentId, ContentType, TaskId};
 use cairn_server::{ApplicationModule, ApplicationName};
@@ -513,26 +513,10 @@ impl ContentType for MigrationTerminalOutcomeArtifact {
     const DOMAIN: &'static str = "migration.terminal-outcome.v1";
 }
 
-/// Product completion target chosen when the migration application is composed.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum MigrationCompletionTargetV1 {
-    /// Finish after mechanical Oracle Admission has granted exact Oracle authority.
-    ThroughOracleAdmission,
-    /// Continue through Candidate generation, observation, and Admission.
-    ThroughCandidateAdmission,
-}
-
 /// Terminal aggregate containing only exact admitted upstream identities.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "completion", rename_all = "kebab-case")]
 pub enum MigrationTerminalOutcomeV1 {
-    OracleAccepted {
-        schema_version: u16,
-        task_id: TaskId,
-        intent: ContentId<IntentAdmissionPublicOutcomeArtifact>,
-        oracle: ContentId<OracleAdmissionOutcomeArtifact>,
-    },
     CandidateAccepted {
         schema_version: u16,
         task_id: TaskId,
@@ -543,19 +527,6 @@ pub enum MigrationTerminalOutcomeV1 {
 }
 
 impl MigrationTerminalOutcomeV1 {
-    fn after_oracle(
-        task_id: TaskId,
-        intent: ContentId<IntentAdmissionPublicOutcomeArtifact>,
-        oracle: ContentId<OracleAdmissionOutcomeArtifact>,
-    ) -> Self {
-        Self::OracleAccepted {
-            schema_version: 1,
-            task_id,
-            intent,
-            oracle,
-        }
-    }
-
     fn after_candidate(
         task_id: TaskId,
         intent: ContentId<IntentAdmissionPublicOutcomeArtifact>,
@@ -574,23 +545,21 @@ impl MigrationTerminalOutcomeV1 {
     #[must_use]
     pub const fn task_id(&self) -> TaskId {
         match self {
-            Self::OracleAccepted { task_id, .. } | Self::CandidateAccepted { task_id, .. } => {
-                *task_id
-            }
+            Self::CandidateAccepted { task_id, .. } => *task_id,
         }
     }
 
     #[must_use]
     pub const fn intent(&self) -> ContentId<IntentAdmissionPublicOutcomeArtifact> {
         match self {
-            Self::OracleAccepted { intent, .. } | Self::CandidateAccepted { intent, .. } => *intent,
+            Self::CandidateAccepted { intent, .. } => *intent,
         }
     }
 
     #[must_use]
     pub const fn oracle(&self) -> ContentId<OracleAdmissionOutcomeArtifact> {
         match self {
-            Self::OracleAccepted { oracle, .. } | Self::CandidateAccepted { oracle, .. } => *oracle,
+            Self::CandidateAccepted { oracle, .. } => *oracle,
         }
     }
 
@@ -729,7 +698,6 @@ where
     role_attempt_limit: MigrationRoleAttemptLimitV1,
     oracle_admission_policy: OracleAdmissionPolicyV1,
     candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
-    completion_target: MigrationCompletionTargetV1,
     initialized_loops: BTreeMap<AgentLoopId, (TaskId, InitializedAgentLoopV1)>,
     task_reasoning: BTreeMap<TaskId, ReasoningDecompositionPolicyV1>,
     oracle_workspace: Option<OracleWorkspaceV1>,
@@ -754,7 +722,6 @@ where
         role_attempt_limit: MigrationRoleAttemptLimitV1,
         oracle_admission_policy: OracleAdmissionPolicyV1,
         candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
-        completion_target: MigrationCompletionTargetV1,
     ) -> Self {
         Self {
             name,
@@ -768,7 +735,6 @@ where
             role_attempt_limit,
             oracle_admission_policy,
             candidate_mechanisms,
-            completion_target,
             initialized_loops: BTreeMap::new(),
             task_reasoning: BTreeMap::new(),
             oracle_workspace: None,
@@ -2290,38 +2256,6 @@ where
             request.attempt().clone(),
             evidence,
         ))
-    }
-
-    async fn continue_after_oracle_admission(
-        &mut self,
-        task: &Self::FrozenTask,
-        intent: &Self::AdmittedIntent,
-        oracle: &Self::AdmittedOracle,
-    ) -> Result<OracleWorkflowDispositionV1<Self::TerminalOutcome>, Self::Error> {
-        match self.completion_target {
-            MigrationCompletionTargetV1::ThroughCandidateAdmission => {
-                Ok(OracleWorkflowDispositionV1::ContinueToCandidate)
-            }
-            MigrationCompletionTargetV1::ThroughOracleAdmission => {
-                let outcome = MigrationTerminalOutcomeV1::after_oracle(
-                    task.task_id(),
-                    intent
-                        .prepared()
-                        .public_outcome()
-                        .identity()
-                        .map_err(MigrationApplicationError::domain)?,
-                    oracle
-                        .outcome()
-                        .identity()
-                        .map_err(MigrationApplicationError::domain)?,
-                );
-                self.services
-                    .record_terminal_outcome(&outcome)
-                    .await
-                    .map_err(MigrationApplicationError::product)?;
-                Ok(OracleWorkflowDispositionV1::Complete(outcome))
-            }
-        }
     }
 
     async fn prepare_candidate_exploration_context(

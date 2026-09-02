@@ -16,9 +16,9 @@ use cairn_migration::{
 };
 use cairn_migration_app::{
     CudaMigrationApplication, CudaMigrationProductModuleV1, EvidenceExperimentWorkerConfigV1,
-    MigrationAgentRuntimeExecutorV1, MigrationCompletionTargetV1, MigrationRoleAttemptLimitV1,
-    MigrationRuntimeMaterialsV1, OracleControlRunnerV1, OracleControlWorkerConfigV1,
-    migration_product_boundary, migration_tool_registry,
+    MigrationAgentRuntimeExecutorV1, MigrationRoleAttemptLimitV1, MigrationRuntimeMaterialsV1,
+    OracleControlRunnerV1, OracleControlWorkerConfigV1, migration_product_boundary,
+    migration_tool_registry,
 };
 use cairn_server::{ApplicationName, load_server_config, run_with_application};
 use serde::Deserialize;
@@ -43,7 +43,6 @@ struct ProductConfigV1 {
     migration_role_attempt_limit: MigrationRoleAttemptLimitV1,
     task_limits: SirTaskLimits,
     inbox_capacity: usize,
-    completion_target: MigrationCompletionTargetV1,
     oracle_coverage_profile: OracleCoverageProfileV1,
     oracle_adversarial_policy: OracleAdversarialPolicyV1,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
@@ -152,7 +151,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.migration_role_attempt_limit,
         OracleAdmissionPolicyV1::strict(),
         config.candidate_mechanisms,
-        config.completion_target,
     );
     let product = CudaMigrationProductModuleV1::new(name, api, workflow);
     run_with_application(server, product).await?;

@@ -83,7 +83,7 @@ pub use candidate_exploration::{
 pub use controller_workflow::{
     CandidateAdmissionDispositionV1, CudaMigrationWorkflow, OracleAdmissionDispositionV1,
     OracleItemDevelopmentLineageV1, OracleItemDiscoveryLineageV1, OracleReviewDispositionV1,
-    OracleWholePortfolioLineageV1, OracleWorkflowDispositionV1, run_cuda_migration,
+    OracleWholePortfolioLineageV1, run_cuda_migration,
 };
 pub use corpus_execution::{
     AssembledCorpusExecutionCase, CorpusExecutionPlanArtifact, CorpusExecutionPlanError,

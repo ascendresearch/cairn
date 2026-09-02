@@ -392,15 +392,6 @@ pub trait CudaMigrationWorkflow: Send {
         request: &Self::OracleControlReconciliationRequest,
     ) -> impl Future<Output = Result<Self::OracleControlObservations, Self::Error>> + Send;
 
-    fn continue_after_oracle_admission(
-        &mut self,
-        task: &Self::FrozenTask,
-        intent: &Self::AdmittedIntent,
-        oracle: &Self::AdmittedOracle,
-    ) -> impl Future<
-        Output = Result<OracleWorkflowDispositionV1<Self::TerminalOutcome>, Self::Error>,
-    > + Send;
-
     fn prepare_candidate_exploration_context(
         &mut self,
         task: &Self::FrozenTask,
@@ -532,12 +523,6 @@ pub enum OracleReviewDispositionV1<A, R> {
     Revise(R),
 }
 
-/// Product completion policy applied only after mechanical Oracle Admission has granted authority.
-pub enum OracleWorkflowDispositionV1<T> {
-    Complete(T),
-    ContinueToCandidate,
-}
-
 /// Mechanical Candidate admission either grants authority or binds revision to exact observation
 /// lineage. A free-form diagnostic cannot replace this lineage value.
 pub enum CandidateAdmissionDispositionV1<A, C, L, R> {
@@ -564,18 +549,6 @@ pub async fn run_cuda_migration<W: CudaMigrationWorkflow>(
     );
     let intent = establish_intent(workflow, &task).await?;
     let oracle = establish_oracle(workflow, &task, &intent).await?;
-    if let OracleWorkflowDispositionV1::Complete(terminal) = workflow
-        .continue_after_oracle_admission(&task, &intent, &oracle)
-        .await?
-    {
-        tracing::info!(
-            target: "cairn.migration.workflow",
-            event = "cuda_migration_completed_after_oracle",
-            task_id = %task_id,
-            "CUDA migration workflow completed at admitted Oracle authority"
-        );
-        return Ok(terminal);
-    }
     let candidate = establish_candidate(workflow, &task, &intent, &oracle).await?;
     complete_cuda_migration(workflow, task, intent, oracle, candidate).await
 }
@@ -1047,7 +1020,6 @@ mod tests {
         trace: Vec<&'static str>,
         oracle_revised: bool,
         candidate_revised: bool,
-        complete_after_oracle: bool,
         reasoning_decomposition: Option<ReasoningDecompositionPolicyV1>,
     }
 
@@ -1486,21 +1458,6 @@ mod tests {
             self.mark("reconcile-oracle-controls", ())
         }
 
-        fn continue_after_oracle_admission(
-            &mut self,
-            _task: &FrozenTask,
-            _intent: &(),
-            _oracle: &(),
-        ) -> impl Future<Output = Result<OracleWorkflowDispositionV1<Terminal>, Infallible>> + Send
-        {
-            self.trace.push("choose-completion-target");
-            ready(Ok(if self.complete_after_oracle {
-                OracleWorkflowDispositionV1::Complete(Terminal)
-            } else {
-                OracleWorkflowDispositionV1::ContinueToCandidate
-            }))
-        }
-
         fn prepare_candidate_exploration_context(
             &mut self,
             _task: &FrozenTask,
@@ -1697,7 +1654,6 @@ mod tests {
                 "accept-oracle-portfolio-review",
                 "run-oracle-controls",
                 "admit-oracle",
-                "choose-completion-target",
                 "prepare-candidate-context",
                 "initialize-candidate-loop",
                 "run-candidate-loop",
@@ -1722,25 +1678,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oracle_completion_target_uses_the_same_workflow_and_skips_candidate_work() {
-        let mut workflow = RecordedWorkflow {
-            complete_after_oracle: true,
-            ..RecordedWorkflow::default()
-        };
-        run_cuda_migration(&mut workflow, ())
-            .await
-            .expect("workflow");
-
-        assert_eq!(workflow.trace.last(), Some(&"choose-completion-target"));
-        assert!(!workflow.trace.contains(&"prepare-candidate-context"));
-        assert!(!workflow.trace.contains(&"record-terminal"));
-    }
-
-    #[tokio::test]
     async fn minimal_decomposition_uses_one_whole_portfolio_loop_and_no_review_loop() {
         let mut workflow = RecordedWorkflow {
             reasoning_decomposition: Some(ReasoningDecompositionPolicyV1::MinimalDecomposition),
-            complete_after_oracle: true,
             oracle_revised: true,
             ..RecordedWorkflow::default()
         };
@@ -1754,6 +1694,6 @@ mod tests {
         assert!(!workflow.trace.contains(&"prepare-oracle-item-discovery"));
         assert!(!workflow.trace.contains(&"prepare-oracle-item-review"));
         assert!(!workflow.trace.contains(&"prepare-oracle-portfolio-review"));
-        assert_eq!(workflow.trace.last(), Some(&"choose-completion-target"));
+        assert_eq!(workflow.trace.last(), Some(&"record-terminal"));
     }
 }
