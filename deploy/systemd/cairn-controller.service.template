@@ -1,0 +1,31 @@
+[Unit]
+Description=Cairn controller (@INSTANCE@)
+After=network-online.target
+Wants=network-online.target
+# The controller retries its own listeners; an exit is a real fault, not a transient one. Bounding
+# restarts turns a persistently broken deployment into a visible failed unit instead of an
+# invisible loop that looks like a running service.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+WorkingDirectory=@WORKING_DIRECTORY@
+ExecStart=@BINARY@ @CONFIG@
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+# Structured JSON goes to stdout and journald collects it. The repository forbids diagnostic bodies
+# in the log stream, so no private file sink is needed here.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cairn-controller-@INSTANCE@
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE_DIRECTORY@
+
+[Install]
+WantedBy=@WANTED_BY@

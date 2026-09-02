@@ -1,0 +1,27 @@
+[Unit]
+Description=Cairn worker (@INSTANCE@)
+After=network-online.target
+Wants=network-online.target
+# A worker reconnects to the controller from inside its own session loop, so a disconnect never
+# reaches systemd. Process exit therefore means a real fault, and bounding restarts makes a broken
+# deployment surface as a failed unit rather than an invisible loop.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+WorkingDirectory=@WORKING_DIRECTORY@
+ExecStart=@BINARY@ @CONFIG@
+Restart=always
+RestartSec=5s
+TimeoutStopSec=60s
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cairn-worker-@INSTANCE@
+# Deliberately unhardened. A worker execs container tooling and stages assignment material through
+# paths its config chooses, so sandboxing directives have to be validated against a real build
+# before they are added. Adding them untested would fail the build lane in a way no test covers.
+
+[Install]
+WantedBy=@WANTED_BY@
