@@ -133,10 +133,27 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 | 稳态 CPU | 单个 tokio worker 线程常驻 45–60% |
 | durable event store | 42 MB |
 
-`read_bytes` 仅 16 KB，说明并非磁盘 I/O 而是对已缓存事件存储的反复读取。会话循环按
-`min(outbox_poll_interval_ms, authority_poll_interval_ms)` 每 100 ms 推进一次，
-而每次推进都要重新扫描事件存储以确定待发 outbox。因此**稳态成本随 durable event 数量线性增长**，
-与是否有工作无关。
+`read_bytes` 仅 16 KB，说明并非磁盘 I/O 而是对已缓存事件存储的反复读取。
+
+机制已定位到具体形态，而不是某个函数的缺陷：**控制面投影没有快照，每一次操作都重放整条聚合流。**
+`cairn-execution/src/control.rs` 中有 10 处 `read_stream(&stream, None)`，全部以 `None` 作游标。
+会话循环按 `min(outbox_poll_interval_ms, authority_poll_interval_ms)`
+每 100 ms 推进一次，每次推进都重放一遍 outbox 流。
+
+同一部署的事件计数说明了代价来源：
+
+| 聚合流 | 事件数 |
+| --- | --- |
+| `execution-worker` | 28,186 |
+| `controller-control-outbox` | 9,434 |
+| `execution-job` | 44 |
+| `worker-enrollment-registry` | 10 |
+
+两个数量级的差距来自**心跳与资源观测被写成了 durable event**。liveness 是易失状态，
+不承载 authority，也不需要被重放；把它放进不可变历史，使每一次控制面操作的成本随在线时长增长。
+
+因此这不是一处补丁，而是两个设计决定：控制面投影是否引入快照或游标；以及 liveness 是否应当离开
+durable 事件流。两者都改变 `AGENTS.md` 所列的内部格式，属于 P1 范围，不在观测当场处理。
 
 成本按会话计。观测期内只有一个空闲 worker 会话时单线程常驻 45–60%；2026-09-02 接入第二个 worker 后
 进程占用升至约 70%，两个 tokio worker 线程各自累积可比的 CPU 时间。两个 worker 自身均近乎空闲
