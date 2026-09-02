@@ -179,33 +179,65 @@ observation。该路径已改为 `SemanticExecutionUnavailable` 并映射为独�
 | 旧构建（单会话） | 10,049 次/秒 | 41.200 MB/s | 45–60% |
 | 会话游标（两会话） | 10,545 次/秒 | 43.183 MB/s | 20% |
 | outbox 游标（两会话） | 312 次/秒 | 1.271 MB/s | 1.5% |
+| 同上，改用无启动窗口重测（两会话） | 2.5 次/秒 | 0.008 MB/s | 1.4% |
 
 依据的不变量是：outbox 投影是该流的纯函数，因此「无事可投」的结论在流前进之前不会改变。
 `controller_outbox_position` 只读游标之后的部分，为空即跳过整次重放。
-剩余的 1.27 MB/s 来自仍以 `None` 为游标的 `EnrollmentRegistry::load`（每次循环一次，10 条事件）
-与心跳路径，两者都不随 outbox 增长。
+
+**第三行的测量方法有缺陷，第四行才是同一份代码的稳态。** 前三行的速率取自 `/proc/PID/io`
+的累计计数除以进程运行时长，而该窗口包含进程启动时的一次性重放。这个偏差有多大是可直接测量的：
+当前进程运行 961 秒、累计 rchar 152.3 MB，而稳态速率（60 秒与 300 秒两个独立窗口互相吻合，
+均为 8.6 KB/s）在 961 秒内只能解释 8.0 MB——累计计数的约 95% 是启动重放，与稳态无关。
+因此凡按累计量除以运行时长得到的速率，量的是启动，不是稳态。第四行改用两个不含启动的窗口重测。
+
+这个偏差不影响前两行的结论：41 MB/s 那一档由独立的字节量模型佐证
+（2 会话 × 10 Hz × 2.26 MB = 45.3 MB/s，与实测吻合），且观测期长达 6.8 天，启动占比可忽略。
+受影响的是第三行，以及基于它的那条归因。
+
+**随之作废的归因。** 原先把残余的 1.27 MB/s 归给仍以 `None` 为游标的 `EnrollmentRegistry::load`。
+稳态实测推翻了它：会话循环在跑（环回链路 21.5 KB/s，两条 ESTABLISHED 连接），而读 syscall 只有
+2.5 次/秒，远低于循环频率——每轮的注册表读取根本没有到达文件层。这与 `journal_mode = WAL`
+下 SQLite 用页缓存服务重复扫描一致：outbox 重放停止后，工作集不再把缓存冲掉。
+`EnrollmentRegistry::load` 的成本因此是 CPU 与内存，不是 I/O；它仍应加游标，但理由是
+随流增长的解析开销，不是这里记错的 1.27 MB/s。
+
+**这是同一类错误的第二次。** 第一次是从事件计数推断成本而没有测量；这一次是测量了，但窗口选错，
+把一次性启动算进了稳态速率。两次的共同点是：拿到一个数就用，没有先问这个数在量什么。
+对应 `EVALUATION.md` 6.6 的 measurement validity。
 
 ### 4.2.1 阻塞：同步存储运行在异步运行时线程上
 
-`ControllerState` 持有 `SqliteEventStore` 与 `SqliteContentStore`，两者都是同步的，而会话路径的每一次
-`read_stream` / `append` 都直接在 `async fn` 内执行。`cairn-server` 中 `block_in_place` 与
-`spawn_blocking` 的出现次数为 **0**；同一工作区的 `cairn-migration-app` 有 11 处。该模式在本仓库内已知，
-只是没有应用到 Controller。
+`ControllerState` 持有 `SqliteEventStore` 与 `SqliteContentStore`，两者都是同步的，而 `schema.rs` 把
+`synchronous` 设为 `FULL`，因此每次 append 都是一次 fsync。发现问题时，会话路径的每一次 `read_stream` /
+`append` 都直接在 `async fn` 内执行，`cairn-server` 中 `block_in_place` 与 `spawn_blocking` 的出现次数为
+**0**；同一工作区的 `cairn-migration-app` 有 11 处。该模式在本仓库内已知，只是没有应用到 Controller。
 
 叠加的第二层是 `tokio::sync::Mutex<ControllerState>`：一把全局锁把所有会话的控制面操作串行化，
 共 11 处获取点。这解释了观测现象——负载并未分散到 17 个运行时线程，而是持锁者独自跑满一个线程。
-因此在数据量增长时，Controller 不是变慢，而是先耗尽单线程再阻塞整个运行时。
 
-因此这不是一处补丁，而是三个设计决定：outbox 投影是否引入游标或改为事件驱动唤醒；liveness 是否
-应当离开 durable 事件流；以及同步存储访问是否必须移出运行时线程并去掉全局锁。三者都改变
-`AGENTS.md` 所列的内部格式或运行拓扑，属于 P1 范围。
+三个设计决定现已全部落地，按依赖顺序：
 
-成本按会话计。观测期内只有一个空闲 worker 会话时单线程常驻 45–60%；2026-09-02 接入第二个 worker 后
-进程占用升至约 70%，两个 tokio worker 线程各自累积可比的 CPU 时间。两个 worker 自身均近乎空闲
-（0.0% 与 0.4%），成本完全在 Controller 侧。
+| 决定 | 处置 | 证据 |
+| --- | --- | --- |
+| outbox 投影引入游标 | 已实施 | 4.2 表：312 次/秒、1.271 MB/s、CPU 1.5%，实测 |
+| 去掉全局锁 | 已实施 | 既有测试 `concurrent_sqlite_placements_cannot_overcommit_quantitative_capacity` 证明并发安全不依赖这把锁：两个 OS 线程、两条连接，落败方由 `RevisionConflict` 拒绝 |
+| 同步存储移出运行时线程 | 已实施 | 具名 `on_store` 包裹 11 处同步存储段，覆盖整个会话生命周期 |
+
+`spawn_blocking` 在此不可用：这些段持有 `&mut ControllerState`，无法跨越 `'static + Send` 边界，
+因此适用形式是 `block_in_place`。它要求多线程运行时，在 current-thread 运行时上会 panic——该隐患经
+红验证确认为真实而非理论：把一个测试的 flavor 改为 current_thread 即可立即复现。`main.rs` 没有任何
+测试覆盖，两个集成测试各自钉住自己的 flavor，因此 flavor 变更只会在生产暴露；
+`scripts/check-product-path.sh` 现在拒绝 `cairn-server` 中出现 `current_thread`。
+
+去锁与移出运行时线程在当前空闲负载下**均无可测量差异**，这与预期一致：空闲会话几乎不提交。
+进程 CPU 1.5% → 1.4%，落在噪声内；这是 4.2 那组数字里唯一未被窗口选择污染的一项。
+可见的变化只有分布：CPU 不再由单个 tokio 线程独占，而是散在多个线程上（0.3/0.2/0.2/0.2/0.1%）。
+两者改变的是负载下的行为，不是稳态数字。真正的验证要等 P4 的构建流量。
+
+liveness 是否应当离开 durable 事件流是**尚未实施**的第四项：它必须与 progressing 信号和
+`last_seen_at` 的语义拆分一起做，否则会把两个不同的问题绑在一次改动里。
 
 这是单元测试看不见、只有长期真实部署才会暴露的一类缺陷，属于 `EVALUATION.md` 6.4 的 system metrics 范畴。
-修复需要游标或索引，是一个设计决定而不是一次补丁，因此记录为事实并进入 P1 范围，不在 P0 内匆忙处理。
 
 ### 4.3 设备与工具链现状
 
@@ -303,11 +335,13 @@ P4 只需要 Ascend build worker，不需要 device，因此 4.3 的通道恢复
    `record_terminal_outcome` 随之改为 `NotImplemented`，与其两个 candidate 侧同族方法一致——
    在候选通路接通之前，把候选终态标成 Oracle 相位是不诚实的。
 2. **已完成。** 三个引用已删除 test target 的 Ascend 冒烟脚本随之移除；重建 lane 时脚本与 test target 一起产生。
-3. **已完成。** 新增 `scripts/check-product-path.sh` 并接入 `scripts/ci.sh`，两项断言：
+3. **已完成。** 新增 `scripts/check-product-path.sh` 并接入 `scripts/ci.sh`，三项断言：
    每个 opt-in lane 引用的 test target 必须存在；`cairn-migration` 导出的 `pub fn` 中
-   「在定义模块之外没有非测试消费者」的数量必须等于记录基线。基线是记录值不是目标值，
+   「在定义模块之外没有非测试消费者」的数量必须等于记录基线；`cairn-server` 不得出现
+   `current_thread`，因为 4.2.1 的 `on_store` 只在多线程运行时上成立。基线是记录值不是目标值，
    只能经一次显式编辑改变，因此失去消费者与采纳孤儿都成为可见事件。刻意不用名字白名单，
-   那种清单会静默变长。两半均已红验：制造悬空 lane 退出 1，摘掉一个真实消费者时计数从 22 变 23 并列出清单。
+   那种清单会静默变长。三项均已红验：制造悬空 lane 退出 1，摘掉一个真实消费者时计数从 22 变 23
+   并列出清单，把一个测试的 flavor 改为 current_thread 时该门退出 1。
 
    开工时发现该缺陷的规模比预期大：仓库的三道文本门此前**全部是死的**。
    `ci.sh` 的行尾空白检查与 `check-log-isolation.sh` 的两项检查都依赖未安装的 `rg`，
