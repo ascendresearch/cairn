@@ -1,215 +1,103 @@
 # Cairn
 
-Cairn is an open-source, evidence-driven system for migrating previously unseen CUDA software to
-hardware-affine Ascend C implementations.
+Cairn is an open-source system for migrating previously unseen CUDA operators and kernel families
+to hardware-affine Ascend C implementations.
 
-The first supported hardware target is **Ascend 950PR (3510)**. SoC, CANN/toolchain and execution
-environment remain explicit task inputs so evidence from another target cannot be silently reused.
+The first target is **Ascend 950PR (3510)**. Target SoC, CANN/toolchain, runtime environment and
+workload are explicit task inputs; evidence from another target never transfers implicitly.
 
-The goal is not to translate syntax or merely generate plausible code. Cairn is intended to deliver
-a reviewable migration package containing target-specific Ascend C kernels, host tiling and
-integration code, executable validation, performance evidence, known limitations, and exact replay
-lineage.
+Cairn is not a syntax translator. It is intended to deliver a reviewable migration package:
+
+- Ascend C kernels, host tiling, dispatch, build and integration code;
+- an explicit contract describing which source behavior must be preserved;
+- executable correctness, numerical, integration and safety validation;
+- target-side performance measurements and supported workload scope;
+- limitations, unknowns and exact replay lineage.
 
 ## Why Cairn
 
-CUDA and Ascend C expose materially different execution models. A useful migration must recover the
-required computation, decide which CUDA behavior should actually be preserved, construct a judge for
-future Ascend implementations, search hardware-specific tiling and pipeline strategies, execute on
-real toolchains and devices, and explain the remaining risk.
+CUDA and Ascend C expose different execution and memory models. A useful migration must recover the
+required computation, distinguish desired semantics from source bugs or accidental behavior, build
+a judge for future implementations, and search target-specific tiling and pipeline strategies on
+real toolchains and hardware.
 
-Cairn therefore treats the runtime model as a per-task reasoning actor, not as an authority:
+The runtime model is therefore a per-task reasoning and generation actor, not an authority:
 
-- models inspect unfamiliar source, propose intent, experiments, validation mechanisms and code;
-- the Controller freezes inputs, capabilities, revisions and workflow transitions;
-- ordinary managed Workers perform CUDA, CPU/reference and Ascend build/run/profile effects;
-- mechanical Admission functions recompute what may be trusted;
-- every expensive or external result is bound to exact artifacts and replayable receipts.
+- model-backed strategies inspect unfamiliar code and propose intent, experiments and candidates;
+- the Controller freezes inputs, revisions, budgets, capabilities and workflow transitions;
+- managed Workers compile, run, sanitize and profile exact artifacts;
+- mechanical Admission gates recompute what may be trusted from frozen policy and receipts.
 
 The repository coding agent builds this generic system. It must not interpret a known fixture and
-encode that answer into production prompts, APIs, policies or task construction.
+encode the answer into production prompts, APIs, policies or task construction.
 
-## Accepted task shapes
-
-PyTorch is optional. A task may contain only CUDA source, a host launcher, build files and a caller
-declaration. Cairn can also use additional authorized evidence when present:
-
-- C/C++ tests or executables;
-- CPU or Python references;
-- PyTorch custom operators, OpInfo or framework tests;
-- TensorFlow, JAX, Triton or other integration code;
-- specifications, papers or model-graph context;
-- production shape, dtype and workload traces.
-
-The input CUDA implementation is evidence, not a guaranteed specification. Observed CUDA bugs,
-races, undefined behavior or accidental numerical behavior do not automatically become migration
-requirements.
-
-## Product direction
-
-Cairn is Ascend-C-first, with Ascend 950PR (3510) as the initial product target. Existing Ascend
-libraries or higher-level implementations may be used as
-references, baselines, seeds or explicit escape hatches, but the long-term differentiator is the
-ability to generate new implementations for a specific Ascend SoC and CANN/toolchain—even when
-framework and template-library support is immature.
-
-The system is organized around four connected planes:
-
-1. **Semantic Contract** — recover and admit what must be migrated;
-2. **Platform Facts** — measure what the exact target hardware and toolchain support;
-3. **Implementation Search** — generate and evaluate an Ascend C candidate family;
-4. **Assurance and Delivery** — validate, benchmark, replay and package the result.
-
-Generated output may include multiple specialized kernels and a verified tiling/dispatch policy.
-Hardware affinity is not assumed to have one globally optimal implementation.
-
-## Workflow
+## Product workflow
 
 ```text
-CUDA task + caller + target
-        │
-        ▼
-Controller-owned Candidate Search Loop
-        ├── Exploration Actor episodes
-        ├── optional focused SIR on a material semantic fork
-        ├── source/reference/target Worker experiments
-        ├── exploratory Ascend C candidate revisions
-        └── Development Evaluation feedback
-        │
-        ▼
-Intent contract + evolving Evidence/Assurance Graph
-        │
-        ▼
-sealed-policy coverage challenge + frozen Validation Bundle
-        │
-        └── end current search generation
+CUDA task + caller contract + exact target
                     │
                     ▼
-Qualification Epoch ── independent / mutant / hidden / 950PR controls
-        │
-        ▼
-Oracle Admission → Candidate Promotion/Admission
-        │
-        ▼
-Reviewable Migration Package
+Controller-owned Candidate Search Loop
+  ├── Exploration Actor episodes
+  ├── optional focused semantic investigation
+  ├── CUDA / reference / Ascend Worker experiments
+  ├── evolving intent and assurance evidence
+  └── correctness-first candidate-family search
+                    │
+                    ▼
+freeze search generation and qualification policy
+                    │
+                    ▼
+independent Qualification Epoch
+  ├── Oracle adequacy controls
+  ├── candidate correctness / numerical / safety controls
+  ├── exact 950PR execution and performance
+  └── parent/current symmetric comparison
+                    │
+                    ▼
+reviewable Migration Package or an honest partial/blocked outcome
 ```
 
-Source understanding occurs in every migration, but Cairn does not run a mini-SIR classifier before
-deciding whether to run SIR. A focused SIR protocol is materialized only when actual migration
-reasoning exposes a semantic fork that changes the candidate or its judge. An exploratory candidate
-may exist before the final Oracle is accepted, but it has no release authority.
-
-The Candidate Search Loop is durable Controller orchestration, not another agent or a model-owned
-while-loop. It creates runtime-model episodes, validates typed actions, schedules authorized Worker
-effects and constructs each next immutable search state. Qualification is outside that loop. If a
-qualification failure is allowed to guide more development, Cairn starts a new search generation
-with only policy-authorized feedback; a disclosed hidden case is retired to the public regression
-set and replaced.
-
-Intent, assurance, Oracle and Candidate roles use real model/tool Agent Loops. The outer traversal
-over graph nodes, revisions, experiments, controls and candidates is mechanical Controller
-orchestration, not nested Agent Loops or separate proposal processes.
-
-The normal customer and execution path is:
-
-```text
-cairn-cli → cairn-server → migration app API → CudaMigrationWorkflow → managed Workers
-```
-
-## Why the workflow is structured
-
-Cairn does not depend on an Agent remembering every obligation in one long response. Structured
-claims, focused items, independent reviews, feedback and revision loops help models concentrate and
-make omissions visible.
-
-Structure is not proof. A filled schema, repeated self-review or model consensus cannot replace a
-compiler result, execution receipt, independent reference, counterexample, mutation control or
-mechanical recomputation. Decomposition is intended to be risk-adaptive: difficult numerical,
-concurrent, stateful or reference-free tasks receive deeper review and experimentation than simple,
-well-specified mechanisms.
+Qualification is outside development search. A disclosed hidden case becomes a public regression
+and cannot continue to count as independent evidence. A new intent, Oracle, target, candidate or
+promotion policy creates a new qualification epoch.
 
 ## Current status
 
-Cairn is pre-release. All internal formats remain current V1 definitions; incompatible development
-changes update V1 directly without compatibility readers, converters or migration paths.
+Cairn is pre-release. The durable Agent runtime, typed records, managed execution foundation,
+CLI/server entry path, intent and Oracle workflow pieces, and several mechanical boundaries exist.
+The first complete CUDA-to-Ascend C migration package has **not** been produced. There is no current
+claim of native build success, NPU correctness, target performance or end-to-end product success.
 
-The repository already contains substantial foundations for:
+See [current implementation status](docs/IMPLEMENTATION.md) for the exact evidence boundary.
 
-- strong domain identities and validated serialization;
-- durable event, content and Agent episode records;
-- model/tool execution and continuation recovery;
-- managed Worker enrollment, scheduling, execution and receipts;
-- the normal CLI/server/migration-workflow submission path;
-- SIR and structured Oracle role Agent Loops;
-- claim-scoped Oracle exploration and mechanical controls;
-- exact diagnostic authority and safe operational logging.
+## Documentation authority
 
-The first complete CUDA→Ascend C migration package has not yet been established. Current development
-is measuring whether up-front structure or adaptive evidence-driven co-design reaches the same
-release gates more reliably and economically.
+The repository intentionally has a small current documentation set. Git history carries superseded
+designs, development records and experiment artifacts.
 
-The first non-`vectorAdd` dogfood audit also found that the bundled Oracle Worker runner validated
-plan structure rather than executing candidate-facing mechanisms. That path now fails closed; real
-Oracle acceptance remains blocked until typed Worker experiments and executable qualification are
-connected. See
-[`DEV-037-IMPLEMENTATION.md`](docs/dev/records/DEV-037-IMPLEMENTATION.md).
-
-## Preserved pilots and next ablation
-
-The preserved A/B/C runs are implementation pilots, not causal comparisons:
-
-| Mode | Reasoning decomposition | New Worker evidence |
+| Document | Purpose | Authority |
 | --- | --- | --- |
-| A `MinimalDecomposition` | one SIR episode and one whole-portfolio Oracle episode | no |
-| B `StructuredReview` | dimension/item discovery, development, review, revision and coherence | no |
-| C `EvidenceAugmentedStructuredReview` | the same structured workflow | yes, typed CUDA/CPU/reference/Ascend requests |
+| [AGENTS.md](AGENTS.md) | repository rules and non-negotiable builder boundaries | highest |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | current product and system design | normative |
+| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | implemented facts, gaps and next milestone | factual |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | how product and architecture claims are tested | normative for evaluation |
+| `docs/DECISIONS.md` | current-V1 fixture's identity-bound historical path | machine anchor, non-authoritative |
+| `README.md` | public orientation and navigation | summary only |
 
-They showed that whole-portfolio reasoning can be broad, independent Review can find real defects,
-and Worker evidence can change a revision—but also that decomposition can explode and the mere
-existence of a Worker does not provide the required CUDA or 950PR capability.
-
-The proposed next comparison is:
-
-- **D-Upfront**: blind Oracle scope, sealed-policy challenge and full structured Review before the
-  candidate workflow;
-- **E-Adaptive**: intent, assurance and an authority-restricted exploratory candidate co-evolve,
-  followed by a late sealed-policy challenge and full D fallback when required;
-- **E-Full-D-Fallback** and an organic-only diagnostic arm to isolate the value of the safety net.
-
-Candidate revisions do not win because they are newer. Promotion binds one admitted Intent,
-Qualification Oracle, 950PR target, Candidate revision and promotion policy into an immutable epoch.
-If the Oracle changes, the parent and new candidate are replayed symmetrically. Performance and
-precision improvements are predeclared, correctness-gated and evaluated against independent
-controls with bounded hidden-query exposure.
-
-The evaluation records obligation coverage, incorrect intent promotion, false acceptance/rejection,
-required capability closure, candidate promotion validity, Oracle symmetric replay, hidden-control
-exposure, reviewer/evidence value, tokens, elapsed time and Worker/device cost.
-
-The corpus must include both framework-free CUDA tasks and tasks with optional framework/reference
-material. PyTorch is one useful adapter, not an experiment prerequisite.
-
-## Design baseline
-
-Start with the two current authoritative documents:
-
-- [`docs/design/CAIRN_CURRENT_PRODUCT_DESIGN.md`](docs/design/CAIRN_CURRENT_PRODUCT_DESIGN.md) — the
-  product mission, four-plane architecture, coupled workflows, delivery contract and ablation plan;
-- [`docs/design/SIR_ORACLE_CURRENT_DESIGN.md`](docs/design/SIR_ORACLE_CURRENT_DESIGN.md) — detailed
-  focused SIR, evidence graph, evolving/qualification Oracle, Worker/control and Candidate promotion
-  boundaries.
-
-The broader candidate E and its completeness audit are in
-[`docs/design/EVIDENCE_DRIVEN_ADAPTIVE_MIGRATION_DESIGN.md`](docs/design/EVIDENCE_DRIVEN_ADAPTIVE_MIGRATION_DESIGN.md).
-
-Earlier documents remain useful historical evidence, but they do not add implicit requirements to
-the current design.
-
-Repository rules are defined by [`AGENTS.md`](AGENTS.md).
+If code and architecture differ, the difference is an implementation gap or a design change to be
+made explicitly. It is not a reason to add a compatibility path. Until a public compatibility
+baseline is declared, all internal formats remain the single current V1 definition.
 
 ## Local verification
 
-The focused migration crates can be checked with:
+The full repository gate is:
+
+```bash
+scripts/ci.sh
+```
+
+Focused migration checks are:
 
 ```bash
 cargo test -p cairn-migration -p cairn-migration-app --all-targets --no-fail-fast
@@ -218,8 +106,8 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-Billable model calls, CUDA execution and Ascend Worker runs are explicit opt-in operations and are
-not part of ordinary unit tests.
+Billable model calls and CUDA/Ascend hardware runs are explicit opt-in operations and are not part
+of ordinary unit tests.
 
 ## Project principle
 

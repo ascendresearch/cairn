@@ -1,1 +1,0 @@
-{"dimension":"cairn:v1:sha256:migration.oracle-dimension.v1:a14034f9307ff9677d52cc48911bdc4a0629b51a3d9812f36c4bce859bb37c20","schema_version":1,"statement":"Positive-y wrap boundary. With W=3, H=2, P=3, shiftX=0, shiftY=1, and source S[j*3+i] = (float)(j*3+i), the candidate must produce exact binary32 output O = [3.0f, 4.0f, 5.0f, 0.0f, 1.0f, 2.0f]."}
