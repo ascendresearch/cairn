@@ -1469,7 +1469,7 @@ pub fn record_worker_heartbeat<E: EventStore, C: ContentStore>(
     // Anything else falls back to the full projection, which keeps every typed failure class that
     // distinguishes a stale incarnation from an ordinary concurrency conflict.
     let advanced = !events
-        .read_stream(&stream, Some(session_sequence(session.revision)?))?
+        .read_stream(&stream, session_cursor(session.revision)?)?
         .is_empty();
     let projection = if advanced {
         let history = events.read_stream(&stream, None)?;
@@ -2144,8 +2144,17 @@ fn project_worker(
     projection.ok_or_else(|| WorkerControlError::InvalidHistory("missing registration".into()))
 }
 
-fn session_sequence(revision: StreamRevision) -> Result<EventSequence, WorkerControlError> {
+/// Converts a session's stream revision into the cursor for reading what came after it.
+///
+/// Revision zero means the stream holds nothing, so there is no position to read past and the
+/// caller must start from the beginning. Sequence numbering starts at one and rejects zero, so
+/// this distinction has to be made here rather than pushed into the sequence constructor.
+fn session_cursor(revision: StreamRevision) -> Result<Option<EventSequence>, WorkerControlError> {
+    if revision.get() == 0 {
+        return Ok(None);
+    }
     EventSequence::new(revision.get())
+        .map(Some)
         .map_err(|error| WorkerControlError::InvalidHistory(error.to_string()))
 }
 
@@ -2529,6 +2538,26 @@ mod tests {
             WorkerResourceSource::BuiltinProbe
         );
         assert_eq!(recovered.availability(), Some(&available));
+
+        // A restart keeps no session in memory, so recovery must also restore the stream position
+        // the heartbeat path appends against. Without it the first heartbeat after a restart would
+        // carry a stale parent and revision.
+        assert_eq!(recovered.last_event_id, session.last_event_id);
+        assert_eq!(recovered.revision, session.revision);
+        assert_eq!(recovered.last_observed_at, session.last_observed_at);
+        let busy = WorkerAvailability::new(WorkerHealth::Ready, false, 0, Vec::new())
+            .expect("availability");
+        let after_restart = record_worker_heartbeat(
+            &mut fixture.events,
+            &mut fixture.content,
+            &recovered,
+            &busy,
+            &CommandId::new(),
+            ObservedAtUnixMillis::new(60),
+        )
+        .expect("heartbeat after restart");
+        assert_eq!(after_restart.availability(), Some(&busy));
+        assert_ne!(after_restart.revision, recovered.revision);
     }
 
     #[test]
