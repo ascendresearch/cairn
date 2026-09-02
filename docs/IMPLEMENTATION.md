@@ -318,8 +318,35 @@ executor 的 `command` 指向宿主上的程序，两者都不是本部署拥有
 搬迁同时纠正了另一处同类问题：8 个 restricted 语义的 intent 语料此前位于 `.cairn/secrets/` 下且无任何
 代码或配置引用，现已移入 `restricted/` 树。
 
-尚未完成的是 P1 第 4 项（`project.json` 与 intake 冻结）。它不在本阶段 Exit 内，
-其消费者在 P4，因此单独推进而不是塞进这次搬运。
+P1 第 4 项也已完成。`cairn-workspace` 承载项目定义，五个条件决定它能否进入 intake，
+每一条都对应一种没有它就会产生的、无法使用的结果：
+
+| 条件 | 缺了会怎样 |
+| --- | --- |
+| 同一文件不得同时属于 `provided` 与 `authored_by_agent` | 构建失败既可能是候选的问题也可能是脚手架的，记录里区分不出来——这恰好取消了设两个集合的意义 |
+| `authored_by_agent` 不得为空 | 可写面为空意味着 Agent 根本无法动作 |
+| 路径只接受一种写法 | 归属靠比较声明的路径决定，同一文件的两种写法会同时落进两个集合而互斥检查看不到冲突 |
+| upstream 必须钉住确切字节 | 分支名指的是「找到源码的方法」而不是「结果所出自的源码」，因此 `main` 与缩写 commit 一律拒绝而不是警告后接受 |
+| schema_version 必须为当前版本 | 与其余 durable 文档一致 |
+
+门禁的入口是 `cairn-server project validate`，因为 intake 是一次管理动作，
+不可复现或归属含混的定义必须在任何工作依赖它之前被拒绝。它的测试跑真实二进制、对真实工作区树，
+因为无人能调用的门不是门。已在生产上验证：对一个不存在的项目，它把定义路径解析到
+`<home>/workspaces/<project>/project.json`。
+
+### 4.2.4 一处运行中的时钟发现
+
+部署过程中 `tar` 报出时间戳超前，追下去量得：**NPU 主机比 Controller 慢约 93 秒**（GPU 主机快 1.2 秒）。
+该主机 `chronyd` 处于 active 但 `System clock synchronized: no`。这是共享主机，未擅自步进其时钟。
+
+值得记录的不是这个偏差本身，而是它暴露的不对称：`resource_clock_skew_tolerance_ms` 配置为 2 秒，
+但 `admitted_resource_observation_time` 只约束 worker **超前**；worker 落后时函数直接返回
+Controller 自己的时间。也就是说落后方向不是「未设上限」，而是**被抹掉**——一次 93 秒前的测量会被
+盖上「此刻」的时间戳。对排序而言这是可辩护的选择，但它使 quantitative freshness 检查失去依据：
+`match_quantitative_resources` 拒绝在求值时刻已陈旧的证据，而陈旧性此时已不可见。
+
+这不在 P1 范围内，因此只记录不修改；它属于 4.2 那一族「两个时钟管同一件事」的问题，
+处理时应与 device capability 声明（P5）一并考虑，因为真正依赖 quantitative freshness 的是那条路径。
 
 ### 4.3 设备与工具链现状
 
