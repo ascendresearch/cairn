@@ -38,6 +38,9 @@ struct ProductConfigV1 {
     agent_event_database: PathBuf,
     agent_content_database: PathBuf,
     agent_content_directory: PathBuf,
+    /// The `workspaces` tree from the runtime layout. Each task owns one directory beneath it,
+    /// which is what lets a task's whole material be removed by removing a directory.
+    task_workspaces: PathBuf,
     episode_budget: EpisodeBudget,
     model_output_tokens: ModelOutputTokenLimit,
     agent_loop_step_limit: AgentLoopStepLimit,
@@ -150,6 +153,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.reasoning_decomposition,
         server.clone(),
         config.candidate_search,
+        config.task_workspaces,
         config.inbox_capacity,
     )?;
     let name = ApplicationName::new("cuda-migration")?;
@@ -181,6 +185,7 @@ fn resolve_product_paths(config: &mut ProductConfigV1, base: &Path) {
         &mut config.agent_event_database,
         &mut config.agent_content_database,
         &mut config.agent_content_directory,
+        &mut config.task_workspaces,
     ] {
         if path.is_relative() {
             *path = base.join(&*path);

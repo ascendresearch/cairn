@@ -457,6 +457,7 @@ pub fn migration_product_boundary(
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
     server: cairn_server::ServerConfig,
     search_policy: cairn_migration::CandidateSearchPolicyV1,
+    workspaces: PathBuf,
     inbox_capacity: usize,
 ) -> Result<
     (
@@ -489,8 +490,8 @@ pub fn migration_product_boundary(
             oracle_controls,
             candidate_build,
             reasoning_decomposition,
-            candidate_search: CandidateSearchStoreV1::new(server.clone(), search_policy),
-            task_workspace: crate::TaskWorkspaceStoreV1::new(server),
+            candidate_search: CandidateSearchStoreV1::new(server, search_policy),
+            task_workspace: crate::TaskWorkspaceStoreV1::new(workspaces),
         },
         receiver,
     ))
@@ -1577,8 +1578,8 @@ pub enum MigrationAppApiError {
     ArchiveUploadTooLarge,
     #[error("uploaded archive is not the archive that was declared")]
     ArchiveIdentityMismatch,
-    #[error("frozen task source does not match the bundle that names it")]
-    TaskWorkspaceIdentityMismatch,
+    #[error("task artifact path leaves the task directory")]
+    TaskWorkspacePathEscape,
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1586,7 +1587,7 @@ pub enum MigrationAppApiError {
 }
 
 impl MigrationAppApiError {
-    fn io(error: impl std::fmt::Display) -> Self {
+    pub(crate) fn io(error: impl std::fmt::Display) -> Self {
         Self::Io(error.to_string())
     }
 
@@ -1615,7 +1616,7 @@ impl MigrationAppApiError {
             Self::ArchiveUploadRangeInvalid => "archive-upload-range-invalid",
             Self::ArchiveUploadTooLarge => "archive-upload-too-large",
             Self::ArchiveIdentityMismatch => "archive-identity-mismatch",
-            Self::TaskWorkspaceIdentityMismatch => "task-workspace-identity-mismatch",
+            Self::TaskWorkspacePathEscape => "task-workspace-path-escape",
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1629,7 +1630,7 @@ impl MigrationAppApiError {
             | Self::ArchiveUploadRangeInvalid
             | Self::ArchiveUploadTooLarge
             | Self::ArchiveIdentityMismatch
-            | Self::TaskWorkspaceIdentityMismatch => AppApiErrorCodeV1::InvalidRequest,
+            | Self::TaskWorkspacePathEscape => AppApiErrorCodeV1::InvalidRequest,
             Self::TaskNotFound => AppApiErrorCodeV1::TaskNotFound,
             Self::Conflict | Self::ArchiveUploadAlreadyStarted => AppApiErrorCodeV1::Conflict,
             Self::NotReady | Self::Cancelled => AppApiErrorCodeV1::NotReady,
@@ -1899,28 +1900,8 @@ mod tests {
     // task be admitted, reasoned about and scheduled while the only copy of what it is about
     // lived in one process, which is a record the event log cannot make good on after a restart.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn freezing_a_task_persists_its_source_to_the_deployment_store() {
+    async fn freezing_a_task_persists_its_source_to_its_own_directory() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let server: cairn_server::ServerConfig = serde_json::from_value(serde_json::json!({
-            "schema_version": 1,
-            "listen": "127.0.0.1:0",
-            "tls": {
-                "certificate": "secrets/controller.pem",
-                "private_key": "secrets/controller-key.pem",
-                "client_ca": "secrets/ca.pem"
-            },
-            "enrollment_service": null,
-            "protocol_version": 1,
-            "scheduler": null,
-            "handshake_timeout_ms": 10_000,
-            "idle_timeout_ms": 120_000,
-            "outbox_poll_interval_ms": 100,
-            "authority_poll_interval_ms": 1_000,
-            "diagnostic_byte_limit": 1_024,
-            "store_root": directory.path(),
-        }))
-        .expect("server configuration");
-
         let workspace = SirTaskWorkspace::from_sources(
             vec![(
                 cairn_migration::SirTaskArtifactPath::new("src/kernel.cu").expect("path"),
@@ -1929,17 +1910,17 @@ mod tests {
             SirTaskLimits::default(),
         )
         .expect("workspace");
-        let bundle_id = workspace.bundle().identity().expect("bundle identity");
+        let task_id = TaskId::new();
 
-        crate::TaskWorkspaceStoreV1::new(server.clone())
-            .freeze(TaskId::new(), &workspace)
+        crate::TaskWorkspaceStoreV1::new(directory.path().to_path_buf())
+            .freeze(task_id, &workspace)
             .expect("freeze");
 
-        // Read it back through a store this test opens itself, so nothing but the deployment's
-        // own content store carries the answer.
-        let recovered = crate::TaskWorkspaceStoreV1::new(server)
-            .recover(bundle_id, SirTaskLimits::default())
-            .expect("the frozen source is readable from the store alone");
+        // Read it back through a store this test opens itself, so nothing but the task's own
+        // directory carries the answer.
+        let recovered = crate::TaskWorkspaceStoreV1::new(directory.path().to_path_buf())
+            .recover(task_id, SirTaskLimits::default())
+            .expect("the frozen source is readable from the directory alone");
         assert_eq!(
             recovered
                 .source(&cairn_migration::SirTaskArtifactPath::new("src/kernel.cu").expect("path")),

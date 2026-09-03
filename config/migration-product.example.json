@@ -10,6 +10,7 @@
   "agent_event_database": "store/agent-events.sqlite3",
   "agent_content_database": "store/agent-content.sqlite3",
   "agent_content_directory": "store/agent-content",
+  "task_workspaces": "workspaces",
   "episode_budget": {
     "step_limit": 24,
     "tool_operation_limit": 96,
@@ -41,12 +42,26 @@
     "schema_version": 1,
     "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "runner_path": "deploy/candidate-build/ascend-dav3510-build",
-    "worker_pools": ["npu-build"],
+    "worker_pools": [
+      "npu-build"
+    ],
     "capabilities": [
-      { "name": "execution.role", "value": "build" },
-      { "name": "toolchain.architecture", "value": "dav-3510" },
-      { "name": "toolchain.cann", "value": "9.1.0-beta.1" },
-      { "name": "toolchain.vendor", "value": "ascend" }
+      {
+        "name": "execution.role",
+        "value": "build"
+      },
+      {
+        "name": "toolchain.architecture",
+        "value": "dav-3510"
+      },
+      {
+        "name": "toolchain.cann",
+        "value": "9.1.0-beta.1"
+      },
+      {
+        "name": "toolchain.vendor",
+        "value": "ascend"
+      }
     ],
     "execution_timeout": 900000,
     "poll_interval_ms": 2000,
