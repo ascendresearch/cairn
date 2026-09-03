@@ -551,8 +551,20 @@ CI 里由 `.github/actions/setup-release-toolchain` 完成,本地没有等价物
 P3 第 4 项要把构建结果作为**搜索信号**（编译成败与诊断）回灌给循环,同时让 admission 继续 fail closed;
 这两件事必须分开,否则要么循环拿不到反馈,要么结构自检被当成语义结论。
 
-**下一步。** P4:用一个此前未知的 elementwise 算子跑真实模型,让循环第一次产生 native build success。
-这也是第一次会有 live 证据。P2 仍是可并行的另一条轨道,而循环里的 `knowledge_snapshot` 空位就是它的接口。
+**下一步不是 P4,因为 P4 现在跑不了。** 理由与证据见下面 P4 小节:Oracle admission 无条件 fail closed,
+候选阶段在它之后,所以正常入口到不了循环。需要 administrator 决定的是先做 P5 第 7 项,
+还是把 P4 重新定义。
+
+**这一轮改为验证循环本身,不烧 provider 调用去跑一条已知跑不通的路。** 新增
+`CandidateSearchStoreV1`,把循环的持久化面从产品服务里分出来——它是那些服务里唯一可以单独运行的部分,
+因为它只需要一个部署的 store,不需要先有 admitted Oracle。集成测试因此能问出那个只有部署后才会失败的问题:
+一次转移经过真实 SQLite journal、真实路径、每次调用重新打开、并且不在运行时线程上,还成不成立。
+两个测试都做了红验证:让 open 不先 recover、让 loop 身份忽略 task。
+
+同时补了两道门:`check-product-path.sh` 的多线程运行时断言扩展到 `cairn-migration-app`
+（它现在也在 `block_in_place` 里开 store）;新增一个测试要求每个任务 fixture 的 caller declaration
+可被真正会读它的入口读出来——**它当场抓到了新任务 fixture 的一处缺陷**（claim 未按 id 排序）,
+而那个缺陷本来要等到一次真实提交、花掉 provider 调用之后才会暴露。
 
 **profiler 诊断分流（P3 第 4 项的后半）尚未做**:目前回灌的只有编译器诊断,原样回传;
 profiler 输出要先经确定性分析器转成结构化建议,那要等到有 device 执行（P5）才有输入。
@@ -791,6 +803,33 @@ Exit：同一 task 内经过多轮 authorized compile→diagnostic→revision �
 空提交计入预算而不被当作完成；Controller restart 后循环从 durable state 恢复。
 
 ### P4 · 纵向 A：normal-path native build success
+
+**P4 现在跑不了，依赖图漏了一项（2026-09-03 查明）。** 工作流到不了候选阶段:
+`oracle_control_runner.rs` 里 `candidate_facing_runner_available()` 硬编码返回 `false`,
+于是 `qualify` 无条件返回 `SemanticExecutionUnavailable`,`run_qualified_oracle_controls` 用 `?`
+向上抛,任务在 Oracle admission 处终止。候选阶段在其之后,因此永远到不了。
+
+这道门本身是对的——3.4 记录它正是为了不让结构自检冒充语义授权——但它同时也是通往候选的唯一道路。
+**6.1 的依赖图因此不完整**:P4 不只需要 P0 + P2 + P3,还需要一个 candidate-facing Oracle
+mechanism runner,而计划把它放在 **P5 第 7 项**。要么先做 P5 的那一项,要么把 P4 重新定义为
+不经 Oracle 的窄纵向;两者都是决定,不是实现细节,所以留给 administrator。
+
+**不能用的做法**:把那个 `false` 翻成 `true`,或者绕过 Oracle admission。前者把结构自检变成假的
+语义授权,后者就是 P0 刚删掉的 `continue_after_oracle_admission` 那类只对 builder 开放的旁门。
+
+**部署侧的现状也一并记下,它们同样挡着 P4:**
+
+| 事实 | 观测 |
+| --- | --- |
+| 迁移产品进程 | **从未部署过**。systemd 里跑的是 `cairn-server`（通用 controller）,不是 `cairn-cuda-migration-server` |
+| 产品配置 | 全盘找不到任何 `ProductConfigV1`,正常入口在这个部署上没跑过 |
+| 构建配方 | Controller 要提供的 `bin/run` 不存在,仓库里也没有 |
+| worker | 两个已登记:`npu-build` 与 `gpu`,构建 worker 在线 |
+| 模型凭据 | DeepSeek key 在 `.cairn/secrets/` 下,live 调用具备条件 |
+
+**已经为 P4 备好的**:任务 `scale-clamp-f32`——一个此前不在仓库里的 elementwise 算子
+（逐元素乘以标量再夹到闭区间）,含 CUDA 源码、caller declaration 与两个真实的 unknown
+（非有限输入、上下界颠倒）。选它的理由就是 P4 说的:把风险集中在通路而不是算法上。
 
 汇合点。使用一个此前未知、无 framework 前提的 **elementwise** 算子：选它的理由是把风险集中在通路而不是算法上，
 而通路正是本阶段要证明的对象。

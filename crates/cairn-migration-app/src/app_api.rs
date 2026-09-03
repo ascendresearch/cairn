@@ -367,8 +367,7 @@ pub struct MigrationProductServicesV1 {
     oracle_controls: OracleControlRunnerV1,
     candidate_build: Option<CandidateBuildRunnerV1>,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
-    server: cairn_server::ServerConfig,
-    search_policy: cairn_migration::CandidateSearchPolicyV1,
+    candidate_search: CandidateSearchStoreV1,
 }
 
 /// CUDA migration App API and workflow composed as one product module above the generic host.
@@ -489,8 +488,7 @@ pub fn migration_product_boundary(
             oracle_controls,
             candidate_build,
             reasoning_decomposition,
-            server,
-            search_policy,
+            candidate_search: CandidateSearchStoreV1::new(server, search_policy),
         },
         receiver,
     ))
@@ -923,31 +921,7 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         &mut self,
         task: &FrozenMigrationTaskV1,
     ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
-        let search = candidate_search_loop(task.task_id())?;
-        let policy = self.search_policy;
-        let observed_at = observed_now()?;
-        let database = self.server.event_database().clone();
-        tokio::task::block_in_place(move || {
-            let mut events =
-                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
-            // Recovering before opening is what makes this idempotent. A loop that already exists
-            // keeps its frozen policy and its position instead of being reopened under new ones.
-            match cairn_migration::recover_candidate_search(&events, &search)
-                .map_err(MigrationAppApiError::internal)?
-            {
-                cairn_migration::CandidateSearchStateV1::NotFound => {
-                    cairn_migration::open_candidate_search(
-                        &mut events,
-                        &search,
-                        policy,
-                        &CommandId::new(),
-                        observed_at,
-                    )
-                    .map_err(MigrationAppApiError::internal)
-                }
-                state => Ok(state),
-            }
-        })
+        self.candidate_search.open(task.task_id())
     }
 
     async fn record_candidate_proposal(
@@ -955,41 +929,16 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         task: &FrozenMigrationTaskV1,
         proposal: ContentId<CandidateProposalArtifact>,
     ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
-        let search = candidate_search_loop(task.task_id())?;
-        let observed_at = observed_now()?;
-        let database = self.server.event_database().clone();
-        tokio::task::block_in_place(move || {
-            let mut events =
-                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
-            cairn_migration::record_candidate_proposal(
-                &mut events,
-                &search,
-                proposal,
-                &CommandId::new(),
-                observed_at,
-            )
-            .map_err(MigrationAppApiError::internal)
-        })
+        self.candidate_search
+            .record_proposal(task.task_id(), proposal)
     }
 
     async fn record_missing_candidate_submission(
         &mut self,
         task: &FrozenMigrationTaskV1,
     ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
-        let search = candidate_search_loop(task.task_id())?;
-        let observed_at = observed_now()?;
-        let database = self.server.event_database().clone();
-        tokio::task::block_in_place(move || {
-            let mut events =
-                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
-            cairn_migration::record_missing_submission(
-                &mut events,
-                &search,
-                &CommandId::new(),
-                observed_at,
-            )
-            .map_err(MigrationAppApiError::internal)
-        })
+        self.candidate_search
+            .record_missing_submission(task.task_id())
     }
 
     async fn record_candidate_build_observation(
@@ -997,23 +946,8 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         task: &FrozenMigrationTaskV1,
         outcome: cairn_migration::CandidateBuildOutcomeV1,
     ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
-        let search = candidate_search_loop(task.task_id())?;
-        let observed_at = observed_now()?;
-        let database = self.server.event_database().clone();
-        tokio::task::block_in_place(move || {
-            let mut events =
-                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
-            cairn_migration::record_candidate_build_observation(
-                &mut events,
-                &search,
-                outcome.proposal(),
-                outcome.receipt(),
-                outcome.compiled(),
-                &CommandId::new(),
-                observed_at,
-            )
-            .map_err(MigrationAppApiError::internal)
-        })
+        self.candidate_search
+            .record_build_observation(task.task_id(), outcome)
     }
 
     async fn record_terminal_outcome(
@@ -1424,6 +1358,170 @@ fn prepare_socket(path: &Path) -> Result<(), MigrationAppApiError> {
 /// The task-owned aggregate the candidate search loop records into.
 fn candidate_search_loop(task_id: TaskId) -> Result<CandidateSearchLoopV1, MigrationAppApiError> {
     CandidateSearchLoopV1::new(task_id).map_err(MigrationAppApiError::internal)
+}
+
+/// Where a candidate search loop's transitions are durably recorded.
+///
+/// This is separated from the rest of the product services because it is the only part of them
+/// that can be exercised on its own: it needs a deployment's store and nothing else, so the
+/// question "does a transition survive being written and read back" has an answer that does not
+/// require an admitted Oracle first.
+#[derive(Clone, Debug)]
+pub struct CandidateSearchStoreV1 {
+    server: cairn_server::ServerConfig,
+    policy: cairn_migration::CandidateSearchPolicyV1,
+}
+
+impl CandidateSearchStoreV1 {
+    /// Binds one deployment's durable store to the policy new loops are frozen under.
+    #[must_use]
+    pub const fn new(
+        server: cairn_server::ServerConfig,
+        policy: cairn_migration::CandidateSearchPolicyV1,
+    ) -> Self {
+        Self { server, policy }
+    }
+
+    /// Opens the loop for this task, or returns the position an existing one already reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store, codec, or invalid-history error.
+    pub fn open(
+        &self,
+        task_id: TaskId,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, MigrationAppApiError> {
+        let search = candidate_search_loop(task_id)?;
+        let policy = self.policy;
+        let observed_at = observed_now()?;
+        self.on_store(move |events| {
+            // Recovering before opening is what makes this idempotent. A loop that already exists
+            // keeps its frozen policy and its position instead of being reopened under new ones.
+            match cairn_migration::recover_candidate_search(events, &search)
+                .map_err(MigrationAppApiError::internal)?
+            {
+                cairn_migration::CandidateSearchStateV1::NotFound => {
+                    cairn_migration::open_candidate_search(
+                        events,
+                        &search,
+                        policy,
+                        &CommandId::new(),
+                        observed_at,
+                    )
+                    .map_err(MigrationAppApiError::internal)
+                }
+                state => Ok(state),
+            }
+        })
+    }
+
+    /// Records one submitted proposal, or the fact that it repeats one already built.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error or an illegal transition.
+    pub fn record_proposal(
+        &self,
+        task_id: TaskId,
+        proposal: ContentId<CandidateProposalArtifact>,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, MigrationAppApiError> {
+        let search = candidate_search_loop(task_id)?;
+        let observed_at = observed_now()?;
+        self.on_store(move |events| {
+            cairn_migration::record_candidate_proposal(
+                events,
+                &search,
+                proposal,
+                &CommandId::new(),
+                observed_at,
+            )
+            .map_err(MigrationAppApiError::internal)
+        })
+    }
+
+    /// Records an episode that ended without any proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error or an illegal transition.
+    pub fn record_missing_submission(
+        &self,
+        task_id: TaskId,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, MigrationAppApiError> {
+        let search = candidate_search_loop(task_id)?;
+        let observed_at = observed_now()?;
+        self.on_store(move |events| {
+            cairn_migration::record_missing_submission(
+                events,
+                &search,
+                &CommandId::new(),
+                observed_at,
+            )
+            .map_err(MigrationAppApiError::internal)
+        })
+    }
+
+    /// Folds one build observation back into durable state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store error or an observation that names a proposal this loop is not building.
+    pub fn record_build_observation(
+        &self,
+        task_id: TaskId,
+        outcome: cairn_migration::CandidateBuildOutcomeV1,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, MigrationAppApiError> {
+        let search = candidate_search_loop(task_id)?;
+        let observed_at = observed_now()?;
+        self.on_store(move |events| {
+            cairn_migration::record_candidate_build_observation(
+                events,
+                &search,
+                outcome.proposal(),
+                outcome.receipt(),
+                outcome.compiled(),
+                &CommandId::new(),
+                observed_at,
+            )
+            .map_err(MigrationAppApiError::internal)
+        })
+    }
+
+    /// Recovers the loop's position without changing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a store, codec, or invalid-history error.
+    pub fn recover(
+        &self,
+        task_id: TaskId,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, MigrationAppApiError> {
+        let search = candidate_search_loop(task_id)?;
+        self.on_store(move |events| {
+            cairn_migration::recover_candidate_search(events, &search)
+                .map_err(MigrationAppApiError::internal)
+        })
+    }
+
+    /// Runs one synchronous store interaction off the async runtime's own thread.
+    ///
+    /// The store is synchronous and every append is an fsync, so doing this inline would park a
+    /// runtime worker for the duration. `block_in_place` requires a multi-threaded runtime, which
+    /// `scripts/check-product-path.sh` holds this crate to.
+    fn on_store<T>(
+        &self,
+        work: impl FnOnce(&mut SqliteEventStore) -> Result<T, MigrationAppApiError> + Send,
+    ) -> Result<T, MigrationAppApiError>
+    where
+        T: Send,
+    {
+        let database = self.server.event_database();
+        tokio::task::block_in_place(move || {
+            let mut events =
+                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
+            work(&mut events)
+        })
+    }
 }
 
 fn observed_now() -> Result<ObservedAtUnixMillis, MigrationAppApiError> {

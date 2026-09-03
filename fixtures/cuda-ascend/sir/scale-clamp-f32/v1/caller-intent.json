@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "caller": {
+    "schema_version": 1,
+    "source_entry_point": "launch_scale_clamp_f32",
+    "arguments": [
+      {
+        "index": 0,
+        "name": "input",
+        "role": "input-buffer",
+        "data_type": "f32",
+        "shape": {
+          "kind": "ranked",
+          "dimensions": [
+            "count"
+          ]
+        },
+        "valid_domain": "Readable for count binary32 elements."
+      },
+      {
+        "index": 1,
+        "name": "count",
+        "role": "scalar",
+        "data_type": "u32",
+        "shape": {
+          "kind": "scalar"
+        },
+        "valid_domain": "Number of readable input elements and writable output elements."
+      },
+      {
+        "index": 2,
+        "name": "scale",
+        "role": "scalar",
+        "data_type": "f32",
+        "shape": {
+          "kind": "scalar"
+        },
+        "valid_domain": "Caller-provided binary32 multiplier."
+      },
+      {
+        "index": 3,
+        "name": "lower",
+        "role": "scalar",
+        "data_type": "f32",
+        "shape": {
+          "kind": "scalar"
+        },
+        "valid_domain": "Caller-provided inclusive lower bound."
+      },
+      {
+        "index": 4,
+        "name": "upper",
+        "role": "scalar",
+        "data_type": "f32",
+        "shape": {
+          "kind": "scalar"
+        },
+        "valid_domain": "Caller-provided inclusive upper bound."
+      },
+      {
+        "index": 5,
+        "name": "output",
+        "role": "output-buffer",
+        "data_type": "f32",
+        "shape": {
+          "kind": "ranked",
+          "dimensions": [
+            "count"
+          ]
+        },
+        "valid_domain": "Writable capacity for count binary32 elements."
+      },
+      {
+        "index": 6,
+        "name": "stream",
+        "role": "runtime-handle",
+        "data_type": null,
+        "shape": {
+          "kind": "opaque-handle"
+        },
+        "valid_domain": null
+      }
+    ],
+    "error_behaviors": [
+      "Return the source runtime status without making the operation host-synchronous."
+    ],
+    "claims": [
+      {
+        "id": "asynchronous-operation",
+        "layer": "observable-contract",
+        "statement": "The operation remains asynchronous with respect to the caller.",
+        "references": []
+      },
+      {
+        "id": "elementwise-scale-then-confine",
+        "layer": "algorithm",
+        "statement": "Each output value is the corresponding input value multiplied by scale and then confined to the closed interval between lower and upper.",
+        "references": []
+      },
+      {
+        "id": "empty-request-is-successful",
+        "layer": "observable-contract",
+        "statement": "A request for zero elements succeeds and writes nothing.",
+        "references": []
+      },
+      {
+        "id": "one-output-per-input",
+        "layer": "observable-contract",
+        "statement": "Write exactly count output values, one for each input value, at the same index.",
+        "references": []
+      },
+      {
+        "id": "separate-input-output",
+        "layer": "observable-contract",
+        "statement": "Input and output storage do not overlap.",
+        "references": []
+      }
+    ],
+    "exclusions": [
+      {
+        "id": "input-output-aliasing",
+        "statement": "Behavior for overlapping input and output storage is outside the requested domain."
+      }
+    ],
+    "unknowns": [
+      {
+        "id": "inverted-interval",
+        "kind": "observable-contract",
+        "question": "Is a caller-provided interval whose lower bound exceeds its upper bound inside the requested domain, and if so what should it produce?"
+      },
+      {
+        "id": "non-finite-input",
+        "kind": "algorithm",
+        "question": "What should the operation produce when an input value is not a number?"
+      }
+    ]
+  },
+  "target": {
+    "soc": {
+      "kind": "not-selected"
+    },
+    "toolchain": {
+      "kind": "not-selected"
+    },
+    "environment": {
+      "kind": "not-selected"
+    }
+  },
+  "authorized_evidence": [],
+  "prior_feedback": {
+    "kind": "no-prior-feedback"
+  }
+}

@@ -300,3 +300,37 @@ fn promotion_requires_and_preserves_every_administrator_decision() {
         .is_err()
     );
 }
+
+/// Every task fixture has to be readable by the entry point that will be asked to read it.
+///
+/// A caller declaration that only fails to parse at submission time turns an authoring mistake
+/// into a runtime failure on a live deployment, where it costs a provider call to discover.
+#[test]
+fn every_task_fixture_carries_a_readable_caller_declaration() {
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cuda-ascend/sir");
+    let mut read = 0_usize;
+    for task in std::fs::read_dir(&root).expect("task fixture root") {
+        let declaration = task
+            .expect("task entry")
+            .path()
+            .join("v1/caller-intent.json");
+        if !declaration.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&declaration).expect("caller declaration bytes");
+        serde_json::from_slice::<cairn_migration::IntentRecoveryRequestV1>(&bytes).unwrap_or_else(
+            |error| {
+                panic!(
+                    "{} is not a readable declaration: {error}",
+                    declaration.display()
+                )
+            },
+        );
+        read += 1;
+    }
+    assert!(
+        read >= 2,
+        "expected every task fixture to be scanned, saw {read}"
+    );
+}

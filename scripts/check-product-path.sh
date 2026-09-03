@@ -85,9 +85,12 @@ fi
 #    current-thread runtime the same call panics, so a flavor change would move a live failure into
 #    production without any ordinary test noticing: no test covers either `main.rs`, and the two
 #    integration tests that reach these paths pin their own flavor.
-for crate in cairn-server cairn-worker; do
+# cairn-migration-app joined this list on 2026-09-03: its product services now open the durable
+# store inside `block_in_place` on every candidate search transition, so it carries the same
+# requirement the controller and worker do.
+for crate in cairn-server cairn-worker cairn-migration-app; do
   if grep -rn 'current_thread' "crates/$crate"; then
-    echo "$crate must stay on a multi-threaded runtime: on_store uses block_in_place" >&2
+    echo "$crate must stay on a multi-threaded runtime: it calls block_in_place" >&2
     status=1
   fi
 done

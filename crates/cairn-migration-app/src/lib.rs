@@ -6,7 +6,7 @@ mod oracle_control_runner;
 mod runtime_agent;
 
 pub use app_api::{
-    CudaMigrationProductModuleV1, MigrationAppApiError, MigrationAppApiV1,
+    CandidateSearchStoreV1, CudaMigrationProductModuleV1, MigrationAppApiError, MigrationAppApiV1,
     MigrationProductServicesV1, SubmittedMigrationTaskV1, migration_product_boundary,
 };
 pub use candidate_build_runner::{
