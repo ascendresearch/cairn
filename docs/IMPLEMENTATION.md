@@ -492,6 +492,43 @@ musl 二进制。清单与脚本彼此一致，只是相对部署都不完整。
 13. 至少三个 materially different tasks 的同路径复现；
 14. migration package assembly、review commands 和 adoption evidence。
 
+## 5.1 从这里继续
+
+**部署现状。** 三个进程都在 `d896d7f`,由 systemd 管理:controller 是本机 user unit
+`cairn-controller-real`,部署根 `~/.local/share/cairn`;两个 worker 分别是 NPU 主机的 system unit
+`cairn-worker-npu-build`（根 `/opt/cairn-worker/npu-build`）和 GPU 主机的 user unit
+`cairn-worker-gpu`（根 `/home/dawei/.local/state/cairn-worker/gpu`）。另有两个隧道 unit,见 4.3。
+改动后重新部署的路径是 `scripts/build-release.sh` 产出 bundle,再用 `scripts/deploy.sh` 逐个部署。
+
+**三个会咬人的地方,都咬过。**
+
+发布构建需要钉住版本的 zig,而本机的 shim 装在 scratchpad 里、**不跨会话存活**。
+重建方式:`uv venv <scratch>/zigenv --python 3.12`,
+`uv pip install --python <scratch>/zigenv/bin/python -r release/zig-requirements.txt`,
+再写一个 `exec <scratch>/zigenv/bin/python -m ziglang "$@"` 的 `zig` 放进 PATH。
+CI 里由 `.github/actions/setup-release-toolchain` 完成,本地没有等价物。
+
+**配置改动必须和要求它的那次代码改动一起部署。** 这个错误犯过两次:先删了线上配置的字段,
+而部署的二进制还是要求它的那一版,systemd 重启五次后放弃,整个系统静默停摆。
+线上配置不是可以顺手编辑的东西。
+
+`cairn-server bootstrap` 把给它的地址同时用作监听与对外通告。这个部署走反向隧道,两者不同
+（监听 17443/17444,通告 7443/7444),bootstrap 之后要手工改 `enrollment_service.public_tcp_address`
+与 `control_endpoint.tcp_address`。
+
+**下一步。** 直接接着做的是任务压缩包的**分块上传**:app API 帧上限 4 MiB,base64 之后压缩包实际卡在
+3 MiB 左右,配置里 500 MiB 的上限够不到。worker 的物料通道已有分块传输,照搬即可。
+之后按 6.1 的依赖图,P2（知识与 skill 层）与 P3（循环框架）是两条并行轨道,在 P4 汇合。
+
+**未解决的事实,别当成已解决。** exposure ledger 一行代码都没有,而它是 restricted 材料唯一
+真正的控制（4.2.4）。资源时钟的两面不对称仍在（4.2.6）。P0 的 Exit 仍未达成:
+还没有一个候选经正常入口到达 Ascend build worker 并取回 typed 诊断。
+
+**这一轮里被证明有用的做法。** 每一道门禁都红验证过——把它该抓的东西造出来,确认它真的失败,
+再撤回。这一轮有三样东西因为「为还不存在的设计搭架子」而被删掉:布局的运行时校验、工具根绑定、
+项目定义与它的服务端子命令;删掉它们比留着便宜。本文记录的是事实与错误,不只是结果,
+包括我自己的两次归因错误（4.2）——那些记录比结论更有用。
+
 ## 6. 下一里程碑：首个真实 package
 
 在此里程碑完成前，暂停新增通用 Agent role、Admission kind、service、完整 graph topology 和兼容机制。
