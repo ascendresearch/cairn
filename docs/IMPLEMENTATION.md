@@ -454,6 +454,14 @@ interpreter、glibc 上限与动态依赖白名单，并产出 `BUILD-METADATA.j
 musl 二进制。清单与脚本彼此一致，只是相对部署都不完整。本次手工拼命令是在绕开这个缺口，
 不是在替代一个不存在的脚本。
 
+**反向隧道现在也由 systemd 看管。** 本机两个 user unit（`cairn-tunnel-npu`、`cairn-tunnel-gpu`）
+维持到两台 worker 主机的 `-R 7443/7444`。此前它们由交互 shell 起,shell 一走隧道就断,
+而断了之后两个 worker 全部离线、控制器侧只看到「没有连接」——一次静默的全系统中断。
+已实测自愈:`kill -9` 掉隧道后 systemd 数秒内重建,worker 自行重连。
+
+这两个 unit **不进仓库**:`ARCHITECTURE.md` 10.1 明确说 SSH reverse tunnel 不是产品拓扑,
+它们是本地运维脚手架。记在这里是为了让接手的人知道它们存在、以及为什么不在代码里。
+
 两点结论：
 
 - **没有任何 worker 声明 device 执行 capability。** 两个 `npu` 池 worker 的 profile 是 `transport-only`
