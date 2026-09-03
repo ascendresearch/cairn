@@ -187,3 +187,42 @@ fn resolve_product_paths(config: &mut ProductConfigV1, base: &Path) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ProductConfigV1;
+
+    /// The shipped example has to be readable by the type that will read it.
+    ///
+    /// An example that only looks like the configuration is worse than none: it is copied, edited,
+    /// deployed, and then fails at startup on a live host, which is where this project has already
+    /// lost a system once.
+    #[test]
+    fn the_shipped_product_example_parses_as_the_configuration_it_documents() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/migration-product.example.json"
+        ))
+        .expect("example configuration");
+
+        let config: ProductConfigV1 =
+            serde_json::from_slice(&bytes).expect("the example is the current configuration");
+
+        assert_eq!(config.schema_version, 1);
+        assert!(config.inbox_capacity > 0);
+        // The build recipe is deployment material the Controller reads at startup, so an example
+        // naming a path that does not exist would fail only once a candidate was already waiting.
+        let runner = config
+            .candidate_build_worker
+            .as_ref()
+            .expect("the example configures a candidate build worker")
+            .runner_path();
+        assert!(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../"))
+                .join(runner)
+                .is_file(),
+            "the example names a build recipe that is not in the tree: {}",
+            runner.display()
+        );
+    }
+}

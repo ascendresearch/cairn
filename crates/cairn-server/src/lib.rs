@@ -907,11 +907,15 @@ where
         "application module started"
     );
     tokio::spawn(async move {
-        if application.run().await.is_err() {
+        // The reason travels with the record. A module that stopped for a reason nobody can read
+        // leaves an operator with a controller that looks healthy and a product that is simply
+        // absent, which is the shape this deployment failed in before the reason was carried here.
+        if let Err(error) = application.run().await {
             tracing::error!(
                 target: "cairn.server.application",
                 event = "application_module_failed",
                 application = application_name,
+                reason = %error,
                 "application module terminated with an error"
             );
         }

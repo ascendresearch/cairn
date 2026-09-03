@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "server_config": "controller.json",
+  "app_api_socket": "/run/cairn/migration.sock",
+  "authority_subject": "task-authority:administrator",
+  "model_template": "model-templates/deepseek/deepseek-v4-pro.json",
+  "runtime_model_catalog": "runtime-models.json",
+  "credential_base": ".",
+  "runtime_model": "deepseek-v4-pro",
+  "agent_event_database": "store/agent-events.sqlite3",
+  "agent_content_database": "store/agent-content.sqlite3",
+  "agent_content_directory": "store/agent-content",
+  "episode_budget": {
+    "step_limit": 24,
+    "tool_operation_limit": 96,
+    "deadline_unix_ms": null
+  },
+  "model_output_tokens": 16384,
+  "agent_loop_step_limit": 24,
+  "migration_role_attempt_limit": 3,
+  "task_limits": {
+    "max_files": 64,
+    "max_task_bytes": 1048576,
+    "max_read_lines": 512,
+    "max_read_bytes": 65536
+  },
+  "inbox_capacity": 4,
+  "oracle_coverage_profile": "correctness",
+  "oracle_adversarial_policy": "required-for-every-concern",
+  "reasoning_decomposition": "structured-review",
+  "evidence_experiment_worker": null,
+  "oracle_control_worker": {
+    "schema_version": 1,
+    "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "worker_pool": "npu-build",
+    "execution_timeout": 600000,
+    "poll_interval_ms": 2000,
+    "completion_timeout_ms": 900000
+  },
+  "candidate_build_worker": {
+    "schema_version": 1,
+    "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "runner_path": "deploy/candidate-build/ascend-dav3510-build",
+    "worker_pools": ["npu-build"],
+    "capabilities": [
+      { "name": "execution.role", "value": "build" },
+      { "name": "toolchain.architecture", "value": "dav-3510" },
+      { "name": "toolchain.cann", "value": "9.1.0-beta.1" },
+      { "name": "toolchain.vendor", "value": "ascend" }
+    ],
+    "execution_timeout": 900000,
+    "poll_interval_ms": 2000,
+    "completion_timeout_ms": 1800000
+  },
+  "candidate_mechanisms": null,
+  "candidate_search": {
+    "iteration_limit": 6,
+    "empty_submission_limit": 3,
+    "repeat_window": 8,
+    "budget_notice_threshold": 2
+  }
+}

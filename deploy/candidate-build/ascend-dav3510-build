@@ -1,0 +1,52 @@
+#!/bin/sh
+# Controller-supplied build recipe for one Ascend C candidate.
+#
+# This file is deployment material, never Candidate output. A Candidate contributes only the files
+# under source/, so it cannot choose how it is built, and that is the control that separates a
+# native build from a host fallback wearing its name: the compile below names the NPU architecture
+# explicitly, so a translation unit that only ever built for the host cannot pass by accident.
+#
+# The sandbox mounts the frozen bundle read-only at /cairn/input and gives one writable /cairn/work.
+# Everything is copied out of the input tree before the compiler is asked to touch it.
+set -eu
+
+readonly INPUT=/cairn/input
+readonly WORK=/cairn/work
+readonly ARCH=dav-3510
+
+mkdir -p "$WORK/source" "$WORK/native"
+cp -R "$INPUT/source/." "$WORK/source"
+
+# The candidate names its own entry point. Reading it here rather than guessing a filename keeps
+# the recipe task-generic: it never has to know what the operator is called.
+primary=$(sed -n 's/.*"primary_source":"\([^"]*\)".*/\1/p' "$INPUT/meta/candidate-proposal.json")
+if [ -z "$primary" ]; then
+  echo "candidate proposal names no primary source" >&2
+  exit 64
+fi
+if [ ! -f "$WORK/source/$primary" ]; then
+  echo "candidate primary source $primary is not among the submitted files" >&2
+  exit 64
+fi
+
+# The compilation unit is generated rather than taken from the candidate, for the same reason the
+# recipe is: a candidate that supplied its own build files could choose a host compiler and report
+# success without ever having built for the target.
+cat > "$WORK/native/CMakeLists.txt" <<CMAKE
+cmake_minimum_required(VERSION 3.24)
+find_package(ASC REQUIRED)
+project(cairn_candidate LANGUAGES ASC)
+add_library(cairn_candidate STATIC \${CMAKE_CURRENT_SOURCE_DIR}/../source/$primary)
+target_include_directories(cairn_candidate PRIVATE
+  \${CMAKE_CURRENT_SOURCE_DIR}/../source
+  \${CMAKE_CURRENT_SOURCE_DIR}/../source/include
+  \$ENV{ASCEND_HOME_PATH}/x86_64-linux/include)
+target_compile_options(cairn_candidate PRIVATE --npu-arch=$ARCH)
+CMAKE
+
+# Diagnostics go to stderr so the compiler's own words reach the revision episode intact. An exit
+# code says a build failed; only this text says what to change.
+cmake -S "$WORK/native" -B "$WORK/build" 1>&2
+cmake --build "$WORK/build" --target cairn_candidate --parallel 1 1>&2
+
+printf 'PASS candidate-native-build=complete architecture=%s device=none\n' "$ARCH"

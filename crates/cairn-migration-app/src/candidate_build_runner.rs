@@ -51,6 +51,12 @@ pub struct CandidateBuildWorkerConfigV1 {
 }
 
 impl CandidateBuildWorkerConfigV1 {
+    /// Returns the deployment-side path to the build recipe the Controller supplies.
+    #[must_use]
+    pub fn runner_path(&self) -> &std::path::Path {
+        &self.runner_path
+    }
+
     fn validate(&self) -> Result<(), CandidateBuildRunnerError> {
         if self.schema_version != 1
             || self.poll_interval_ms == 0

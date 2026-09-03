@@ -804,6 +804,29 @@ Exit：同一 task 内经过多轮 authorized compile→diagnostic→revision �
 
 ### P4 · 纵向 A：normal-path native build success
 
+**正常入口第一次真的跑起来了（2026-09-03，live）。** 迁移产品进程此前从未部署过。本轮补齐了它缺的两件东西
+——产品配置与 Controller 侧构建配方（`deploy/candidate-build/ascend-dav3510-build`，形态取自 Git 历史里
+真正跑通过的那条 `find_package(ASC)` / `--npu-arch=dav-3510` 路径）——然后在一个 scratch 部署上完成:
+
+| 阶段 | 结果 |
+| --- | --- |
+| bootstrap → 产品进程启动 | App API 监听就绪，无失败事件 |
+| 正常 CLI 提交 `scale-clamp-f32` | 接受；分块上传、归档解包、任务冻结首次在真实部署上跑通 |
+| SIR episode | **真实 DeepSeek 调用**，模型三次调用读原文工具 |
+| 停在 `awaiting-intent-review` | 设计要求的暂停点，不是失败 |
+
+**模型产出值得记。** 它对我在任务里留的两个 unknown 各提出竞争假说，并额外识别出一个我没写进任务的
+unknown:`fminf`/`fmaxf` 的 NaN 语义决定该算子对非有限输入的行为。它没有把源码行为当成规范，
+而是提出「若 fmaxf 传播 NaN 则结果为 upper，否则为 lower」这组可区分的假说交给管理员裁决。
+这正是 3.1「source 不是 specification」要的行为。
+
+**过程中修了一个真缺陷。** `application_module_failed` 只记事件不记原因（`.is_err()` 把错误丢了），
+运维会看到一个健康的 controller 和一个不见了的产品，且无法行动。修好后第一次运行就说清了原因
+（socket 路径超长）。同时新增一道门:随仓库发布的产品配置例必须能被真正读它的类型解析，
+且它命名的构建配方必须在树里——两个方向都红验过。
+
+**下一段仍未做:** intent 裁决之后才是 Oracle 与候选阶段，需要连着 worker 的真实部署。
+
 **Oracle 的阻塞已解除（2026-09-03，见下节 P5 第 7 项）。** 以下是解除之前记录的诊断，保留是因为它说明了
 为什么那道门当时是对的。
 
