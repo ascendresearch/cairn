@@ -75,7 +75,8 @@ Git 历史保留其原调用契约。这两项都不在 `scripts/ci.sh` 的覆�
 
 ### 3.4 Migration workflow pieces
 
-- typed SDK、Unix-socket App API 和 reference CLI 的 submit/list/status/watch/cancel/review surface；
+- typed SDK、Unix-socket App API 和 reference CLI 的 submit/list/status/watch/cancel/review surface，
+  提交走一条声明—分块—提交的上传会话，因此源码树的大小不再受单帧上限约束（见 5.1）；
 - task-owned Controller aggregate 和可读的 SIR→Intent→Oracle→Candidate stage ordering；
 - caller decision request、typed user authority 和 independent intent admission；
 - claim×concern×role Oracle ledger、deterministic/Agent strategy consumer 和 evidence experiment request；
@@ -516,9 +517,26 @@ CI 里由 `.github/actions/setup-release-toolchain` 完成,本地没有等价物
 （监听 17443/17444,通告 7443/7444),bootstrap 之后要手工改 `enrollment_service.public_tcp_address`
 与 `control_endpoint.tcp_address`。
 
-**下一步。** 直接接着做的是任务压缩包的**分块上传**:app API 帧上限 4 MiB,base64 之后压缩包实际卡在
-3 MiB 左右,配置里 500 MiB 的上限够不到。worker 的物料通道已有分块传输,照搬即可。
-之后按 6.1 的依赖图,P2（知识与 skill 层）与 P3（循环框架）是两条并行轨道,在 P4 汇合。
+**分块上传已完成。** 任务源码压缩包不再整包塞进一帧。客户端先声明归档的长度与摘要,再按帧上限推导出的
+块大小逐块推送,最后在同一条连接上提交。服务端在收下任何字节之前就用声明长度挡掉超出配置上限的归档,
+并在完成时用摘要判定重组结果是否正是客户端手里的字节——只看长度会放过一份块块都到、内容却不对的传输。
+方向与 worker 的物料通道相反:那条是 Controller 给清单、worker 按偏移拉,这条是客户端往上推。
+因此照搬的是形状而不是代码——清单在前、按偏移分块、以内容标识收尾。
+
+**暂存字节挂在连接上,不在共享表里。** 这样「上传被放弃了」由持有 socket 的一方直接观察到,
+不需要再引入一口专门判定放弃的上传何时死亡的钟,而 4.2.2 刚把一口这样的钟换成被记录的事实。
+偏移因此不是续传游标——连接一断暂存就没了,没有可以续上的东西——它的作用是让重复、乱序或重叠的块
+变成一次拒绝,而不是一份被悄悄写坏的归档。服务端也没有单独的每块上限:帧上限已经界定单次请求,
+声明长度已经界定整条传输,第三道界什么都不挡。声明本身不预分配,一份声明了却从未发送的归档不占内存。
+
+证据口径是 **local model-free**,没有真实部署运行的证据。四道门各做了一次红验证:把块大小的 envelope
+预留改成 0、让客户端整包发一块、在传输中翻转一个字节、把干净 EOF 重新当作错误——四次都如预期失败。
+
+**其中一次红验证先是假通过,值得记下来。** 注入字节翻转的那次改写因为缩进不匹配而一处也没改到,
+脚本又没有断言匹配数,于是测试「通过」了——它比较的是未被改动的自身。这正是 `AGENTS.md` 里那条:
+重写了零处的变换会让比较同义反复地成立。此后每一次注入都先断言匹配数,四道门才逐一验完。
+
+**下一步。** 按 6.1 的依赖图,P2（知识与 skill 层）与 P3（循环框架）是两条并行轨道,在 P4 汇合。
 
 **未解决的事实,别当成已解决。** exposure ledger 一行代码都没有,而它是 restricted 材料唯一
 真正的控制（4.2.4）。资源时钟的两面不对称仍在（4.2.6）。P0 的 Exit 仍未达成:

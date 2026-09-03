@@ -20,11 +20,12 @@ use cairn_migration::{
     UserIntentAuthorityGrantV1, UserIntentDecisionResponseV1, UserIntentDecisionV1,
     derive_oracle_claims, derive_oracle_dimensions,
 };
-use cairn_protocol::{ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
+use cairn_protocol::{BlobDigest, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
 use cairn_sdk::{
     AppApiErrorCodeV1, CairnRequestV1, CairnResponseV1, IntentReviewRequestResourceV1,
-    IntentReviewResourceV1, TaskAttentionV1, TaskPhaseV1, TaskProgressItemV1, TaskProgressPageV1,
-    TaskResourceV1, TaskSubmissionV1, read_frame, write_frame,
+    IntentReviewResourceV1, TaskArchiveManifestV1, TaskAttentionV1, TaskPhaseV1,
+    TaskProgressItemV1, TaskProgressPageV1, TaskResourceV1, TaskSubmissionV1, read_optional_frame,
+    write_frame,
 };
 use cairn_server::{ApplicationModule, ApplicationName};
 use thiserror::Error;
@@ -44,6 +45,7 @@ use crate::{
 /// Exact request admitted by the App API and sent to the product workflow inbox.
 pub struct SubmittedMigrationTaskV1 {
     task_id: TaskId,
+    archive: Vec<u8>,
     submission: TaskSubmissionV1,
 }
 
@@ -57,6 +59,70 @@ impl SubmittedMigrationTaskV1 {
 impl MigrationTaskRequest for SubmittedMigrationTaskV1 {
     fn task_id(&self) -> TaskId {
         self.task_id
+    }
+}
+
+/// Archive bytes staged on one connection while their upload is still in progress.
+///
+/// The staging lives on the connection because that is the only place from which the client going
+/// away is observable. A map keyed by an upload identity would need someone to decide when an
+/// abandoned upload dies, and the answer would have to be a clock; this system has already
+/// replaced one such clock with an observed fact, and adding a new one here would undo that.
+struct PendingArchiveUploadV1 {
+    manifest: TaskArchiveManifestV1,
+    received: Vec<u8>,
+}
+
+impl PendingArchiveUploadV1 {
+    /// Stages an upload once its declared length is within the configured archive bound.
+    ///
+    /// Nothing is preallocated. A declaration costs the server no memory until bytes arrive, so an
+    /// archive declared and never sent costs what it delivered, which is nothing.
+    fn begin(
+        manifest: TaskArchiveManifestV1,
+        limits: cairn_migration::TaskArchiveLimits,
+    ) -> Result<Self, MigrationAppApiError> {
+        if manifest.byte_len() > limits.max_archive_bytes {
+            return Err(MigrationAppApiError::ArchiveUploadTooLarge);
+        }
+        Ok(Self {
+            manifest,
+            received: Vec::new(),
+        })
+    }
+
+    /// Appends one chunk at the exact offset the transfer has reached, returning the new total.
+    ///
+    /// The offset is carried so that a duplicated, reordered or overlapping chunk is a refusal
+    /// rather than a silently corrupted archive. It is not a resume cursor: staging dies with the
+    /// connection, so there is never a transfer to resume onto.
+    fn accept_chunk(&mut self, offset: u64, bytes: &[u8]) -> Result<u64, MigrationAppApiError> {
+        let received =
+            u64::try_from(self.received.len()).map_err(MigrationAppApiError::internal)?;
+        let chunk_len = u64::try_from(bytes.len()).map_err(MigrationAppApiError::internal)?;
+        let total = received
+            .checked_add(chunk_len)
+            .ok_or(MigrationAppApiError::ArchiveUploadRangeInvalid)?;
+        if bytes.is_empty() || offset != received || total > self.manifest.byte_len() {
+            return Err(MigrationAppApiError::ArchiveUploadRangeInvalid);
+        }
+        self.received.extend_from_slice(bytes);
+        Ok(total)
+    }
+
+    /// Returns the uploaded bytes once they are exactly the archive the manifest declared.
+    ///
+    /// Length alone would accept a transfer whose chunks arrived intact but wrong; the digest is
+    /// what makes a completed upload reproduce the client's bytes or fail.
+    fn into_archive(self) -> Result<Vec<u8>, MigrationAppApiError> {
+        let byte_len =
+            u64::try_from(self.received.len()).map_err(MigrationAppApiError::internal)?;
+        if byte_len != self.manifest.byte_len()
+            || BlobDigest::derive(&self.received) != self.manifest.digest()
+        {
+            return Err(MigrationAppApiError::ArchiveIdentityMismatch);
+        }
+        Ok(self.received)
     }
 }
 
@@ -247,10 +313,11 @@ pub struct MigrationAppApiV1 {
     sender: mpsc::Sender<SubmittedMigrationTaskV1>,
     tasks: SharedTasksV1,
     authority_subject: TaskIntentAuthoritySubject,
+    archive_limits: cairn_migration::TaskArchiveLimits,
 }
 
 impl MigrationAppApiV1 {
-    /// Binds the current-V1 Unix App API and serves one canonical request per connection.
+    /// Binds the current-V1 Unix App API and serves canonical requests until a connection ends.
     ///
     /// # Errors
     ///
@@ -268,9 +335,11 @@ impl MigrationAppApiV1 {
             let sender = self.sender.clone();
             let tasks = self.tasks.clone();
             let authority_subject = self.authority_subject.clone();
+            let archive_limits = self.archive_limits;
             tokio::spawn(async move {
                 if let Err(error) =
-                    handle_connection(stream, sender, tasks, authority_subject).await
+                    handle_connection(stream, sender, tasks, authority_subject, archive_limits)
+                        .await
                 {
                     tracing::warn!(
                         target: "cairn.migration.app-api",
@@ -401,6 +470,7 @@ pub fn migration_product_boundary(
             sender,
             tasks: tasks.clone(),
             authority_subject: authority_subject.clone(),
+            archive_limits,
         },
         MigrationProductServicesV1 {
             tasks,
@@ -429,11 +499,8 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         // The archive is transport. What the system keeps is the per-path source bundle, and a
         // submission that cannot convert entirely is refused rather than trimmed, so the bundle
         // always describes exactly what was uploaded.
-        let sources = cairn_migration::extract_task_sources(
-            request.submission.archive(),
-            self.archive_limits,
-        )
-        .map_err(MigrationAppApiError::internal)?;
+        let sources = cairn_migration::extract_task_sources(&request.archive, self.archive_limits)
+            .map_err(MigrationAppApiError::internal)?;
         let workspace = SirTaskWorkspace::from_sources(sources, self.task_limits)
             .map_err(MigrationAppApiError::internal)?;
         let recovery_input = IntentRecoveryInputV1::new(
@@ -879,34 +946,54 @@ const fn workflow_failure_attention(failure: MigrationWorkflowFailureClassV1) ->
     }
 }
 
+/// Serves one connection until the client stops sending, carrying its archive staging along.
+///
+/// The connection outlives a single request because an upload is several of them, and the staged
+/// bytes are held here rather than in shared state so that they are released exactly when this
+/// connection ends, however it ends.
 async fn handle_connection(
     mut stream: UnixStream,
     sender: mpsc::Sender<SubmittedMigrationTaskV1>,
     tasks: SharedTasksV1,
     authority_subject: TaskIntentAuthoritySubject,
+    archive_limits: cairn_migration::TaskArchiveLimits,
 ) -> Result<(), MigrationAppApiError> {
-    let request = read_frame(&mut stream)
+    let mut upload: Option<PendingArchiveUploadV1> = None;
+    while let Some(request) = read_optional_frame(&mut stream)
         .await
-        .map_err(MigrationAppApiError::internal)?;
-    let response = match handle_request(request, &sender, &tasks, &authority_subject).await {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(
-                target: "cairn.migration.app-api",
-                event = "migration_app_api_request_rejected",
-                error_class = error.log_class(),
-                "CUDA migration App API request rejected"
-            );
-            CairnResponseV1::Error { code: error.code() }
-        }
-    };
-    write_frame(&mut stream, &response)
+        .map_err(MigrationAppApiError::internal)?
+    {
+        let response = match handle_request(
+            request,
+            &sender,
+            &tasks,
+            &authority_subject,
+            &mut upload,
+            archive_limits,
+        )
         .await
-        .map_err(MigrationAppApiError::internal)
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    target: "cairn.migration.app-api",
+                    event = "migration_app_api_request_rejected",
+                    error_class = error.log_class(),
+                    "CUDA migration App API request rejected"
+                );
+                CairnResponseV1::Error { code: error.code() }
+            }
+        };
+        write_frame(&mut stream, &response)
+            .await
+            .map_err(MigrationAppApiError::internal)?;
+    }
+    Ok(())
 }
 
 #[allow(
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     reason = "the closed SDK request variants remain one visible product dispatch table"
 )]
 async fn handle_request(
@@ -914,13 +1001,36 @@ async fn handle_request(
     sender: &mpsc::Sender<SubmittedMigrationTaskV1>,
     tasks: &SharedTasksV1,
     authority_subject: &TaskIntentAuthoritySubject,
+    upload: &mut Option<PendingArchiveUploadV1>,
+    archive_limits: cairn_migration::TaskArchiveLimits,
 ) -> Result<CairnResponseV1, MigrationAppApiError> {
     match request {
+        CairnRequestV1::BeginArchiveUpload { archive } => {
+            if upload.is_some() {
+                return Err(MigrationAppApiError::ArchiveUploadAlreadyStarted);
+            }
+            *upload = Some(PendingArchiveUploadV1::begin(archive, archive_limits)?);
+            Ok(CairnResponseV1::ArchiveUpload { received: 0 })
+        }
+        CairnRequestV1::PutArchiveChunk { offset, bytes } => {
+            let received = upload
+                .as_mut()
+                .ok_or(MigrationAppApiError::ArchiveUploadNotStarted)?
+                .accept_chunk(offset, &bytes)?;
+            Ok(CairnResponseV1::ArchiveUpload { received })
+        }
         CairnRequestV1::SubmitTask {
             command_id,
             task_id,
             submission,
         } => {
+            // The archive is verified before the task identity is claimed. A submission whose
+            // upload did not reproduce the client's bytes never becomes a task at all, so no task
+            // state is created that would then have to be unwound.
+            let archive = upload
+                .take()
+                .ok_or(MigrationAppApiError::ArchiveUploadNotStarted)?
+                .into_archive()?;
             {
                 let mut states = tasks.lock()?;
                 if states.contains_key(&task_id) {
@@ -931,6 +1041,7 @@ async fn handle_request(
             sender
                 .send(SubmittedMigrationTaskV1 {
                     task_id,
+                    archive,
                     submission,
                 })
                 .await
@@ -1227,6 +1338,16 @@ pub enum MigrationAppApiError {
     CandidateBuildWorkerUnavailable,
     #[error("no qualified Candidate mechanism can observe the built artifact")]
     CandidateMechanismExecutionUnavailable,
+    #[error("no archive upload is in progress on this connection")]
+    ArchiveUploadNotStarted,
+    #[error("an archive upload is already in progress on this connection")]
+    ArchiveUploadAlreadyStarted,
+    #[error("archive chunk does not continue the declared transfer")]
+    ArchiveUploadRangeInvalid,
+    #[error("declared archive is above the configured bound")]
+    ArchiveUploadTooLarge,
+    #[error("uploaded archive is not the archive that was declared")]
+    ArchiveIdentityMismatch,
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1258,6 +1379,11 @@ impl MigrationAppApiError {
             Self::CandidateMechanismExecutionUnavailable => {
                 "candidate-mechanism-execution-unavailable"
             }
+            Self::ArchiveUploadNotStarted => "archive-upload-not-started",
+            Self::ArchiveUploadAlreadyStarted => "archive-upload-already-started",
+            Self::ArchiveUploadRangeInvalid => "archive-upload-range-invalid",
+            Self::ArchiveUploadTooLarge => "archive-upload-too-large",
+            Self::ArchiveIdentityMismatch => "archive-identity-mismatch",
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1265,11 +1391,14 @@ impl MigrationAppApiError {
 
     const fn code(&self) -> AppApiErrorCodeV1 {
         match self {
-            Self::InvalidConfiguration | Self::UnsafeSocketTarget => {
-                AppApiErrorCodeV1::InvalidRequest
-            }
+            Self::InvalidConfiguration
+            | Self::UnsafeSocketTarget
+            | Self::ArchiveUploadNotStarted
+            | Self::ArchiveUploadRangeInvalid
+            | Self::ArchiveUploadTooLarge
+            | Self::ArchiveIdentityMismatch => AppApiErrorCodeV1::InvalidRequest,
             Self::TaskNotFound => AppApiErrorCodeV1::TaskNotFound,
-            Self::Conflict => AppApiErrorCodeV1::Conflict,
+            Self::Conflict | Self::ArchiveUploadAlreadyStarted => AppApiErrorCodeV1::Conflict,
             Self::NotReady | Self::Cancelled => AppApiErrorCodeV1::NotReady,
             Self::WorkflowUnavailable
             | Self::StatePoisoned
@@ -1302,7 +1431,209 @@ impl From<crate::MigrationAgentRuntimeError> for MigrationAppApiError {
 
 #[cfg(test)]
 mod tests {
+    use cairn_protocol::CommandId;
+    use cairn_sdk::{CairnClient, CairnClientConfigV1, MAX_ARCHIVE_CHUNK_BYTES, UnixCairnClient};
+
     use super::*;
+
+    fn recovery_request() -> cairn_migration::IntentRecoveryRequestV1 {
+        serde_json::from_str(include_str!(
+            "../../../fixtures/cuda-ascend/sir/compact-above-f32/v1/caller-intent.json"
+        ))
+        .expect("recovery request")
+    }
+
+    fn archive_limits(max_archive_bytes: u64) -> cairn_migration::TaskArchiveLimits {
+        cairn_migration::TaskArchiveLimits {
+            max_archive_bytes,
+            ..cairn_migration::TaskArchiveLimits::default()
+        }
+    }
+
+    fn staged(archive: &[u8]) -> PendingArchiveUploadV1 {
+        PendingArchiveUploadV1::begin(
+            TaskArchiveManifestV1::describing(archive).expect("manifest"),
+            archive_limits(1 << 20),
+        )
+        .expect("staged upload")
+    }
+
+    #[test]
+    fn a_chunked_upload_reassembles_exactly_the_declared_archive() {
+        let archive: Vec<u8> = (0..=255_u8).cycle().take(5000).collect();
+        let mut pending = staged(&archive);
+
+        let mut offset = 0_u64;
+        for chunk in archive.chunks(1024) {
+            offset = pending.accept_chunk(offset, chunk).expect("chunk accepted");
+        }
+
+        assert_eq!(offset, 5000);
+        assert_eq!(pending.into_archive().expect("archive"), archive);
+    }
+
+    // The bound is applied to what was declared, so an archive above it costs the server nothing
+    // to refuse. Checking it after the bytes arrive would mean accepting them first.
+    #[test]
+    fn a_declaration_above_the_bound_is_refused_before_any_bytes_arrive() {
+        let manifest = TaskArchiveManifestV1::describing(&[7_u8; 64]).expect("manifest");
+
+        assert!(matches!(
+            PendingArchiveUploadV1::begin(manifest, archive_limits(63)),
+            Err(MigrationAppApiError::ArchiveUploadTooLarge)
+        ));
+    }
+
+    #[test]
+    fn a_chunk_that_does_not_continue_the_transfer_is_refused() {
+        let archive = vec![3_u8; 100];
+        let mut pending = staged(&archive);
+
+        assert!(matches!(
+            pending.accept_chunk(0, &[]),
+            Err(MigrationAppApiError::ArchiveUploadRangeInvalid)
+        ));
+        assert!(matches!(
+            pending.accept_chunk(1, &archive[..10]),
+            Err(MigrationAppApiError::ArchiveUploadRangeInvalid)
+        ));
+        assert_eq!(
+            pending
+                .accept_chunk(0, &archive[..40])
+                .expect("first chunk"),
+            40
+        );
+        assert!(matches!(
+            pending.accept_chunk(0, &archive[..40]),
+            Err(MigrationAppApiError::ArchiveUploadRangeInvalid)
+        ));
+        assert!(matches!(
+            pending.accept_chunk(40, &[3_u8; 61]),
+            Err(MigrationAppApiError::ArchiveUploadRangeInvalid)
+        ));
+        assert_eq!(
+            pending
+                .accept_chunk(40, &archive[40..])
+                .expect("last chunk"),
+            100
+        );
+    }
+
+    // Length alone would accept a transfer whose chunks all arrived but carried the wrong bytes,
+    // and a short one would arrive as a smaller archive that still unpacks.
+    #[test]
+    fn completion_refuses_an_upload_that_is_not_the_declared_archive() {
+        let archive = vec![9_u8; 64];
+
+        let mut short = staged(&archive);
+        short.accept_chunk(0, &archive[..32]).expect("half");
+        assert!(matches!(
+            short.into_archive(),
+            Err(MigrationAppApiError::ArchiveIdentityMismatch)
+        ));
+
+        let mut altered = staged(&archive);
+        let mut other = archive.clone();
+        other[7] = 0;
+        altered.accept_chunk(0, &other).expect("full length");
+        assert!(matches!(
+            altered.into_archive(),
+            Err(MigrationAppApiError::ArchiveIdentityMismatch)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_submission_without_an_upload_creates_no_task() {
+        let (sender, _receiver) = mpsc::channel(1);
+        let tasks = SharedTasksV1::default();
+        let authority = TaskIntentAuthoritySubject::new("task-authority:test").expect("authority");
+        let mut upload = None;
+
+        let error = handle_request(
+            CairnRequestV1::SubmitTask {
+                command_id: CommandId::new(),
+                task_id: TaskId::new(),
+                submission: TaskSubmissionV1::new(recovery_request()),
+            },
+            &sender,
+            &tasks,
+            &authority,
+            &mut upload,
+            cairn_migration::TaskArchiveLimits::default(),
+        )
+        .await
+        .expect_err("a submission with no uploaded archive cannot become a task");
+
+        assert!(matches!(
+            error,
+            MigrationAppApiError::ArchiveUploadNotStarted
+        ));
+        assert!(tasks.lock().expect("tasks").is_empty());
+    }
+
+    // The archive here is deliberately larger than one frame, so it cannot have reached the
+    // workflow inbox unless the upload actually spanned several requests on one connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_client_uploads_an_archive_larger_than_one_frame_and_submits_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let socket = directory.path().join("app.sock");
+        let listener = UnixListener::bind(&socket).expect("listener");
+        let (sender, mut receiver) = mpsc::channel(1);
+        let tasks = SharedTasksV1::default();
+        let authority = TaskIntentAuthoritySubject::new("task-authority:test").expect("authority");
+        let served = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            handle_connection(
+                stream,
+                sender,
+                tasks,
+                authority,
+                cairn_migration::TaskArchiveLimits::default(),
+            )
+            .await
+        });
+
+        let archive: Vec<u8> = (0..=255_u8)
+            .cycle()
+            .take(MAX_ARCHIVE_CHUNK_BYTES * 2 + 7)
+            .collect();
+        let client = UnixCairnClient::new(CairnClientConfigV1 {
+            schema_version: 1,
+            unix_socket: socket,
+        })
+        .expect("client");
+        let command_id = CommandId::new();
+        let task_id = TaskId::new();
+
+        let response = client
+            .submit_task(
+                command_id,
+                task_id,
+                &archive,
+                TaskSubmissionV1::new(recovery_request()),
+            )
+            .await
+            .expect("submitted");
+
+        match response {
+            CairnResponseV1::Mutation {
+                command_id: echoed,
+                task,
+            } => {
+                assert_eq!(echoed, command_id);
+                assert_eq!(task.task_id(), task_id);
+            }
+            other => panic!("expected a mutation response, got {other:?}"),
+        }
+        let submitted = receiver.recv().await.expect("workflow inbox");
+        assert_eq!(submitted.task_id, task_id);
+        assert_eq!(submitted.archive, archive);
+        // A client that has nothing further to send just goes away, and that is not a failure.
+        served
+            .await
+            .expect("server task")
+            .expect("connection ended cleanly when the client went away");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn app_api_task_progresses_while_the_workflow_runs_blocking_provider_work() {

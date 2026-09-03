@@ -41,16 +41,12 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
         ("submit", [archive_path, recovery]) => {
             let archive = fs::read(Path::new(archive_path)).map_err(display)?;
             let recovery_request: IntentRecoveryRequestV1 = read_json(Path::new(recovery))?;
-            let submission = TaskSubmissionV1::new(archive, recovery_request).map_err(display)?;
-            exchange(
-                &client,
-                CairnRequestV1::SubmitTask {
-                    command_id: CommandId::new(),
-                    task_id: TaskId::new(),
-                    submission,
-                },
-            )
-            .await
+            let submission = TaskSubmissionV1::new(recovery_request);
+            let response = client
+                .submit_task(CommandId::new(), TaskId::new(), &archive, submission)
+                .await
+                .map_err(display)?;
+            print_json(&response)
         }
         ("list", []) => exchange(&client, CairnRequestV1::ListTasks).await,
         ("status", [task_id]) => {

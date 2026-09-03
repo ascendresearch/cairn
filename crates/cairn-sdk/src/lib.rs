@@ -7,24 +7,116 @@ use cairn_migration::{
     SirHypothesisId, SirIntentHypothesisSetProposalArtifact, UserIntentAuthorityScopeV1,
     UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserProvidedIntentClaimV1,
 };
-use cairn_protocol::{CommandId, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
+use cairn_protocol::{
+    BlobDigest, CommandId, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const SCHEMA_V1: u16 = 1;
 const MAX_FRAME_BYTES: u32 = 4 * 1024 * 1024;
+/// Room reserved inside one frame for the JSON envelope around a chunk's base64 payload.
+const CHUNK_ENVELOPE_RESERVE_BYTES: usize = 4096;
 
-/// Immutable task bytes plus the caller-owned recovery declaration.
+/// Largest raw archive slice whose base64 encoding still leaves room for its request envelope.
+///
+/// Base64 turns three bytes into four characters, so what a frame can carry is three quarters of
+/// what remains once the envelope is reserved. This is the size a client chunks at. The server
+/// applies no separate per-chunk bound: the frame limit already bounds one request and the
+/// declared archive length already bounds the whole transfer, so a third bound would guard
+/// nothing.
+pub const MAX_ARCHIVE_CHUNK_BYTES: usize =
+    (MAX_FRAME_BYTES as usize - CHUNK_ENVELOPE_RESERVE_BYTES) / 4 * 3;
+
+/// What one submitted archive is, declared before any of its bytes are sent.
+///
+/// The length lets the server refuse an archive above its configured bound before it accepts a
+/// single byte. The digest is what makes a completed upload either exactly the bytes the client
+/// held or a refusal: a transfer that ended early without saying so would otherwise arrive as a
+/// shorter archive that is still well-formed, and nothing downstream could tell the difference.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct TaskArchiveManifestV1 {
+    schema_version: u16,
+    byte_len: u64,
+    digest: BlobDigest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskArchiveManifestWire {
+    schema_version: u16,
+    byte_len: u64,
+    digest: BlobDigest,
+}
+
+impl TaskArchiveManifestV1 {
+    /// Describes the exact archive bytes a client is about to upload.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty archive, which no upload could complete.
+    pub fn describing(archive: &[u8]) -> Result<Self, SdkError> {
+        let byte_len =
+            u64::try_from(archive.len()).map_err(|_| SdkError::Invalid("task archive manifest"))?;
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            byte_len,
+            digest: BlobDigest::derive(archive),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Returns the declared archive length in bytes.
+    #[must_use]
+    pub const fn byte_len(&self) -> u64 {
+        self.byte_len
+    }
+
+    /// Returns the digest the reassembled upload has to reproduce.
+    #[must_use]
+    pub const fn digest(&self) -> BlobDigest {
+        self.digest
+    }
+
+    fn validate(&self) -> Result<(), SdkError> {
+        if self.schema_version != SCHEMA_V1 || self.byte_len == 0 {
+            return Err(SdkError::Invalid("task archive manifest"));
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<TaskArchiveManifestWire> for TaskArchiveManifestV1 {
+    type Error = SdkError;
+
+    fn try_from(wire: TaskArchiveManifestWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            byte_len: wire.byte_len,
+            digest: wire.digest,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskArchiveManifestV1 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        TaskArchiveManifestWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
+}
+
+/// The caller-owned recovery declaration that turns an uploaded archive into a task.
+///
+/// The archive is not in here. It reaches the server as its own bounded chunk sequence on the same
+/// connection, so a real operator source tree is no longer limited to what fits in one frame.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TaskSubmissionV1 {
     schema_version: u16,
-    /// Gzip-compressed tar archive of the task source tree.
-    ///
-    /// Content bounds are the server's to apply, because they are configured there. This type
-    /// carries the bytes; the transport frame limit is what stops an unbounded request.
-    #[serde(with = "canonical_base64")]
-    archive: Vec<u8>,
     recovery_request: IntentRecoveryRequestV1,
 }
 
@@ -32,8 +124,6 @@ pub struct TaskSubmissionV1 {
 #[serde(deny_unknown_fields)]
 struct TaskSubmissionWire {
     schema_version: u16,
-    #[serde(with = "canonical_base64")]
-    archive: Vec<u8>,
     recovery_request: IntentRecoveryRequestV1,
 }
 
@@ -54,29 +144,16 @@ mod canonical_base64 {
 }
 
 impl TaskSubmissionV1 {
-    /// Creates one submission carrying a source archive.
+    /// Creates one submission for the archive uploaded on the same connection.
     ///
-    /// # Errors
-    ///
-    /// Rejects an empty archive. What the archive may contain is the server's decision, since the
-    /// bounds are configured there and a client cannot be trusted to apply them.
-    pub fn new(
-        archive: Vec<u8>,
-        recovery_request: IntentRecoveryRequestV1,
-    ) -> Result<Self, SdkError> {
-        let value = Self {
-            schema_version: SCHEMA_V1,
-            archive,
-            recovery_request,
-        };
-        value.validate()?;
-        Ok(value)
-    }
-
-    /// Returns the submitted source archive.
+    /// Nothing here can be malformed once the archive has left, so this cannot fail. The same
+    /// invariant is still checked on the way in, where wire bytes can carry any schema version.
     #[must_use]
-    pub fn archive(&self) -> &[u8] {
-        &self.archive
+    pub const fn new(recovery_request: IntentRecoveryRequestV1) -> Self {
+        Self {
+            schema_version: SCHEMA_V1,
+            recovery_request,
+        }
     }
 
     #[must_use]
@@ -85,7 +162,7 @@ impl TaskSubmissionV1 {
     }
 
     fn validate(&self) -> Result<(), SdkError> {
-        if self.schema_version != SCHEMA_V1 || self.archive.is_empty() {
+        if self.schema_version != SCHEMA_V1 {
             return Err(SdkError::Invalid("task submission structure"));
         }
         Ok(())
@@ -98,7 +175,6 @@ impl TryFrom<TaskSubmissionWire> for TaskSubmissionV1 {
     fn try_from(wire: TaskSubmissionWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
-            archive: wire.archive,
             recovery_request: wire.recovery_request,
         };
         value.validate()?;
@@ -271,6 +347,14 @@ pub struct IntentReviewRequestResourceV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "request", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CairnRequestV1 {
+    BeginArchiveUpload {
+        archive: TaskArchiveManifestV1,
+    },
+    PutArchiveChunk {
+        offset: u64,
+        #[serde(with = "canonical_base64")]
+        bytes: Vec<u8>,
+    },
     SubmitTask {
         command_id: CommandId,
         task_id: TaskId,
@@ -337,6 +421,9 @@ pub enum AppApiErrorCodeV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "response", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CairnResponseV1 {
+    ArchiveUpload {
+        received: u64,
+    },
     Task {
         task: TaskResourceV1,
     },
@@ -413,6 +500,19 @@ pub trait CairnClient {
         &self,
         request: CairnRequestV1,
     ) -> impl Future<Output = Result<CairnResponseV1, SdkError>> + Send;
+
+    /// Uploads one source archive in bounded chunks and submits it as a task.
+    ///
+    /// The upload and the submission share one connection because that is what binds them. The
+    /// staged bytes belong to this exchange and to no other, and the server releases them the
+    /// moment the client goes away, so this cannot be expressed as independent exchanges.
+    fn submit_task(
+        &self,
+        command_id: CommandId,
+        task_id: TaskId,
+        archive: &[u8],
+        submission: TaskSubmissionV1,
+    ) -> impl Future<Output = Result<CairnResponseV1, SdkError>> + Send;
 }
 
 /// Current local Unix-socket SDK adapter.
@@ -437,6 +537,74 @@ impl CairnClient for UnixCairnClient {
         let mut stream = tokio::net::UnixStream::connect(&self.config.unix_socket).await?;
         write_frame(&mut stream, &request).await?;
         read_frame(&mut stream).await
+    }
+
+    async fn submit_task(
+        &self,
+        command_id: CommandId,
+        task_id: TaskId,
+        archive: &[u8],
+        submission: TaskSubmissionV1,
+    ) -> Result<CairnResponseV1, SdkError> {
+        let manifest = TaskArchiveManifestV1::describing(archive)?;
+        let mut stream = tokio::net::UnixStream::connect(&self.config.unix_socket).await?;
+        let response = exchange_on(
+            &mut stream,
+            &CairnRequestV1::BeginArchiveUpload { archive: manifest },
+        )
+        .await?;
+        if let Some(refusal) = upload_refusal(&response, 0)? {
+            return Ok(refusal);
+        }
+        let mut sent: u64 = 0;
+        for chunk in archive.chunks(MAX_ARCHIVE_CHUNK_BYTES) {
+            let response = exchange_on(
+                &mut stream,
+                &CairnRequestV1::PutArchiveChunk {
+                    offset: sent,
+                    bytes: chunk.to_vec(),
+                },
+            )
+            .await?;
+            sent += u64::try_from(chunk.len()).map_err(|_| SdkError::FrameLimit)?;
+            if let Some(refusal) = upload_refusal(&response, sent)? {
+                return Ok(refusal);
+            }
+        }
+        exchange_on(
+            &mut stream,
+            &CairnRequestV1::SubmitTask {
+                command_id,
+                task_id,
+                submission,
+            },
+        )
+        .await
+    }
+}
+
+async fn exchange_on<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    request: &CairnRequestV1,
+) -> Result<CairnResponseV1, SdkError> {
+    write_frame(stream, request).await?;
+    read_frame(stream).await
+}
+
+/// Compares the server's byte accounting with the client's, passing a refusal back untouched.
+///
+/// A server that stopped accepting the upload has already said why. Reporting a local accounting
+/// mismatch instead would replace that reason with a less specific one.
+fn upload_refusal(
+    response: &CairnResponseV1,
+    expected: u64,
+) -> Result<Option<CairnResponseV1>, SdkError> {
+    match response {
+        CairnResponseV1::ArchiveUpload { received } if *received == expected => Ok(None),
+        CairnResponseV1::ArchiveUpload { .. } => {
+            Err(SdkError::Invalid("archive upload accounting"))
+        }
+        other => Ok(Some(other.clone())),
     }
 }
 
@@ -464,13 +632,36 @@ pub async fn write_frame<W: AsyncWrite + Unpin, T: Serialize>(
 ///
 /// # Errors
 ///
-/// Returns a frame-limit, transport, codec, or non-canonical-input error.
+/// Returns a frame-limit, transport, codec, or non-canonical-input error, including a stream that
+/// ended where a frame was required.
 pub async fn read_frame<R: AsyncRead + Unpin, T>(reader: &mut R) -> Result<T, SdkError>
 where
     T: for<'de> Deserialize<'de> + Serialize,
 {
+    read_optional_frame(reader)
+        .await?
+        .ok_or_else(|| SdkError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)))
+}
+
+/// Reads one frame, or reports a stream that ended cleanly between frames.
+///
+/// A connection carrying more than one request has to be able to end. Ending between frames is how
+/// a client says it has nothing further; ending inside one is a truncated frame and stays an error.
+///
+/// # Errors
+///
+/// Returns a frame-limit, transport, codec, or non-canonical-input error.
+pub async fn read_optional_frame<R: AsyncRead + Unpin, T>(
+    reader: &mut R,
+) -> Result<Option<T>, SdkError>
+where
+    T: for<'de> Deserialize<'de> + Serialize,
+{
     let mut header = [0_u8; 4];
-    reader.read_exact(&mut header).await?;
+    if reader.read(&mut header[..1]).await? == 0 {
+        return Ok(None);
+    }
+    reader.read_exact(&mut header[1..]).await?;
     let length = u32::from_be_bytes(header);
     if length == 0 || length > MAX_FRAME_BYTES {
         return Err(SdkError::FrameLimit);
@@ -481,7 +672,7 @@ where
     if cairn_codec::to_vec(&value)? != bytes {
         return Err(SdkError::NonCanonical);
     }
-    Ok(value)
+    Ok(Some(value))
 }
 
 /// SDK configuration, codec, framing, or transport failure.
@@ -519,17 +710,59 @@ mod tests {
         .expect("recovery request")
     }
 
-    // The wire type carries bytes and says so. What may be inside them is decided where the
-    // limits are configured, which is the server; a client applying its own would be a second
-    // policy that the first one has to agree with.
+    // The manifest is derived from the bytes rather than declared alongside them, so a client
+    // cannot describe an archive it does not hold. What may be inside those bytes stays the
+    // server's decision, because that is where the limits are configured.
     #[test]
-    fn a_submission_carries_an_archive_and_refuses_an_empty_one() {
-        assert!(TaskSubmissionV1::new(Vec::new(), recovery_request()).is_err());
-        let submission = TaskSubmissionV1::new(b"not-really-gzip".to_vec(), recovery_request())
-            .expect("carries");
-        let document = serde_json::to_value(&submission).expect("document");
-        let decoded: TaskSubmissionV1 = serde_json::from_value(document).expect("round trip");
-        assert_eq!(decoded.archive(), b"not-really-gzip");
+    fn a_manifest_describes_the_exact_archive_and_refuses_an_empty_one() {
+        assert!(TaskArchiveManifestV1::describing(&[]).is_err());
+        let manifest = TaskArchiveManifestV1::describing(b"not-really-gzip").expect("describes");
+        assert_eq!(manifest.byte_len(), 15);
+        assert_eq!(manifest.digest(), BlobDigest::derive(b"not-really-gzip"));
+        let document = serde_json::to_value(manifest).expect("document");
+        let decoded: TaskArchiveManifestV1 = serde_json::from_value(document).expect("round trip");
+        assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn a_submission_no_longer_carries_the_archive() {
+        let submission = TaskSubmissionV1::new(recovery_request());
+        let bytes = cairn_codec::to_vec(&submission).expect("canonical submission");
+        assert!(
+            !String::from_utf8(bytes.clone())
+                .expect("JSON")
+                .contains("archive")
+        );
+        let decoded: TaskSubmissionV1 = cairn_codec::from_slice(&bytes).expect("round trip");
+        assert_eq!(decoded, submission);
+    }
+
+    // The chunk size is derived from the frame limit, so it is the derivation that has to hold: a
+    // client chunking at the published size must be able to send a full one.
+    #[tokio::test]
+    async fn a_full_size_chunk_still_fits_one_frame() {
+        let request = CairnRequestV1::PutArchiveChunk {
+            offset: 0,
+            bytes: vec![0xA5; MAX_ARCHIVE_CHUNK_BYTES],
+        };
+        let mut frame = Vec::new();
+        write_frame(&mut frame, &request)
+            .await
+            .expect("a full chunk fits one frame");
+    }
+
+    #[tokio::test]
+    async fn a_stream_ending_between_frames_is_not_an_error_but_a_truncated_one_is() {
+        let mut ended: &[u8] = &[];
+        assert!(matches!(
+            read_optional_frame::<_, CairnRequestV1>(&mut ended).await,
+            Ok(None)
+        ));
+        let mut truncated: &[u8] = &[0, 0];
+        assert!(matches!(
+            read_optional_frame::<_, CairnRequestV1>(&mut truncated).await,
+            Err(SdkError::Io(_))
+        ));
     }
 
     #[test]
