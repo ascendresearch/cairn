@@ -222,6 +222,7 @@ pub enum TaskAttentionV1 {
     AgentExecution,
     WorkflowFailure,
     Reconciliation,
+    CandidateSearchStopped,
 }
 
 /// Current public task resource.

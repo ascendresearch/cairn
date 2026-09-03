@@ -33,7 +33,13 @@ done < <(find scripts -name '*.sh' -type f | sort)
 #    no longer reach. The number below is a recorded baseline, not a target: it may only change
 #    through a reviewed edit to this file, so both losing a consumer and adopting an orphan become
 #    visible events. It is deliberately not an allowlist of names, which would grow in silence.
-readonly EXPECTED_ORPHANS=22
+# 2026-09-03: 22 -> 23. `recompute_candidate_admission` lost its caller when the candidate stage
+# was rebuilt around the search loop. It had no reachable caller before either: the only path to it
+# ran through `observe_candidate_on_worker`, which returned `CandidateMechanismExecutionUnavailable`
+# unconditionally, so admission was never reached at runtime. The reference was decoration, and the
+# count now says what was already true. It regains a caller in P5, when a qualified mechanism can
+# execute against a built artifact.
+readonly EXPECTED_ORPHANS=23
 
 orphans=$(python3 - <<'PY'
 import pathlib

@@ -2,7 +2,11 @@ use std::future::Future;
 
 use cairn_protocol::{AgentLoopId, TaskId};
 
-use crate::ReasoningDecompositionPolicyV1;
+use crate::{
+    CandidateBuildOutcomeV1, CandidateIterationOrdinal, CandidateIterationsRemaining,
+    CandidateSearchNextActionV1, CandidateSearchNoticeV1, CandidateSearchParentV1,
+    CandidateSearchStateV1, CandidateSearchTerminalV1, ReasoningDecompositionPolicyV1,
+};
 
 /// Exact prior lineage exposed to one dimension item-discovery Agent Loop.
 pub enum OracleItemDiscoveryLineageV1<'a, S, R> {
@@ -45,6 +49,7 @@ pub enum OracleWholePortfolioLineageV1<'a, D, A> {
 #[allow(
     clippy::missing_errors_doc,
     clippy::type_complexity,
+    clippy::too_many_arguments,
     reason = "workflow ports preserve product errors and explicit authority-boundary types"
 )]
 pub trait CudaMigrationWorkflow: Send {
@@ -82,12 +87,7 @@ pub trait CudaMigrationWorkflow: Send {
 
     type CandidateExplorationContext: Send + Sync;
     type CandidateDraft: Send + Sync;
-    type CandidateReviewContext: Send + Sync;
-    type CandidateReview: Send + Sync;
     type CandidateBuildAuthority: Send + Sync;
-    type CandidateWorkerObservations: Send + Sync;
-    type CandidateObservationLineage: Send + Sync;
-    type CandidateRevisionRequest: Send + Sync;
     type CandidateRevisionContext: Send + Sync;
     type AdmittedCandidate: Send + Sync;
     type TerminalOutcome: Send;
@@ -392,11 +392,20 @@ pub trait CudaMigrationWorkflow: Send {
         request: &Self::OracleControlReconciliationRequest,
     ) -> impl Future<Output = Result<Self::OracleControlObservations, Self::Error>> + Send;
 
+    /// Opens or recovers the Controller-owned durable search loop for this task.
+    fn open_candidate_search(
+        &mut self,
+        task: &Self::FrozenTask,
+    ) -> impl Future<Output = Result<CandidateSearchStateV1, Self::Error>> + Send;
+
     fn prepare_candidate_exploration_context(
         &mut self,
         task: &Self::FrozenTask,
         intent: &Self::AdmittedIntent,
         oracle: &Self::AdmittedOracle,
+        iteration: CandidateIterationOrdinal,
+        remaining: CandidateIterationsRemaining,
+        notice: Option<CandidateSearchNoticeV1>,
     ) -> impl Future<Output = Result<Self::CandidateExplorationContext, Self::Error>> + Send;
 
     fn initialize_candidate_exploration_loop(
@@ -405,78 +414,23 @@ pub trait CudaMigrationWorkflow: Send {
         context: &Self::CandidateExplorationContext,
     ) -> impl Future<Output = Result<AgentLoopId, Self::Error>> + Send;
 
+    /// Runs one proposal episode. `None` is an episode that produced no proposal at all, which is
+    /// a failed attempt the Controller counts, never a finished search.
     fn run_candidate_exploration_loop(
         &mut self,
         loop_id: AgentLoopId,
         context: Self::CandidateExplorationContext,
-    ) -> impl Future<Output = Result<Self::CandidateDraft, Self::Error>> + Send;
-
-    fn prepare_candidate_review_context(
-        &mut self,
-        task: &Self::FrozenTask,
-        intent: &Self::AdmittedIntent,
-        oracle: &Self::AdmittedOracle,
-        candidate: &Self::CandidateDraft,
-    ) -> impl Future<Output = Result<Self::CandidateReviewContext, Self::Error>> + Send;
-
-    fn initialize_candidate_review_loop(
-        &mut self,
-        task: &Self::FrozenTask,
-        context: &Self::CandidateReviewContext,
-    ) -> impl Future<Output = Result<AgentLoopId, Self::Error>> + Send;
-
-    fn run_candidate_review_loop(
-        &mut self,
-        loop_id: AgentLoopId,
-        context: Self::CandidateReviewContext,
-    ) -> impl Future<Output = Result<Self::CandidateReview, Self::Error>> + Send;
-
-    fn authorize_candidate_build(
-        &mut self,
-        task: &Self::FrozenTask,
-        intent: &Self::AdmittedIntent,
-        oracle: &Self::AdmittedOracle,
-        candidate: &Self::CandidateDraft,
-        review: &Self::CandidateReview,
-    ) -> impl Future<Output = Result<Self::CandidateBuildAuthority, Self::Error>> + Send;
-
-    fn observe_candidate_on_worker(
-        &mut self,
-        authority: Self::CandidateBuildAuthority,
-    ) -> impl Future<Output = Result<Self::CandidateWorkerObservations, Self::Error>> + Send;
-
-    #[expect(
-        clippy::type_complexity,
-        reason = "the explicit candidate, admission, revision, and lineage types prevent authority erasure"
-    )]
-    fn admit_candidate(
-        &mut self,
-        task: &Self::FrozenTask,
-        intent: &Self::AdmittedIntent,
-        oracle: &Self::AdmittedOracle,
-        candidate: Self::CandidateDraft,
-        review: Self::CandidateReview,
-        observations: Self::CandidateWorkerObservations,
-    ) -> impl Future<
-        Output = Result<
-            CandidateAdmissionDispositionV1<
-                Self::AdmittedCandidate,
-                Self::CandidateDraft,
-                Self::CandidateObservationLineage,
-                Self::CandidateRevisionRequest,
-            >,
-            Self::Error,
-        >,
-    > + Send;
+    ) -> impl Future<Output = Result<Option<Self::CandidateDraft>, Self::Error>> + Send;
 
     fn prepare_candidate_revision_context(
         &mut self,
         task: &Self::FrozenTask,
         intent: &Self::AdmittedIntent,
         oracle: &Self::AdmittedOracle,
-        candidate: &Self::CandidateDraft,
-        observation_lineage: &Self::CandidateObservationLineage,
-        request: &Self::CandidateRevisionRequest,
+        parent: CandidateSearchParentV1,
+        iteration: CandidateIterationOrdinal,
+        remaining: CandidateIterationsRemaining,
+        notice: Option<CandidateSearchNoticeV1>,
     ) -> impl Future<Output = Result<Self::CandidateRevisionContext, Self::Error>> + Send;
 
     fn initialize_candidate_revision_loop(
@@ -489,7 +443,55 @@ pub trait CudaMigrationWorkflow: Send {
         &mut self,
         loop_id: AgentLoopId,
         context: Self::CandidateRevisionContext,
-    ) -> impl Future<Output = Result<Self::CandidateDraft, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<Self::CandidateDraft>, Self::Error>> + Send;
+
+    fn record_candidate_proposal(
+        &mut self,
+        task: &Self::FrozenTask,
+        candidate: &Self::CandidateDraft,
+    ) -> impl Future<Output = Result<CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn record_missing_candidate_submission(
+        &mut self,
+        task: &Self::FrozenTask,
+    ) -> impl Future<Output = Result<CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn authorize_candidate_build(
+        &mut self,
+        task: &Self::FrozenTask,
+        intent: &Self::AdmittedIntent,
+        oracle: &Self::AdmittedOracle,
+        candidate: &Self::CandidateDraft,
+    ) -> impl Future<Output = Result<Self::CandidateBuildAuthority, Self::Error>> + Send;
+
+    /// Observes one build. The outcome is a search signal and never an admission verdict.
+    fn observe_candidate_build(
+        &mut self,
+        authority: Self::CandidateBuildAuthority,
+    ) -> impl Future<Output = Result<CandidateBuildOutcomeV1, Self::Error>> + Send;
+
+    fn record_candidate_build_observation(
+        &mut self,
+        task: &Self::FrozenTask,
+        outcome: CandidateBuildOutcomeV1,
+    ) -> impl Future<Output = Result<CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn admit_candidate(
+        &mut self,
+        task: &Self::FrozenTask,
+        intent: &Self::AdmittedIntent,
+        oracle: &Self::AdmittedOracle,
+        candidate: Self::CandidateDraft,
+    ) -> impl Future<Output = Result<Self::AdmittedCandidate, Self::Error>> + Send;
+
+    /// Records the honest terminal for a search that stopped without a compiling candidate.
+    fn record_candidate_search_stop(
+        &mut self,
+        task: &Self::FrozenTask,
+        intent: &Self::AdmittedIntent,
+        oracle: &Self::AdmittedOracle,
+        terminal: CandidateSearchTerminalV1,
+    ) -> impl Future<Output = Result<Self::TerminalOutcome, Self::Error>> + Send;
 
     fn record_terminal_outcome(
         &mut self,
@@ -523,15 +525,10 @@ pub enum OracleReviewDispositionV1<A, R> {
     Revise(R),
 }
 
-/// Mechanical Candidate admission either grants authority or binds revision to exact observation
-/// lineage. A free-form diagnostic cannot replace this lineage value.
-pub enum CandidateAdmissionDispositionV1<A, C, L, R> {
+/// How the candidate stage resolved. A stopped search is an outcome, not an error.
+pub enum CandidateResolutionV1<A> {
     Admitted(A),
-    Revise {
-        candidate: C,
-        observation_lineage: L,
-        request: R,
-    },
+    SearchStopped(CandidateSearchTerminalV1),
 }
 
 /// Complete product workflow, intentionally written in business order.
@@ -549,8 +546,16 @@ pub async fn run_cuda_migration<W: CudaMigrationWorkflow>(
     );
     let intent = establish_intent(workflow, &task).await?;
     let oracle = establish_oracle(workflow, &task, &intent).await?;
-    let candidate = establish_candidate(workflow, &task, &intent, &oracle).await?;
-    complete_cuda_migration(workflow, task, intent, oracle, candidate).await
+    match establish_candidate(workflow, &task, &intent, &oracle).await? {
+        CandidateResolutionV1::Admitted(candidate) => {
+            complete_cuda_migration(workflow, task, intent, oracle, candidate).await
+        }
+        CandidateResolutionV1::SearchStopped(terminal) => {
+            workflow
+                .record_candidate_search_stop(&task, &intent, &oracle, terminal)
+                .await
+        }
+    }
 }
 
 /// Runs SIR as a role-scoped loop, obtains administrator decisions, then applies Intent Admission.
@@ -924,64 +929,108 @@ async fn establish_minimal_oracle<W: CudaMigrationWorkflow>(
 }
 
 /// Explores, reviews, builds, observes, and mechanically admits a Candidate.
+/// Runs the Controller-owned candidate search loop, then reviews and admits what it settled on.
+///
+/// The loop belongs to the Controller, not to the model. Every transition is decided from durable
+/// state the actor can neither see nor write, which is what lets the Controller notice a repeated
+/// proposal, an episode that submitted nothing, and a budget about to run out. An actor cannot
+/// observe any of those about itself, so being told is the only way it can change course.
 async fn establish_candidate<W: CudaMigrationWorkflow>(
     workflow: &mut W,
     task: &W::FrozenTask,
     intent: &W::AdmittedIntent,
     oracle: &W::AdmittedOracle,
-) -> Result<W::AdmittedCandidate, W::Error> {
-    let context = workflow
-        .prepare_candidate_exploration_context(task, intent, oracle)
-        .await?;
-    let loop_id = workflow
-        .initialize_candidate_exploration_loop(task, &context)
-        .await?;
-    let mut candidate = workflow
-        .run_candidate_exploration_loop(loop_id, context)
-        .await?;
-    loop {
-        let review_context = workflow
-            .prepare_candidate_review_context(task, intent, oracle, &candidate)
-            .await?;
-        let review_loop = workflow
-            .initialize_candidate_review_loop(task, &review_context)
-            .await?;
-        let review = workflow
-            .run_candidate_review_loop(review_loop, review_context)
-            .await?;
-        let authority = workflow
-            .authorize_candidate_build(task, intent, oracle, &candidate, &review)
-            .await?;
-        let observations = workflow.observe_candidate_on_worker(authority).await?;
-        match workflow
-            .admit_candidate(task, intent, oracle, candidate, review, observations)
-            .await?
-        {
-            CandidateAdmissionDispositionV1::Admitted(admitted) => return Ok(admitted),
-            CandidateAdmissionDispositionV1::Revise {
-                candidate: rejected,
-                observation_lineage,
-                request,
+) -> Result<CandidateResolutionV1<W::AdmittedCandidate>, W::Error> {
+    let mut state = workflow.open_candidate_search(task).await?;
+    let mut current: Option<W::CandidateDraft> = None;
+    let candidate = loop {
+        match state.next_action() {
+            CandidateSearchNextActionV1::None => {
+                unreachable!("Controller opens the search loop before reading its next action")
+            }
+            CandidateSearchNextActionV1::RequestProposal {
+                iteration,
+                remaining,
+                parent,
+                notice,
             } => {
-                let revision_context = workflow
-                    .prepare_candidate_revision_context(
-                        task,
-                        intent,
-                        oracle,
-                        &rejected,
-                        &observation_lineage,
-                        &request,
-                    )
+                let proposal = match parent {
+                    None => {
+                        let context = workflow
+                            .prepare_candidate_exploration_context(
+                                task, intent, oracle, iteration, remaining, notice,
+                            )
+                            .await?;
+                        let loop_id = workflow
+                            .initialize_candidate_exploration_loop(task, &context)
+                            .await?;
+                        workflow
+                            .run_candidate_exploration_loop(loop_id, context)
+                            .await?
+                    }
+                    Some(parent) => {
+                        let context = workflow
+                            .prepare_candidate_revision_context(
+                                task, intent, oracle, parent, iteration, remaining, notice,
+                            )
+                            .await?;
+                        let loop_id = workflow
+                            .initialize_candidate_revision_loop(task, &context)
+                            .await?;
+                        workflow
+                            .run_candidate_revision_loop(loop_id, context)
+                            .await?
+                    }
+                };
+                state = match &proposal {
+                    Some(draft) => workflow.record_candidate_proposal(task, draft).await?,
+                    None => workflow.record_missing_candidate_submission(task).await?,
+                };
+                current = proposal;
+            }
+            CandidateSearchNextActionV1::RequestBuild { iteration, .. } => {
+                let Some(draft) = current.as_ref() else {
+                    unreachable!("a build is only requested for the proposal just recorded")
+                };
+                let authority = workflow
+                    .authorize_candidate_build(task, intent, oracle, draft)
                     .await?;
-                let revision_loop = workflow
-                    .initialize_candidate_revision_loop(task, &revision_context)
-                    .await?;
-                candidate = workflow
-                    .run_candidate_revision_loop(revision_loop, revision_context)
+                let outcome = workflow.observe_candidate_build(authority).await?;
+                tracing::info!(
+                    target: "cairn.migration.workflow",
+                    event = "candidate_build_observed",
+                    task_id = %workflow.task_id(task),
+                    iteration = iteration.get(),
+                    compiled = outcome.compiled(),
+                    "candidate search folded one build observation back into durable state"
+                );
+                state = workflow
+                    .record_candidate_build_observation(task, outcome)
                     .await?;
             }
+            CandidateSearchNextActionV1::Terminal(CandidateSearchTerminalV1::Compiled {
+                ..
+            }) => {
+                let Some(draft) = current else {
+                    unreachable!("a compiled terminal names the proposal just built")
+                };
+                break draft;
+            }
+            CandidateSearchNextActionV1::Terminal(terminal) => {
+                tracing::info!(
+                    target: "cairn.migration.workflow",
+                    event = "candidate_search_stopped",
+                    task_id = %workflow.task_id(task),
+                    "candidate search stopped without a compiling candidate"
+                );
+                return Ok(CandidateResolutionV1::SearchStopped(terminal));
+            }
         }
-    }
+    };
+    workflow
+        .admit_candidate(task, intent, oracle, candidate)
+        .await
+        .map(CandidateResolutionV1::Admitted)
 }
 
 async fn complete_cuda_migration<W: CudaMigrationWorkflow>(
@@ -1008,19 +1057,59 @@ async fn complete_cuda_migration<W: CudaMigrationWorkflow>(
 mod tests {
     use std::{convert::Infallible, future::ready};
 
+    use cairn_protocol::ContentId;
+
     use super::*;
+    use crate::{CandidateSearchLoopV1, CandidateSearchPolicyV1};
 
     struct FrozenTask(TaskId);
 
-    struct CandidateLineage;
     struct Terminal;
 
-    #[derive(Default)]
     struct RecordedWorkflow {
         trace: Vec<&'static str>,
         oracle_revised: bool,
-        candidate_revised: bool,
         reasoning_decomposition: Option<ReasoningDecompositionPolicyV1>,
+        events: cairn_store_sqlite::SqliteEventStore,
+        search: Option<CandidateSearchLoopV1>,
+        proposals: u32,
+        builds: u32,
+        compile_on: u32,
+        last_proposal: Option<ContentId<crate::CandidateProposalArtifact>>,
+    }
+
+    impl Default for RecordedWorkflow {
+        fn default() -> Self {
+            Self {
+                trace: Vec::new(),
+                oracle_revised: false,
+                reasoning_decomposition: None,
+                events: cairn_store_sqlite::SqliteEventStore::in_memory()
+                    .expect("in-memory event store"),
+                search: None,
+                proposals: 0,
+                builds: 0,
+                // The first build fails and the second compiles, so the readable order below has
+                // to show one full compile-diagnostic-revision round rather than a single pass.
+                compile_on: 2,
+                last_proposal: None,
+            }
+        }
+    }
+
+    fn test_policy() -> CandidateSearchPolicyV1 {
+        CandidateSearchPolicyV1 {
+            iteration_limit: crate::CandidateIterationLimit::new(4).expect("iteration limit"),
+            empty_submission_limit: crate::CandidateEmptySubmissionLimit::new(2)
+                .expect("empty submission limit"),
+            repeat_window: crate::CandidateRepeatWindow::new(4).expect("repeat window"),
+            budget_notice_threshold: crate::CandidateBudgetNoticeThreshold::new(1)
+                .expect("budget notice threshold"),
+        }
+    }
+
+    fn observed_at() -> cairn_protocol::ObservedAtUnixMillis {
+        cairn_protocol::ObservedAtUnixMillis::new(1)
     }
 
     impl RecordedWorkflow {
@@ -1065,13 +1154,8 @@ mod tests {
         type OracleControlReconciliationRequest = ();
         type AdmittedOracle = ();
         type CandidateExplorationContext = ();
-        type CandidateDraft = ();
-        type CandidateReviewContext = ();
-        type CandidateReview = ();
+        type CandidateDraft = u32;
         type CandidateBuildAuthority = ();
-        type CandidateWorkerObservations = ();
-        type CandidateObservationLineage = CandidateLineage;
-        type CandidateRevisionRequest = ();
         type CandidateRevisionContext = ();
         type AdmittedCandidate = ();
         type TerminalOutcome = Terminal;
@@ -1458,11 +1542,32 @@ mod tests {
             self.mark("reconcile-oracle-controls", ())
         }
 
+        fn open_candidate_search(
+            &mut self,
+            task: &FrozenTask,
+        ) -> impl Future<Output = Result<CandidateSearchStateV1, Infallible>> + Send {
+            self.trace.push("open-candidate-search");
+            let search = CandidateSearchLoopV1::new(task.0).expect("search loop");
+            let state = crate::open_candidate_search(
+                &mut self.events,
+                &search,
+                test_policy(),
+                &cairn_protocol::CommandId::new(),
+                observed_at(),
+            )
+            .expect("open candidate search");
+            self.search = Some(search);
+            ready(Ok(state))
+        }
+
         fn prepare_candidate_exploration_context(
             &mut self,
             _task: &FrozenTask,
             _intent: &(),
             _oracle: &(),
+            _iteration: CandidateIterationOrdinal,
+            _remaining: CandidateIterationsRemaining,
+            _notice: Option<CandidateSearchNoticeV1>,
         ) -> impl Future<Output = Result<(), Infallible>> + Send {
             self.mark("prepare-candidate-context", ())
         }
@@ -1479,79 +1584,10 @@ mod tests {
             &mut self,
             _loop_id: AgentLoopId,
             _context: (),
-        ) -> impl Future<Output = Result<(), Infallible>> + Send {
-            self.mark("run-candidate-loop", ())
-        }
-
-        fn prepare_candidate_review_context(
-            &mut self,
-            _task: &FrozenTask,
-            _intent: &(),
-            _oracle: &(),
-            _candidate: &(),
-        ) -> impl Future<Output = Result<(), Infallible>> + Send {
-            self.mark("prepare-candidate-review", ())
-        }
-
-        fn initialize_candidate_review_loop(
-            &mut self,
-            _task: &FrozenTask,
-            _context: &(),
-        ) -> impl Future<Output = Result<AgentLoopId, Infallible>> + Send {
-            self.mark("initialize-candidate-review", AgentLoopId::new())
-        }
-
-        fn run_candidate_review_loop(
-            &mut self,
-            _loop_id: AgentLoopId,
-            _context: (),
-        ) -> impl Future<Output = Result<(), Infallible>> + Send {
-            self.mark("run-candidate-review", ())
-        }
-
-        fn authorize_candidate_build(
-            &mut self,
-            _task: &FrozenTask,
-            _intent: &(),
-            _oracle: &(),
-            _candidate: &(),
-            _review: &(),
-        ) -> impl Future<Output = Result<(), Infallible>> + Send {
-            self.mark("authorize-candidate-build", ())
-        }
-
-        fn observe_candidate_on_worker(
-            &mut self,
-            _authority: (),
-        ) -> impl Future<Output = Result<(), Infallible>> + Send {
-            self.mark("observe-candidate", ())
-        }
-
-        fn admit_candidate(
-            &mut self,
-            _task: &FrozenTask,
-            _intent: &(),
-            _oracle: &(),
-            _candidate: (),
-            _review: (),
-            _observations: (),
-        ) -> impl Future<
-            Output = Result<
-                CandidateAdmissionDispositionV1<(), (), CandidateLineage, ()>,
-                Infallible,
-            >,
-        > + Send {
-            self.trace.push("admit-candidate");
-            if self.candidate_revised {
-                ready(Ok(CandidateAdmissionDispositionV1::Admitted(())))
-            } else {
-                self.candidate_revised = true;
-                ready(Ok(CandidateAdmissionDispositionV1::Revise {
-                    candidate: (),
-                    observation_lineage: CandidateLineage,
-                    request: (),
-                }))
-            }
+        ) -> impl Future<Output = Result<Option<u32>, Infallible>> + Send {
+            self.proposals = self.proposals.saturating_add(1);
+            let ordinal = self.proposals;
+            self.mark("run-candidate-loop", Some(ordinal))
         }
 
         fn prepare_candidate_revision_context(
@@ -1559,9 +1595,10 @@ mod tests {
             _task: &FrozenTask,
             _intent: &(),
             _oracle: &(),
-            _candidate: &(),
-            _observation_lineage: &CandidateLineage,
-            _request: &(),
+            _parent: CandidateSearchParentV1,
+            _iteration: CandidateIterationOrdinal,
+            _remaining: CandidateIterationsRemaining,
+            _notice: Option<CandidateSearchNoticeV1>,
         ) -> impl Future<Output = Result<(), Infallible>> + Send {
             self.mark("prepare-candidate-revision", ())
         }
@@ -1578,8 +1615,107 @@ mod tests {
             &mut self,
             _loop_id: AgentLoopId,
             _context: (),
+        ) -> impl Future<Output = Result<Option<u32>, Infallible>> + Send {
+            self.proposals = self.proposals.saturating_add(1);
+            let ordinal = self.proposals;
+            self.mark("run-candidate-revision", Some(ordinal))
+        }
+
+        fn record_candidate_proposal(
+            &mut self,
+            _task: &FrozenTask,
+            candidate: &u32,
+        ) -> impl Future<Output = Result<CandidateSearchStateV1, Infallible>> + Send {
+            self.trace.push("record-candidate-proposal");
+            let proposal = ContentId::derive(&candidate.to_be_bytes()).expect("proposal identity");
+            self.last_proposal = Some(proposal);
+            let state = crate::record_candidate_proposal(
+                &mut self.events,
+                self.search.as_ref().expect("search loop"),
+                proposal,
+                &cairn_protocol::CommandId::new(),
+                observed_at(),
+            )
+            .expect("record candidate proposal");
+            ready(Ok(state))
+        }
+
+        fn record_missing_candidate_submission(
+            &mut self,
+            _task: &FrozenTask,
+        ) -> impl Future<Output = Result<CandidateSearchStateV1, Infallible>> + Send {
+            self.trace.push("record-missing-candidate-submission");
+            let state = crate::record_missing_submission(
+                &mut self.events,
+                self.search.as_ref().expect("search loop"),
+                &cairn_protocol::CommandId::new(),
+                observed_at(),
+            )
+            .expect("record missing submission");
+            ready(Ok(state))
+        }
+
+        fn authorize_candidate_build(
+            &mut self,
+            _task: &FrozenTask,
+            _intent: &(),
+            _oracle: &(),
+            _candidate: &u32,
         ) -> impl Future<Output = Result<(), Infallible>> + Send {
-            self.mark("run-candidate-revision", ())
+            self.mark("authorize-candidate-build", ())
+        }
+
+        fn observe_candidate_build(
+            &mut self,
+            _authority: (),
+        ) -> impl Future<Output = Result<CandidateBuildOutcomeV1, Infallible>> + Send {
+            self.builds = self.builds.saturating_add(1);
+            let compiled = self.builds >= self.compile_on;
+            let outcome = CandidateBuildOutcomeV1::new(
+                self.last_proposal.expect("built proposal"),
+                ContentId::derive(&self.builds.to_be_bytes()).expect("receipt identity"),
+                compiled,
+            );
+            self.mark("observe-candidate-build", outcome)
+        }
+
+        fn record_candidate_build_observation(
+            &mut self,
+            _task: &FrozenTask,
+            outcome: CandidateBuildOutcomeV1,
+        ) -> impl Future<Output = Result<CandidateSearchStateV1, Infallible>> + Send {
+            self.trace.push("record-candidate-build");
+            let state = crate::record_candidate_build_observation(
+                &mut self.events,
+                self.search.as_ref().expect("search loop"),
+                outcome.proposal(),
+                outcome.receipt(),
+                outcome.compiled(),
+                &cairn_protocol::CommandId::new(),
+                observed_at(),
+            )
+            .expect("record build observation");
+            ready(Ok(state))
+        }
+
+        fn admit_candidate(
+            &mut self,
+            _task: &FrozenTask,
+            _intent: &(),
+            _oracle: &(),
+            _candidate: u32,
+        ) -> impl Future<Output = Result<(), Infallible>> + Send {
+            self.mark("admit-candidate", ())
+        }
+
+        fn record_candidate_search_stop(
+            &mut self,
+            _task: &FrozenTask,
+            _intent: &(),
+            _oracle: &(),
+            _terminal: CandidateSearchTerminalV1,
+        ) -> impl Future<Output = Result<Terminal, Infallible>> + Send {
+            self.mark("record-candidate-search-stop", Terminal)
         }
 
         fn record_terminal_outcome(
@@ -1654,23 +1790,22 @@ mod tests {
                 "accept-oracle-portfolio-review",
                 "run-oracle-controls",
                 "admit-oracle",
+                // The search loop is the compile-diagnostic-revision cycle, and nothing else.
+                "open-candidate-search",
                 "prepare-candidate-context",
                 "initialize-candidate-loop",
                 "run-candidate-loop",
-                "prepare-candidate-review",
-                "initialize-candidate-review",
-                "run-candidate-review",
+                "record-candidate-proposal",
                 "authorize-candidate-build",
-                "observe-candidate",
-                "admit-candidate",
+                "observe-candidate-build",
+                "record-candidate-build",
                 "prepare-candidate-revision",
                 "initialize-candidate-revision",
                 "run-candidate-revision",
-                "prepare-candidate-review",
-                "initialize-candidate-review",
-                "run-candidate-review",
+                "record-candidate-proposal",
                 "authorize-candidate-build",
-                "observe-candidate",
+                "observe-candidate-build",
+                "record-candidate-build",
                 "admit-candidate",
                 "record-terminal",
             ]

@@ -10,9 +10,9 @@ use cairn_agent::{
     SkillRegistry,
 };
 use cairn_migration::{
-    CandidateMechanismCatalogV1, OracleAdmissionPolicyV1, OracleAdversarialPolicyV1,
-    OracleCoveragePolicyV1, OracleCoverageProfileV1, ReasoningDecompositionPolicyV1, SirTaskLimits,
-    TaskIntentAuthoritySubject,
+    CandidateMechanismCatalogV1, CandidateSearchPolicyV1, OracleAdmissionPolicyV1,
+    OracleAdversarialPolicyV1, OracleCoveragePolicyV1, OracleCoverageProfileV1,
+    ReasoningDecompositionPolicyV1, SirTaskLimits, TaskIntentAuthoritySubject,
 };
 use cairn_migration_app::{
     CandidateBuildRunnerV1, CandidateBuildWorkerConfigV1, CudaMigrationApplication,
@@ -53,6 +53,8 @@ struct ProductConfigV1 {
     oracle_control_worker: OracleControlWorkerConfigV1,
     candidate_build_worker: Option<CandidateBuildWorkerConfigV1>,
     candidate_mechanisms: Option<CandidateMechanismCatalogV1>,
+    #[serde(default)]
+    candidate_search: CandidateSearchPolicyV1,
 }
 
 #[tokio::main]
@@ -146,6 +148,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         oracle_controls,
         candidate_build,
         config.reasoning_decomposition,
+        server.clone(),
+        config.candidate_search,
         config.inbox_capacity,
     )?;
     let name = ApplicationName::new("cuda-migration")?;

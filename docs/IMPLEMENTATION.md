@@ -551,9 +551,11 @@ CI 里由 `.github/actions/setup-release-toolchain` 完成,本地没有等价物
 P3 第 4 项要把构建结果作为**搜索信号**（编译成败与诊断）回灌给循环,同时让 admission 继续 fail closed;
 这两件事必须分开,否则要么循环拿不到反馈,要么结构自检被当成语义结论。
 
-**下一步。** P3 第 4 项（把构建诊断回灌成搜索信号）与第 1、2 项（durable 循环与五条迭代策略）。
-持久化照 `cairn-execution` 的既有惯例:每模块自带 `project_*` / `apply` / `fact` / `expected`,
-不新造 trait,读取端与审计端共用同一个推导函数。P2 仍是可并行的另一条轨道。
+**下一步。** P4:用一个此前未知的 elementwise 算子跑真实模型,让循环第一次产生 native build success。
+这也是第一次会有 live 证据。P2 仍是可并行的另一条轨道,而循环里的 `knowledge_snapshot` 空位就是它的接口。
+
+**profiler 诊断分流（P3 第 4 项的后半）尚未做**:目前回灌的只有编译器诊断,原样回传;
+profiler 输出要先经确定性分析器转成结构化建议,那要等到有 device 执行（P5）才有输入。
 
 **未解决的事实,别当成已解决。** exposure ledger 一行代码都没有,而它是 restricted 材料唯一
 真正的控制（4.2.4）。资源时钟的两面不对称仍在（4.2.6）。P0 的 Exit 仍未达成:
@@ -724,6 +726,42 @@ Exit：知识按 target 过滤后投影进 episode；任一 entry 字节变化�
 4. 诊断回灌分流：编译器诊断原样回传；profiler 输出先经确定性分析器转为结构化建议（`ARCHITECTURE.md` 7.3）。
 
 规模估计：第 1 项为大，其余为中。
+
+**P3 的第 1、2 项与第 3、4 项的主体已完成（2026-09-03）。** 候选阶段现在是一条真正的循环：
+提案 → 构建 → 诊断 → 修订 → 再构建，由 `CandidateSearchLoopV1` 这个事件溯源聚合拥有每一次转移。
+形状照搬 `cairn-execution` 的既有惯例——每模块自带 `project` / `apply` / `fact` / `expected`，
+不新造 trait；状态只从自己的事件流重建，因此「下一步该做什么」由流决定，而不是由谁在驱动它的内存决定。
+
+五条迭代策略全部落地，每条都有一个模型看不见而 Controller 看得见的理由：
+
+| 策略 | 落点 | 为什么模型自己做不到 |
+| --- | --- | --- |
+| 迭代预算 | 观测到的构建次数达上限即停 | actor 不知道还剩几次 |
+| 重复动作检测 | 重复的提案不构建，作为 typed notice 回传 | actor 看不见自己在转圈 |
+| 空提交按故障计数 | 既无提案也无文本的 episode 计入连续计数，超阈值才停 | 空提交此前是硬错误，直接打死任务 |
+| 预算临界通知 | 剩余量低于阈值时注入 typed notice | 让 actor 收敛，而不是被截断 |
+| 证据到达即固化 | receipt 折回即追加事件并推进状态 | 流程末尾正是受限 actor 最可能到不了的位置 |
+
+**构建观测现在是搜索信号，不再被丢弃。** `observe_candidate_build` 返回编译成败与 receipt，
+循环据此决定是收敛还是再修订；修订 episode 拿到的是编译器原文的 stdout/stderr，而不是退出码。
+Admission 仍然 fail closed，且把「没有配置 mechanism 目录」与「没有能执行它的能力」分成两个错误，
+因为这是两种不同的运维动作。
+
+**候选评审角色已删除。** 它在流程里没有消费者：admission 用不到它的输出，而把它留在循环里
+会让搜索刚成功就死在一个桩上。ARCHITECTURE 把独立评审放在 assurance 一侧，不在搜索循环内。
+
+**Exit 达成情况要说清楚。** 前三条达成：同一 task 内多轮 authorized compile→diagnostic→revision，
+重复动作被检测并转为 typed input，空提交计入预算而不被当作完成。**第四条未达成**：聚合本身可以从
+事件流恢复（有测试证明），但工作流驱动器没有任何重启恢复——任务来自一个内存 channel，
+Controller 重启后没有东西会把任何任务重新驱动起来。这不是本聚合的缺口，是工作流层从来没有过恢复路径，
+规模超出 P3。**不要把「聚合可恢复」读成「循环可恢复」。**
+
+证据口径仍是 **local model-free**。四道门做了红验证：关掉迭代预算判断、关掉重复检测、
+关掉空提交上限、让测试替身第一次构建就通过——四次都如预期失败。仍然没有任何一次真实模型调用。
+
+`scripts/check-product-path.sh` 的孤儿基线由 22 改为 23，原因写在脚本里：
+`recompute_candidate_admission` 失去了调用者，而它**此前也从未可达**，
+因为唯一通向它的路径会先无条件返回 `CandidateMechanismExecutionUnavailable`。计数现在说的是本来就成立的事。
 
 **第 3 项的 exploration 一路已完成（2026-09-03）。** 开工时发现的前提比预期严重：三个 candidate 角色
 executor 全是桩，候选阶段从未向模型发出过一次调用，因此循环框架无论怎么写都没有东西可循环。

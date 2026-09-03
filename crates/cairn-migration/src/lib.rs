@@ -7,6 +7,7 @@ mod call_adapter;
 mod candidate_admission;
 mod candidate_build;
 mod candidate_exploration;
+mod candidate_search;
 mod controller_workflow;
 mod corpus_execution;
 mod corpus_observation;
@@ -81,8 +82,18 @@ pub use candidate_exploration::{
     CandidateProposalSubmissionV1, CandidateProposalV1, CandidateSourceFileV1, CandidateSourcePath,
     CandidateSourceText, CandidateWorkspaceArtifact, CandidateWorkspaceV1,
 };
+pub use candidate_search::{
+    CandidateBudgetNoticeThreshold, CandidateBuildOutcomeV1, CandidateEmptySubmissionLimit,
+    CandidateIterationLimit, CandidateIterationOrdinal, CandidateIterationsRemaining,
+    CandidateRepeatWindow, CandidateSearchError, CandidateSearchLoopV1,
+    CandidateSearchNextActionV1, CandidateSearchNoticeV1, CandidateSearchParentV1,
+    CandidateSearchPolicyV1, CandidateSearchProgressV1, CandidateSearchStateV1,
+    CandidateSearchStopV1, CandidateSearchTerminalV1, open_candidate_search,
+    record_candidate_build_observation, record_candidate_proposal, record_missing_submission,
+    recover_candidate_search,
+};
 pub use controller_workflow::{
-    CandidateAdmissionDispositionV1, CudaMigrationWorkflow, OracleAdmissionDispositionV1,
+    CandidateResolutionV1, CudaMigrationWorkflow, OracleAdmissionDispositionV1,
     OracleItemDevelopmentLineageV1, OracleItemDiscoveryLineageV1, OracleReviewDispositionV1,
     OracleWholePortfolioLineageV1, run_cuda_migration,
 };
@@ -244,9 +255,8 @@ pub use reasoning_decomposition::ReasoningDecompositionPolicyV1;
 #[cfg(feature = "agent-runtime")]
 pub use role_agent::{
     CandidateExplorationAgentContextV1, CandidateExplorationRoleHooksV1,
-    CandidateReviewAgentContextV1, CandidateReviewRoleHooksV1, CandidateRevisionAgentContextV1,
-    CandidateRevisionRoleHooksV1, MigrationAgentRoleError, MigrationAgentToolV1,
-    MigrationRoleHooksV1, MigrationRoleStepObservationV1,
+    CandidateRevisionAgentContextV1, CandidateRevisionRoleHooksV1, MigrationAgentRoleError,
+    MigrationAgentToolV1, MigrationRoleHooksV1, MigrationRoleStepObservationV1,
     OracleDimensionItemDiscoveryAgentContextV1, OracleDimensionItemDiscoveryRoleHooksV1,
     OracleDimensionItemSetReviewerAgentContextV1, OracleDimensionItemSetReviewerRoleHooksV1,
     OracleItemDeveloperAgentContextV1, OracleItemDeveloperRoleHooksV1,

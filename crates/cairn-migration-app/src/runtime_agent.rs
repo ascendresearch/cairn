@@ -21,16 +21,15 @@ use cairn_agent::{
 use cairn_migration::{
     AgentLoopRuntimeBindingArtifact, AgentResolvedRuntimeModelArtifact, AuthoritativeIntentClaimV1,
     CandidateExplorationAgentContextV1, CandidateOracleContractV1, CandidateProposalSubmissionV1,
-    CandidateProposalV1, CandidateReviewAgentContextV1, CandidateRevisionAgentContextV1,
-    CandidateWorkspaceV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
-    MigrationAgentToolV1, MigrationRoleStepObservationV1, OracleBuildTestSnapshotArtifact,
-    OracleCheckEvidenceV1, OracleCheckMethodV1, OracleCheckObjective, OracleCheckObservation,
-    OracleCheckPassCondition, OracleCheckPlanV1, OracleCheckSetup, OracleClaimV1,
-    OracleControlFailureClassV1, OracleControlResultV1, OracleCoveragePolicyV1,
-    OracleDimensionItemDiscoveryAgentContextV1, OracleDimensionItemSetProposalV1,
-    OracleDimensionItemSetReviewDecisionV1, OracleDimensionItemSetReviewV1,
-    OracleDimensionItemSetReviewerAgentContextV1, OracleDimensionV1,
-    OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
+    CandidateProposalV1, CandidateRevisionAgentContextV1, CandidateWorkspaceV1,
+    IntentHypothesisSetProposalV1, IntentRecoveryInputV1, MigrationAgentToolV1,
+    MigrationRoleStepObservationV1, OracleBuildTestSnapshotArtifact, OracleCheckEvidenceV1,
+    OracleCheckMethodV1, OracleCheckObjective, OracleCheckObservation, OracleCheckPassCondition,
+    OracleCheckPlanV1, OracleCheckSetup, OracleClaimV1, OracleControlFailureClassV1,
+    OracleControlResultV1, OracleCoveragePolicyV1, OracleDimensionItemDiscoveryAgentContextV1,
+    OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewDecisionV1,
+    OracleDimensionItemSetReviewV1, OracleDimensionItemSetReviewerAgentContextV1,
+    OracleDimensionV1, OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
     OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
     OracleExplorationCapabilityGrantArtifact, OracleItemDeveloperAgentContextV1,
     OracleItemDiscoveryRevisionLimit, OracleItemDraftV1, OracleItemReviewDecisionV1,
@@ -86,6 +85,14 @@ Read migration-read-oracle-dimension-items, including the full Controller-derive
 const ORACLE_ITEM_DEVELOPMENT_INSTRUCTION: &str = r"You develop one exact Oracle item for a CUDA-to-Ascend-C migration task.
 
 Read migration-read-oracle-item-conversation, including the item's exact dimension and admitted-intent claim, before submitting. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. On the initial revision, create one or more complementary, executable check plans for only the offered item. Every plan must say what future Ascend-C candidate artifact or target execution observation it consumes and how it can accept or reject that candidate. Static analysis of the CUDA source or restatement of admitted intent can support a plan but cannot itself be the candidate observation. On a later revision, preserve the same item and address every finding from the exact prior draft review and every exact artifact-owned failed control supplied by Admission. For each failed receipt, call migration-read-oracle-control-diagnostic and use its bounded exact stdout/stderr to determine the required correction; do not guess from an exit code or artifact identity. Treat prior receipts only as feedback, never as passing authority. Negative-challenge, mechanism, infrastructure-unavailable, or missing observations are reconciled by the Controller and are never a reason to rewrite an item. Each plan must state an objective, setup, obtainable candidate observation, unambiguous pass condition, and exact source citation or admitted-intent evidence. Submit only through migration-submit-oracle-item-draft. Do not change the item, omit feedback, claim execution, review, qualification, or admission.";
+
+const CANDIDATE_REVISION_INSTRUCTION: &str = r"You revise one Ascend C implementation that a build has just refused.
+
+Read migration-read-candidate-observation first. It carries the exact previous proposal and the compiler's own stdout and stderr for the build that refused it. Determine the required correction from that text; an exit code, a receipt identity, or the shape of the code alone does not tell you what the toolchain objected to, and an API invented to satisfy a guess will fail the next build the same way. If the diagnostic does not identify the cause, say so in the explanation rather than changing something at random.
+
+Read migration-read-admitted-oracle to keep the admitted intent claims in view: a revision that compiles by dropping required behaviour has not made progress. Submit the complete revised source through migration-submit-candidate-revision, including every file the build needs and not only the ones you changed. State in the explanation what the diagnostic said, what you changed because of it, and any assumption you still could not verify.
+
+The observation also reports how many build attempts remain and, when the Controller has something to tell you about the search itself, a notice. A notice that your previous submission repeated one already built means that exact source has already been refused: submitting it again spends nothing and changes nothing. You have no build, execution, review, qualification, or admission authority.";
 
 const CANDIDATE_EXPLORATION_INSTRUCTION: &str = r"You write the first Ascend C implementation of one CUDA operator for a migration task.
 
@@ -1329,7 +1336,7 @@ impl MigrationAgentRuntimeExecutorV1 {
         context: &CandidateExplorationAgentContextV1,
         access: &AgentStepAccessV1,
     ) -> Result<
-        AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<CandidateProposalV1>>,
+        AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<Option<CandidateProposalV1>>>,
         MigrationAgentRuntimeError,
     > {
         let task = self.materials.task(context.task_id())?;
@@ -1441,31 +1448,12 @@ impl MigrationAgentRuntimeExecutorV1 {
                 ))
             }
             cairn_agent::AgentEpisodeDriverStepOutcomeV1::Complete(completion) => {
-                let proposal = match resolve_role_submission(
+                let proposal = self.settle_candidate_submission(
                     gateway.accepted,
                     completion.reason,
-                    "Candidate proposal",
-                )? {
-                    RuntimeRoleSubmissionV1::Submitted(proposal) => proposal,
-                    RuntimeRoleSubmissionV1::Exhausted(reason) => {
-                        return Ok(AgentLoopStepExecutionV1::Observed(
-                            MigrationRoleStepObservationV1::Exhausted(reason),
-                        ));
-                    }
-                };
-                let proposal_id = proposal
-                    .identity()
-                    .map_err(MigrationAgentRuntimeError::domain)?;
-                archive_exact(&mut self.content, proposal_id, &proposal)?;
-                tracing::info!(
-                    target: "cairn.migration.agent-runtime",
-                    event = "candidate_proposal_submitted",
-                    task_id = %context.task_id(),
-                    episode_id = %episode_id,
-                    proposal_id = %proposal_id,
-                    file_count = proposal.submission().files().len(),
-                    "Candidate exploration produced one exact proposal"
-                );
+                    context.task_id(),
+                    episode_id,
+                )?;
                 Ok(AgentLoopStepExecutionV1::Observed(
                     MigrationRoleStepObservationV1::Complete(proposal),
                 ))
@@ -1477,6 +1465,214 @@ impl MigrationAgentRuntimeExecutorV1 {
                 ))
             }
         }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the role executor keeps material binding, frozen projection, and episode outcome handling together"
+    )]
+    fn execute_candidate_revision(
+        &mut self,
+        checkpoint: &AgentLoopCheckpointV1,
+        context: &CandidateRevisionAgentContextV1,
+        access: &AgentStepAccessV1,
+    ) -> Result<
+        AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<Option<CandidateProposalV1>>>,
+        MigrationAgentRuntimeError,
+    > {
+        let task = self.materials.task(context.task_id())?;
+        let candidate = task
+            .candidate
+            .clone()
+            .ok_or(MigrationAgentRuntimeError::MissingCandidateMaterials)?;
+        let contract_id = candidate
+            .contract
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        let workspace_id = candidate
+            .workspace
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        if context.oracle_contract() != contract_id || context.candidate_workspace() != workspace_id
+        {
+            return Err(MigrationAgentRuntimeError::TaskBinding);
+        }
+        let parent: CandidateProposalV1 = load_exact(&self.content, context.parent())?;
+        if parent
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?
+            != context.parent()
+        {
+            return Err(MigrationAgentRuntimeError::ArtifactBinding);
+        }
+        let receipt: cairn_execution::ExecutionReceipt =
+            load_exact(&self.execution_content, context.receipt())?;
+        let diagnostic = CandidateBuildDiagnosticV1 {
+            receipt: context.receipt(),
+            outcome: receipt.outcome(),
+            exit_code: receipt.exit_code(),
+            stdout: read_control_diagnostic_artifact(&self.execution_content, receipt.stdout_id())?,
+            stderr: read_control_diagnostic_artifact(&self.execution_content, receipt.stderr_id())?,
+        };
+        let tools = exposed_native_tools(access, &candidate_revision_native_tools(task.limits)?)?;
+        let model_context = json!({
+            "schema_version": SCHEMA_V1,
+            "candidate_workspace_id": workspace_id,
+            "oracle_contract_id": contract_id,
+            "parent_proposal_id": context.parent(),
+            "build_receipt_id": context.receipt(),
+            "iteration": context.iteration(),
+            "build_attempts_remaining": context.remaining(),
+            "controller_notice": context.notice(),
+            "task_artifacts": task.workspace.bundle().artifacts(),
+            "knowledge_snapshot": {"kind":"empty"},
+        });
+        let projection = archive_role_projection(
+            &mut self.content,
+            CANDIDATE_REVISION_INSTRUCTION,
+            &tools,
+            &model_context,
+            "Revise the implementation the last build refused.".to_owned(),
+        )?;
+        let episode_id = checkpoint.start().episode_id();
+        let model_configuration = ContentId::<AgentResolvedRuntimeModelArtifact>::derive(
+            &self
+                .model
+                .canonical_bytes()
+                .map_err(MigrationAgentRuntimeError::domain)?,
+        )
+        .map_err(MigrationAgentRuntimeError::domain)?;
+        let frozen = FrozenAgentEpisodeDriverV1 {
+            task_id: context.task_id(),
+            episode_id,
+            role: checkpoint.start().role().clone(),
+            selection: self.selection.clone(),
+            budget: self.budget.clone(),
+            native_spec: NativeRequestSpec {
+                wire_model: self.selection.model.clone(),
+                instructions: role_instruction(
+                    CANDIDATE_REVISION_INSTRUCTION,
+                    task.reasoning_decomposition,
+                ),
+                tools: tools.clone(),
+                max_output_tokens: self.max_output_tokens,
+            },
+            user_text: projection.user_text,
+            instruction: projection.instruction,
+            tool_catalog: projection.tool_catalog,
+            history: projection.history,
+            context: projection.context,
+            policy: projection.policy,
+            capability_grant: capability_grant(access, &tools)?,
+        };
+        tracing::info!(
+            target: "cairn.migration.agent-runtime",
+            event = "candidate_revision_step_started",
+            task_id = %context.task_id(),
+            episode_id = %episode_id,
+            step_ordinal = checkpoint.steps_started(),
+            iteration = context.iteration().get(),
+            remaining = context.remaining().get(),
+            has_notice = context.notice().is_some(),
+            "Candidate revision model/tool step started"
+        );
+        let loop_id = checkpoint.start().loop_id();
+        let mut gateway = CandidateRevisionGateway {
+            task_workspace: task.workspace,
+            limits: task.limits,
+            contract: candidate.contract,
+            contract_id,
+            parent_id: context.parent(),
+            parent,
+            diagnostic,
+            notice: context.notice(),
+            remaining: context.remaining(),
+            episode_id,
+            model_configuration,
+            accepted: self.candidate_submissions.remove(&loop_id),
+        };
+        let mut transport = HttpModelTransport::new(&self.model, &self.credential_base)
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        let outcome = drive_agent_episode_step(
+            &mut self.events,
+            &mut self.content,
+            &mut transport,
+            NativeProtocolCodec::from_config(self.model.protocol())
+                .map_err(MigrationAgentRuntimeError::domain)?,
+            &frozen,
+            &mut gateway,
+        )
+        .map_err(MigrationAgentRuntimeError::episode_driver)?;
+        match outcome {
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::Continue => {
+                if let Some(submission) = gateway.accepted {
+                    self.candidate_submissions.insert(loop_id, submission);
+                }
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::Complete(completion) => {
+                let proposal = self.settle_candidate_submission(
+                    gateway.accepted,
+                    completion.reason,
+                    context.task_id(),
+                    episode_id,
+                )?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Complete(proposal),
+                ))
+            }
+            cairn_agent::AgentEpisodeDriverStepOutcomeV1::WorkerRequest(request) => {
+                self.execute_evidence_worker_request(context.task_id(), &request)?;
+                Ok(AgentLoopStepExecutionV1::Observed(
+                    MigrationRoleStepObservationV1::Continue,
+                ))
+            }
+        }
+    }
+
+    /// Turns one finished proposal episode into what the search loop counts.
+    ///
+    /// An episode that ended without submitting is `None`, not an error. The Controller records it
+    /// as a failed attempt and stops only after a run of them, because a reasoning model can spend
+    /// its whole output budget before it ever calls the submit tool.
+    fn settle_candidate_submission(
+        &mut self,
+        accepted: Option<CandidateProposalV1>,
+        reason: cairn_agent::EpisodeCompletionReason,
+        task_id: TaskId,
+        episode_id: cairn_protocol::EpisodeId,
+    ) -> Result<Option<CandidateProposalV1>, MigrationAgentRuntimeError> {
+        let proposal = match resolve_role_submission(accepted, reason, "Candidate proposal") {
+            Ok(RuntimeRoleSubmissionV1::Submitted(proposal)) => proposal,
+            Ok(RuntimeRoleSubmissionV1::Exhausted(_))
+            | Err(MigrationAgentRuntimeError::MissingSubmission(_)) => {
+                tracing::info!(
+                    target: "cairn.migration.agent-runtime",
+                    event = "candidate_episode_submitted_nothing",
+                    task_id = %task_id,
+                    episode_id = %episode_id,
+                    "Candidate episode ended without a proposal"
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let proposal_id = proposal
+            .identity()
+            .map_err(MigrationAgentRuntimeError::domain)?;
+        archive_exact(&mut self.content, proposal_id, &proposal)?;
+        tracing::info!(
+            target: "cairn.migration.agent-runtime",
+            event = "candidate_proposal_submitted",
+            task_id = %task_id,
+            episode_id = %episode_id,
+            proposal_id = %proposal_id,
+            file_count = proposal.submission().files().len(),
+            "Candidate episode produced one exact proposal"
+        );
+        Ok(Some(proposal))
     }
 
     #[allow(
@@ -2750,34 +2946,10 @@ impl
     }
 }
 
-macro_rules! unavailable_role_executor {
-    ($context:ty, $output:ty, $role:literal) => {
-        impl AgentLoopStepExecutor<$context, MigrationRoleStepObservationV1<$output>>
-            for MigrationAgentRuntimeExecutorV1
-        {
-            type Error = MigrationAgentRuntimeError;
-
-            fn execute_step(
-                &mut self,
-                _checkpoint: &AgentLoopCheckpointV1,
-                _context: &$context,
-                _access: &AgentStepAccessV1,
-            ) -> impl Future<
-                Output = Result<
-                    AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<$output>>,
-                    Self::Error,
-                >,
-            > + Send {
-                ready(Err(MigrationAgentRuntimeError::RoleNotImplemented($role)))
-            }
-        }
-    };
-}
-
 impl
     AgentLoopStepExecutor<
         CandidateExplorationAgentContextV1,
-        MigrationRoleStepObservationV1<CandidateProposalV1>,
+        MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
     > for MigrationAgentRuntimeExecutorV1
 {
     type Error = MigrationAgentRuntimeError;
@@ -2789,23 +2961,35 @@ impl
         access: &AgentStepAccessV1,
     ) -> impl Future<
         Output = Result<
-            AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<CandidateProposalV1>>,
+            AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<Option<CandidateProposalV1>>>,
             Self::Error,
         >,
     > + Send {
         ready(self.execute_candidate_exploration(checkpoint, context, access))
     }
 }
-unavailable_role_executor!(
-    CandidateReviewAgentContextV1,
-    ContentId<cairn_migration::CandidateProposalArtifact>,
-    "Candidate Review"
-);
-unavailable_role_executor!(
-    CandidateRevisionAgentContextV1,
-    CandidateProposalV1,
-    "Candidate Revision"
-);
+impl
+    AgentLoopStepExecutor<
+        CandidateRevisionAgentContextV1,
+        MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
+    > for MigrationAgentRuntimeExecutorV1
+{
+    type Error = MigrationAgentRuntimeError;
+
+    fn execute_step(
+        &mut self,
+        checkpoint: &AgentLoopCheckpointV1,
+        context: &CandidateRevisionAgentContextV1,
+        access: &AgentStepAccessV1,
+    ) -> impl Future<
+        Output = Result<
+            AgentLoopStepExecutionV1<MigrationRoleStepObservationV1<Option<CandidateProposalV1>>>,
+            Self::Error,
+        >,
+    > + Send {
+        ready(self.execute_candidate_revision(checkpoint, context, access))
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -3781,7 +3965,6 @@ pub fn migration_tool_registry() -> Result<ToolRegistry, MigrationAgentRuntimeEr
         MigrationAgentToolV1::SubmitOraclePortfolioCoherenceReview,
         MigrationAgentToolV1::ReadAdmittedOracle,
         MigrationAgentToolV1::SubmitCandidate,
-        MigrationAgentToolV1::SubmitCandidateReview,
         MigrationAgentToolV1::ReadCandidateObservation,
         MigrationAgentToolV1::SubmitCandidateRevision,
     ] {
@@ -4341,6 +4524,157 @@ impl ToolGateway for CandidateExplorationGateway {
     }
 }
 
+/// The parent proposal a build refuted, and the bounded diagnostic that refuted it.
+///
+/// The compiler's own words are handed back verbatim. An exit code or a receipt identity says a
+/// build failed; only the diagnostic says what to change, and guessing from the former is how the
+/// last attributed failure invented an API that did not exist.
+struct CandidateBuildDiagnosticV1 {
+    receipt: ContentId<cairn_execution::ExecutionReceiptArtifact>,
+    outcome: cairn_execution::ExecutionOutcome,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+struct CandidateRevisionGateway {
+    task_workspace: SirTaskWorkspace,
+    limits: SirTaskLimits,
+    contract: CandidateOracleContractV1,
+    contract_id: ContentId<cairn_migration::CandidateOracleContractArtifact>,
+    parent: CandidateProposalV1,
+    parent_id: ContentId<cairn_migration::CandidateProposalArtifact>,
+    diagnostic: CandidateBuildDiagnosticV1,
+    notice: Option<cairn_migration::CandidateSearchNoticeV1>,
+    remaining: cairn_migration::CandidateIterationsRemaining,
+    episode_id: cairn_protocol::EpisodeId,
+    model_configuration: ContentId<AgentResolvedRuntimeModelArtifact>,
+    accepted: Option<CandidateProposalV1>,
+}
+
+impl ToolGateway for CandidateRevisionGateway {
+    fn invoke(
+        &mut self,
+        operation: &PreparedToolOperation,
+    ) -> Result<CanonicalToolResult, ToolGatewayError> {
+        match operation.tool().as_str() {
+            "migration-read-task-artifact" => {
+                read_task_artifact(&self.task_workspace, self.limits, operation)
+            }
+            "migration-read-admitted-oracle" => {
+                validate_operation(
+                    operation,
+                    "migration-read-admitted-oracle",
+                    ToolEffectClass::ReadOnly,
+                )?;
+                let request: CurrentSchemaRequestV1 = decode_arguments(operation.argument_bytes())?;
+                if request.schema_version != SCHEMA_V1 {
+                    return rejected("admitted Oracle read requires current V1");
+                }
+                CanonicalToolResult::from_value(&json!({
+                    "schema_version": SCHEMA_V1,
+                    "oracle_contract_id": self.contract_id,
+                    "admitted_claims": self.contract.admitted_claims(),
+                }))
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            }
+            "migration-read-candidate-observation" => {
+                validate_operation(
+                    operation,
+                    "migration-read-candidate-observation",
+                    ToolEffectClass::ReadOnly,
+                )?;
+                let request: CurrentSchemaRequestV1 = decode_arguments(operation.argument_bytes())?;
+                if request.schema_version != SCHEMA_V1 {
+                    return rejected("candidate observation read requires current V1");
+                }
+                CanonicalToolResult::from_value(&json!({
+                    "schema_version": SCHEMA_V1,
+                    "parent_proposal_id": self.parent_id,
+                    "parent_files": self.parent.submission().files(),
+                    "parent_primary_source": self.parent.submission().primary_source(),
+                    "build_receipt_id": self.diagnostic.receipt,
+                    "build_outcome": format!("{:?}", self.diagnostic.outcome),
+                    "build_exit_code": self.diagnostic.exit_code,
+                    "build_stdout": self.diagnostic.stdout,
+                    "build_stderr": self.diagnostic.stderr,
+                    "build_attempts_remaining": self.remaining,
+                    "controller_notice": self.notice,
+                }))
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            }
+            "migration-submit-candidate-revision" => {
+                validate_operation(
+                    operation,
+                    "migration-submit-candidate-revision",
+                    ToolEffectClass::Pure,
+                )?;
+                let submission: CandidateProposalSubmissionV1 =
+                    decode_arguments(operation.argument_bytes())?;
+                let proposal = CandidateProposalV1::new(
+                    self.contract_id,
+                    self.episode_id,
+                    self.model_configuration,
+                    submission,
+                )
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                if self
+                    .accepted
+                    .as_ref()
+                    .is_some_and(|accepted| accepted != &proposal)
+                {
+                    return rejected("candidate revision was already submitted differently");
+                }
+                let proposal_id = proposal
+                    .identity()
+                    .map_err(|error| ToolGatewayError::Rejected(error.to_string()))?;
+                self.accepted = Some(proposal);
+                CanonicalToolResult::from_value(&json!({
+                    "schema_version": SCHEMA_V1,
+                    "proposal_id": proposal_id,
+                }))
+                .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
+            }
+            _ => Err(ToolGatewayError::NotStarted(
+                "operation is outside the Candidate revision role grant".to_owned(),
+            )),
+        }
+    }
+}
+
+fn candidate_revision_native_tools(
+    limits: SirTaskLimits,
+) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
+    let mut tools = candidate_exploration_native_tools(limits)?;
+    tools.truncate(2);
+    tools.push(NativeToolDefinition {
+        name: MigrationAgentToolV1::ReadCandidateObservation
+            .tool_name()
+            .map_err(MigrationAgentRuntimeError::domain)?,
+        description:
+            "Read the exact previous proposal and the build that refused it, including the compiler's own bounded stdout and stderr, and how many build attempts remain."
+                .to_owned(),
+        input_schema: json!({
+            "type":"object",
+            "properties":{"schema_version":{"type":"integer","const":1}},
+            "required":["schema_version"],
+            "additionalProperties":false
+        }),
+        strict: true,
+    });
+    tools.push(NativeToolDefinition {
+        name: MigrationAgentToolV1::SubmitCandidateRevision
+            .tool_name()
+            .map_err(MigrationAgentRuntimeError::domain)?,
+        description:
+            "Submit the complete revised implementation: every source file the build needs, not only the ones you changed."
+                .to_owned(),
+        input_schema: candidate_submission_schema(),
+        strict: true,
+    });
+    Ok(tools)
+}
+
 fn candidate_exploration_native_tools(
     limits: SirTaskLimits,
 ) -> Result<Vec<NativeToolDefinition>, MigrationAgentRuntimeError> {
@@ -4367,31 +4701,40 @@ fn candidate_exploration_native_tools(
         description:
             "Submit one complete implementation: every source file the build needs, which file holds the kernel entry point, and the assumptions you could not verify."
                 .to_owned(),
-        input_schema: json!({
-            "type":"object",
-            "properties":{
-                "schema_version":{"type":"integer","const":1},
-                "files":{
-                    "type":"array","minItems":1,"maxItems":32,
-                    "items":{
-                        "type":"object",
-                        "properties":{
-                            "path":{"type":"string","minLength":1,"maxLength":512,"description":"Relative path inside the candidate source tree. No absolute path and no parent-directory segment."},
-                            "source":{"type":"string","minLength":1,"maxLength":262_144}
-                        },
-                        "required":["path","source"],
-                        "additionalProperties":false
-                    }
-                },
-                "primary_source":{"type":"string","minLength":1,"description":"The path, among files, that holds the kernel entry point."},
-                "explanation":{"type":"string","minLength":1,"maxLength":16384,"description":"What this implementation does and every assumption you could not verify from the task artifacts or the admitted claims."}
-            },
-            "required":["schema_version","files","primary_source","explanation"],
-            "additionalProperties":false
-        }),
+        input_schema: candidate_submission_schema(),
         strict: true,
     });
     Ok(tools)
+}
+
+/// The one submission shape both proposal roles offer.
+///
+/// A revision replaces the whole source tree rather than patching it, so the two roles describe
+/// the same object; letting them drift would mean the model is shown one contract and judged by
+/// another.
+fn candidate_submission_schema() -> Value {
+    json!({
+        "type":"object",
+        "properties":{
+            "schema_version":{"type":"integer","const":1},
+            "files":{
+                "type":"array","minItems":1,"maxItems":32,
+                "items":{
+                    "type":"object",
+                    "properties":{
+                        "path":{"type":"string","minLength":1,"maxLength":512,"description":"Relative path inside the candidate source tree. No absolute path and no parent-directory segment."},
+                        "source":{"type":"string","minLength":1,"maxLength":262_144}
+                    },
+                    "required":["path","source"],
+                    "additionalProperties":false
+                }
+            },
+            "primary_source":{"type":"string","minLength":1,"description":"The path, among files, that holds the kernel entry point."},
+            "explanation":{"type":"string","minLength":1,"maxLength":16384,"description":"What this implementation does and every assumption you could not verify from the task artifacts or the admitted claims."}
+        },
+        "required":["schema_version","files","primary_source","explanation"],
+        "additionalProperties":false
+    })
 }
 
 fn read_task_artifact_native_tool(
@@ -4944,6 +5287,18 @@ fn put_json<T: ContentType>(
         .put::<T>(&mut Cursor::new(bytes))
         .map_err(MigrationAgentRuntimeError::domain)?
         .content_id)
+}
+
+/// Loads one exact artifact body by its content identity.
+fn load_exact<T: ContentType, V: DeserializeOwned>(
+    content: &SqliteContentStore,
+    identity: ContentId<T>,
+) -> Result<V, MigrationAgentRuntimeError> {
+    let mut bytes = Vec::new();
+    content
+        .write_to(&identity, &mut bytes)
+        .map_err(MigrationAgentRuntimeError::domain)?;
+    cairn_codec::from_slice(&bytes).map_err(MigrationAgentRuntimeError::domain)
 }
 
 fn archive_exact<T: ContentType, V: Serialize>(

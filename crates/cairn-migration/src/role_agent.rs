@@ -9,16 +9,15 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    CandidateAdmissionEvidenceArtifact, CandidateOracleContractArtifact, CandidateProposalArtifact,
-    CandidateProposalV1, CandidateWorkspaceArtifact, IntentHypothesisSetProposalV1,
-    IntentRecoveryInputArtifact, MigrationIntentContractArtifact, OracleAdmissionOutcomeArtifact,
-    OracleDimensionArtifact, OracleDimensionItemSetProposalArtifact,
-    OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewArtifact,
-    OracleDimensionItemSetReviewV1, OracleItemArtifact, OracleItemDraftArtifact, OracleItemDraftV1,
-    OracleItemReviewArtifact, OracleItemReviewV1, OraclePortfolioCoherenceReviewArtifact,
-    OraclePortfolioCoherenceReviewV1, OraclePortfolioProposalArtifact, OraclePortfolioProposalV1,
-    OracleRevisionRequestArtifact, OracleWholePortfolioProposalAuthorityArtifact,
-    OracleWorkspaceArtifact, SirTaskBundleArtifact,
+    CandidateOracleContractArtifact, CandidateProposalArtifact, CandidateProposalV1,
+    CandidateWorkspaceArtifact, IntentHypothesisSetProposalV1, IntentRecoveryInputArtifact,
+    MigrationIntentContractArtifact, OracleAdmissionOutcomeArtifact, OracleDimensionArtifact,
+    OracleDimensionItemSetProposalArtifact, OracleDimensionItemSetProposalV1,
+    OracleDimensionItemSetReviewArtifact, OracleDimensionItemSetReviewV1, OracleItemArtifact,
+    OracleItemDraftArtifact, OracleItemDraftV1, OracleItemReviewArtifact, OracleItemReviewV1,
+    OraclePortfolioCoherenceReviewArtifact, OraclePortfolioCoherenceReviewV1,
+    OraclePortfolioProposalArtifact, OraclePortfolioProposalV1, OracleRevisionRequestArtifact,
+    OracleWholePortfolioProposalAuthorityArtifact, OracleWorkspaceArtifact, SirTaskBundleArtifact,
 };
 
 const HOOK_VERSION: &str = "migration-role-hooks-v1";
@@ -45,7 +44,6 @@ pub enum MigrationAgentToolV1 {
     SubmitOraclePortfolioCoherenceReview,
     ReadAdmittedOracle,
     SubmitCandidate,
-    SubmitCandidateReview,
     ReadCandidateObservation,
     SubmitCandidateRevision,
 }
@@ -80,7 +78,6 @@ impl MigrationAgentToolV1 {
             }
             Self::ReadAdmittedOracle => "migration-read-admitted-oracle",
             Self::SubmitCandidate => "migration-submit-candidate",
-            Self::SubmitCandidateReview => "migration-submit-candidate-review",
             Self::ReadCandidateObservation => "migration-read-candidate-observation",
             Self::SubmitCandidateRevision => "migration-submit-candidate-revision",
         })
@@ -198,15 +195,18 @@ role_context!(CandidateExplorationAgentContextV1 {
     admitted_oracle: ContentId<OracleAdmissionOutcomeArtifact>,
     oracle_contract: ContentId<CandidateOracleContractArtifact>,
     candidate_workspace: ContentId<CandidateWorkspaceArtifact>,
-});
-role_context!(CandidateReviewAgentContextV1 {
-    oracle_contract: ContentId<CandidateOracleContractArtifact>,
-    proposal: ContentId<CandidateProposalArtifact>,
+    iteration: crate::CandidateIterationOrdinal,
+    remaining: crate::CandidateIterationsRemaining,
+    notice: Option<crate::CandidateSearchNoticeV1>,
 });
 role_context!(CandidateRevisionAgentContextV1 {
     oracle_contract: ContentId<CandidateOracleContractArtifact>,
-    proposal: ContentId<CandidateProposalArtifact>,
-    observation: ContentId<CandidateAdmissionEvidenceArtifact>,
+    candidate_workspace: ContentId<CandidateWorkspaceArtifact>,
+    parent: ContentId<CandidateProposalArtifact>,
+    receipt: ContentId<cairn_execution::ExecutionReceiptArtifact>,
+    iteration: crate::CandidateIterationOrdinal,
+    remaining: crate::CandidateIterationsRemaining,
+    notice: Option<crate::CandidateSearchNoticeV1>,
 });
 
 /// Typed observation returned by a durable role step to its product hook.
@@ -485,7 +485,7 @@ role_hooks!(
 role_hooks!(
     CandidateExplorationRoleHooksV1,
     context = CandidateExplorationAgentContextV1,
-    output = CandidateProposalV1,
+    output = Option<CandidateProposalV1>,
     role = "migration-candidate-explorer",
     profile = "migration-candidate-exploration-hooks",
     tools = [
@@ -495,23 +495,14 @@ role_hooks!(
     ]
 );
 role_hooks!(
-    CandidateReviewRoleHooksV1,
-    context = CandidateReviewAgentContextV1,
-    output = ContentId<CandidateProposalArtifact>,
-    role = "migration-candidate-reviewer",
-    profile = "migration-candidate-review-hooks",
-    tools = [
-        MigrationAgentToolV1::ReadAdmittedOracle,
-        MigrationAgentToolV1::SubmitCandidateReview,
-    ]
-);
-role_hooks!(
     CandidateRevisionRoleHooksV1,
     context = CandidateRevisionAgentContextV1,
-    output = CandidateProposalV1,
+    output = Option<CandidateProposalV1>,
     role = "migration-candidate-reviser",
     profile = "migration-candidate-revision-hooks",
     tools = [
+        MigrationAgentToolV1::ReadTaskArtifact,
+        MigrationAgentToolV1::ReadAdmittedOracle,
         MigrationAgentToolV1::ReadCandidateObservation,
         MigrationAgentToolV1::SubmitCandidateRevision,
     ]
@@ -544,23 +535,28 @@ mod tests {
             .expect("contract identity");
         let proposal =
             ContentId::<CandidateProposalArtifact>::derive(b"proposal").expect("proposal identity");
-        let first = CandidateRevisionAgentContextV1::new(
-            task_id,
-            contract,
-            proposal,
-            ContentId::<CandidateAdmissionEvidenceArtifact>::derive(b"observation-one")
-                .expect("observation identity"),
-        )
-        .expect("context");
-        let second = CandidateRevisionAgentContextV1::new(
-            task_id,
-            contract,
-            proposal,
-            ContentId::<CandidateAdmissionEvidenceArtifact>::derive(b"observation-two")
-                .expect("observation identity"),
-        )
-        .expect("context");
-        assert_ne!(first.context_id(), second.context_id());
+        let workspace = ContentId::<CandidateWorkspaceArtifact>::derive(b"workspace")
+            .expect("workspace identity");
+        let iteration = crate::CandidateIterationOrdinal::default();
+        let remaining = crate::CandidateIterationsRemaining::default();
+        let revision = |label: &[u8]| {
+            CandidateRevisionAgentContextV1::new(
+                task_id,
+                contract,
+                workspace,
+                proposal,
+                ContentId::<cairn_execution::ExecutionReceiptArtifact>::derive(label)
+                    .expect("receipt identity"),
+                iteration,
+                remaining,
+                None,
+            )
+            .expect("context")
+        };
+        assert_ne!(
+            revision(b"receipt-one").context_id(),
+            revision(b"receipt-two").context_id()
+        );
     }
 
     #[test]

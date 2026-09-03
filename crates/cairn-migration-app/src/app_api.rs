@@ -11,8 +11,8 @@ use std::{
 
 use cairn_agent::AgentLoopCheckpointV1;
 use cairn_migration::{
-    CandidateAdmissionAttemptV1, CandidateAdmissionEvidenceV1, CandidateOracleContractV1,
-    CandidateProposalV1, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
+    CandidateOracleContractV1, CandidateProposalArtifact, CandidateProposalV1,
+    CandidateSearchLoopV1, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
     IntentRecoveryInputV1, OracleAdmissionAttemptV1, OracleAdmissionEvidenceV1,
     OracleCoveragePolicyV1, OracleDimensionV1, OraclePortfolioProposalV1, OracleStrategyCatalogV1,
     OracleWorkspaceV1, PreparedIntentAdmissionV1, ReasoningDecompositionPolicyV1,
@@ -20,7 +20,9 @@ use cairn_migration::{
     UserIntentAuthorityGrantV1, UserIntentDecisionResponseV1, UserIntentDecisionV1,
     derive_oracle_claims, derive_oracle_dimensions,
 };
-use cairn_protocol::{BlobDigest, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
+use cairn_protocol::{
+    BlobDigest, CommandId, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId,
+};
 use cairn_sdk::{
     AppApiErrorCodeV1, CairnRequestV1, CairnResponseV1, IntentReviewRequestResourceV1,
     IntentReviewResourceV1, TaskArchiveManifestV1, TaskAttentionV1, TaskPhaseV1,
@@ -28,6 +30,7 @@ use cairn_sdk::{
     write_frame,
 };
 use cairn_server::{ApplicationModule, ApplicationName};
+use cairn_store_sqlite::SqliteEventStore;
 use thiserror::Error;
 use tokio::{
     net::{UnixListener, UnixStream},
@@ -35,7 +38,7 @@ use tokio::{
 };
 
 use crate::{
-    AdmittedIntentV1, AdmittedOracleV1, AuthorizedCandidateBuildV1, AuthorizedIntentDecisionV1,
+    AdmittedIntentV1, AuthorizedCandidateBuildV1, AuthorizedIntentDecisionV1,
     CandidateBuildRunnerV1, CudaMigrationApplication, CudaMigrationProductServices,
     FrozenMigrationTaskV1, MigrationAgentRuntimeExecutorV1, MigrationProductServiceError,
     MigrationRuntimeMaterialsV1, MigrationTaskRequest, MigrationTerminalOutcomeV1,
@@ -364,6 +367,8 @@ pub struct MigrationProductServicesV1 {
     oracle_controls: OracleControlRunnerV1,
     candidate_build: Option<CandidateBuildRunnerV1>,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
+    server: cairn_server::ServerConfig,
+    search_policy: cairn_migration::CandidateSearchPolicyV1,
 }
 
 /// CUDA migration App API and workflow composed as one product module above the generic host.
@@ -450,6 +455,8 @@ pub fn migration_product_boundary(
     oracle_controls: OracleControlRunnerV1,
     candidate_build: Option<CandidateBuildRunnerV1>,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
+    server: cairn_server::ServerConfig,
+    search_policy: cairn_migration::CandidateSearchPolicyV1,
     inbox_capacity: usize,
 ) -> Result<
     (
@@ -482,6 +489,8 @@ pub fn migration_product_boundary(
             oracle_controls,
             candidate_build,
             reasoning_decomposition,
+            server,
+            search_policy,
         },
         receiver,
     ))
@@ -868,11 +877,7 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
     async fn authorize_candidate_build(
         &mut self,
         _task: &FrozenMigrationTaskV1,
-        _intent: &AdmittedIntentV1,
-        _oracle: &AdmittedOracleV1,
-        _contract: &CandidateOracleContractV1,
         candidate: &CandidateProposalV1,
-        _attempt: &CandidateAdmissionAttemptV1,
     ) -> Result<Self::CandidateBuildAuthority, Self::Error> {
         self.candidate_build
             .as_ref()
@@ -881,11 +886,11 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             .map_err(MigrationAppApiError::internal)
     }
 
-    async fn observe_candidate_on_worker(
+    async fn observe_candidate_build(
         &mut self,
         authority: Self::CandidateBuildAuthority,
-        _attempt: &CandidateAdmissionAttemptV1,
-    ) -> Result<CandidateAdmissionEvidenceV1, Self::Error> {
+    ) -> Result<cairn_migration::CandidateBuildOutcomeV1, Self::Error> {
+        let proposal = authority.proposal();
         let observation = self
             .candidate_build
             .as_ref()
@@ -905,7 +910,110 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             compiled = observation.compiled(),
             "candidate build reached a terminal Worker receipt"
         );
-        Err(MigrationAppApiError::CandidateMechanismExecutionUnavailable)
+        // The receipt says whether the exact toolchain accepted the exact artifact, which is a
+        // search signal. It is deliberately not admission evidence: nothing here judged meaning.
+        Ok(cairn_migration::CandidateBuildOutcomeV1::new(
+            proposal,
+            observation.receipt_id(),
+            observation.compiled(),
+        ))
+    }
+
+    async fn open_candidate_search(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        let search = candidate_search_loop(task.task_id())?;
+        let policy = self.search_policy;
+        let observed_at = observed_now()?;
+        let database = self.server.event_database().clone();
+        tokio::task::block_in_place(move || {
+            let mut events =
+                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
+            // Recovering before opening is what makes this idempotent. A loop that already exists
+            // keeps its frozen policy and its position instead of being reopened under new ones.
+            match cairn_migration::recover_candidate_search(&events, &search)
+                .map_err(MigrationAppApiError::internal)?
+            {
+                cairn_migration::CandidateSearchStateV1::NotFound => {
+                    cairn_migration::open_candidate_search(
+                        &mut events,
+                        &search,
+                        policy,
+                        &CommandId::new(),
+                        observed_at,
+                    )
+                    .map_err(MigrationAppApiError::internal)
+                }
+                state => Ok(state),
+            }
+        })
+    }
+
+    async fn record_candidate_proposal(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        proposal: ContentId<CandidateProposalArtifact>,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        let search = candidate_search_loop(task.task_id())?;
+        let observed_at = observed_now()?;
+        let database = self.server.event_database().clone();
+        tokio::task::block_in_place(move || {
+            let mut events =
+                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
+            cairn_migration::record_candidate_proposal(
+                &mut events,
+                &search,
+                proposal,
+                &CommandId::new(),
+                observed_at,
+            )
+            .map_err(MigrationAppApiError::internal)
+        })
+    }
+
+    async fn record_missing_candidate_submission(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        let search = candidate_search_loop(task.task_id())?;
+        let observed_at = observed_now()?;
+        let database = self.server.event_database().clone();
+        tokio::task::block_in_place(move || {
+            let mut events =
+                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
+            cairn_migration::record_missing_submission(
+                &mut events,
+                &search,
+                &CommandId::new(),
+                observed_at,
+            )
+            .map_err(MigrationAppApiError::internal)
+        })
+    }
+
+    async fn record_candidate_build_observation(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        outcome: cairn_migration::CandidateBuildOutcomeV1,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        let search = candidate_search_loop(task.task_id())?;
+        let observed_at = observed_now()?;
+        let database = self.server.event_database().clone();
+        tokio::task::block_in_place(move || {
+            let mut events =
+                SqliteEventStore::open(&database).map_err(MigrationAppApiError::internal)?;
+            cairn_migration::record_candidate_build_observation(
+                &mut events,
+                &search,
+                outcome.proposal(),
+                outcome.receipt(),
+                outcome.compiled(),
+                &CommandId::new(),
+                observed_at,
+            )
+            .map_err(MigrationAppApiError::internal)
+        })
     }
 
     async fn record_terminal_outcome(
@@ -1311,6 +1419,11 @@ fn prepare_socket(path: &Path) -> Result<(), MigrationAppApiError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(MigrationAppApiError::io(error)),
     }
+}
+
+/// The task-owned aggregate the candidate search loop records into.
+fn candidate_search_loop(task_id: TaskId) -> Result<CandidateSearchLoopV1, MigrationAppApiError> {
+    CandidateSearchLoopV1::new(task_id).map_err(MigrationAppApiError::internal)
 }
 
 fn observed_now() -> Result<ObservedAtUnixMillis, MigrationAppApiError> {

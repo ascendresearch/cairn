@@ -192,6 +192,7 @@ impl CandidateBuildRunnerV1 {
             .map_err(domain)?
             .content_id;
         Ok(AuthorizedCandidateBuildV1 {
+            proposal: proposal_id,
             job_id,
             request,
             contract,
@@ -298,12 +299,19 @@ impl CandidateBuildRunnerV1 {
 /// Frozen Candidate build authority: the exact contract a Worker will be asked to execute.
 #[derive(Clone, Debug)]
 pub struct AuthorizedCandidateBuildV1 {
+    proposal: ContentId<CandidateProposalArtifact>,
     job_id: JobId,
     request: ContentId<CandidateBuildRequestArtifact>,
     contract: cairn_execution::JobContract,
 }
 
 impl AuthorizedCandidateBuildV1 {
+    /// Returns the exact proposal this build was authorized for.
+    #[must_use]
+    pub const fn proposal(&self) -> ContentId<CandidateProposalArtifact> {
+        self.proposal
+    }
+
     /// Returns the frozen build request identity.
     #[must_use]
     pub const fn request(&self) -> ContentId<CandidateBuildRequestArtifact> {

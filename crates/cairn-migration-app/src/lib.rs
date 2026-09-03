@@ -30,24 +30,22 @@ use cairn_agent::{
     TransportFailureClass, initialize_agent_loop, run_agent_loop,
 };
 use cairn_migration::{
-    CandidateAdmissionAttemptV1, CandidateAdmissionDispositionV1,
-    CandidateAdmissionEvidenceArtifact, CandidateAdmissionEvidenceV1,
-    CandidateAdmissionOutcomeArtifact, CandidateAdmissionOutcomeV1, CandidateClaimStatusV1,
+    CandidateAdmissionOutcomeArtifact, CandidateAdmissionOutcomeV1,
     CandidateExplorationAgentContextV1, CandidateExplorationRoleHooksV1,
     CandidateMechanismCatalogV1, CandidateOracleContractV1, CandidateProposalArtifact,
-    CandidateProposalV1, CandidateReviewAgentContextV1, CandidateReviewRoleHooksV1,
-    CandidateRevisionAgentContextV1, CandidateRevisionRoleHooksV1, CandidateWorkspaceV1,
-    CudaMigrationWorkflow, IntentAdmissionPublicOutcomeArtifact, IntentDecisionMaterialV1,
-    IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1, IntentRecoveryInputV1,
-    MigrationRoleHooksV1, MigrationRoleStepObservationV1, OracleAcceptedItemV1,
-    OracleAdmissionAttemptV1, OracleAdmissionDispositionV1, OracleAdmissionEvidenceV1,
-    OracleAdmissionMechanismCatalogV1, OracleAdmissionOutcomeArtifact, OracleAdmissionOutcomeV1,
-    OracleAdmissionPolicyV1, OracleClaimAdmissionStatusV1, OracleCoherentPortfolioV1,
-    OracleControlReconciliationRequestV1, OracleDimensionItemDiscoveryAgentContextV1,
-    OracleDimensionItemDiscoveryRoleHooksV1, OracleDimensionItemSetProposalV1,
-    OracleDimensionItemSetReviewDecisionV1, OracleDimensionItemSetReviewV1,
-    OracleDimensionItemSetReviewerAgentContextV1, OracleDimensionItemSetReviewerRoleHooksV1,
-    OracleDimensionV1, OracleItemDeveloperAgentContextV1, OracleItemDeveloperRoleHooksV1,
+    CandidateProposalV1, CandidateRevisionAgentContextV1, CandidateRevisionRoleHooksV1,
+    CandidateWorkspaceV1, CudaMigrationWorkflow, IntentAdmissionPublicOutcomeArtifact,
+    IntentDecisionMaterialV1, IntentDecisionRequestBatchV1, IntentHypothesisSetProposalV1,
+    IntentRecoveryInputV1, MigrationRoleHooksV1, MigrationRoleStepObservationV1,
+    OracleAcceptedItemV1, OracleAdmissionAttemptV1, OracleAdmissionDispositionV1,
+    OracleAdmissionEvidenceV1, OracleAdmissionMechanismCatalogV1, OracleAdmissionOutcomeArtifact,
+    OracleAdmissionOutcomeV1, OracleAdmissionPolicyV1, OracleClaimAdmissionStatusV1,
+    OracleCoherentPortfolioV1, OracleControlReconciliationRequestV1,
+    OracleDimensionItemDiscoveryAgentContextV1, OracleDimensionItemDiscoveryRoleHooksV1,
+    OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewDecisionV1,
+    OracleDimensionItemSetReviewV1, OracleDimensionItemSetReviewerAgentContextV1,
+    OracleDimensionItemSetReviewerRoleHooksV1, OracleDimensionV1,
+    OracleItemDeveloperAgentContextV1, OracleItemDeveloperRoleHooksV1,
     OracleItemDevelopmentLineageV1, OracleItemDiscoveryLineageV1, OracleItemDraftV1,
     OracleItemReviewDecisionV1, OracleItemReviewV1, OracleItemReviewerAgentContextV1,
     OracleItemReviewerRoleHooksV1, OracleItemV1, OraclePortfolioCoherenceDecisionV1,
@@ -58,8 +56,7 @@ use cairn_migration::{
     OracleWholePortfolioRoleHooksV1, OracleWorkspaceV1, PreparedIntentAdmissionV1,
     ReasoningDecompositionPolicyV1, SirAgentContextV1, SirRoleHooksV1, SirTaskWorkspace,
     UserIntentAuthorityGrantV1, UserIntentDecisionRequestV1, UserIntentDecisionV1,
-    derive_user_intent_decision_requests, promote_user_intent, recompute_candidate_admission,
-    recompute_oracle_admission,
+    derive_user_intent_decision_requests, promote_user_intent, recompute_oracle_admission,
 };
 use cairn_protocol::{AgentLoopId, ContentId, ContentType, TaskId};
 use cairn_server::{ApplicationModule, ApplicationName};
@@ -227,6 +224,20 @@ pub trait MigrationRoleExecutionError: Display {
 impl MigrationRoleExecutionError for std::convert::Infallible {
     fn model_dispatch_failure_class(&self) -> Option<TransportFailureClass> {
         match *self {}
+    }
+}
+
+/// An episode that reached its budget without submitting is a failed attempt, not a finished one.
+///
+/// The Controller counts it so the loop can stop after a run of them, rather than reading the
+/// first one as an answer. Every other failure stays a failure.
+fn proposal_or_missing_submission(
+    outcome: Result<Option<CandidateProposalV1>, MigrationApplicationError>,
+) -> Result<Option<CandidateProposalV1>, MigrationApplicationError> {
+    match outcome {
+        Ok(proposal) => Ok(proposal),
+        Err(MigrationApplicationError::AgentLoopExhausted(_)) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -445,54 +456,6 @@ impl OracleAdmissionReadyDraftV1 {
     }
 }
 
-/// Exact qualified mechanisms, attempt, and worker receipts for Candidate Admission.
-pub struct CandidateAdmissionMaterialsV1 {
-    mechanisms: CandidateMechanismCatalogV1,
-    attempt: CandidateAdmissionAttemptV1,
-    evidence: CandidateAdmissionEvidenceV1,
-}
-
-impl CandidateAdmissionMaterialsV1 {
-    #[must_use]
-    pub const fn new(
-        mechanisms: CandidateMechanismCatalogV1,
-        attempt: CandidateAdmissionAttemptV1,
-        evidence: CandidateAdmissionEvidenceV1,
-    ) -> Self {
-        Self {
-            mechanisms,
-            attempt,
-            evidence,
-        }
-    }
-}
-
-/// Product build authority paired with the exact Candidate Admission attempt it must observe.
-pub struct CandidateBuildAuthorityV1<A> {
-    authority: A,
-    attempt: CandidateAdmissionAttemptV1,
-}
-
-/// Exact Candidate observation lineage; diagnostics cannot substitute for this type.
-///
-/// ```compile_fail
-/// use cairn_migration::CandidateAdmissionOutcomeArtifact;
-/// use cairn_migration_app::CandidateObservationLineageV1;
-/// use cairn_protocol::ContentId;
-/// fn revise(_: CandidateObservationLineageV1) {}
-/// let outcome = ContentId::<CandidateAdmissionOutcomeArtifact>::derive(b"outcome").unwrap();
-/// revise(outcome);
-/// ```
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateObservationLineageV1(ContentId<CandidateAdmissionEvidenceArtifact>);
-
-impl CandidateObservationLineageV1 {
-    #[must_use]
-    pub const fn evidence(self) -> ContentId<CandidateAdmissionEvidenceArtifact> {
-        self.0
-    }
-}
-
 /// Candidate source tree admitted against exact Oracle authority and worker observations.
 pub struct AdmittedCandidateV1 {
     proposal: CandidateProposalV1,
@@ -529,6 +492,16 @@ pub enum MigrationTerminalOutcomeV1 {
         oracle: ContentId<OracleAdmissionOutcomeArtifact>,
         candidate: ContentId<CandidateAdmissionOutcomeArtifact>,
     },
+    /// The search ran out of authorized attempts without a candidate that compiles.
+    ///
+    /// This is an honest non-success, not a rejection: nothing here judged what the code means.
+    CandidateSearchStopped {
+        schema_version: u16,
+        task_id: TaskId,
+        intent: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+        oracle: ContentId<OracleAdmissionOutcomeArtifact>,
+        terminal: cairn_migration::CandidateSearchTerminalV1,
+    },
 }
 
 impl MigrationTerminalOutcomeV1 {
@@ -547,24 +520,42 @@ impl MigrationTerminalOutcomeV1 {
         }
     }
 
+    const fn after_stopped_search(
+        task_id: TaskId,
+        intent: ContentId<IntentAdmissionPublicOutcomeArtifact>,
+        oracle: ContentId<OracleAdmissionOutcomeArtifact>,
+        terminal: cairn_migration::CandidateSearchTerminalV1,
+    ) -> Self {
+        Self::CandidateSearchStopped {
+            schema_version: 1,
+            task_id,
+            intent,
+            oracle,
+            terminal,
+        }
+    }
+
     #[must_use]
     pub const fn task_id(&self) -> TaskId {
         match self {
-            Self::CandidateAccepted { task_id, .. } => *task_id,
+            Self::CandidateAccepted { task_id, .. }
+            | Self::CandidateSearchStopped { task_id, .. } => *task_id,
         }
     }
 
     #[must_use]
     pub const fn intent(&self) -> ContentId<IntentAdmissionPublicOutcomeArtifact> {
         match self {
-            Self::CandidateAccepted { intent, .. } => *intent,
+            Self::CandidateAccepted { intent, .. }
+            | Self::CandidateSearchStopped { intent, .. } => *intent,
         }
     }
 
     #[must_use]
     pub const fn oracle(&self) -> ContentId<OracleAdmissionOutcomeArtifact> {
         match self {
-            Self::CandidateAccepted { oracle, .. } => *oracle,
+            Self::CandidateAccepted { oracle, .. }
+            | Self::CandidateSearchStopped { oracle, .. } => *oracle,
         }
     }
 
@@ -665,6 +656,33 @@ pub trait CudaMigrationProductServices: Send + 'static {
         attempt: &OracleAdmissionAttemptV1,
     ) -> impl Future<Output = Result<OracleAdmissionEvidenceV1, Self::Error>> + Send;
 
+    fn open_candidate_search(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+    ) -> impl Future<Output = Result<cairn_migration::CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn record_candidate_proposal(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        proposal: ContentId<CandidateProposalArtifact>,
+    ) -> impl Future<Output = Result<cairn_migration::CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn record_missing_candidate_submission(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+    ) -> impl Future<Output = Result<cairn_migration::CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn record_candidate_build_observation(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        outcome: cairn_migration::CandidateBuildOutcomeV1,
+    ) -> impl Future<Output = Result<cairn_migration::CandidateSearchStateV1, Self::Error>> + Send;
+
+    fn observe_candidate_build(
+        &mut self,
+        authority: Self::CandidateBuildAuthority,
+    ) -> impl Future<Output = Result<cairn_migration::CandidateBuildOutcomeV1, Self::Error>> + Send;
+
     fn register_candidate_authority(
         &mut self,
         task: &FrozenMigrationTaskV1,
@@ -675,18 +693,8 @@ pub trait CudaMigrationProductServices: Send + 'static {
     fn authorize_candidate_build(
         &mut self,
         task: &FrozenMigrationTaskV1,
-        intent: &AdmittedIntentV1,
-        oracle: &AdmittedOracleV1,
-        contract: &CandidateOracleContractV1,
         candidate: &CandidateProposalV1,
-        attempt: &CandidateAdmissionAttemptV1,
     ) -> impl Future<Output = Result<Self::CandidateBuildAuthority, Self::Error>> + Send;
-
-    fn observe_candidate_on_worker(
-        &mut self,
-        authority: Self::CandidateBuildAuthority,
-        attempt: &CandidateAdmissionAttemptV1,
-    ) -> impl Future<Output = Result<CandidateAdmissionEvidenceV1, Self::Error>> + Send;
 
     fn record_terminal_outcome(
         &mut self,
@@ -713,7 +721,6 @@ where
     initialized_loops: BTreeMap<AgentLoopId, (TaskId, InitializedAgentLoopV1)>,
     task_reasoning: BTreeMap<TaskId, ReasoningDecompositionPolicyV1>,
     oracle_workspace: Option<OracleWorkspaceV1>,
-    candidate_contract: Option<CandidateOracleContractV1>,
 }
 
 impl<S, E> CudaMigrationApplication<S, E>
@@ -750,7 +757,6 @@ where
             initialized_loops: BTreeMap::new(),
             task_reasoning: BTreeMap::new(),
             oracle_workspace: None,
-            candidate_contract: None,
         }
     }
 
@@ -954,12 +960,25 @@ where
             ))
     }
 
-    fn candidate_contract(&self) -> Result<&CandidateOracleContractV1, MigrationApplicationError> {
-        self.candidate_contract
-            .as_ref()
-            .ok_or(MigrationApplicationError::MissingWorkflowState(
-                "Candidate Oracle contract",
-            ))
+    /// Derives and registers the frozen Candidate authority for this task.
+    ///
+    /// Both values are pure functions of the admitted Oracle, so deriving them once per iteration
+    /// cannot drift; registration is idempotent and rejects a second, different authority.
+    async fn candidate_authority(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        oracle: &AdmittedOracleV1,
+    ) -> Result<(CandidateOracleContractV1, CandidateWorkspaceV1), MigrationApplicationError> {
+        let contract = CandidateOracleContractV1::derive(&oracle.proposal, &oracle.outcome)
+            .map_err(MigrationApplicationError::domain)?;
+        let workspace =
+            CandidateWorkspaceV1::derive(&oracle.workspace, &oracle.proposal, &contract)
+                .map_err(MigrationApplicationError::domain)?;
+        self.services
+            .register_candidate_authority(task, &workspace, &contract)
+            .await
+            .map_err(MigrationApplicationError::product)?;
+        Ok((contract, workspace))
     }
 }
 
@@ -1063,13 +1082,10 @@ where
             MigrationRoleStepObservationV1<OraclePortfolioCoherenceReviewV1>,
         > + AgentLoopStepExecutor<
             CandidateExplorationAgentContextV1,
-            MigrationRoleStepObservationV1<CandidateProposalV1>,
-        > + AgentLoopStepExecutor<
-            CandidateReviewAgentContextV1,
-            MigrationRoleStepObservationV1<ContentId<CandidateProposalArtifact>>,
+            MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
         > + AgentLoopStepExecutor<
             CandidateRevisionAgentContextV1,
-            MigrationRoleStepObservationV1<CandidateProposalV1>,
+            MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
         >,
     <E as AgentLoopStepExecutor<
         SirAgentContextV1,
@@ -1101,15 +1117,11 @@ where
     >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateExplorationAgentContextV1,
-        MigrationRoleStepObservationV1<CandidateProposalV1>,
-    >>::Error: MigrationRoleExecutionError,
-    <E as AgentLoopStepExecutor<
-        CandidateReviewAgentContextV1,
-        MigrationRoleStepObservationV1<ContentId<CandidateProposalArtifact>>,
+        MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
     >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateRevisionAgentContextV1,
-        MigrationRoleStepObservationV1<CandidateProposalV1>,
+        MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
     >>::Error: MigrationRoleExecutionError,
 {
     type Error = MigrationApplicationError;
@@ -1146,12 +1158,7 @@ where
 
     type CandidateExplorationContext = CandidateExplorationAgentContextV1;
     type CandidateDraft = CandidateProposalV1;
-    type CandidateReviewContext = CandidateReviewAgentContextV1;
-    type CandidateReview = ContentId<CandidateProposalArtifact>;
-    type CandidateBuildAuthority = CandidateBuildAuthorityV1<S::CandidateBuildAuthority>;
-    type CandidateWorkerObservations = CandidateAdmissionMaterialsV1;
-    type CandidateObservationLineage = CandidateObservationLineageV1;
-    type CandidateRevisionRequest = CandidateAdmissionOutcomeV1;
+    type CandidateBuildAuthority = S::CandidateBuildAuthority;
     type CandidateRevisionContext = CandidateRevisionAgentContextV1;
     type AdmittedCandidate = AdmittedCandidateV1;
     type TerminalOutcome = MigrationTerminalOutcomeV1;
@@ -1161,7 +1168,6 @@ where
         request: Self::Request,
     ) -> Result<Self::FrozenTask, Self::Error> {
         self.oracle_workspace = None;
-        self.candidate_contract = None;
         let task = self
             .services
             .freeze_task(request)
@@ -2278,17 +2284,26 @@ where
         ))
     }
 
+    async fn open_candidate_search(
+        &mut self,
+        task: &Self::FrozenTask,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        self.services
+            .open_candidate_search(task)
+            .await
+            .map_err(MigrationApplicationError::product)
+    }
+
     async fn prepare_candidate_exploration_context(
         &mut self,
         task: &Self::FrozenTask,
         intent: &Self::AdmittedIntent,
         oracle: &Self::AdmittedOracle,
+        iteration: cairn_migration::CandidateIterationOrdinal,
+        remaining: cairn_migration::CandidateIterationsRemaining,
+        notice: Option<cairn_migration::CandidateSearchNoticeV1>,
     ) -> Result<Self::CandidateExplorationContext, Self::Error> {
-        let contract = CandidateOracleContractV1::derive(&oracle.proposal, &oracle.outcome)
-            .map_err(MigrationApplicationError::domain)?;
-        let workspace =
-            CandidateWorkspaceV1::derive(&oracle.workspace, &oracle.proposal, &contract)
-                .map_err(MigrationApplicationError::domain)?;
+        let (contract, workspace) = self.candidate_authority(task, oracle).await?;
         let context = CandidateExplorationAgentContextV1::new(
             task.task_id(),
             intent
@@ -2307,13 +2322,11 @@ where
             workspace
                 .identity()
                 .map_err(MigrationApplicationError::domain)?,
+            iteration,
+            remaining,
+            notice,
         )
         .map_err(MigrationApplicationError::domain)?;
-        self.services
-            .register_candidate_authority(task, &workspace, &contract)
-            .await
-            .map_err(MigrationApplicationError::product)?;
-        self.candidate_contract = Some(contract);
         Ok(context)
     }
 
@@ -2333,205 +2346,45 @@ where
         &mut self,
         loop_id: AgentLoopId,
         context: Self::CandidateExplorationContext,
-    ) -> Result<Self::CandidateDraft, Self::Error> {
-        self.run_role_loop(
-            loop_id,
-            &context,
-            &CandidateExplorationRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
-        )
-        .await
-    }
-
-    async fn prepare_candidate_review_context(
-        &mut self,
-        task: &Self::FrozenTask,
-        _intent: &Self::AdmittedIntent,
-        _oracle: &Self::AdmittedOracle,
-        candidate: &Self::CandidateDraft,
-    ) -> Result<Self::CandidateReviewContext, Self::Error> {
-        let contract_id = self
-            .candidate_contract()?
-            .identity()
-            .map_err(MigrationApplicationError::domain)?;
-        if candidate.oracle_contract() != contract_id {
-            return Err(MigrationApplicationError::Binding(
-                "Candidate proposal contract",
-            ));
-        }
-        CandidateReviewAgentContextV1::new(
-            task.task_id(),
-            contract_id,
-            candidate
-                .identity()
-                .map_err(MigrationApplicationError::domain)?,
-        )
-        .map_err(MigrationApplicationError::domain)
-    }
-
-    async fn initialize_candidate_review_loop(
-        &mut self,
-        task: &Self::FrozenTask,
-        context: &Self::CandidateReviewContext,
-    ) -> Result<AgentLoopId, Self::Error> {
-        self.initialize_role_loop(
-            task.task_id(),
-            context,
-            &CandidateReviewRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
-        )
-    }
-
-    async fn run_candidate_review_loop(
-        &mut self,
-        loop_id: AgentLoopId,
-        context: Self::CandidateReviewContext,
-    ) -> Result<Self::CandidateReview, Self::Error> {
-        self.run_role_loop(
-            loop_id,
-            &context,
-            &CandidateReviewRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
-        )
-        .await
-    }
-
-    async fn authorize_candidate_build(
-        &mut self,
-        task: &Self::FrozenTask,
-        intent: &Self::AdmittedIntent,
-        oracle: &Self::AdmittedOracle,
-        candidate: &Self::CandidateDraft,
-        review: &Self::CandidateReview,
-    ) -> Result<Self::CandidateBuildAuthority, Self::Error> {
-        if *review
-            != candidate
-                .identity()
-                .map_err(MigrationApplicationError::domain)?
-        {
-            return Err(MigrationApplicationError::Binding("Candidate review"));
-        }
-        let contract = self.candidate_contract()?.clone();
-        let mechanisms = self.candidate_mechanisms.as_ref().ok_or(
-            MigrationApplicationError::MissingWorkflowState(
-                "qualified Candidate Admission mechanisms",
-            ),
-        )?;
-        let attempt = CandidateAdmissionAttemptV1::new(&contract, candidate, mechanisms)
-            .map_err(MigrationApplicationError::domain)?;
-        let authority = self
-            .services
-            .authorize_candidate_build(task, intent, oracle, &contract, candidate, &attempt)
-            .await
-            .map_err(MigrationApplicationError::product)?;
-        Ok(CandidateBuildAuthorityV1 { authority, attempt })
-    }
-
-    async fn observe_candidate_on_worker(
-        &mut self,
-        authority: Self::CandidateBuildAuthority,
-    ) -> Result<Self::CandidateWorkerObservations, Self::Error> {
-        let evidence = self
-            .services
-            .observe_candidate_on_worker(authority.authority, &authority.attempt)
-            .await
-            .map_err(MigrationApplicationError::product)?;
-        Ok(CandidateAdmissionMaterialsV1::new(
-            self.candidate_mechanisms.clone().ok_or(
-                MigrationApplicationError::MissingWorkflowState(
-                    "qualified Candidate Admission mechanisms",
-                ),
-            )?,
-            authority.attempt,
-            evidence,
-        ))
-    }
-
-    async fn admit_candidate(
-        &mut self,
-        _task: &Self::FrozenTask,
-        _intent: &Self::AdmittedIntent,
-        _oracle: &Self::AdmittedOracle,
-        candidate: Self::CandidateDraft,
-        review: Self::CandidateReview,
-        observations: Self::CandidateWorkerObservations,
-    ) -> Result<
-        CandidateAdmissionDispositionV1<
-            Self::AdmittedCandidate,
-            Self::CandidateDraft,
-            Self::CandidateObservationLineage,
-            Self::CandidateRevisionRequest,
-        >,
-        Self::Error,
-    > {
-        if review
-            != candidate
-                .identity()
-                .map_err(MigrationApplicationError::domain)?
-        {
-            return Err(MigrationApplicationError::Binding("Candidate review"));
-        }
-        let outcome = recompute_candidate_admission(
-            self.candidate_contract()?,
-            &candidate,
-            &observations.mechanisms,
-            &observations.attempt,
-            &observations.evidence,
-        )
-        .map_err(MigrationApplicationError::domain)?;
-        let admitted = outcome
-            .claims()
-            .iter()
-            .all(|claim| claim.status() == CandidateClaimStatusV1::Admitted);
-        tracing::info!(
-            target: "cairn.migration.admission",
-            event = "candidate_admission_recomputed",
-            proposal_id = %outcome.proposal(),
-            evidence_id = %outcome.evidence(),
-            admitted,
-            "Candidate Admission mechanically recomputed"
-        );
-        if admitted {
-            Ok(CandidateAdmissionDispositionV1::Admitted(
-                AdmittedCandidateV1 {
-                    proposal: candidate,
-                    outcome,
-                },
-            ))
-        } else {
-            Ok(CandidateAdmissionDispositionV1::Revise {
-                candidate,
-                observation_lineage: CandidateObservationLineageV1(outcome.evidence()),
-                request: outcome,
-            })
-        }
+    ) -> Result<Option<Self::CandidateDraft>, Self::Error> {
+        let proposal = self
+            .run_role_loop(
+                loop_id,
+                &context,
+                &CandidateExplorationRoleHooksV1::new()
+                    .map_err(MigrationApplicationError::domain)?,
+            )
+            .await;
+        proposal_or_missing_submission(proposal)
     }
 
     async fn prepare_candidate_revision_context(
         &mut self,
         task: &Self::FrozenTask,
         _intent: &Self::AdmittedIntent,
-        _oracle: &Self::AdmittedOracle,
-        candidate: &Self::CandidateDraft,
-        observation_lineage: &Self::CandidateObservationLineage,
-        request: &Self::CandidateRevisionRequest,
+        oracle: &Self::AdmittedOracle,
+        parent: cairn_migration::CandidateSearchParentV1,
+        iteration: cairn_migration::CandidateIterationOrdinal,
+        remaining: cairn_migration::CandidateIterationsRemaining,
+        notice: Option<cairn_migration::CandidateSearchNoticeV1>,
     ) -> Result<Self::CandidateRevisionContext, Self::Error> {
-        let candidate_id = candidate
-            .identity()
-            .map_err(MigrationApplicationError::domain)?;
-        if request.proposal() != candidate_id
-            || request.evidence() != observation_lineage.evidence()
-        {
-            return Err(MigrationApplicationError::Binding(
-                "Candidate revision observation lineage",
-            ));
-        }
-        CandidateRevisionAgentContextV1::new(
+        let (contract, workspace) = self.candidate_authority(task, oracle).await?;
+        let context = CandidateRevisionAgentContextV1::new(
             task.task_id(),
-            self.candidate_contract()?
+            contract
                 .identity()
                 .map_err(MigrationApplicationError::domain)?,
-            candidate_id,
-            observation_lineage.evidence(),
+            workspace
+                .identity()
+                .map_err(MigrationApplicationError::domain)?,
+            parent.proposal(),
+            parent.receipt(),
+            iteration,
+            remaining,
+            notice,
         )
-        .map_err(MigrationApplicationError::domain)
+        .map_err(MigrationApplicationError::domain)?;
+        Ok(context)
     }
 
     async fn initialize_candidate_revision_loop(
@@ -2550,13 +2403,122 @@ where
         &mut self,
         loop_id: AgentLoopId,
         context: Self::CandidateRevisionContext,
-    ) -> Result<Self::CandidateDraft, Self::Error> {
-        self.run_role_loop(
-            loop_id,
-            &context,
-            &CandidateRevisionRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
-        )
-        .await
+    ) -> Result<Option<Self::CandidateDraft>, Self::Error> {
+        let proposal = self
+            .run_role_loop(
+                loop_id,
+                &context,
+                &CandidateRevisionRoleHooksV1::new().map_err(MigrationApplicationError::domain)?,
+            )
+            .await;
+        proposal_or_missing_submission(proposal)
+    }
+
+    async fn record_candidate_proposal(
+        &mut self,
+        task: &Self::FrozenTask,
+        candidate: &Self::CandidateDraft,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        let proposal = candidate
+            .identity()
+            .map_err(MigrationApplicationError::domain)?;
+        self.services
+            .record_candidate_proposal(task, proposal)
+            .await
+            .map_err(MigrationApplicationError::product)
+    }
+
+    async fn record_missing_candidate_submission(
+        &mut self,
+        task: &Self::FrozenTask,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        self.services
+            .record_missing_candidate_submission(task)
+            .await
+            .map_err(MigrationApplicationError::product)
+    }
+
+    async fn authorize_candidate_build(
+        &mut self,
+        task: &Self::FrozenTask,
+        _intent: &Self::AdmittedIntent,
+        _oracle: &Self::AdmittedOracle,
+        candidate: &Self::CandidateDraft,
+    ) -> Result<Self::CandidateBuildAuthority, Self::Error> {
+        self.services
+            .authorize_candidate_build(task, candidate)
+            .await
+            .map_err(MigrationApplicationError::product)
+    }
+
+    async fn observe_candidate_build(
+        &mut self,
+        authority: Self::CandidateBuildAuthority,
+    ) -> Result<cairn_migration::CandidateBuildOutcomeV1, Self::Error> {
+        self.services
+            .observe_candidate_build(authority)
+            .await
+            .map_err(MigrationApplicationError::product)
+    }
+
+    async fn record_candidate_build_observation(
+        &mut self,
+        task: &Self::FrozenTask,
+        outcome: cairn_migration::CandidateBuildOutcomeV1,
+    ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+        self.services
+            .record_candidate_build_observation(task, outcome)
+            .await
+            .map_err(MigrationApplicationError::product)
+    }
+
+    async fn admit_candidate(
+        &mut self,
+        _task: &Self::FrozenTask,
+        _intent: &Self::AdmittedIntent,
+        _oracle: &Self::AdmittedOracle,
+        _candidate: Self::CandidateDraft,
+    ) -> Result<Self::AdmittedCandidate, Self::Error> {
+        // A candidate that compiles has been observed, not judged. Admission needs qualified
+        // mechanisms that can execute against the built artifact, so this fails closed rather
+        // than publishing a search result as a semantic verdict. The two failures are kept
+        // apart because they are different operator actions: one is a missing configuration,
+        // the other is a capability this deployment does not have yet.
+        if self.candidate_mechanisms.is_none() {
+            return Err(MigrationApplicationError::MissingWorkflowState(
+                "qualified Candidate Admission mechanism catalog",
+            ));
+        }
+        Err(MigrationApplicationError::MissingWorkflowState(
+            "qualified Candidate Admission mechanism execution",
+        ))
+    }
+
+    async fn record_candidate_search_stop(
+        &mut self,
+        task: &Self::FrozenTask,
+        intent: &Self::AdmittedIntent,
+        oracle: &Self::AdmittedOracle,
+        terminal: cairn_migration::CandidateSearchTerminalV1,
+    ) -> Result<Self::TerminalOutcome, Self::Error> {
+        let outcome = MigrationTerminalOutcomeV1::after_stopped_search(
+            task.task_id(),
+            intent
+                .prepared()
+                .public_outcome()
+                .identity()
+                .map_err(MigrationApplicationError::domain)?,
+            oracle
+                .outcome()
+                .identity()
+                .map_err(MigrationApplicationError::domain)?,
+            terminal,
+        );
+        self.services
+            .record_terminal_outcome(&outcome)
+            .await
+            .map_err(MigrationApplicationError::product)?;
+        Ok(outcome)
     }
 
     async fn record_terminal_outcome(
@@ -2663,13 +2625,10 @@ where
             MigrationRoleStepObservationV1<OraclePortfolioCoherenceReviewV1>,
         > + AgentLoopStepExecutor<
             CandidateExplorationAgentContextV1,
-            MigrationRoleStepObservationV1<CandidateProposalV1>,
-        > + AgentLoopStepExecutor<
-            CandidateReviewAgentContextV1,
-            MigrationRoleStepObservationV1<ContentId<CandidateProposalArtifact>>,
+            MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
         > + AgentLoopStepExecutor<
             CandidateRevisionAgentContextV1,
-            MigrationRoleStepObservationV1<CandidateProposalV1>,
+            MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
         > + 'static,
     <E as AgentLoopStepExecutor<
         SirAgentContextV1,
@@ -2701,15 +2660,11 @@ where
     >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateExplorationAgentContextV1,
-        MigrationRoleStepObservationV1<CandidateProposalV1>,
-    >>::Error: MigrationRoleExecutionError,
-    <E as AgentLoopStepExecutor<
-        CandidateReviewAgentContextV1,
-        MigrationRoleStepObservationV1<ContentId<CandidateProposalArtifact>>,
+        MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
     >>::Error: MigrationRoleExecutionError,
     <E as AgentLoopStepExecutor<
         CandidateRevisionAgentContextV1,
-        MigrationRoleStepObservationV1<CandidateProposalV1>,
+        MigrationRoleStepObservationV1<Option<CandidateProposalV1>>,
     >>::Error: MigrationRoleExecutionError,
 {
     type Error = MigrationApplicationError;
@@ -2914,20 +2869,45 @@ mod tests {
         async fn authorize_candidate_build(
             &mut self,
             _task: &FrozenMigrationTaskV1,
-            _intent: &AdmittedIntentV1,
-            _oracle: &AdmittedOracleV1,
-            _contract: &CandidateOracleContractV1,
             _candidate: &CandidateProposalV1,
-            _attempt: &CandidateAdmissionAttemptV1,
         ) -> Result<Self::CandidateBuildAuthority, Self::Error> {
             panic!("compile-time composition test")
         }
 
-        async fn observe_candidate_on_worker(
+        async fn observe_candidate_build(
             &mut self,
             _authority: Self::CandidateBuildAuthority,
-            _attempt: &CandidateAdmissionAttemptV1,
-        ) -> Result<CandidateAdmissionEvidenceV1, Self::Error> {
+        ) -> Result<cairn_migration::CandidateBuildOutcomeV1, Self::Error> {
+            panic!("compile-time composition test")
+        }
+
+        async fn open_candidate_search(
+            &mut self,
+            _task: &FrozenMigrationTaskV1,
+        ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+            panic!("compile-time composition test")
+        }
+
+        async fn record_candidate_proposal(
+            &mut self,
+            _task: &FrozenMigrationTaskV1,
+            _proposal: ContentId<CandidateProposalArtifact>,
+        ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+            panic!("compile-time composition test")
+        }
+
+        async fn record_missing_candidate_submission(
+            &mut self,
+            _task: &FrozenMigrationTaskV1,
+        ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
+            panic!("compile-time composition test")
+        }
+
+        async fn record_candidate_build_observation(
+            &mut self,
+            _task: &FrozenMigrationTaskV1,
+            _outcome: cairn_migration::CandidateBuildOutcomeV1,
+        ) -> Result<cairn_migration::CandidateSearchStateV1, Self::Error> {
             panic!("compile-time composition test")
         }
 
