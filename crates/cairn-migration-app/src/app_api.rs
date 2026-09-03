@@ -368,6 +368,7 @@ pub struct MigrationProductServicesV1 {
     candidate_build: Option<CandidateBuildRunnerV1>,
     reasoning_decomposition: ReasoningDecompositionPolicyV1,
     candidate_search: CandidateSearchStoreV1,
+    task_workspace: crate::TaskWorkspaceStoreV1,
 }
 
 /// CUDA migration App API and workflow composed as one product module above the generic host.
@@ -488,7 +489,8 @@ pub fn migration_product_boundary(
             oracle_controls,
             candidate_build,
             reasoning_decomposition,
-            candidate_search: CandidateSearchStoreV1::new(server, search_policy),
+            candidate_search: CandidateSearchStoreV1::new(server.clone(), search_policy),
+            task_workspace: crate::TaskWorkspaceStoreV1::new(server),
         },
         receiver,
     ))
@@ -510,6 +512,10 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             .map_err(MigrationAppApiError::internal)?;
         let workspace = SirTaskWorkspace::from_sources(sources, self.task_limits)
             .map_err(MigrationAppApiError::internal)?;
+        // The frozen source is written down before anything is built on it. Registering it in
+        // memory first would let a task be admitted, reasoned about and scheduled while the one
+        // copy of what it is about lived only in this process.
+        self.task_workspace.freeze(request.task_id, &workspace)?;
         let recovery_input = IntentRecoveryInputV1::new(
             request.task_id,
             workspace
@@ -1571,6 +1577,8 @@ pub enum MigrationAppApiError {
     ArchiveUploadTooLarge,
     #[error("uploaded archive is not the archive that was declared")]
     ArchiveIdentityMismatch,
+    #[error("frozen task source does not match the bundle that names it")]
+    TaskWorkspaceIdentityMismatch,
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1582,7 +1590,7 @@ impl MigrationAppApiError {
         Self::Io(error.to_string())
     }
 
-    fn internal(error: impl std::fmt::Display) -> Self {
+    pub(crate) fn internal(error: impl std::fmt::Display) -> Self {
         Self::Internal(error.to_string())
     }
 
@@ -1607,6 +1615,7 @@ impl MigrationAppApiError {
             Self::ArchiveUploadRangeInvalid => "archive-upload-range-invalid",
             Self::ArchiveUploadTooLarge => "archive-upload-too-large",
             Self::ArchiveIdentityMismatch => "archive-identity-mismatch",
+            Self::TaskWorkspaceIdentityMismatch => "task-workspace-identity-mismatch",
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1619,7 +1628,8 @@ impl MigrationAppApiError {
             | Self::ArchiveUploadNotStarted
             | Self::ArchiveUploadRangeInvalid
             | Self::ArchiveUploadTooLarge
-            | Self::ArchiveIdentityMismatch => AppApiErrorCodeV1::InvalidRequest,
+            | Self::ArchiveIdentityMismatch
+            | Self::TaskWorkspaceIdentityMismatch => AppApiErrorCodeV1::InvalidRequest,
             Self::TaskNotFound => AppApiErrorCodeV1::TaskNotFound,
             Self::Conflict | Self::ArchiveUploadAlreadyStarted => AppApiErrorCodeV1::Conflict,
             Self::NotReady | Self::Cancelled => AppApiErrorCodeV1::NotReady,
@@ -1883,6 +1893,58 @@ mod tests {
             .expect("App API progress signal");
         product.abort();
         let _ = product.await;
+    }
+
+    // Freezing a task has to write its source down. Registering it in memory alone would let a
+    // task be admitted, reasoned about and scheduled while the only copy of what it is about
+    // lived in one process, which is a record the event log cannot make good on after a restart.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn freezing_a_task_persists_its_source_to_the_deployment_store() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let server: cairn_server::ServerConfig = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "listen": "127.0.0.1:0",
+            "tls": {
+                "certificate": "secrets/controller.pem",
+                "private_key": "secrets/controller-key.pem",
+                "client_ca": "secrets/ca.pem"
+            },
+            "enrollment_service": null,
+            "protocol_version": 1,
+            "scheduler": null,
+            "handshake_timeout_ms": 10_000,
+            "idle_timeout_ms": 120_000,
+            "outbox_poll_interval_ms": 100,
+            "authority_poll_interval_ms": 1_000,
+            "diagnostic_byte_limit": 1_024,
+            "store_root": directory.path(),
+        }))
+        .expect("server configuration");
+
+        let workspace = SirTaskWorkspace::from_sources(
+            vec![(
+                cairn_migration::SirTaskArtifactPath::new("src/kernel.cu").expect("path"),
+                "void launch() {}\n".to_owned(),
+            )],
+            SirTaskLimits::default(),
+        )
+        .expect("workspace");
+        let bundle_id = workspace.bundle().identity().expect("bundle identity");
+
+        crate::TaskWorkspaceStoreV1::new(server.clone())
+            .freeze(TaskId::new(), &workspace)
+            .expect("freeze");
+
+        // Read it back through a store this test opens itself, so nothing but the deployment's
+        // own content store carries the answer.
+        let recovered = crate::TaskWorkspaceStoreV1::new(server)
+            .recover(bundle_id, SirTaskLimits::default())
+            .expect("the frozen source is readable from the store alone");
+        assert_eq!(
+            recovered
+                .source(&cairn_migration::SirTaskArtifactPath::new("src/kernel.cu").expect("path")),
+            Some("void launch() {}\n")
+        );
     }
 
     #[test]

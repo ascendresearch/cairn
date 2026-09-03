@@ -4,6 +4,7 @@ mod app_api;
 mod candidate_build_runner;
 mod oracle_control_runner;
 mod runtime_agent;
+mod task_workspace;
 
 pub use app_api::{
     CandidateSearchStoreV1, CudaMigrationProductModuleV1, MigrationAppApiError, MigrationAppApiV1,
@@ -20,6 +21,7 @@ pub use runtime_agent::{
     MigrationAgentRuntimeError, MigrationAgentRuntimeExecutorV1, MigrationRuntimeMaterialsV1,
     migration_tool_registry,
 };
+pub use task_workspace::TaskWorkspaceStoreV1;
 
 use std::{collections::BTreeMap, fmt::Display, future::Future, num::NonZeroU16};
 
