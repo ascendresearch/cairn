@@ -853,6 +853,18 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             })
     }
 
+    async fn register_candidate_authority(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        workspace: &cairn_migration::CandidateWorkspaceV1,
+        contract: &CandidateOracleContractV1,
+    ) -> Result<(), Self::Error> {
+        self.materials
+            .register_candidate(task.task_id(), workspace.clone(), contract.clone())?;
+        self.transition(task.task_id(), TaskPhaseV1::ExploringCandidate, None)?;
+        Ok(())
+    }
+
     async fn authorize_candidate_build(
         &mut self,
         _task: &FrozenMigrationTaskV1,

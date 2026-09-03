@@ -665,6 +665,13 @@ pub trait CudaMigrationProductServices: Send + 'static {
         attempt: &OracleAdmissionAttemptV1,
     ) -> impl Future<Output = Result<OracleAdmissionEvidenceV1, Self::Error>> + Send;
 
+    fn register_candidate_authority(
+        &mut self,
+        task: &FrozenMigrationTaskV1,
+        workspace: &cairn_migration::CandidateWorkspaceV1,
+        contract: &CandidateOracleContractV1,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
     fn authorize_candidate_build(
         &mut self,
         task: &FrozenMigrationTaskV1,
@@ -2302,6 +2309,10 @@ where
                 .map_err(MigrationApplicationError::domain)?,
         )
         .map_err(MigrationApplicationError::domain)?;
+        self.services
+            .register_candidate_authority(task, &workspace, &contract)
+            .await
+            .map_err(MigrationApplicationError::product)?;
         self.candidate_contract = Some(contract);
         Ok(context)
     }
@@ -2800,6 +2811,15 @@ mod tests {
             &mut self,
             _request: Self::Request,
         ) -> Result<FrozenMigrationTaskV1, Self::Error> {
+            panic!("compile-time composition test")
+        }
+
+        async fn register_candidate_authority(
+            &mut self,
+            _task: &FrozenMigrationTaskV1,
+            _workspace: &cairn_migration::CandidateWorkspaceV1,
+            _contract: &CandidateOracleContractV1,
+        ) -> Result<(), Self::Error> {
             panic!("compile-time composition test")
         }
 

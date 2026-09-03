@@ -204,6 +204,7 @@ pub enum TaskPhaseV1 {
     RunningOracleControls,
     OracleAccepted,
     OraclePartial,
+    ExploringCandidate,
     OracleRejected,
     Cancelled,
     Blocked,

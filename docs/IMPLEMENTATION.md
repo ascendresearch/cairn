@@ -81,7 +81,13 @@ Git 历史保留其原调用契约。这两项都不在 `scripts/ci.sh` 的覆�
 - caller decision request、typed user authority 和 independent intent admission；
 - claim×concern×role Oracle ledger、deterministic/Agent strategy consumer 和 evidence experiment request；
 - qualified Oracle mechanism runner contract、trusted receipt folding 和 model-free Oracle outcome；
-- admitted-only Candidate workspace、proposal episode、product-owned build authority 和 mechanical candidate control matrix。
+- admitted-only Candidate workspace、product-owned build authority 和 mechanical candidate control matrix；
+- Candidate exploration episode：工具面、指令、gateway 与 executor（P3 第 3 项的第一半，见 6.1 之后的 P3 记录）。
+
+**上一版此处把「proposal episode」列为已实现，这是高估。** 直到 2026-09-03，三个 candidate 角色
+（exploration / review / revision）的 executor 全部是 `unavailable_role_executor!` 展开的桩，一律返回
+`RoleNotImplemented`。也就是说候选阶段从未向模型发出过一次调用：工作流走到 `run_candidate_exploration_loop`
+就会失败。按第 2 节的口径这是 **design only**，不是 recorded。exploration 一路现已实现，另两路仍是桩。
 
 这些环节中相当一部分只由 recorded 或 local model-free controls 验证。App API 尚未把完整 normal path 组合到真实 local Worker、
 qualified Candidate control runner 和 950PR execution。
@@ -536,7 +542,18 @@ CI 里由 `.github/actions/setup-release-toolchain` 完成,本地没有等价物
 脚本又没有断言匹配数,于是测试「通过」了——它比较的是未被改动的自身。这正是 `AGENTS.md` 里那条:
 重写了零处的变换会让比较同义反复地成立。此后每一次注入都先断言匹配数,四道门才逐一验完。
 
-**下一步。** 按 6.1 的依赖图,P2（知识与 skill 层）与 P3（循环框架）是两条并行轨道,在 P4 汇合。
+**P3 已开工,先做的是让候选阶段不再是桩**,记录见 6.1 之后的 P3 小节。
+
+**一处会误导人的现状,顺带记下。** `observe_candidate_on_worker` 会真的把候选调度到 build worker、
+拿到 receipt、把 outcome 与 exit code 写进日志,然后**无条件返回 `CandidateMechanismExecutionUnavailable`
+并丢弃这次观测**。fail closed 本身是对的——没有 qualified mechanism 就不该发布语义结论——
+但它同时意味着 `establish_candidate` 里那个 `loop` 从来没有循环过:第一次构建观测就把整个任务打死。
+P3 第 4 项要把构建结果作为**搜索信号**（编译成败与诊断）回灌给循环,同时让 admission 继续 fail closed;
+这两件事必须分开,否则要么循环拿不到反馈,要么结构自检被当成语义结论。
+
+**下一步。** P3 第 4 项（把构建诊断回灌成搜索信号）与第 1、2 项（durable 循环与五条迭代策略）。
+持久化照 `cairn-execution` 的既有惯例:每模块自带 `project_*` / `apply` / `fact` / `expected`,
+不新造 trait,读取端与审计端共用同一个推导函数。P2 仍是可并行的另一条轨道。
 
 **未解决的事实,别当成已解决。** exposure ledger 一行代码都没有,而它是 restricted 材料唯一
 真正的控制（4.2.4）。资源时钟的两面不对称仍在（4.2.6）。P0 的 Exit 仍未达成:
@@ -707,6 +724,30 @@ Exit：知识按 target 过滤后投影进 episode；任一 entry 字节变化�
 4. 诊断回灌分流：编译器诊断原样回传；profiler 输出先经确定性分析器转为结构化建议（`ARCHITECTURE.md` 7.3）。
 
 规模估计：第 1 项为大，其余为中。
+
+**第 3 项的 exploration 一路已完成（2026-09-03）。** 开工时发现的前提比预期严重：三个 candidate 角色
+executor 全是桩，候选阶段从未向模型发出过一次调用，因此循环框架无论怎么写都没有东西可循环。
+先做的是让 exploration episode 真的存在——三件工具（读任务原文、读 admitted Oracle contract、提交候选）、
+一条 task-generic 指令、一个 gateway 和一个 executor，形状照搬既有的 oracle item developer 一路。
+每任务材料新增了冻结的 candidate 授权（workspace 与 oracle contract），经 services seam 注册，
+并新增 `ExploringCandidate` 这一 task phase，使这一阶段对客户端可见。
+
+三点值得记下来：
+
+- **知识投影是显式的空位。** episode 的 model context 里 `knowledge_snapshot` 写的是 `{"kind":"empty"}`。
+  这正是 P2 接上来的地方，写成空位而不是省略，是为了让「还没有知识」是一个可读到的事实。
+- **指令里不写平台事实。** 4.1 那次失败的直接原因是编译器无法推导 kernel 类型，而把「用某个 vector 或 cube API」
+  写进生产指令，就是把知识塞进 prompt——`AGENTS.md` 说知识以 pack 分发，不进仓库。留空是正确的，
+  也正是 P2 存在的理由。
+- **没有改动任何中立 crate。** `cairn-agent` 及其以下不知道候选或迁移的存在；新增代码全部落在
+  `cairn-migration-app` 的接线层，复用的领域类型早已在 `cairn-migration` 里。
+
+证据口径是 **local model-free**：三道门各做了红验证（撤掉一件工具、让 schema 与领域类型漂移、
+把提交的入口点改成确实存在的文件），三次都如预期失败。**尚未有任何一次真实模型调用**，
+因此不构成「候选可用」的证据，只构成「这条路不再是桩」。
+
+仍未做：review 与 revision 两路 executor 仍是桩；构建观测仍在 `observe_candidate_on_worker` 里被丢弃
+（见下）；第 1、2、4 项尚未开工。
 
 Exit：同一 task 内经过多轮 authorized compile→diagnostic→revision 且不离开 durable state；重复动作被检测并转为 typed input；
 空提交计入预算而不被当作完成；Controller restart 后循环从 durable state 恢复。
