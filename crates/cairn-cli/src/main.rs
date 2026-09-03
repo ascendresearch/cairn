@@ -1,23 +1,17 @@
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process::ExitCode,
-    str::FromStr,
-    time::Duration,
-};
+use std::{env, fs, path::Path, process::ExitCode, str::FromStr, time::Duration};
 
 use cairn_migration::{
-    IntentRecoveryRequestV1, SirCallerClaimId, SirHypothesisId, SirTaskArtifactPath,
-    UserIntentAuthorityScopeV1, UserIntentDecisionRequestArtifact, UserProvidedIntentClaimV1,
+    IntentRecoveryRequestV1, SirCallerClaimId, SirHypothesisId, UserIntentAuthorityScopeV1,
+    UserIntentDecisionRequestArtifact, UserProvidedIntentClaimV1,
 };
 use cairn_protocol::{CommandId, ContentId, EventSequence, TaskId};
 use cairn_sdk::{
-    CairnClient, CairnClientConfigV1, CairnRequestV1, CairnResponseV1, TaskPhaseV1, TaskSourceV1,
+    CairnClient, CairnClientConfigV1, CairnRequestV1, CairnResponseV1, TaskPhaseV1,
     TaskSubmissionV1, UnixCairnClient,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-const USAGE: &str = "usage: cairn-cli --config CLIENT.json task <submit SOURCE_ROOT RECOVERY.json|list|status TASK_ID|watch TASK_ID|cancel TASK_ID|intent-review TASK_ID|intent-select TASK_ID REQUEST_ID HYPOTHESIS_ID CLAIM_ID...|intent-keep-unknown TASK_ID REQUEST_ID CLAIM_ID...|intent-provide TASK_ID REQUEST_ID CLAIM.json CLAIM_ID...|intent-reconcile TASK_ID>";
+const USAGE: &str = "usage: cairn-cli --config CLIENT.json task <submit SOURCE_ARCHIVE.tar.gz RECOVERY.json|list|status TASK_ID|watch TASK_ID|cancel TASK_ID|intent-review TASK_ID|intent-select TASK_ID REQUEST_ID HYPOTHESIS_ID CLAIM_ID...|intent-keep-unknown TASK_ID REQUEST_ID CLAIM_ID...|intent-provide TASK_ID REQUEST_ID CLAIM.json CLAIM_ID...|intent-reconcile TASK_ID>";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -44,10 +38,10 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
     let config: CairnClientConfigV1 = read_json(Path::new(config_path))?;
     let client = UnixCairnClient::new(config).map_err(display)?;
     match (command.as_str(), rest) {
-        ("submit", [source_root, recovery]) => {
-            let sources = collect_sources(Path::new(source_root))?;
+        ("submit", [archive_path, recovery]) => {
+            let archive = fs::read(Path::new(archive_path)).map_err(display)?;
             let recovery_request: IntentRecoveryRequestV1 = read_json(Path::new(recovery))?;
-            let submission = TaskSubmissionV1::new(sources, recovery_request).map_err(display)?;
+            let submission = TaskSubmissionV1::new(archive, recovery_request).map_err(display)?;
             exchange(
                 &client,
                 CairnRequestV1::SubmitTask {
@@ -185,61 +179,6 @@ fn terminal_phase(phase: TaskPhaseV1) -> bool {
             | TaskPhaseV1::Cancelled
             | TaskPhaseV1::Blocked
     )
-}
-
-fn collect_sources(root: &Path) -> Result<Vec<TaskSourceV1>, String> {
-    let root = root.canonicalize().map_err(display)?;
-    if !root.is_dir() {
-        return Err("SOURCE_ROOT must be a directory".into());
-    }
-    let mut paths = Vec::new();
-    visit(&root, &mut paths)?;
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|path| {
-            let relative = path.strip_prefix(&root).map_err(display)?;
-            let relative = relative
-                .to_str()
-                .ok_or_else(|| "task source path is not UTF-8".to_owned())?;
-            let source_path =
-                SirTaskArtifactPath::new(relative.replace(std::path::MAIN_SEPARATOR, "/"))
-                    .map_err(display)?;
-            let text = fs::read_to_string(path).map_err(display)?;
-            TaskSourceV1::new(source_path, text).map_err(display)
-        })
-        .collect()
-}
-
-fn visit(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
-    let mut entries = fs::read_dir(directory)
-        .map_err(display)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(display)?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let file_type = entry.file_type().map_err(display)?;
-        if file_type.is_symlink() {
-            return Err(format!(
-                "task bundle rejects symbolic link {}",
-                entry.path().display()
-            ));
-        }
-        if file_type.is_dir() {
-            visit(&entry.path(), paths)?;
-        } else if file_type.is_file() {
-            paths.push(entry.path());
-        } else {
-            return Err(format!(
-                "task bundle rejects non-regular file {}",
-                entry.path().display()
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {

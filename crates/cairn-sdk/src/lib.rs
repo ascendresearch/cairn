@@ -4,9 +4,8 @@ use std::{future::Future, path::PathBuf};
 
 use cairn_migration::{
     IntentDecisionRequestBatchArtifact, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
-    SirHypothesisId, SirIntentHypothesisSetProposalArtifact, SirTaskArtifactPath,
-    UserIntentAuthorityScopeV1, UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
-    UserProvidedIntentClaimV1,
+    SirHypothesisId, SirIntentHypothesisSetProposalArtifact, UserIntentAuthorityScopeV1,
+    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserProvidedIntentClaimV1,
 };
 use cairn_protocol::{CommandId, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId};
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -14,69 +13,18 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const SCHEMA_V1: u16 = 1;
-const MAX_TASK_FILES: usize = 32;
-const MAX_TASK_BYTES: usize = 256 * 1024;
 const MAX_FRAME_BYTES: u32 = 4 * 1024 * 1024;
-
-/// One exact UTF-8 file sent by a client as part of a task snapshot.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct TaskSourceV1 {
-    path: SirTaskArtifactPath,
-    text: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TaskSourceWire {
-    path: SirTaskArtifactPath,
-    text: String,
-}
-
-impl TaskSourceV1 {
-    /// Creates one bounded task source.
-    ///
-    /// # Errors
-    ///
-    /// Rejects source text larger than the current task byte limit.
-    pub fn new(path: SirTaskArtifactPath, text: String) -> Result<Self, SdkError> {
-        if text.len() > MAX_TASK_BYTES {
-            return Err(SdkError::Invalid("task source byte length"));
-        }
-        Ok(Self { path, text })
-    }
-
-    #[must_use]
-    pub const fn path(&self) -> &SirTaskArtifactPath {
-        &self.path
-    }
-
-    #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-}
-
-impl TryFrom<TaskSourceWire> for TaskSourceV1 {
-    type Error = SdkError;
-
-    fn try_from(wire: TaskSourceWire) -> Result<Self, Self::Error> {
-        Self::new(wire.path, wire.text)
-    }
-}
-
-impl<'de> Deserialize<'de> for TaskSourceV1 {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        TaskSourceWire::deserialize(deserializer)?
-            .try_into()
-            .map_err(de::Error::custom)
-    }
-}
 
 /// Immutable task bytes plus the caller-owned recovery declaration.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TaskSubmissionV1 {
     schema_version: u16,
-    sources: Vec<TaskSourceV1>,
+    /// Gzip-compressed tar archive of the task source tree.
+    ///
+    /// Content bounds are the server's to apply, because they are configured there. This type
+    /// carries the bytes; the transport frame limit is what stops an unbounded request.
+    #[serde(with = "canonical_base64")]
+    archive: Vec<u8>,
     recovery_request: IntentRecoveryRequestV1,
 }
 
@@ -84,32 +32,51 @@ pub struct TaskSubmissionV1 {
 #[serde(deny_unknown_fields)]
 struct TaskSubmissionWire {
     schema_version: u16,
-    sources: Vec<TaskSourceV1>,
+    #[serde(with = "canonical_base64")]
+    archive: Vec<u8>,
     recovery_request: IntentRecoveryRequestV1,
 }
 
+mod canonical_base64 {
+    use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
+    use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD_NO_PAD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        STANDARD_NO_PAD
+            .decode(encoded.as_bytes())
+            .map_err(D::Error::custom)
+    }
+}
+
 impl TaskSubmissionV1 {
-    /// Creates one canonical bounded submission.
+    /// Creates one submission carrying a source archive.
     ///
     /// # Errors
     ///
-    /// Rejects an empty or oversized source set, duplicate paths, or task/caller binding drift.
+    /// Rejects an empty archive. What the archive may contain is the server's decision, since the
+    /// bounds are configured there and a client cannot be trusted to apply them.
     pub fn new(
-        sources: Vec<TaskSourceV1>,
+        archive: Vec<u8>,
         recovery_request: IntentRecoveryRequestV1,
     ) -> Result<Self, SdkError> {
         let value = Self {
             schema_version: SCHEMA_V1,
-            sources,
+            archive,
             recovery_request,
         };
         value.validate()?;
         Ok(value)
     }
 
+    /// Returns the submitted source archive.
     #[must_use]
-    pub fn sources(&self) -> &[TaskSourceV1] {
-        &self.sources
+    pub fn archive(&self) -> &[u8] {
+        &self.archive
     }
 
     #[must_use]
@@ -118,23 +85,8 @@ impl TaskSubmissionV1 {
     }
 
     fn validate(&self) -> Result<(), SdkError> {
-        if self.schema_version != SCHEMA_V1
-            || self.sources.is_empty()
-            || self.sources.len() > MAX_TASK_FILES
-            || self
-                .sources
-                .windows(2)
-                .any(|pair| pair[0].path >= pair[1].path)
-        {
+        if self.schema_version != SCHEMA_V1 || self.archive.is_empty() {
             return Err(SdkError::Invalid("task submission structure"));
-        }
-        let total = self.sources.iter().try_fold(0_usize, |total, source| {
-            total
-                .checked_add(source.text.len())
-                .ok_or(SdkError::Invalid("task submission byte length"))
-        })?;
-        if total > MAX_TASK_BYTES {
-            return Err(SdkError::Invalid("task submission byte length"));
         }
         Ok(())
     }
@@ -146,7 +98,7 @@ impl TryFrom<TaskSubmissionWire> for TaskSubmissionV1 {
     fn try_from(wire: TaskSubmissionWire) -> Result<Self, Self::Error> {
         let value = Self {
             schema_version: wire.schema_version,
-            sources: wire.sources,
+            archive: wire.archive,
             recovery_request: wire.recovery_request,
         };
         value.validate()?;
@@ -567,14 +519,17 @@ mod tests {
         .expect("recovery request")
     }
 
+    // The wire type carries bytes and says so. What may be inside them is decided where the
+    // limits are configured, which is the server; a client applying its own would be a second
+    // policy that the first one has to agree with.
     #[test]
-    fn submission_rejects_unsorted_and_duplicate_paths() {
-        let a = TaskSourceV1::new(SirTaskArtifactPath::new("a.cu").expect("path"), "a".into())
-            .expect("source");
-        let b = TaskSourceV1::new(SirTaskArtifactPath::new("b.cu").expect("path"), "b".into())
-            .expect("source");
-        assert!(TaskSubmissionV1::new(vec![b, a.clone()], recovery_request()).is_err());
-        assert!(TaskSubmissionV1::new(vec![a.clone(), a], recovery_request()).is_err());
+    fn a_submission_carries_an_archive_and_refuses_an_empty_one() {
+        assert!(TaskSubmissionV1::new(Vec::new(), recovery_request()).is_err());
+        let submission = TaskSubmissionV1::new(b"not-really-gzip".to_vec(), recovery_request())
+            .expect("carries");
+        let document = serde_json::to_value(&submission).expect("document");
+        let decoded: TaskSubmissionV1 = serde_json::from_value(document).expect("round trip");
+        assert_eq!(decoded.archive(), b"not-really-gzip");
     }
 
     #[test]

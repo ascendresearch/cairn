@@ -176,8 +176,8 @@ pub struct SirTaskLimits {
 impl Default for SirTaskLimits {
     fn default() -> Self {
         Self {
-            max_files: SirTaskFileLimit(32),
-            max_task_bytes: SirTaskByteLimit(256 * 1024),
+            max_files: SirTaskFileLimit(1024),
+            max_task_bytes: SirTaskByteLimit(256 * 1024 * 1024),
             max_read_lines: SirReadLineLimit(200),
             max_read_bytes: SirReadByteLimit(32 * 1024),
         }

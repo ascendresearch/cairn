@@ -289,6 +289,7 @@ pub struct MigrationProductServicesV1 {
     tasks: SharedTasksV1,
     materials: MigrationRuntimeMaterialsV1,
     task_limits: SirTaskLimits,
+    archive_limits: cairn_migration::TaskArchiveLimits,
     oracle_policy: OracleCoveragePolicyV1,
     oracle_catalog: OracleStrategyCatalogV1,
     oracle_controls: OracleControlRunnerV1,
@@ -373,6 +374,7 @@ pub fn migration_product_boundary(
     unix_socket: PathBuf,
     authority_subject: &TaskIntentAuthoritySubject,
     task_limits: SirTaskLimits,
+    archive_limits: cairn_migration::TaskArchiveLimits,
     materials: MigrationRuntimeMaterialsV1,
     oracle_policy: OracleCoveragePolicyV1,
     oracle_catalog: OracleStrategyCatalogV1,
@@ -404,6 +406,7 @@ pub fn migration_product_boundary(
             tasks,
             materials,
             task_limits,
+            archive_limits,
             oracle_policy,
             oracle_catalog,
             oracle_controls,
@@ -423,12 +426,14 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
         &mut self,
         request: Self::Request,
     ) -> Result<FrozenMigrationTaskV1, Self::Error> {
-        let sources = request
-            .submission
-            .sources()
-            .iter()
-            .map(|source| (source.path().clone(), source.text().to_owned()))
-            .collect();
+        // The archive is transport. What the system keeps is the per-path source bundle, and a
+        // submission that cannot convert entirely is refused rather than trimmed, so the bundle
+        // always describes exactly what was uploaded.
+        let sources = cairn_migration::extract_task_sources(
+            request.submission.archive(),
+            self.archive_limits,
+        )
+        .map_err(MigrationAppApiError::internal)?;
         let workspace = SirTaskWorkspace::from_sources(sources, self.task_limits)
             .map_err(MigrationAppApiError::internal)?;
         let recovery_input = IntentRecoveryInputV1::new(

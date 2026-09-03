@@ -28,6 +28,7 @@ mod reasoning_decomposition;
 mod role_agent;
 mod sir;
 mod sir_contract;
+mod task_archive;
 mod variant_execution;
 #[cfg(feature = "agent-runtime")]
 pub use agent_materials::{
@@ -282,6 +283,7 @@ pub use sir_contract::{
     SirTargetSocSelectionV1, SirTargetToolchain, SirTargetToolchainSelectionV1, SirUnknownId,
     SirUnknownKind, SirUnknownQuestion, SirUnknownV1, SirValueDomainDeclaration,
 };
+pub use task_archive::{TaskArchiveError, TaskArchiveLimits, extract_task_sources};
 pub use variant_execution::{
     ExactVariantTrialArtifact, ExactVariantTrialV1, PreparedExactVariantTrial,
     PreparedVariantBuildJob, ValidatedVariantBuild, VariantBuildCaptureLimits,

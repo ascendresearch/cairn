@@ -14,6 +14,8 @@ agent-runtime = ["dep:cairn-agent", "dep:reqwest"]
 base64.workspace = true
 cairn-agent = { workspace = true, optional = true }
 cairn-codec.workspace = true
+flate2.workspace = true
+tar.workspace = true
 cairn-execution.workspace = true
 cairn-protocol.workspace = true
 cairn-record.workspace = true

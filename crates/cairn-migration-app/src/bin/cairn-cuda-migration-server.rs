@@ -43,6 +43,8 @@ struct ProductConfigV1 {
     agent_loop_step_limit: AgentLoopStepLimit,
     migration_role_attempt_limit: MigrationRoleAttemptLimitV1,
     task_limits: SirTaskLimits,
+    #[serde(default)]
+    archive_limits: cairn_migration::TaskArchiveLimits,
     inbox_capacity: usize,
     oracle_coverage_profile: OracleCoverageProfileV1,
     oracle_adversarial_policy: OracleAdversarialPolicyV1,
@@ -137,6 +139,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.app_api_socket,
         &config.authority_subject,
         config.task_limits,
+        config.archive_limits,
         materials,
         oracle_policy,
         oracle_catalog,
