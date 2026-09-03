@@ -6297,6 +6297,8 @@ pub enum OracleFrameworkError {
     AdmissionPolicyDrift,
     #[error("Oracle numerical allowance has no stated provenance")]
     UnjustifiedAllowance,
+    #[error("Oracle control mechanism was never shown to discriminate")]
+    UncalibratedMechanism,
     #[error("Oracle Admission qualified mechanism catalog drifted")]
     AdmissionMechanismCatalogDrift,
     #[error("Oracle Admission attempt changed its portfolio, policy, mechanism, or obligations")]
@@ -6435,6 +6437,126 @@ pub fn archive_oracle_framework_artifact<A: ContentType, S: ContentStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A mechanism's identity now names a record rather than a hash of its own name, and the
+    // calibration is part of that record. Registering one that was never shown to discriminate
+    // would put the whole point of calibration behind an unchecked field.
+    #[test]
+    fn a_mechanism_cannot_register_without_having_been_shown_to_discriminate() {
+        let runner = ContentId::derive(b"runner").expect("runner identity");
+
+        assert!(
+            OracleQualifiedMechanismV1::new(
+                OracleControlFamilyV1::Honest,
+                runner,
+                OracleCalibrationOutcomeV1::Calibrated,
+            )
+            .is_ok()
+        );
+        for refused in [
+            OracleCalibrationOutcomeV1::FailedSensitivity,
+            OracleCalibrationOutcomeV1::FailedSpecificity,
+            OracleCalibrationOutcomeV1::Uncomparable,
+            OracleCalibrationOutcomeV1::NoNegativeVariants,
+        ] {
+            assert!(
+                OracleQualifiedMechanismV1::new(OracleControlFamilyV1::Honest, runner, refused)
+                    .is_err()
+            );
+        }
+    }
+
+    // Two mechanisms differing only in what their calibration found are different mechanisms, so
+    // a registration cannot survive being re-derived from weaker evidence.
+    #[test]
+    fn calibration_is_part_of_a_mechanism_identity() {
+        let runner = ContentId::derive(b"runner").expect("runner identity");
+        let honest = OracleQualifiedMechanismV1::new(
+            OracleControlFamilyV1::Honest,
+            runner,
+            OracleCalibrationOutcomeV1::Calibrated,
+        )
+        .expect("mechanism");
+        let mutant = OracleQualifiedMechanismV1::new(
+            OracleControlFamilyV1::Mutant,
+            runner,
+            OracleCalibrationOutcomeV1::Calibrated,
+        )
+        .expect("mechanism");
+
+        assert_ne!(
+            honest.identity().expect("identity"),
+            mutant.identity().expect("identity")
+        );
+        // Deserialization re-runs the constructor, so an uncalibrated mechanism cannot be decoded
+        // into existence either.
+        let mut wire = serde_json::to_value(honest).expect("wire");
+        wire["calibration"] = serde_json::json!("failed-sensitivity");
+        assert!(serde_json::from_value::<OracleQualifiedMechanismV1>(wire).is_err());
+    }
+
+    // A registration says which mechanism, runner and receipt it rests on. Nothing else compares
+    // those three against the receipt itself, so a registration that drifted from its evidence
+    // would otherwise travel as though it had earned it.
+    #[test]
+    fn a_registration_is_refused_when_it_drifts_from_the_receipt_it_cites() {
+        let runner = ContentId::derive(b"runner").expect("runner identity");
+        let other_runner = ContentId::derive(b"other-runner").expect("runner identity");
+        let evidence = ContentId::derive(b"execution-receipt").expect("evidence identity");
+        let mechanism = OracleQualifiedMechanismV1::new(
+            OracleControlFamilyV1::Mutant,
+            runner,
+            OracleCalibrationOutcomeV1::Calibrated,
+        )
+        .expect("mechanism")
+        .identity()
+        .expect("mechanism identity");
+        let receipt = crate::OracleMechanismQualificationReceiptV1::new(
+            OracleControlFamilyV1::Mutant,
+            mechanism,
+            runner,
+            evidence,
+        );
+        let receipt_id = receipt.identity().expect("receipt identity");
+
+        OracleQualifiedMechanismRegistrationV1::new(
+            OracleControlFamilyV1::Mutant,
+            mechanism,
+            runner,
+            receipt_id,
+        )
+        .validate_qualification(&receipt)
+        .expect("a registration matching its receipt is accepted");
+
+        for drifted in [
+            OracleQualifiedMechanismRegistrationV1::new(
+                OracleControlFamilyV1::Honest,
+                mechanism,
+                runner,
+                receipt_id,
+            ),
+            OracleQualifiedMechanismRegistrationV1::new(
+                OracleControlFamilyV1::Mutant,
+                mechanism,
+                other_runner,
+                receipt_id,
+            ),
+            OracleQualifiedMechanismRegistrationV1::new(
+                OracleControlFamilyV1::Mutant,
+                ContentId::derive(b"other-mechanism").expect("mechanism identity"),
+                runner,
+                receipt_id,
+            ),
+            OracleQualifiedMechanismRegistrationV1::new(
+                OracleControlFamilyV1::Mutant,
+                mechanism,
+                runner,
+                ContentId::derive(b"other-receipt").expect("receipt identity"),
+            ),
+        ] {
+            assert!(drifted.validate_qualification(&receipt).is_err());
+        }
+    }
 
     fn f32_bytes(values: &[f32]) -> Vec<u8> {
         values
@@ -7628,4 +7750,107 @@ pub fn calibrate_check_assertion(
         }
     }
     OracleCalibrationOutcomeV1::Calibrated
+}
+
+/// What one qualified Oracle control mechanism is, rather than merely what it is called.
+///
+/// The mechanism identity used to be a hash of `(control family, runner)`, which named nothing:
+/// no bytes were stored under it and nothing dereferenced it. It now names this record, and the
+/// calibration outcome is part of the identity, so a mechanism calibrated differently is a
+/// different mechanism and a registration cannot outlive the evidence that earned it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct OracleQualifiedMechanismV1 {
+    schema_version: u16,
+    control: OracleControlFamilyV1,
+    runner: ContentId<OracleControlRunnerArtifact>,
+    calibration: OracleCalibrationOutcomeV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleQualifiedMechanismWire {
+    schema_version: u16,
+    control: OracleControlFamilyV1,
+    runner: ContentId<OracleControlRunnerArtifact>,
+    calibration: OracleCalibrationOutcomeV1,
+}
+
+impl OracleQualifiedMechanismV1 {
+    /// Records one mechanism that has completed calibration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a mechanism whose calibration did not conclude `Calibrated`. A judge that was never
+    /// shown to discriminate is not qualified, and letting one register would put the whole point
+    /// of calibration behind an unchecked field.
+    pub fn new(
+        control: OracleControlFamilyV1,
+        runner: ContentId<OracleControlRunnerArtifact>,
+        calibration: OracleCalibrationOutcomeV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        let value = Self {
+            schema_version: SCHEMA_V1,
+            control,
+            runner,
+            calibration,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn control(&self) -> OracleControlFamilyV1 {
+        self.control
+    }
+
+    #[must_use]
+    pub const fn runner(&self) -> ContentId<OracleControlRunnerArtifact> {
+        self.runner
+    }
+
+    /// Derives the identity this mechanism is registered under.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or encoding error.
+    pub fn identity(
+        &self,
+    ) -> Result<ContentId<OracleQualifiedMechanismArtifact>, OracleFrameworkError> {
+        self.validate()?;
+        derive_id(self)
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        require_v1(self.schema_version)?;
+        if self.calibration != OracleCalibrationOutcomeV1::Calibrated {
+            return Err(OracleFrameworkError::UncalibratedMechanism);
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<OracleQualifiedMechanismWire> for OracleQualifiedMechanismV1 {
+    type Error = OracleFrameworkError;
+
+    fn try_from(wire: OracleQualifiedMechanismWire) -> Result<Self, Self::Error> {
+        let value = Self {
+            schema_version: wire.schema_version,
+            control: wire.control,
+            runner: wire.runner,
+            calibration: wire.calibration,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for OracleQualifiedMechanismV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        OracleQualifiedMechanismWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(de::Error::custom)
+    }
 }

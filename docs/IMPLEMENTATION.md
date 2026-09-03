@@ -880,14 +880,15 @@ Exit：normal path 产生可重放的 native build success；replay 校验 exact
 `evaluate_check_assertion` **不导出**，因为它模块外还没有消费者——它的消费者是对真实候选观测求值的
 control runner，属于下一步。孤儿门禁当场抓到了这次过早导出。
 
-**仍未做，别当成已完成:**
+**随后补上的三项（同日）:** mechanism 有了值类型 `OracleQualifiedMechanismV1`，存进 CAS，
+校准结论进入其身份——校准不同的机制就是不同的机制，未校准的无法构造也无法反序列化出来；
+五个控制族各自以自己的模式执行一次、各拿一张 receipt（此前是一次执行扇出五份，
+那只能证明「合式计划被接受」五遍，证不了 mutant 模式会拒绝 mutant）；
+`validate_qualification` 进入生产路径，registration 要与它引用的 receipt 对账。
+资格证明绑定的 item 按规范序取，因为要证的是机制而不是某个 item。
 
-- controls 执行阶段仍在判计划文本，不判候选观测。断言现在可被求值，但把它接到
-  `execute_controls` 上、让 receipt 承载真实的候选判定，是 P5 第 5、7 项的剩余部分；
-- 五个控制族仍共用**同一张** qualification receipt（`qualify` 把一次执行的 receipt 扇出五份）。
-  类型支持每族一张，生产者还没这么做；
-- `OracleQualifiedMechanismArtifact` 仍然没有值类型，mechanism 仍是描述符而非可解引用的实体；
-- `validate_qualification` 仍只在单元测试里被调用，生产路径没有调它。
+**仍未做，别当成已完成:** controls 执行阶段仍在判计划文本，不判候选观测。
+断言可求值了，但把它接到 `execute_controls`、让 receipt 承载真实候选判定，需要先有候选观测。
 
 证据口径 **local model-free**。三道红验证:把长度不符改回「无法比较」、去掉容差来源的强制、
 关掉敏感性检查——三次都如预期失败，其中第三条同时被领域层与接线层的测试抓到。

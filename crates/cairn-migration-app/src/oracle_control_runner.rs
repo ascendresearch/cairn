@@ -19,7 +19,7 @@ use cairn_migration::{
     OracleControlReceiptV1, OracleControlResultV1, OracleControlRunV1, OracleControlRunnerArtifact,
     OracleControlWorkerBindingV1, OracleItemArtifact, OracleItemStatement, OracleItemV1,
     OracleMechanismQualificationReceiptV1, OracleObligationResolutionV1, OraclePortfolioProposalV1,
-    OracleQualifiedMechanismArtifact, OracleQualifiedMechanismRegistrationV1,
+    OracleQualifiedMechanismRegistrationV1, OracleQualifiedMechanismV1,
     TrustedOracleControlObservationV1,
 };
 use cairn_protocol::{
@@ -175,27 +175,68 @@ impl OracleControlRunnerV1 {
             }
         }
         let runner = self.runner_id()?;
-        let qualification = self
-            .execute_batch(OracleControlFamilyV1::MechanismQualification, plans, None)
-            .await?;
-        if qualification.result != OracleControlResultV1::Passed {
-            return Err(OracleControlRunnerError::WorkerRejected);
+        // Qualification establishes that the mechanism discriminates, which is a property of the
+        // mode rather than of any item. One item's plans therefore exercise it, and the choice is
+        // pinned to canonical order so the same portfolio always qualifies against the same
+        // material instead of whichever item happened to be first in memory.
+        let bound = proposal
+            .accepted_items()
+            .iter()
+            .map(cairn_migration::OracleAcceptedItemV1::item)
+            .min_by_key(|item| item.identity().map(|id| id.to_wire()).unwrap_or_default())
+            .ok_or(OracleControlRunnerError::Binding)?
+            .clone();
+        let bound_id = bound.identity().map_err(domain)?;
+        let bound_plans = plans
+            .iter()
+            .filter(|plan| plan.item() == bound_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if bound_plans.is_empty() {
+            return Err(OracleControlRunnerError::Binding);
         }
         let mut registrations = Vec::new();
         let mut content = self.content()?;
         for control in policy.required_controls() {
-            let mechanism = Self::mechanism_id(*control, runner)?;
+            // Each family is qualified in its own mode against its own execution. One receipt
+            // fanned across five families would have said the same thing five times: that a
+            // well-formed plan was accepted. It could not say that the mutant mode rejects a
+            // mutant, which is the only reason those families exist.
+            let qualification = self
+                .execute_batch(*control, &bound_plans, Some(&bound))
+                .await?;
+            if qualification.result != OracleControlResultV1::Passed {
+                return Err(OracleControlRunnerError::WorkerRejected);
+            }
+            let mechanism = OracleQualifiedMechanismV1::new(
+                *control,
+                runner,
+                cairn_migration::OracleCalibrationOutcomeV1::Calibrated,
+            )
+            .map_err(domain)?;
+            let mechanism_id = mechanism.identity().map_err(domain)?;
+            archive_exact(&mut content, mechanism_id, &mechanism)?;
             let receipt = OracleMechanismQualificationReceiptV1::new(
                 *control,
-                mechanism,
+                mechanism_id,
                 runner,
                 qualification.receipt_id,
             );
             let receipt_id = receipt.identity().map_err(domain)?;
             archive_exact(&mut content, receipt_id, &receipt)?;
-            registrations.push(OracleQualifiedMechanismRegistrationV1::new(
-                *control, mechanism, runner, receipt_id,
-            ));
+            let registration = OracleQualifiedMechanismRegistrationV1::new(
+                *control,
+                mechanism_id,
+                runner,
+                receipt_id,
+            );
+            // The registration is checked against the receipt it cites rather than trusted to
+            // describe it. Nothing else compares the two, so a registration that drifted from its
+            // evidence would otherwise travel as though it had earned it.
+            registration
+                .validate_qualification(&receipt)
+                .map_err(domain)?;
+            registrations.push(registration);
         }
         let catalog = OracleAdmissionMechanismCatalogV1::new(registrations).map_err(domain)?;
         let catalog_id = catalog.identity().map_err(domain)?;
@@ -205,9 +246,8 @@ impl OracleControlRunnerV1 {
             task_id = %task_id,
             proposal_id = %proposal_id,
             catalog_id = %catalog_id,
-            worker_job_id = %qualification.job_id,
-            worker_attempt_id = %qualification.attempt_id,
-            "Oracle control mechanisms qualified by Worker evidence"
+            mechanism_count = catalog.mechanisms().len(),
+            "each Oracle control family qualified by its own Worker execution"
         );
         self.qualified.insert(
             task_id,
@@ -384,13 +424,6 @@ impl OracleControlRunnerV1 {
             "runner_sha256": sha256_hex(RUNNER),
             "image": self.config.image,
         }))
-    }
-
-    fn mechanism_id(
-        control: OracleControlFamilyV1,
-        runner: ContentId<OracleControlRunnerArtifact>,
-    ) -> Result<ContentId<OracleQualifiedMechanismArtifact>, OracleControlRunnerError> {
-        derive(&json!({"schema_version":1,"control":control,"runner":runner}))
     }
 
     #[allow(
