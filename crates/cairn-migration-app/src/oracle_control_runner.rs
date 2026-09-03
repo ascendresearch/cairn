@@ -14,9 +14,9 @@ use cairn_execution::{
 };
 use cairn_migration::{
     OracleAdmissionAttemptV1, OracleAdmissionEvidenceV1, OracleAdmissionMechanismCatalogV1,
-    OracleAdmissionPolicyV1, OracleCheckPlanV1, OracleControlDispatchV1,
-    OracleControlFailureClassV1, OracleControlFamilyV1, OracleControlReceiptV1,
-    OracleControlResultV1, OracleControlRunV1, OracleControlRunnerArtifact,
+    OracleAdmissionPolicyV1, OracleCalibrationOutcomeV1, OracleCheckPlanV1,
+    OracleControlDispatchV1, OracleControlFailureClassV1, OracleControlFamilyV1,
+    OracleControlReceiptV1, OracleControlResultV1, OracleControlRunV1, OracleControlRunnerArtifact,
     OracleControlWorkerBindingV1, OracleItemArtifact, OracleItemStatement, OracleItemV1,
     OracleMechanismQualificationReceiptV1, OracleObligationResolutionV1, OraclePortfolioProposalV1,
     OracleQualifiedMechanismArtifact, OracleQualifiedMechanismRegistrationV1,
@@ -53,6 +53,18 @@ validate_plan() {
   grep -Eq '"observation":"[^"]+"' "$file" || return 1
   grep -Eq '"pass_condition":"[^"]+"' "$file" || return 1
   grep -Fq '"evidence":[' "$file" || return 1
+  # The assertion is the half of the pass condition a machine can act on. A plan without one can
+  # only ever be inspected, never used to judge, so it is rejected here rather than downstream.
+  grep -Fq '"assertion":' "$file" || return 1
+  grep -Eq '"kind":"(exact-bytes|absolute-binary32|relative-binary32)"' "$file" || return 1
+  grep -Eq '"allowance_provenance":"(caller-declared|measured-noise-floor|derived-from-arithmetic|not-applicable)"' "$file" || return 1
+  # A tolerance that nobody can account for is a number somebody chose. Exact comparison is the
+  # only case with nothing to account for.
+  if grep -Fq '"allowance_provenance":"not-applicable"' "$file"; then
+    grep -Fq '"kind":"exact-bytes"' "$file" || return 1
+  else
+    grep -Fq '"kind":"exact-bytes"' "$file" && return 1
+  fi
 }
 while IFS='|' read -r file item digest; do
   [ -n "$file" ] || continue
@@ -153,7 +165,7 @@ impl OracleControlRunnerV1 {
         // execute against an Ascend-C candidate or target receipt. Fail closed until the ordinary
         // Worker path executes a candidate-facing Oracle mechanism; otherwise mechanical
         // Admission would turn a structural self-check into false semantic authority.
-        if !candidate_facing_runner_available() {
+        if !candidate_facing_runner_available(plans) {
             return Err(OracleControlRunnerError::SemanticExecutionUnavailable);
         }
         let proposal_id = proposal.identity().map_err(domain)?;
@@ -368,7 +380,7 @@ impl OracleControlRunnerV1 {
     ) -> Result<ContentId<OracleControlRunnerArtifact>, OracleControlRunnerError> {
         derive(&json!({
             "schema_version": 1,
-            "implementation": "oracle-check-plan-structural-runner",
+            "implementation": "oracle-check-plan-assertion-runner",
             "runner_sha256": sha256_hex(RUNNER),
             "image": self.config.image,
         }))
@@ -534,8 +546,51 @@ impl OracleControlRunnerV1 {
     }
 }
 
-fn candidate_facing_runner_available() -> bool {
-    false
+/// Whether every offered plan carries an assertion this deployment can actually evaluate.
+///
+/// This used to be a hard-coded `false`, which was honest while a plan's pass condition was prose:
+/// a mechanism could only confirm the prose was non-empty, and publishing that as semantic
+/// qualification would have turned a structural self-check into authority it had not earned.
+///
+/// A plan now carries a comparator, so the question has a real answer. It is asked of the plans in
+/// hand rather than of the deployment, because that is where it can be wrong: a plan whose
+/// assertion this build cannot calibrate has to fail closed exactly as before.
+fn candidate_facing_runner_available(plans: &[OracleCheckPlanV1]) -> bool {
+    !plans.is_empty()
+        && plans.iter().all(|plan| {
+            calibration_probe(plan.assertion()) == OracleCalibrationOutcomeV1::Calibrated
+        })
+}
+
+/// Runs the calibration protocol against synthetic observations of this comparator's own shape.
+///
+/// The probe is synthetic on purpose. What has to be established before a mechanism judges anything
+/// is that it *can* fail, and that is a property of the comparator rather than of any candidate, so
+/// establishing it does not require a candidate, a device, or a reference implementation. It is
+/// also why the wrong variants below are constructed rather than sampled: a variant that is wrong
+/// by construction is one the judge must reject, and if it does not, the judge is silent about that
+/// whole class of defect.
+fn calibration_probe(
+    assertion: cairn_migration::OracleCheckAssertionV1,
+) -> OracleCalibrationOutcomeV1 {
+    let reference: Vec<u8> = [1.0_f32, -2.5, 0.0, 1_000.0]
+        .iter()
+        .flat_map(|value| value.to_bits().to_le_bytes())
+        .collect();
+    let mut variants = Vec::new();
+    // A single changed element: the smallest defect that still has to be caught.
+    let mut single = reference.clone();
+    single[0] ^= 0xFF;
+    variants.push(single);
+    // A dropped tail: an observation that stopped early rather than one that is merely wrong.
+    variants.push(reference[..reference.len() - 4].to_vec());
+    // An all-zero observation: what a kernel that never ran leaves behind.
+    variants.push(vec![0_u8; reference.len()]);
+    // A non-finite value where a finite one belongs.
+    let mut non_finite = reference.clone();
+    non_finite[4..8].copy_from_slice(&f32::NAN.to_bits().to_le_bytes());
+    variants.push(non_finite);
+    cairn_migration::calibrate_check_assertion(assertion, &reference, &variants)
 }
 
 fn classify_control_failure(
@@ -803,6 +858,11 @@ mod tests {
                 .expect("observation"),
             OracleCheckPassCondition::new("The property matches the admitted intent.")
                 .expect("pass condition"),
+            cairn_migration::OracleCheckAssertionV1::new(
+                cairn_migration::OracleComparatorV1::ExactBytes,
+                cairn_migration::OracleAllowanceProvenanceV1::NotApplicable,
+            )
+            .expect("assertion"),
             vec![OracleCheckEvidenceV1::AdmittedIntent {
                 contract: ContentId::<MigrationIntentContractArtifact>::derive(b"intent")
                     .expect("intent"),
@@ -822,12 +882,58 @@ mod tests {
         assert_ne!(first, plan.item());
     }
 
+    // The gate is asked of the plans in hand. A plan carrying a comparator this build can
+    // calibrate opens it; a plan with nothing evaluable keeps it shut, which is the state the
+    // whole product was in until an assertion existed to ask about.
     #[test]
-    fn structural_plan_validator_cannot_grant_semantic_qualification() {
-        assert!(!candidate_facing_runner_available());
+    fn qualification_is_available_only_for_plans_whose_assertion_can_be_calibrated() {
+        let item = item();
+        assert!(candidate_facing_runner_available(&[plan(&item)]));
+        assert!(!candidate_facing_runner_available(&[]));
         assert_eq!(
             OracleControlRunnerError::SemanticExecutionUnavailable.to_string(),
             "no candidate-facing executable Oracle mechanism is available"
+        );
+    }
+
+    // A judge that cannot fail is not a judge. Every comparator offered to a plan must reject the
+    // constructed defects, and a tolerance wide enough to swallow them must not qualify.
+    #[test]
+    fn a_comparator_qualifies_only_when_it_rejects_every_known_wrong_variant() {
+        let exact = cairn_migration::OracleCheckAssertionV1::new(
+            cairn_migration::OracleComparatorV1::ExactBytes,
+            cairn_migration::OracleAllowanceProvenanceV1::NotApplicable,
+        )
+        .expect("exact assertion");
+        assert_eq!(
+            calibration_probe(exact),
+            OracleCalibrationOutcomeV1::Calibrated
+        );
+
+        let tight = cairn_migration::OracleCheckAssertionV1::new(
+            cairn_migration::OracleComparatorV1::AbsoluteBinary32 {
+                allowance: cairn_migration::OracleAllowanceBitsV1::new(1.0e-6_f32.to_bits()),
+            },
+            cairn_migration::OracleAllowanceProvenanceV1::MeasuredNoiseFloor,
+        )
+        .expect("tight assertion");
+        assert_eq!(
+            calibration_probe(tight),
+            OracleCalibrationOutcomeV1::Calibrated
+        );
+
+        // Wide enough to accept an all-zero observation, which is what a kernel that never ran
+        // leaves behind.
+        let permissive = cairn_migration::OracleCheckAssertionV1::new(
+            cairn_migration::OracleComparatorV1::AbsoluteBinary32 {
+                allowance: cairn_migration::OracleAllowanceBitsV1::new(1.0e9_f32.to_bits()),
+            },
+            cairn_migration::OracleAllowanceProvenanceV1::DerivedFromArithmetic,
+        )
+        .expect("permissive assertion");
+        assert_eq!(
+            calibration_probe(permissive),
+            OracleCalibrationOutcomeV1::FailedSensitivity
         );
     }
 

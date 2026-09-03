@@ -23,13 +23,14 @@ use cairn_migration::{
     CandidateExplorationAgentContextV1, CandidateOracleContractV1, CandidateProposalSubmissionV1,
     CandidateProposalV1, CandidateRevisionAgentContextV1, CandidateWorkspaceV1,
     IntentHypothesisSetProposalV1, IntentRecoveryInputV1, MigrationAgentToolV1,
-    MigrationRoleStepObservationV1, OracleBuildTestSnapshotArtifact, OracleCheckEvidenceV1,
-    OracleCheckMethodV1, OracleCheckObjective, OracleCheckObservation, OracleCheckPassCondition,
-    OracleCheckPlanV1, OracleCheckSetup, OracleClaimV1, OracleControlFailureClassV1,
-    OracleControlResultV1, OracleCoveragePolicyV1, OracleDimensionItemDiscoveryAgentContextV1,
-    OracleDimensionItemSetProposalV1, OracleDimensionItemSetReviewDecisionV1,
-    OracleDimensionItemSetReviewV1, OracleDimensionItemSetReviewerAgentContextV1,
-    OracleDimensionV1, OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
+    MigrationRoleStepObservationV1, OracleBuildTestSnapshotArtifact, OracleCheckAssertionV1,
+    OracleCheckEvidenceV1, OracleCheckMethodV1, OracleCheckObjective, OracleCheckObservation,
+    OracleCheckPassCondition, OracleCheckPlanV1, OracleCheckSetup, OracleClaimV1,
+    OracleControlFailureClassV1, OracleControlResultV1, OracleCoveragePolicyV1,
+    OracleDimensionItemDiscoveryAgentContextV1, OracleDimensionItemSetProposalV1,
+    OracleDimensionItemSetReviewDecisionV1, OracleDimensionItemSetReviewV1,
+    OracleDimensionItemSetReviewerAgentContextV1, OracleDimensionV1,
+    OracleDocumentationSnapshotArtifact, OracleExperimentLimit,
     OracleExperimentToolCatalogArtifact, OracleExplorationBudgetV1,
     OracleExplorationCapabilityGrantArtifact, OracleItemDeveloperAgentContextV1,
     OracleItemDiscoveryRevisionLimit, OracleItemDraftV1, OracleItemReviewDecisionV1,
@@ -84,7 +85,7 @@ Read migration-read-oracle-dimension-items, including the full Controller-derive
 
 const ORACLE_ITEM_DEVELOPMENT_INSTRUCTION: &str = r"You develop one exact Oracle item for a CUDA-to-Ascend-C migration task.
 
-Read migration-read-oracle-item-conversation, including the item's exact dimension and admitted-intent claim, before submitting. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. On the initial revision, create one or more complementary, executable check plans for only the offered item. Every plan must say what future Ascend-C candidate artifact or target execution observation it consumes and how it can accept or reject that candidate. Static analysis of the CUDA source or restatement of admitted intent can support a plan but cannot itself be the candidate observation. On a later revision, preserve the same item and address every finding from the exact prior draft review and every exact artifact-owned failed control supplied by Admission. For each failed receipt, call migration-read-oracle-control-diagnostic and use its bounded exact stdout/stderr to determine the required correction; do not guess from an exit code or artifact identity. Treat prior receipts only as feedback, never as passing authority. Negative-challenge, mechanism, infrastructure-unavailable, or missing observations are reconciled by the Controller and are never a reason to rewrite an item. Each plan must state an objective, setup, obtainable candidate observation, unambiguous pass condition, and exact source citation or admitted-intent evidence. Submit only through migration-submit-oracle-item-draft. Do not change the item, omit feedback, claim execution, review, qualification, or admission.";
+Read migration-read-oracle-item-conversation, including the item's exact dimension and admitted-intent claim, before submitting. The frozen context lists every valid task-artifact path; use migration-read-task-artifact only for those paths and never guess a path for a Controller object. On the initial revision, create one or more complementary, executable check plans for only the offered item. Every plan must say what future Ascend-C candidate artifact or target execution observation it consumes and how it can accept or reject that candidate. Static analysis of the CUDA source or restatement of admitted intent can support a plan but cannot itself be the candidate observation. On a later revision, preserve the same item and address every finding from the exact prior draft review and every exact artifact-owned failed control supplied by Admission. For each failed receipt, call migration-read-oracle-control-diagnostic and use its bounded exact stdout/stderr to determine the required correction; do not guess from an exit code or artifact identity. Treat prior receipts only as feedback, never as passing authority. Negative-challenge, mechanism, infrastructure-unavailable, or missing observations are reconciled by the Controller and are never a reason to rewrite an item. Each plan must state an objective, setup, obtainable candidate observation, unambiguous pass condition, and exact source citation or admitted-intent evidence. Each plan must also carry an assertion, which is the machine-evaluable half of its pass condition: the comparator a runner would compute, and where its tolerance came from. Use exact-bytes only when the observation really is bit-reproducible. Pair any tolerance with the origin that justifies it rather than a number you picked, because a tolerance nobody can account for cannot say how wrong a candidate would have to be before the check complains. Submit only through migration-submit-oracle-item-draft. Do not change the item, omit feedback, claim execution, review, qualification, or admission.";
 
 const CANDIDATE_REVISION_INSTRUCTION: &str = r"You revise one Ascend C implementation that a build has just refused.
 
@@ -3382,6 +3383,7 @@ impl ToolGateway for OracleItemDeveloperGateway {
                             submitted.setup,
                             submitted.observation,
                             submitted.pass_condition,
+                            submitted.assertion,
                             self.materialize_evidence(submitted.evidence)?,
                         )
                         .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
@@ -3638,6 +3640,7 @@ struct OracleSubmittedCheckPlanV1 {
     setup: OracleCheckSetup,
     observation: OracleCheckObservation,
     pass_condition: OracleCheckPassCondition,
+    assertion: OracleCheckAssertionV1,
     evidence: Vec<OracleSubmittedCheckEvidenceV1>,
 }
 
@@ -3875,6 +3878,7 @@ impl ToolGateway for OracleWholePortfolioGateway {
                                     submitted.setup,
                                     submitted.observation,
                                     submitted.pass_condition,
+                                    submitted.assertion,
                                     self.materialize_evidence(submitted.evidence)?,
                                 )
                                 .map_err(|error| ToolGatewayError::Rejected(error.to_string()))
@@ -4893,6 +4897,48 @@ fn oracle_item_discovery_native_tools(
     ])
 }
 
+/// The one check-plan shape both Oracle authoring roles are offered.
+///
+/// Both roles submit the same object, so they describe it once. Letting the two drift would mean
+/// a plan a model was told to write in one role is rejected by the validator in the other.
+fn oracle_check_plan_schema(text: &Value, evidence: &Value) -> Value {
+    // The tolerance travels as a binary32 bit pattern: a decimal would be rounded on the way
+    // through JSON, and a comparator whose threshold moved in transit is not the one anybody
+    // agreed to.
+    let allowance = json!({
+        "type":"integer","minimum":0,"maximum":4_294_967_295_u32,
+        "description":"IEEE-754 binary32 tolerance, given as its unsigned bit pattern."
+    });
+    let assertion = json!({
+        "type":"object",
+        "properties":{
+            "comparator":{"oneOf":[
+                {"type":"object","properties":{"kind":{"type":"string","const":"exact-bytes"}},"required":["kind"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"type":"string","const":"absolute-binary32"},"allowance":allowance},"required":["kind","allowance"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"type":"string","const":"relative-binary32"},"allowance":allowance},"required":["kind","allowance"],"additionalProperties":false}
+            ]},
+            "allowance_provenance":{
+                "type":"string",
+                "enum":["caller-declared","measured-noise-floor","derived-from-arithmetic","not-applicable"],
+                "description":"Where the tolerance came from. Use not-applicable only with exact-bytes."
+            }
+        },
+        "required":["comparator","allowance_provenance"],
+        "additionalProperties":false
+    });
+    json!({
+        "type":"object",
+        "properties":{
+            "method":{"type":"string","enum":["static-analysis","reference-execution","metamorphic","boundary-probe","runtime-observation"]},
+            "objective":text,"setup":text,"observation":text,"pass_condition":text,
+            "assertion":assertion,
+            "evidence":{"type":"array","minItems":1,"maxItems":16,"items":evidence}
+        },
+        "required":["method","objective","setup","observation","pass_condition","assertion","evidence"],
+        "additionalProperties":false
+    })
+}
+
 fn oracle_whole_portfolio_native_tools(
     admitted_intent: ContentId<cairn_migration::MigrationIntentContractArtifact>,
     limits: SirTaskLimits,
@@ -4907,16 +4953,7 @@ fn oracle_whole_portfolio_native_tools(
         {"type":"object","properties":{"source":{"type":"string","const":"source-citation"},"citation":citation},"required":["source","citation"],"additionalProperties":false},
         {"type":"object","properties":{"source":{"type":"string","const":"admitted-intent"},"contract":{"type":"string","const":admitted_intent}},"required":["source","contract"],"additionalProperties":false}
     ]});
-    let plan = json!({
-        "type":"object",
-        "properties":{
-            "method":{"type":"string","enum":["static-analysis","reference-execution","metamorphic","boundary-probe","runtime-observation"]},
-            "objective":text,"setup":text,"observation":text,"pass_condition":text,
-            "evidence":{"type":"array","minItems":1,"maxItems":16,"items":evidence}
-        },
-        "required":["method","objective","setup","observation","pass_condition","evidence"],
-        "additionalProperties":false
-    });
+    let plan = oracle_check_plan_schema(&text, &evidence);
     let item = json!({
         "type":"object",
         "properties":{
@@ -5032,16 +5069,7 @@ fn oracle_item_developer_native_tools(
         {"type":"object","properties":{"source":{"type":"string","const":"source-citation"},"citation":citation},"required":["source","citation"],"additionalProperties":false},
         {"type":"object","properties":{"source":{"type":"string","const":"admitted-intent"},"contract":{"type":"string","const":admitted_intent}},"required":["source","contract"],"additionalProperties":false}
     ]});
-    let plan = json!({
-        "type":"object",
-        "properties":{
-            "method":{"type":"string","enum":["static-analysis","reference-execution","metamorphic","boundary-probe","runtime-observation"]},
-            "objective":text,"setup":text,"observation":text,"pass_condition":text,
-            "evidence":{"type":"array","minItems":1,"maxItems":16,"items":evidence}
-        },
-        "required":["method","objective","setup","observation","pass_condition","evidence"],
-        "additionalProperties":false
-    });
+    let plan = oracle_check_plan_schema(&text, &evidence);
     tools.push(NativeToolDefinition {
         name: MigrationAgentToolV1::ReadOracleItemConversation
             .tool_name()

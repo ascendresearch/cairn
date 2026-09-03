@@ -1848,6 +1848,131 @@ pub enum OracleCheckEvidenceV1 {
     },
 }
 
+/// Exact binary32 allowance, carried as its bit pattern so JSON cannot round it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct OracleAllowanceBitsV1(u32);
+
+impl OracleAllowanceBitsV1 {
+    /// Creates one exact binary32 allowance from its bit pattern.
+    #[must_use]
+    pub const fn new(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    /// Returns whether this allowance is a finite, non-negative binary32 value.
+    ///
+    /// A negative or non-finite allowance accepts everything or nothing, and either way it is not
+    /// a tolerance.
+    #[must_use]
+    pub fn is_usable(self) -> bool {
+        let value = f32::from_bits(self.0);
+        value.is_finite() && value >= 0.0
+    }
+}
+
+/// How a candidate observation is compared with what the check requires.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum OracleComparatorV1 {
+    /// The observed bytes have to match exactly.
+    ExactBytes,
+    /// Elementwise binary32 comparison inside an absolute allowance.
+    AbsoluteBinary32 { allowance: OracleAllowanceBitsV1 },
+    /// Elementwise binary32 comparison inside a relative allowance.
+    RelativeBinary32 { allowance: OracleAllowanceBitsV1 },
+}
+
+/// Where a numerical allowance came from.
+///
+/// An allowance with no stated origin is a number somebody chose, and a judge resting on one
+/// cannot say how wrong a candidate would have to be before it complained.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleAllowanceProvenanceV1 {
+    /// The caller declared the tolerance as part of the desired contract.
+    CallerDeclared,
+    /// Measured as the difference between independent runs of a reference.
+    MeasuredNoiseFloor,
+    /// Derived from the arithmetic the operation performs, and stated in the plan's setup.
+    DerivedFromArithmetic,
+    /// No allowance is claimed, because the comparison is exact.
+    NotApplicable,
+}
+
+/// The machine-evaluable half of a check plan's pass condition.
+///
+/// The prose pass condition says what a reader should conclude; this says what a runner should
+/// compute. Without it a mechanism can only confirm that the prose is non-empty, which is a fact
+/// about the plan and not about any candidate.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OracleCheckAssertionV1 {
+    comparator: OracleComparatorV1,
+    allowance_provenance: OracleAllowanceProvenanceV1,
+}
+
+impl OracleCheckAssertionV1 {
+    /// Binds one comparator to the origin of the allowance it uses.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a tolerant comparator whose allowance is unusable or has no stated origin, and an
+    /// exact comparator that claims an origin it does not need.
+    pub fn new(
+        comparator: OracleComparatorV1,
+        allowance_provenance: OracleAllowanceProvenanceV1,
+    ) -> Result<Self, OracleFrameworkError> {
+        let value = Self {
+            comparator,
+            allowance_provenance,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    #[must_use]
+    pub const fn comparator(&self) -> OracleComparatorV1 {
+        self.comparator
+    }
+
+    #[must_use]
+    pub const fn allowance_provenance(&self) -> OracleAllowanceProvenanceV1 {
+        self.allowance_provenance
+    }
+
+    fn validate(&self) -> Result<(), OracleFrameworkError> {
+        let allowance = match self.comparator {
+            OracleComparatorV1::ExactBytes => {
+                return if matches!(
+                    self.allowance_provenance,
+                    OracleAllowanceProvenanceV1::NotApplicable
+                ) {
+                    Ok(())
+                } else {
+                    Err(OracleFrameworkError::UnjustifiedAllowance)
+                };
+            }
+            OracleComparatorV1::AbsoluteBinary32 { allowance }
+            | OracleComparatorV1::RelativeBinary32 { allowance } => allowance,
+        };
+        if !allowance.is_usable()
+            || matches!(
+                self.allowance_provenance,
+                OracleAllowanceProvenanceV1::NotApplicable
+            )
+        {
+            return Err(OracleFrameworkError::UnjustifiedAllowance);
+        }
+        Ok(())
+    }
+}
+
 /// Model-proposed, non-authoritative check plan bound to one exact Oracle item.
 ///
 /// The plan can describe how evidence should be obtained, but it cannot create an observation,
@@ -1861,6 +1986,7 @@ pub struct OracleCheckPlanV1 {
     setup: OracleCheckSetup,
     observation: OracleCheckObservation,
     pass_condition: OracleCheckPassCondition,
+    assertion: OracleCheckAssertionV1,
     evidence: Vec<OracleCheckEvidenceV1>,
 }
 
@@ -1874,10 +2000,15 @@ struct OracleCheckPlanWire {
     setup: OracleCheckSetup,
     observation: OracleCheckObservation,
     pass_condition: OracleCheckPassCondition,
+    assertion: OracleCheckAssertionV1,
     evidence: Vec<OracleCheckEvidenceV1>,
 }
 
 impl OracleCheckPlanV1 {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a check plan keeps every independently authored field explicit at its constructor"
+    )]
     pub fn new(
         item: ContentId<OracleItemArtifact>,
         method: OracleCheckMethodV1,
@@ -1885,6 +2016,7 @@ impl OracleCheckPlanV1 {
         setup: OracleCheckSetup,
         observation: OracleCheckObservation,
         pass_condition: OracleCheckPassCondition,
+        assertion: OracleCheckAssertionV1,
         evidence: Vec<OracleCheckEvidenceV1>,
     ) -> Result<Self, OracleFrameworkError> {
         let value = Self {
@@ -1895,6 +2027,7 @@ impl OracleCheckPlanV1 {
             setup,
             observation,
             pass_condition,
+            assertion,
             evidence,
         };
         value.validate()?;
@@ -1911,6 +2044,12 @@ impl OracleCheckPlanV1 {
         self.method
     }
 
+    /// Returns the machine-evaluable half of this plan's pass condition.
+    #[must_use]
+    pub const fn assertion(&self) -> OracleCheckAssertionV1 {
+        self.assertion
+    }
+
     #[must_use]
     pub fn evidence(&self) -> &[OracleCheckEvidenceV1] {
         &self.evidence
@@ -1922,6 +2061,7 @@ impl OracleCheckPlanV1 {
 
     fn validate(&self) -> Result<(), OracleFrameworkError> {
         require_v1(self.schema_version)?;
+        self.assertion.validate()?;
         if self.evidence.is_empty() {
             return Err(OracleFrameworkError::Empty("Oracle check evidence"));
         }
@@ -1950,6 +2090,7 @@ impl TryFrom<OracleCheckPlanWire> for OracleCheckPlanV1 {
             wire.setup,
             wire.observation,
             wire.pass_condition,
+            wire.assertion,
             wire.evidence,
         )
     }
@@ -6154,6 +6295,8 @@ pub enum OracleFrameworkError {
     CoveragePolicyDrift,
     #[error("admission policy required controls drifted")]
     AdmissionPolicyDrift,
+    #[error("Oracle numerical allowance has no stated provenance")]
+    UnjustifiedAllowance,
     #[error("Oracle Admission qualified mechanism catalog drifted")]
     AdmissionMechanismCatalogDrift,
     #[error("Oracle Admission attempt changed its portfolio, policy, mechanism, or obligations")]
@@ -6293,6 +6436,122 @@ pub fn archive_oracle_framework_artifact<A: ContentType, S: ContentStore>(
 mod tests {
     use super::*;
 
+    fn f32_bytes(values: &[f32]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_bits().to_le_bytes())
+            .collect()
+    }
+
+    fn absolute(allowance: f32) -> OracleCheckAssertionV1 {
+        OracleCheckAssertionV1::new(
+            OracleComparatorV1::AbsoluteBinary32 {
+                allowance: OracleAllowanceBitsV1::new(allowance.to_bits()),
+            },
+            OracleAllowanceProvenanceV1::MeasuredNoiseFloor,
+        )
+        .expect("assertion")
+    }
+
+    // A tolerance nobody can account for is a number somebody chose, and a judge resting on one
+    // cannot say how wrong a candidate would have to be before it complained.
+    #[test]
+    fn a_tolerance_without_a_stated_origin_is_not_a_pass_condition() {
+        assert!(
+            OracleCheckAssertionV1::new(
+                OracleComparatorV1::AbsoluteBinary32 {
+                    allowance: OracleAllowanceBitsV1::new(1.0e-6_f32.to_bits()),
+                },
+                OracleAllowanceProvenanceV1::NotApplicable,
+            )
+            .is_err()
+        );
+        // An exact comparison has nothing to account for, so claiming an origin is also wrong.
+        assert!(
+            OracleCheckAssertionV1::new(
+                OracleComparatorV1::ExactBytes,
+                OracleAllowanceProvenanceV1::CallerDeclared,
+            )
+            .is_err()
+        );
+        // Neither is a negative or non-finite tolerance, which accepts everything or nothing.
+        assert!(
+            OracleCheckAssertionV1::new(
+                OracleComparatorV1::AbsoluteBinary32 {
+                    allowance: OracleAllowanceBitsV1::new((-1.0_f32).to_bits()),
+                },
+                OracleAllowanceProvenanceV1::MeasuredNoiseFloor,
+            )
+            .is_err()
+        );
+    }
+
+    // An implementation that stops early has produced the wrong answer, not an unreadable one.
+    // Reporting that as uncomparable would let it through by producing too little to judge.
+    #[test]
+    fn an_observation_of_the_wrong_length_is_rejected_rather_than_excused() {
+        let reference = f32_bytes(&[1.0, 2.0, 3.0]);
+        let truncated = f32_bytes(&[1.0, 2.0]);
+
+        assert_eq!(
+            evaluate_check_assertion(absolute(1.0e-6), &reference, &truncated),
+            OracleAssertionOutcomeV1::Rejected
+        );
+        // A reference that is not a whole binary32 array cannot state a requirement at all.
+        assert_eq!(
+            evaluate_check_assertion(absolute(1.0e-6), &reference[..5], &reference[..5]),
+            OracleAssertionOutcomeV1::Uncomparable
+        );
+    }
+
+    // Two identical infinities are the same value. Subtracting them yields NaN, which compares
+    // false against every tolerance, so a naive difference would reject a correct result.
+    #[test]
+    fn matching_non_finite_values_are_accepted_and_differing_ones_are_not() {
+        assert_eq!(
+            evaluate_check_assertion(
+                absolute(1.0e-6),
+                &f32_bytes(&[f32::INFINITY]),
+                &f32_bytes(&[f32::INFINITY])
+            ),
+            OracleAssertionOutcomeV1::Accepted
+        );
+        assert_eq!(
+            evaluate_check_assertion(
+                absolute(1.0e9),
+                &f32_bytes(&[f32::INFINITY]),
+                &f32_bytes(&[f32::NEG_INFINITY])
+            ),
+            OracleAssertionOutcomeV1::Rejected
+        );
+        // A tolerance can never make a NaN acceptable where a finite value was required.
+        assert_eq!(
+            evaluate_check_assertion(absolute(1.0e9), &f32_bytes(&[1.0]), &f32_bytes(&[f32::NAN])),
+            OracleAssertionOutcomeV1::Rejected
+        );
+    }
+
+    #[test]
+    fn calibration_separates_a_judge_that_cannot_pass_from_one_that_cannot_fail() {
+        let reference = f32_bytes(&[1.0, 2.0, 3.0]);
+        let wrong = vec![f32_bytes(&[1.0, 2.0, 4.0])];
+
+        assert_eq!(
+            calibrate_check_assertion(absolute(1.0e-6), &reference, &wrong),
+            OracleCalibrationOutcomeV1::Calibrated
+        );
+        // Wide enough to accept the known-wrong variant: it can no longer fail.
+        assert_eq!(
+            calibrate_check_assertion(absolute(10.0), &reference, &wrong),
+            OracleCalibrationOutcomeV1::FailedSensitivity
+        );
+        // Offering no wrong variants tests nothing, which is not the same as passing.
+        assert_eq!(
+            calibrate_check_assertion(absolute(1.0e-6), &reference, &[]),
+            OracleCalibrationOutcomeV1::NoNegativeVariants
+        );
+    }
+
     fn item_plan(item: &OracleItemV1, objective: &str) -> OracleCheckPlanV1 {
         OracleCheckPlanV1::new(
             item.identity().expect("item identity"),
@@ -6303,6 +6562,11 @@ mod tests {
                 .expect("observation"),
             OracleCheckPassCondition::new("The property matches the admitted contract.")
                 .expect("pass condition"),
+            OracleCheckAssertionV1::new(
+                OracleComparatorV1::ExactBytes,
+                OracleAllowanceProvenanceV1::NotApplicable,
+            )
+            .expect("assertion"),
             vec![OracleCheckEvidenceV1::AdmittedIntent {
                 contract: ContentId::derive(b"admitted-intent").expect("intent identity"),
             }],
@@ -7193,4 +7457,175 @@ mod tests {
         drifted["elements"][0]["material"]["bytes"][0] = serde_json::json!(0);
         assert!(serde_json::from_value::<crate::CandidateOracleMaterialsV1>(drifted).is_err());
     }
+}
+
+/// Evaluates one check assertion against a reference observation and a candidate observation.
+///
+/// This is the whole of what makes a mechanism able to judge rather than merely to inspect. It
+/// takes two observations and says whether the candidate's is acceptable under the plan's stated
+/// comparator, and it is deliberately the only place that decision is made, so a runner cannot
+/// invent a looser rule than the plan declared.
+///
+/// Both observations are raw bytes because that is what an execution produces. A binary32
+/// comparator therefore requires both to be whole binary32 arrays of equal length: a length
+/// mismatch is a failure rather than a shorter comparison, since comparing a prefix would accept a
+/// candidate that stopped early.
+///
+/// This is deliberately not re-exported yet. Its consumer is the control runner that will judge a
+/// real candidate observation, and until that exists the calibration protocol below is the only
+/// caller; exporting it earlier would publish a capability with nobody behind it.
+#[must_use]
+pub fn evaluate_check_assertion(
+    assertion: OracleCheckAssertionV1,
+    reference: &[u8],
+    candidate: &[u8],
+) -> OracleAssertionOutcomeV1 {
+    match assertion.comparator() {
+        OracleComparatorV1::ExactBytes => {
+            if reference == candidate {
+                OracleAssertionOutcomeV1::Accepted
+            } else {
+                OracleAssertionOutcomeV1::Rejected
+            }
+        }
+        OracleComparatorV1::AbsoluteBinary32 { allowance } => {
+            compare_binary32(reference, candidate, allowance, false)
+        }
+        OracleComparatorV1::RelativeBinary32 { allowance } => {
+            compare_binary32(reference, candidate, allowance, true)
+        }
+    }
+}
+
+/// What one assertion concluded about one candidate observation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleAssertionOutcomeV1 {
+    Accepted,
+    Rejected,
+    /// The observations cannot be compared under this comparator at all.
+    ///
+    /// This is distinct from rejection: a truncated or misshapen observation says nothing about
+    /// whether the candidate is correct, and reporting it as a rejection would attribute a defect
+    /// to the candidate that the evidence does not support.
+    Uncomparable,
+}
+
+fn compare_binary32(
+    reference: &[u8],
+    candidate: &[u8],
+    allowance: OracleAllowanceBitsV1,
+    relative: bool,
+) -> OracleAssertionOutcomeV1 {
+    const WIDTH: usize = 4;
+    // Only the reference decides whether a comparison can be stated at all. If it is not a whole
+    // binary32 array, or the tolerance is not a tolerance, nothing here can say what was required.
+    if reference.is_empty() || reference.len() % WIDTH != 0 || !allowance.is_usable() {
+        return OracleAssertionOutcomeV1::Uncomparable;
+    }
+    // A candidate of a different length is wrong, not unreadable: it did not produce the values
+    // that were required. Calling that uncomparable would let an implementation that stops early
+    // pass by producing too little to judge.
+    if reference.len() != candidate.len() {
+        return OracleAssertionOutcomeV1::Rejected;
+    }
+    let tolerance = f32::from_bits(allowance.get());
+    for (expected, actual) in reference
+        .chunks_exact(WIDTH)
+        .zip(candidate.chunks_exact(WIDTH))
+    {
+        let expected = f32::from_bits(u32::from_le_bytes([
+            expected[0],
+            expected[1],
+            expected[2],
+            expected[3],
+        ]));
+        let actual = f32::from_bits(u32::from_le_bytes([
+            actual[0], actual[1], actual[2], actual[3],
+        ]));
+        // A non-finite pair is only acceptable when both sides agree on which non-finite value it
+        // is. Subtracting them would produce NaN and compare false against every tolerance, which
+        // would reject two identical infinities.
+        if !expected.is_finite() || !actual.is_finite() {
+            if expected.to_bits() != actual.to_bits() {
+                return OracleAssertionOutcomeV1::Rejected;
+            }
+            continue;
+        }
+        let difference = (expected - actual).abs();
+        let bound = if relative {
+            tolerance * expected.abs()
+        } else {
+            tolerance
+        };
+        // Incomparability here is a rejection, not an excuse: a difference that cannot be
+        // ordered against the bound is one the tolerance does not cover.
+        if !matches!(
+            difference.partial_cmp(&bound),
+            Some(core::cmp::Ordering::Less | core::cmp::Ordering::Equal)
+        ) {
+            return OracleAssertionOutcomeV1::Rejected;
+        }
+    }
+    OracleAssertionOutcomeV1::Accepted
+}
+
+/// What a mechanism's self-certification found before it was allowed to judge anything.
+///
+/// A judge that cannot fail is not a judge, so a mechanism proves it can discriminate before it is
+/// used. The protocol is deliberately not a single "it worked" bit: specificity and sensitivity
+/// fail in different ways, and a floor taken from a comparison that produced no difference at all
+/// is a zero wearing a floor's clothes, which turns the judge into a machine that rejects
+/// everything.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OracleCalibrationOutcomeV1 {
+    /// The mechanism accepted the reference against itself and rejected every known-wrong variant.
+    Calibrated,
+    /// The mechanism rejected the reference against itself, so it would reject correct work.
+    FailedSpecificity,
+    /// Some known-wrong variant was accepted, so the mechanism cannot detect that class of defect.
+    FailedSensitivity,
+    /// A variant could not be compared at all, so the calibration proved nothing either way.
+    Uncomparable,
+    /// No known-wrong variants were offered, so nothing tested whether the judge can fail.
+    NoNegativeVariants,
+}
+
+/// Runs the calibration protocol for one assertion against a reference and its known-wrong variants.
+///
+/// Specificity is checked against the reference compared with itself, which is the one comparison
+/// a correct implementation must always survive. Sensitivity is checked against variants that are
+/// known to be wrong; every one of them has to be rejected, because a judge that misses one class
+/// of defect will stay silent about it for every candidate afterwards.
+#[must_use]
+pub fn calibrate_check_assertion(
+    assertion: OracleCheckAssertionV1,
+    reference: &[u8],
+    wrong_variants: &[Vec<u8>],
+) -> OracleCalibrationOutcomeV1 {
+    if wrong_variants.is_empty() {
+        return OracleCalibrationOutcomeV1::NoNegativeVariants;
+    }
+    match evaluate_check_assertion(assertion, reference, reference) {
+        OracleAssertionOutcomeV1::Accepted => {}
+        OracleAssertionOutcomeV1::Rejected => {
+            return OracleCalibrationOutcomeV1::FailedSpecificity;
+        }
+        OracleAssertionOutcomeV1::Uncomparable => {
+            return OracleCalibrationOutcomeV1::Uncomparable;
+        }
+    }
+    for variant in wrong_variants {
+        match evaluate_check_assertion(assertion, reference, variant) {
+            OracleAssertionOutcomeV1::Rejected => {}
+            OracleAssertionOutcomeV1::Accepted => {
+                return OracleCalibrationOutcomeV1::FailedSensitivity;
+            }
+            OracleAssertionOutcomeV1::Uncomparable => {
+                return OracleCalibrationOutcomeV1::Uncomparable;
+            }
+        }
+    }
+    OracleCalibrationOutcomeV1::Calibrated
 }

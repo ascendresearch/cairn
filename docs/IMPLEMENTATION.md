@@ -804,7 +804,10 @@ Exit：同一 task 内经过多轮 authorized compile→diagnostic→revision �
 
 ### P4 · 纵向 A：normal-path native build success
 
-**P4 现在跑不了，依赖图漏了一项（2026-09-03 查明）。** 工作流到不了候选阶段:
+**Oracle 的阻塞已解除（2026-09-03，见下节 P5 第 7 项）。** 以下是解除之前记录的诊断，保留是因为它说明了
+为什么那道门当时是对的。
+
+**P4 曾经跑不了，依赖图漏了一项（2026-09-03 查明）。** 工作流到不了候选阶段:
 `oracle_control_runner.rs` 里 `candidate_facing_runner_available()` 硬编码返回 `false`,
 于是 `qualify` 无条件返回 `SemanticExecutionUnavailable`,`run_qualified_oracle_controls` 用 `?`
 向上抛,任务在 Oracle admission 处终止。候选阶段在其之后,因此永远到不了。
@@ -842,6 +845,52 @@ mechanism runner,而计划把它放在 **P5 第 7 项**。要么先做 P5 的那
 起算，包含 provider 排队、Worker 等待与失败尝试，并另报 active model / Worker / device time。
 
 Exit：normal path 产生可重放的 native build success；replay 校验 exact artifact 与 toolchain binding。
+
+### P5 第 7 项 · 判据的可判定性（2026-09-03 完成）
+
+**根因不是那个 `false`，是判据没有可判的东西。** `candidate_facing_runner_available()` 硬编码
+返回 `false`，把整条 Oracle 通路堵死。但翻开它并不能解决问题:检查计划的 `pass_condition` 与
+`observation` 都是 `bounded_text!`，上限 4096 字节，全部校验只有「非空、无首尾空白」。
+没有比较器、没有容差、没有操作数绑定。runner 因此只能 `grep` 它非空——那是关于**计划**的事实，
+不是关于任何**候选**的事实。mechanism 至今只是 `(control, runner)` 的哈希，正因为它没有可执行的内容。
+
+**做法:给计划一个可被机器判定的断言。** `OracleCheckAssertionV1` 携带比较器与容差来源:
+
+- 比较器三选一:逐字节相等、binary32 绝对容差、binary32 相对容差；
+- 容差以 binary32 **位模式**传递，因为十进制会在 JSON 里被舍入，而一个在传输中变了的阈值不是任何人同意过的那个；
+- 容差来源必填（caller-declared / measured-noise-floor / derived-from-arithmetic / not-applicable），
+  且与比较器交叉校验:精确比较不得声称来源，容差比较不得没有来源。
+  **一个说不出出处的容差是某人随手挑的数**，靠它的判据无法说出候选要错到什么程度它才会叫。
+
+**判据先自证，再裁决。** `calibrate_check_assertion` 实现 `EVALUATION.md` 5.1 的协议:
+特异性（参考对自身必须通过）与敏感性（每一个已知错误变体都必须被拒），
+并把「没有提供错误变体」与「通过」区分开——**没测过能不能失败，不等于通过**。
+校准用的是合成观测，因此**不需要设备**:判据能不能失败是比较器的性质，不是候选的性质。
+
+`candidate_facing_runner_available` 因此从硬编码常量变成对**手上这批计划**的真实探测:
+每个计划的断言都要能被本次构建校准，否则照旧 fail closed。
+
+**校准探针当场抓到一个真实缺陷。** 原实现把长度不符判为 `Uncomparable`，
+于是「少写了尾部元素」的候选会因为「无法比较」而逃过判定。丢尾是**错误答案**，不是无法判断:
+现在只有参考本身不成形（非 binary32 整数组）才是不可比较，候选长度不符一律拒绝。
+这个缺陷是探针里那条「丢弃末尾」的变体逼出来的——正是 5.1 要求它存在的理由。
+
+顺带处理的两处:两个 Oracle 角色的检查计划 schema 此前各写一份，已抽成一个共享函数
+（两处漂移就意味着模型被告知写的东西会被另一处的校验器拒绝）；
+`evaluate_check_assertion` **不导出**，因为它模块外还没有消费者——它的消费者是对真实候选观测求值的
+control runner，属于下一步。孤儿门禁当场抓到了这次过早导出。
+
+**仍未做，别当成已完成:**
+
+- controls 执行阶段仍在判计划文本，不判候选观测。断言现在可被求值，但把它接到
+  `execute_controls` 上、让 receipt 承载真实的候选判定，是 P5 第 5、7 项的剩余部分；
+- 五个控制族仍共用**同一张** qualification receipt（`qualify` 把一次执行的 receipt 扇出五份）。
+  类型支持每族一张，生产者还没这么做；
+- `OracleQualifiedMechanismArtifact` 仍然没有值类型，mechanism 仍是描述符而非可解引用的实体；
+- `validate_qualification` 仍只在单元测试里被调用，生产路径没有调它。
+
+证据口径 **local model-free**。三道红验证:把长度不符改回「无法比较」、去掉容差来源的强制、
+关掉敏感性检查——三次都如预期失败，其中第三条同时被领域层与接线层的测试抓到。
 
 ### P5 · 纵向 B：950PR correctness
 
