@@ -16,7 +16,6 @@ members = [
     "crates/cairn-store-sqlite",
     "crates/cairn-testkit",
     "crates/cairn-verification",
-    "crates/cairn-workspace",
     "crates/cairn-worker",
 ]
 resolver = "3"
@@ -33,7 +32,6 @@ cairn-codec = { path = "crates/cairn-codec" }
 cairn-agent = { path = "crates/cairn-agent" }
 cairn-execution = { path = "crates/cairn-execution" }
 cairn-layout = { path = "crates/cairn-layout" }
-cairn-workspace = { path = "crates/cairn-workspace" }
 cairn-migration = { path = "crates/cairn-migration", default-features = false }
 cairn-migration-app = { path = "crates/cairn-migration-app" }
 cairn-observability = { path = "crates/cairn-observability" }

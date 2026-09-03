@@ -714,7 +714,6 @@ fn server_config(
         "schema_version": 1,
         "listen": listen.to_string(),
         "store_root": home.join("store"),
-        "workspaces_root": home.join("workspaces"),
         "tls": {
             "certificate": home.join("secrets/server.pem"),
             "private_key": home.join("secrets/server-key.pem"),

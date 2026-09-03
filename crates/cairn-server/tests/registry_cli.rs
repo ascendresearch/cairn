@@ -23,7 +23,6 @@ fn registry_query_cli_emits_strict_json_and_missing_entries_fail() -> Result<(),
             "schema_version": 1,
             "scheduler": null,
             "store_root": home.join("store"),
-            "workspaces_root": home.join("workspaces"),
             "tls": {
                 "certificate": home.join("secrets/unused-controller.pem"),
                 "client_ca": home.join("secrets/unused-ca.pem"),

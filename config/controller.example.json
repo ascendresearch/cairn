@@ -51,6 +51,5 @@
   },
   "transport": {
     "message_byte_limit": 1048576
-  },
-  "workspaces_root": "workspaces"
+  }
 }

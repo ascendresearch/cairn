@@ -55,7 +55,6 @@ use cairn_protocol::{
     EventSequence, ObservedAtUnixMillis, ReservationId, WorkerId,
 };
 use cairn_store_sqlite::{SqliteContentStore, SqliteEventStore};
-use cairn_workspace::ProjectName;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::TcpListener, time::Instant};
@@ -96,8 +95,6 @@ pub struct ServerConfig {
     /// this tree's business, and repeating them per deployment only creates more ways to scatter
     /// durable state.
     pub store_root: PathBuf,
-    /// Root of the project workspaces tree.
-    pub workspaces_root: PathBuf,
 }
 
 /// Isolated server-authenticated listener and certificate authority used only for bootstrap.
@@ -154,7 +151,7 @@ pub(crate) struct EnrolledWorker {
 #[derive(Debug, Error)]
 pub enum ServerError {
     #[error(
-        "usage: cairn-server <config.json> | cairn-server bootstrap <directory> <server-name> <control-address> <enrollment-address> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id> | cairn-server project validate|init <config.json> <project>"
+        "usage: cairn-server <config.json> | cairn-server bootstrap <directory> <server-name> <control-address> <enrollment-address> | cairn-server model resolve <runtime-catalog.json> <model-template.json> <alias> <output.json> | cairn-server registry list|audit <config.json> | cairn-server registry show-worker <config.json> <worker-id> | cairn-server registry show-credential <config.json> <credential-id> | cairn-server enrollment create <config.json> <pool> <ttl-ms> <bundle.json> | cairn-server enrollment revoke <config.json> <enrollment-id> <command-id> | cairn-server credential rotate <config.json> <credential-id> <ttl-ms> <bundle.json> | cairn-server credential revoke <config.json> <credential-id> <command-id> | cairn-server worker disable|enable <config.json> <worker-id> <command-id> | cairn-server worker set-pool <config.json> <worker-id> <pool> <command-id> | cairn-server reservation release <config.json> <reservation-id> <command-id>"
     )]
     Usage,
     #[error("controller configuration failed: {0}")]
@@ -370,32 +367,8 @@ pub async fn run_from_arguments(
     if first == "registry" {
         return run_registry_command(&mut arguments);
     }
-    if first == "project" {
-        let action = arguments.next().ok_or(ServerError::Usage)?;
-        let initialize = match action.to_str() {
-            Some("validate") => false,
-            Some("init") => true,
-            _ => return Err(ServerError::Usage),
-        };
-        let config_path = PathBuf::from(arguments.next().ok_or(ServerError::Usage)?);
-        let project = ProjectName::new(
-            arguments
-                .next()
-                .ok_or(ServerError::Usage)?
-                .into_string()
-                .map_err(|_| ServerError::Usage)?,
-        )
-        .map_err(|error| ServerError::Configuration(error.to_string()))?;
-        if arguments.next().is_some() {
-            return Err(ServerError::Usage);
-        }
-        let config = load_server_config(&config_path)?;
-        let admitted = if initialize {
-            initialize_project_workspace(&config, &project)?
-        } else {
-            admit_project_definition(&config, &project)?
-        };
-        return write_json_stdout(&admitted);
+    if first == "registry" {
+        return run_registry_command(&mut arguments);
     }
     if first == "enrollment" {
         let action = arguments.next().ok_or(ServerError::Usage)?;
@@ -640,89 +613,6 @@ pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerErro
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
     config.resolve_paths(base);
     Ok(config)
-}
-
-/// Lays out one admitted project's workspace.
-///
-/// A workspace holds several different things and each operation reaches one of them, so the areas
-/// exist before anything writes into them, for the same reason the deployment trees do: whoever
-/// creates a directory decides what it is for, and leaving that to whoever writes first means
-/// nobody decided.
-///
-/// # Errors
-///
-/// Returns an error when the definition cannot enter intake, or a directory cannot be created.
-pub fn initialize_project_workspace(
-    config: &ServerConfig,
-    project: &ProjectName,
-) -> Result<AdmittedProject, ServerError> {
-    let admitted = admit_project_definition(config, project)?;
-    for area in cairn_layout::WorkspaceArea::ALL {
-        let path = admitted.workspace.join(area.directory_name());
-        fs::create_dir_all(&path)
-            .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?;
-    }
-    Ok(admitted)
-}
-
-/// What one project definition declares, once every intake condition has been checked.
-#[derive(Debug, Serialize)]
-pub struct AdmittedProject {
-    /// Stable project identity.
-    pub project: String,
-    /// Absolute workspace directory inside the workspaces tree.
-    pub workspace: PathBuf,
-    /// Upstream the frozen source is taken from.
-    pub upstream: cairn_workspace::UpstreamIdentity,
-    /// Files the product supplies, which the agent may read and may not write.
-    pub provided: usize,
-    /// The agent's entire writable surface.
-    pub authored_by_agent: usize,
-    /// The areas this project's workspace is laid out in.
-    pub areas: Vec<String>,
-}
-
-/// Checks whether one project definition may enter intake, and reports what it declares.
-///
-/// This is the administrator-facing boundary the gate belongs at: intake is an administrative act,
-/// and a definition that cannot be reproduced or whose file ownership is ambiguous has to be
-/// refused before any work rests on it rather than after.
-///
-/// # Errors
-///
-/// Returns an error when the definition is missing, undecodable, or fails an intake condition.
-pub fn admit_project_definition(
-    config: &ServerConfig,
-    project: &ProjectName,
-) -> Result<AdmittedProject, ServerError> {
-    let workspace = cairn_workspace::project_directory(&config.workspaces_root, project);
-    let path = cairn_workspace::definition_path(&config.workspaces_root, project);
-    let definition: cairn_workspace::ProjectDefinition = serde_json::from_slice(
-        &fs::read(&path)
-            .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?,
-    )
-    .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?;
-    definition
-        .validate()
-        .map_err(|error| ServerError::Configuration(format!("{}: {error}", path.display())))?;
-    if definition.project != *project {
-        return Err(ServerError::Configuration(format!(
-            "{} declares project {} but sits in the workspace of {project}",
-            path.display(),
-            definition.project
-        )));
-    }
-    Ok(AdmittedProject {
-        project: definition.project.to_string(),
-        workspace,
-        upstream: definition.source.upstream,
-        provided: definition.provided.len(),
-        authored_by_agent: definition.authored_by_agent.len(),
-        areas: cairn_layout::WorkspaceArea::ALL
-            .iter()
-            .map(|area| area.directory_name().to_owned())
-            .collect(),
-    })
 }
 
 /// Reconstructs the canonical current worker and credential registry view.
@@ -1146,7 +1036,6 @@ impl ServerConfig {
     /// configuration and the state genuinely live in different places. One rule covers both.
     fn resolve_paths(&mut self, base: &Path) {
         resolve(&mut self.store_root, base);
-        resolve(&mut self.workspaces_root, base);
         resolve(&mut self.tls.certificate, base);
         resolve(&mut self.tls.private_key, base);
         resolve(&mut self.tls.client_ca, base);
@@ -2250,7 +2139,6 @@ mod tests {
             config.tls.client_ca,
             directory.path().join("secrets/ca.pem")
         );
-        assert_eq!(config.workspaces_root, directory.path().join("workspaces"));
     }
 
     #[cfg(unix)]
