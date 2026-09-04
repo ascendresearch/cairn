@@ -87,6 +87,7 @@ designs, development records and experiment artifacts.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | current product and system design | normative |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | implemented facts, gaps and next milestone | factual |
 | [docs/EVALUATION.md](docs/EVALUATION.md) | how product and architecture claims are tested | normative for evaluation |
+| [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md) | knowledge and skill subsystem design | normative under ARCHITECTURE 7.4 |
 | `docs/DECISIONS.md` | current-V1 fixture's identity-bound historical path | machine anchor, non-authoritative |
 | `README.md` | public orientation and navigation | summary only |
 
