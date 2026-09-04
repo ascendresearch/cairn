@@ -418,17 +418,18 @@ exposure ledger 仍未实现。
 | 注册 worker | 5 个：`gpu` 2、`npu` 2、`npu-build` 1 |
 | Ascend build worker | 已重新上线并注册，backends `docker-v1`，capabilities `execution.role=build`、`toolchain.vendor=ascend`、`toolchain.architecture=dav-3510`、`toolchain.cann=9.1.0-beta.1` |
 
-三个进程已于 2026-09-02 全部由 systemd 管理，并统一部署到同一个提交：
+三个进程自 2026-09-02 起由 systemd 管理。**位置与 scope 已于 2026-09-03 重整，当前形态见 5.1**;
+下表只保留仍然成立的一件事——每台主机要的目标环境不同:
 
-| 进程 | 主机 | scope | unit | 目标环境 |
-| --- | --- | --- | --- | --- |
-| Controller | 本机 | user（已开 linger） | `cairn-controller-real.service` | x86_64-gnu |
-| Ascend build worker | NPU 主机 | system | `cairn-worker-npu-build.service` | x86_64-**musl** |
-| CUDA worker | GPU 主机 | user（已开 linger） | `cairn-worker-gpu.service` | aarch64-gnu |
+| 进程 | 主机 | 目标环境 |
+| --- | --- | --- |
+| 服务端 | 本机 | x86_64-gnu |
+| Ascend build worker | NPU 主机 | x86_64-**musl** |
+| CUDA worker | GPU 主机 | aarch64-gnu |
 
-三台主机的布局一致：`<prefix>/versions/<commit>/` 为不可变版本目录，`<prefix>/current` 是符号链接，
+`<root>/versions/<commit>/` 为不可变版本目录，`<root>/bin` 是指向其中的符号链接，
 回滚是一次链接翻转而不是又一次传输，unit 文件不随版本变化。部署由 `scripts/deploy.sh` 从 release
-bundle 完成，见本节末。
+bundle 完成。
 
 此前每个进程都是手工 `setsid` 加重定向启动的：没有东西负责重启，退出原因不被记录，
 「哪台机器在跑什么」只存在于 shell 历史里。已实测该性质：对构建 worker 发 `SIGKILL` 后
@@ -501,82 +502,87 @@ musl 二进制。清单与脚本彼此一致，只是相对部署都不完整。
 
 ## 5.1 从这里继续
 
-**部署现状。** 三个进程都在 `d896d7f`,由 systemd 管理:controller 是本机 user unit
-`cairn-controller-real`,部署根 `~/.local/share/cairn`;两个 worker 分别是 NPU 主机的 system unit
-`cairn-worker-npu-build`（根 `/opt/cairn-worker/npu-build`）和 GPU 主机的 user unit
-`cairn-worker-gpu`（根 `/home/dawei/.local/state/cairn-worker/gpu`）。另有两个隧道 unit,见 4.3。
-改动后重新部署的路径是 `scripts/build-release.sh` 产出 bundle,再用 `scripts/deploy.sh` 逐个部署。
+### 部署现状（2026-09-04）
 
-**三个会咬人的地方,都咬过。**
+三台主机同一形态，全部 system unit，全部在跑:
 
-发布构建需要钉住版本的 zig,而本机的 shim 装在 scratchpad 里、**不跨会话存活**。
-重建方式:`uv venv <scratch>/zigenv --python 3.12`,
+| 角色 | 主机 | 部署根 | unit |
+| --- | --- | --- | --- |
+| 服务端（迁移产品进程） | 本机 | `/opt/cairn/server` | `cairn-server` |
+| Ascend 构建 worker | NPU 主机 | `/opt/cairn/worker` | `cairn-worker-npu-build` |
+| CUDA worker | GPU 主机 | `/opt/cairn/worker` | `cairn-worker-gpu` |
+
+每个根下是 `bin/`（指向 `versions/<commit>/bin` 的符号链接）、`config/` 与其余状态树。
+App API socket 在 `/run/cairn-server/migration.sock`，客户端配置指向它即可。
+本机与 GPU 主机可免密 sudo，NPU 主机是 root 登录。
+
+**改动后重新部署的路径**:`scripts/build-release.sh` 产出 bundle，`scripts/deploy.sh` 逐个部署。
+本地交叉构建需要钉住版本的 zig，而它装在 scratchpad 里、不跨会话存活;
+重建方式见本节末的「会咬人的地方」。
+
+### P4 走到哪里了
+
+**正常入口已在真实部署上跑通到 intent 裁决之后。** 用任务 `scale-clamp-f32`
+（此前不在仓库里的 elementwise 算子，见 `fixtures/cuda-ascend/sir/scale-clamp-f32/v1/`）,
+经 CLI 提交后依次完成:分块上传、归档解包、任务冻结落盘、**真实 DeepSeek 调用**、
+模型对两个 unknown 提出可区分的竞争假说、两次管理员裁决被记录。
+
+**当前停在 `blocked`，但这不是缺陷。** 日志 `intent_admission_waiting_for_reconciliation`
+带 `unresolved_decision_count = 1`。我作为管理员对「非有限输入」这个 unknown 选了
+`intent-keep-unknown`，而 `KeepUnknown` 按设计计为未解决，工作流据此暂停等管理员回头处理
+（见 `app_api.rs` 的 `take_resolved_intent_decisions`）。**下一步很简单**:
+对该请求改用 `intent-select` 选一个假说，或先补 `intent-provide` 给出确切 claim，
+任务即可继续进入 Oracle 阶段。已验证 `intent-reconcile` 单独调用不会推进——
+它不解决未解决的裁决，只做对账。
+
+**再往后没有走过**:Oracle 阶段会调用 `qualify`，那条路在本轮之前是死的，
+现已由 P5 第 7 项打通（检查计划带可校准断言）,但**从未在真实 worker 上跑过**。
+候选阶段更远。这两段是 P4 剩下的全部内容。
+
+### 本轮修好的一类缺陷，值得下一次留意
+
+**四处「只报失败不报原因」，同一形状，同一天各修一次。** 产品进程启动、
+应用模块终止、控制器读配置、agent loop 执行——每一处都把具体错误丢成一个分类或一句空话，
+运维拿到的是一个健康的进程和一个停住的任务，无从下手。修好之后每一次都**立刻**说清了真因:
+端口被占、哪份配置缺失、模型输出在 16384 处截断。
+下一次遇到 `.is_err()`、`Err(_)` 或无参数错误变体，那就是同一个坑。
+
+**预算已一次调到位，不要再逐个撞。** 输出 token 131072（模型上限 384000）、
+episode 步数 96、工具操作 512、循环步数 96、角色重试 5、任务 256 文件共 8 MiB、
+单次读 4096 行、候选搜索 12 轮、worker 执行 1 小时/完成 2 小时。
+线上配置与 `config/migration-product.example.json` 取值一致，有测试钉住例配置可被产品类型解析。
+
+### 未解决的事实，别当成已解决
+
+- **工作流层没有重启恢复**:任务来自内存 channel，Controller 重启后没有东西重新驱动它。
+  冻结源码现在落在 `workspaces/<task>/` 且可重建，但驱动器本身没有恢复路径。
+- exposure ledger 一行代码都没有，而它是 restricted 材料唯一真正的控制（4.2.4）。
+- 资源时钟的两面不对称仍在（4.2.6）。
+- controls 执行阶段仍在判计划文本，不判候选观测。
+
+### 这一轮做错的事
+
+**在真实部署上先停服务再改结构，产生了停机窗口。** 其间 unit 启动失败，
+而 systemd 的启动限流把真实原因挡成了「重启过于频繁」,我一度定位不到。
+正确做法是在旁边建好新结构、验证可启动、再切换。这个部署已因
+「配置改动必须和要求它的那次代码改动一起部署」栽过两次，这是同一类问题的第三种形态。
+
+**红验证出过两次假通过。** 一次是注入的假名字含被安装名的子串被 grep 匹到;
+一次是先还原再检查，检查跑的是干净输入。**注入之后立刻检查，并断言注入确实生效**,
+这两条现在是硬性做法。
+
+### 三个会咬人的地方
+
+发布构建需要钉住版本的 zig，本机 shim 装在 scratchpad 里、**不跨会话存活**。重建:
+`uv venv <scratch>/zigenv --python 3.12`,
 `uv pip install --python <scratch>/zigenv/bin/python -r release/zig-requirements.txt`,
 再写一个 `exec <scratch>/zigenv/bin/python -m ziglang "$@"` 的 `zig` 放进 PATH。
-CI 里由 `.github/actions/setup-release-toolchain` 完成,本地没有等价物。
 
-**配置改动必须和要求它的那次代码改动一起部署。** 这个错误犯过两次:先删了线上配置的字段,
-而部署的二进制还是要求它的那一版,systemd 重启五次后放弃,整个系统静默停摆。
-线上配置不是可以顺手编辑的东西。
+**配置改动必须和要求它的那次代码改动一起部署。** 这个错误犯过两次:
+先删了线上配置的字段，而部署的二进制还是要求它的那一版，systemd 重启五次后放弃，整个系统静默停摆。
 
-`cairn-server bootstrap` 把给它的地址同时用作监听与对外通告。这个部署走反向隧道,两者不同
-（监听 17443/17444,通告 7443/7444),bootstrap 之后要手工改 `enrollment_service.public_tcp_address`
-与 `control_endpoint.tcp_address`。
-
-**分块上传已完成。** 任务源码压缩包不再整包塞进一帧。客户端先声明归档的长度与摘要,再按帧上限推导出的
-块大小逐块推送,最后在同一条连接上提交。服务端在收下任何字节之前就用声明长度挡掉超出配置上限的归档,
-并在完成时用摘要判定重组结果是否正是客户端手里的字节——只看长度会放过一份块块都到、内容却不对的传输。
-方向与 worker 的物料通道相反:那条是 Controller 给清单、worker 按偏移拉,这条是客户端往上推。
-因此照搬的是形状而不是代码——清单在前、按偏移分块、以内容标识收尾。
-
-**暂存字节挂在连接上,不在共享表里。** 这样「上传被放弃了」由持有 socket 的一方直接观察到,
-不需要再引入一口专门判定放弃的上传何时死亡的钟,而 4.2.2 刚把一口这样的钟换成被记录的事实。
-偏移因此不是续传游标——连接一断暂存就没了,没有可以续上的东西——它的作用是让重复、乱序或重叠的块
-变成一次拒绝,而不是一份被悄悄写坏的归档。服务端也没有单独的每块上限:帧上限已经界定单次请求,
-声明长度已经界定整条传输,第三道界什么都不挡。声明本身不预分配,一份声明了却从未发送的归档不占内存。
-
-证据口径是 **local model-free**,没有真实部署运行的证据。四道门各做了一次红验证:把块大小的 envelope
-预留改成 0、让客户端整包发一块、在传输中翻转一个字节、把干净 EOF 重新当作错误——四次都如预期失败。
-
-**其中一次红验证先是假通过,值得记下来。** 注入字节翻转的那次改写因为缩进不匹配而一处也没改到,
-脚本又没有断言匹配数,于是测试「通过」了——它比较的是未被改动的自身。这正是 `AGENTS.md` 里那条:
-重写了零处的变换会让比较同义反复地成立。此后每一次注入都先断言匹配数,四道门才逐一验完。
-
-**P3 已开工,先做的是让候选阶段不再是桩**,记录见 6.1 之后的 P3 小节。
-
-**一处会误导人的现状,顺带记下。** `observe_candidate_on_worker` 会真的把候选调度到 build worker、
-拿到 receipt、把 outcome 与 exit code 写进日志,然后**无条件返回 `CandidateMechanismExecutionUnavailable`
-并丢弃这次观测**。fail closed 本身是对的——没有 qualified mechanism 就不该发布语义结论——
-但它同时意味着 `establish_candidate` 里那个 `loop` 从来没有循环过:第一次构建观测就把整个任务打死。
-P3 第 4 项要把构建结果作为**搜索信号**（编译成败与诊断）回灌给循环,同时让 admission 继续 fail closed;
-这两件事必须分开,否则要么循环拿不到反馈,要么结构自检被当成语义结论。
-
-**下一步不是 P4,因为 P4 现在跑不了。** 理由与证据见下面 P4 小节:Oracle admission 无条件 fail closed,
-候选阶段在它之后,所以正常入口到不了循环。需要 administrator 决定的是先做 P5 第 7 项,
-还是把 P4 重新定义。
-
-**这一轮改为验证循环本身,不烧 provider 调用去跑一条已知跑不通的路。** 新增
-`CandidateSearchStoreV1`,把循环的持久化面从产品服务里分出来——它是那些服务里唯一可以单独运行的部分,
-因为它只需要一个部署的 store,不需要先有 admitted Oracle。集成测试因此能问出那个只有部署后才会失败的问题:
-一次转移经过真实 SQLite journal、真实路径、每次调用重新打开、并且不在运行时线程上,还成不成立。
-两个测试都做了红验证:让 open 不先 recover、让 loop 身份忽略 task。
-
-同时补了两道门:`check-product-path.sh` 的多线程运行时断言扩展到 `cairn-migration-app`
-（它现在也在 `block_in_place` 里开 store）;新增一个测试要求每个任务 fixture 的 caller declaration
-可被真正会读它的入口读出来——**它当场抓到了新任务 fixture 的一处缺陷**（claim 未按 id 排序）,
-而那个缺陷本来要等到一次真实提交、花掉 provider 调用之后才会暴露。
-
-**profiler 诊断分流（P3 第 4 项的后半）尚未做**:目前回灌的只有编译器诊断,原样回传;
-profiler 输出要先经确定性分析器转成结构化建议,那要等到有 device 执行（P5）才有输入。
-
-**未解决的事实,别当成已解决。** exposure ledger 一行代码都没有,而它是 restricted 材料唯一
-真正的控制（4.2.4）。资源时钟的两面不对称仍在（4.2.6）。P0 的 Exit 仍未达成:
-还没有一个候选经正常入口到达 Ascend build worker 并取回 typed 诊断。
-
-**这一轮里被证明有用的做法。** 每一道门禁都红验证过——把它该抓的东西造出来,确认它真的失败,
-再撤回。这一轮有三样东西因为「为还不存在的设计搭架子」而被删掉:布局的运行时校验、工具根绑定、
-项目定义与它的服务端子命令;删掉它们比留着便宜。本文记录的是事实与错误,不只是结果,
-包括我自己的两次归因错误（4.2）——那些记录比结论更有用。
+NPU 主机要 **musl** 目标,GPU 主机要 **aarch64-gnu**,本机直接 `cargo build --release`
+产出的 glibc 二进制在 NPU 主机上会以 `GLIBC_2.38 not found` 立即退出。
 
 ## 6. 下一里程碑：首个真实 package
 
