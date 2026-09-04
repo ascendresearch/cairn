@@ -740,6 +740,42 @@ obligation，因为那是阅读顺序;`CandidateOracleContractV1` 以 content id
 **三、四、五这三堵墙的共同点:所在代码路径从未被真正走到过。** 因此「测试全绿」在这些位置
 不构成任何能力证据，与本文第 1 节「没有反向审计的绿灯不构成能力证据」是同一件事。
 
+### 4.10 P4 通路跑通，失败点是 platform fact gap（2026-09-04，live）
+
+**整条通路首次贯通:** 正常入口 → SIR 真实调用 → Intent Admission → Oracle 整体 portfolio →
+五个控制族在 worker 上执行 → Oracle Admission → **候选探索首次真实模型调用**
+（539 秒、44595 output token）→ 提交接受 → 调度到 Ascend build worker → **真实编译** →
+构建观测折回 → 自动进入修订。每一段都是首次。P3 的迭代策略同时得到验证:
+构建失败没有终结任务，而是成为搜索信号。
+
+**工具链解析正确**，这是独立的好消息:诊断里出现了 `bisheng`、
+`cann-9.1.0-beta.1`、`ccec_compiler/bin/ld.lld`。构建失败不在工具链可得性上。
+
+**失败点:**
+
+```
+CMake Error: Cannot determine link language for target "cairn_candidate"
+```
+
+候选提交 `source/src/scale_clamp.cpp`;配方只启用 `ASC` 语言并把候选自报的文件名原样喂给 target;
+CMake 不认 `.cpp` 属于 ASC，连链接语言都定不了。
+
+**一轮修订后诊断一字未变**（同样 568 字节）。这就是缺口的实测尺寸:模型需要的那条事实极小——
+**ASC 语言只认特定扩展名**——而它在诊断里根本不出现。CMake 说的是「定不了链接语言」，
+不是「换个后缀」。模型只能在 kernel 代码里打转，而问题不在那里。
+迭代预算 12 轮，每轮约 9 分钟;**没有这条知识，再多迭代也不会收敛**。
+
+这正好把 4.1 那次归因的两个因子分开验证了:「platform fact gap 加 iteration budget」——
+P3 补上了后者，前者一点没动，于是失败以同一形态复现。
+
+**不要在配方里归一化扩展名。** 8-29 那条历史路径确实把 primary source 复制到固定的
+`native/candidate_primary.asc`，当前配方没有这一步;但补回去是错的修法:
+它把一条平台事实焊死在部署材料里，CANN 升级或扩展名规则变化就要改代码，而写进 pack 只需升级一条 entry
+（7.4 的 `platform` 层正是为此存在）。更糟的是它会让这次失败**看起来消失**，
+于是永远拿不到「知识缺口有多大」的数据。
+
+**因此 P2 的下一步内容有了第一条由实测决定的 entry**，而不是照搬 ascend-factory 再猜哪些有用。
+
 ### 本轮修好的一类缺陷，值得下一次留意
 
 **四处「只报失败不报原因」，同一形状，同一天各修一次。** 产品进程启动、
