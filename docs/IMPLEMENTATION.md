@@ -527,17 +527,40 @@ App API socket 在 `/run/cairn-server/migration.sock`，客户端配置指向它
 经 CLI 提交后依次完成:分块上传、归档解包、任务冻结落盘、**真实 DeepSeek 调用**、
 模型对两个 unknown 提出可区分的竞争假说、两次管理员裁决被记录。
 
-**当前停在 `blocked`，但这不是缺陷。** 日志 `intent_admission_waiting_for_reconciliation`
-带 `unresolved_decision_count = 1`。我作为管理员对「非有限输入」这个 unknown 选了
-`intent-keep-unknown`，而 `KeepUnknown` 按设计计为未解决，工作流据此暂停等管理员回头处理
-（见 `app_api.rs` 的 `take_resolved_intent_decisions`）。**下一步很简单**:
-对该请求改用 `intent-select` 选一个假说，或先补 `intent-provide` 给出确切 claim，
-任务即可继续进入 Oracle 阶段。已验证 `intent-reconcile` 单独调用不会推进——
-它不解决未解决的裁决，只做对账。
+**那次暂停不是缺陷，但解掉它的过程撞出一个真缺陷。** 暂停本身按设计:
+管理员对「非有限输入」选了 `intent-keep-unknown`，`KeepUnknown` 计为未解决，
+工作流等管理员回头（见 `app_api.rs` 的 `take_resolved_intent_decisions`）。
+已验证 `intent-reconcile` 单独调用不推进——它只对账，不解决未解决的裁决。
 
-**再往后没有走过**:Oracle 阶段会调用 `qualify`，那条路在本轮之前是死的，
-现已由 P5 第 7 项打通（检查计划带可校准断言）,但**从未在真实 worker 上跑过**。
-候选阶段更远。这两段是 P4 剩下的全部内容。
+改判之后任务却立刻整个失败，`failure_class = Domain`，
+原因是 `the authority grant does not cover the authoritative claim scope`。
+**根因是一道装在事后的门。** 每条裁决都要指名它所限定的 caller claim，
+而这些名字直到 Intent Admission promotion 才被校验，promotion 又只在全部请求都有答案之后才跑。
+于是拒绝到达时已过不可逆点:任务转入 workflow-failure attention，不再接受任何裁决；
+recovery input 只活在工作流进程里，事后也说不出是哪一条裁决带了坏名字。
+管理员看到的是一次没有归属的领域失败。
+
+**修法是把这道校验挪到还能改的位置，并让它点名。** 现在 record 时就解析 scope，
+读取端与审计端共用同一个函数（`resolve_authority_scope_claims`），
+API 不可能接受一个 Admission 会拒绝的 scope；拒绝时点出那条 claim。
+同时补上另一半:scope 是每条裁决命令的必填参数，而 API 从不公开它的合法取值——
+唯一的学习途径是回头读自己提交的声明，而不合法的取值根本无从发现。
+intent review 现在携带可被指名的 caller claims，由同一条发布路径从 Admission 要读的那份冻结声明派生。
+
+三道红验证各注入后立刻检查:关掉 record 时的解析、把点名的拒绝收回成 `AuthorityScope`、
+清空发布的 claim 集合。**第三条先抓到了测试本身的弱点**——测试自己造了一份 review 资源，
+验的是复制品而不是产品路径。发布因此抽成一个函数，测试调用它。
+
+**任务已重新提交并越过 Intent Admission（2026-09-04，live）。** 新一轮 SIR 产生三条裁决请求，
+三条都提供了同一个 observable-contract 假说 `h-contract-closed-interval-only`:
+「scale-then-confine 契约只覆盖有序有限区间；倒置区间与非有限输入不是被授权的语义」。
+三条均选它，scope 为 `elementwise-scale-then-confine`。
+选它的理由是它是唯一不把源码的偶然行为提升为契约的选项（3.1），
+也把风险留在通路而不是算法上，而通路正是本阶段要证明的对象。
+任务随即进入 `exploring-oracle`——**这是此前从未到达过的阶段**。
+
+**Oracle 与候选两段仍是 P4 剩下的全部内容。** `qualify` 由 P5 第 7 项打通，
+但在此之前从未在真实 worker 上跑过。
 
 ### 本轮修好的一类缺陷，值得下一次留意
 
