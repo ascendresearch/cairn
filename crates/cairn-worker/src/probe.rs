@@ -129,11 +129,15 @@ impl HostResourceProbe {
         .map_err(|_| ResourceProbeError::Overflow("logical CPU count"))?;
         let logical_cpus = LogicalCpuCount::new(logical)
             .map_err(|error| ResourceProbeError::Value(error.to_string()))?;
+        // The path is part of the reason. A probe that reads several paths and reports only
+        // "no such file or directory" leaves an operator to guess which one, and this one has
+        // already cost a deployment that guess.
         let memory_wire = fs::read_to_string("/proc/meminfo")
-            .map_err(|error| ResourceProbeError::Io(error.to_string()))?;
+            .map_err(|error| ResourceProbeError::Io(format!("/proc/meminfo: {error}")))?;
         let memory_bytes = parse_memory_bytes(&memory_wire)?;
-        let stat = rustix::fs::statvfs(&config.scratch_path)
-            .map_err(|error| ResourceProbeError::Io(error.to_string()))?;
+        let stat = rustix::fs::statvfs(&config.scratch_path).map_err(|error| {
+            ResourceProbeError::Io(format!("{}: {error}", config.scratch_path.display()))
+        })?;
         let scratch = stat
             .f_frsize
             .checked_mul(stat.f_bavail)
@@ -200,7 +204,12 @@ fn discover_accelerators(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok((AcceleratorDiscoveryCompleteness::Complete, Vec::new()));
         }
-        Err(error) => return Err(ResourceProbeError::Io(error.to_string())),
+        Err(error) => {
+            return Err(ResourceProbeError::Io(format!(
+                "{}: {error}",
+                root.display()
+            )));
+        }
     };
     let mut complete = true;
     let mut devices = Vec::new();

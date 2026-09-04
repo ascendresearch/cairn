@@ -289,8 +289,7 @@ pub async fn run_from_arguments(
             .map_err(|error| WorkerError::Configuration(error.to_string()))?,
     )
     .map_err(|error| WorkerError::Configuration(error.to_string()))?;
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    config.resolve_paths(base);
+    config.resolve_paths(&deployment_root(&config_path));
     Box::pin(run(config)).await
 }
 
@@ -423,6 +422,23 @@ async fn wait_for_identity_change(
             return Ok(());
         }
     }
+}
+
+/// The root a configuration file's relative tree names are read from.
+///
+/// A configuration inside the `config/` tree names its siblings from the root above it, so that is
+/// the root. Anywhere else the file's own directory is the root, which is what a single-file
+/// deployment or a test fixture wants.
+fn deployment_root(config_path: &Path) -> PathBuf {
+    let directory = config_path.parent().unwrap_or_else(|| Path::new("."));
+    if directory.file_name().and_then(|name| name.to_str())
+        == Some(cairn_layout::RuntimeTree::Config.directory_name())
+    {
+        if let Some(root) = directory.parent() {
+            return root.to_path_buf();
+        }
+    }
+    directory.to_path_buf()
 }
 
 impl WorkerConfig {
@@ -1443,7 +1459,11 @@ pub async fn join_from_bundle(
     let identity_directory = state_directory.join("secrets/identity");
     prepare_state_directory(&state_directory.join("store/scratch"))?;
     let identity = Box::pin(enroll(bundle, &identity_directory)).await?;
-    let config_path = state_directory.join("worker.json");
+    // Configuration is one of the deployment's trees, so it goes in that tree rather than loose
+    // at the root. The trees are still named from the root, so nothing inside the file changes.
+    let config_path = state_directory
+        .join(cairn_layout::RuntimeTree::Config.directory_name())
+        .join("worker.json");
 
     if config_path.exists() {
         let mut existing: WorkerConfig = serde_json::from_slice(

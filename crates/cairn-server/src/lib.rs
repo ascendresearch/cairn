@@ -605,13 +605,15 @@ fn write_new_secret_file(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
 ///
 /// Returns a configuration error for unreadable, invalid, or non-current input.
 pub fn load_server_config(config_path: &Path) -> Result<ServerConfig, ServerError> {
-    let mut config: ServerConfig = serde_json::from_slice(
-        &std::fs::read(config_path)
-            .map_err(|error| ServerError::Configuration(error.to_string()))?,
-    )
-    .map_err(|error| ServerError::Configuration(error.to_string()))?;
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    config.resolve_paths(base);
+    // The path is part of the reason. "No such file or directory" names a step but not a file, and
+    // an operator holding that has to guess which of a deployment's configurations is missing.
+    let bytes = std::fs::read(config_path).map_err(|error| {
+        ServerError::Configuration(format!("{}: {error}", config_path.display()))
+    })?;
+    let mut config: ServerConfig = serde_json::from_slice(&bytes).map_err(|error| {
+        ServerError::Configuration(format!("{}: {error}", config_path.display()))
+    })?;
+    config.resolve_paths(&deployment_root(config_path));
     Ok(config)
 }
 
@@ -1033,10 +1035,11 @@ impl ServerConfig {
         self.store_root.join("content")
     }
 
-    /// Resolves every configured path against the directory holding the configuration file.
+    /// Resolves every configured path against the deployment root.
     ///
-    /// A bundled deployment names its trees relatively, so the whole tree can be moved or copied
-    /// without editing a line. A system installation names them absolutely, where the
+    /// The trees are siblings under one root, so they are named from that root and not from
+    /// wherever the configuration file happens to sit. A bundled deployment can be moved or copied
+    /// without editing a line, and a system installation names its trees absolutely, where the
     /// configuration and the state genuinely live in different places. One rule covers both.
     fn resolve_paths(&mut self, base: &Path) {
         resolve(&mut self.store_root, base);
@@ -1052,6 +1055,28 @@ impl ServerConfig {
             resolve(&mut service.issuer_private_key, base);
         }
     }
+}
+
+/// The root a configuration file's relative tree names are read from.
+///
+/// Every process that reads a configuration uses this, so one deployment reads the same way no
+/// matter which of its configurations is being loaded.
+///
+/// A configuration inside the `config/` tree names its siblings from the root above it, so that is
+/// the root. Anywhere else the file's own directory is the root, which is what a single-file
+/// deployment or a test fixture wants. Deciding it here rather than writing `../` into every path
+/// keeps the file saying which trees it uses rather than how far away they are.
+#[must_use]
+pub fn deployment_root(config_path: &Path) -> PathBuf {
+    let directory = config_path.parent().unwrap_or_else(|| Path::new("."));
+    if directory.file_name().and_then(|name| name.to_str())
+        == Some(cairn_layout::RuntimeTree::Config.directory_name())
+    {
+        if let Some(root) = directory.parent() {
+            return root.to_path_buf();
+        }
+    }
+    directory.to_path_buf()
 }
 
 fn resolve(path: &mut PathBuf, base: &Path) {
@@ -1990,6 +2015,27 @@ fn bound(value: &str, limit: Option<NonZeroU64>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    // The trees are siblings under one root, so a configuration names them from that root. Where
+    // the file itself sits must not move them: writing `../store` to reach out of `config/` would
+    // make the file say how far away a tree is rather than which tree it uses.
+    #[test]
+    fn a_configuration_names_its_trees_from_the_deployment_root_wherever_it_sits() {
+        let root = std::path::Path::new("/opt/cairn/server");
+
+        assert_eq!(deployment_root(&root.join("config/controller.json")), root);
+        // A file outside the config tree is its own root, which is what a single-file deployment
+        // and every test fixture rely on.
+        assert_eq!(deployment_root(&root.join("controller.json")), root);
+        // Only the tree of that exact name lifts: a directory that merely ends in something
+        // similar is not the config tree.
+        assert_eq!(
+            deployment_root(std::path::Path::new("/opt/cairn/reconfig/controller.json")),
+            std::path::Path::new("/opt/cairn/reconfig")
+        );
+    }
+
     use std::num::NonZeroU64;
 
     use cairn_protocol::ObservedAtUnixMillis;

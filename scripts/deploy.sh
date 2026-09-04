@@ -9,8 +9,10 @@ set -euo pipefail
 # compares byte for byte. Copying a loose binary out of `target/` skips all of that, and doing so
 # once already put a build worker on a host whose libc could not load it.
 #
-# Versions are immutable directories and `current` is a symlink, so a rollback is a symlink flip
-# rather than another transfer, and the unit file never has to change to move between versions.
+# A deployment is one root: `bin/` beside `config/`, `store/` and the rest, so everything one role
+# owns is in one place and removing it is removing a directory. Versions are immutable directories
+# beneath it and `bin` is a symlink into the current one, so a rollback is a symlink flip rather
+# than another transfer, and the unit file never changes to move between versions.
 
 usage() {
   cat >&2 <<'USAGE'
@@ -18,7 +20,7 @@ usage: scripts/deploy.sh <bundle.tar.gz> <controller|worker> <instance>
 
 Required environment:
   CAIRN_DEPLOY_HOST     "local", or an ssh destination such as root@host
-  CAIRN_DEPLOY_PREFIX   absolute directory on the target that will hold versions/ and current
+  CAIRN_DEPLOY_PREFIX   absolute deployment root: bin/ and versions/ beside the state trees
   CAIRN_DEPLOY_CONFIG   absolute path to the process configuration on the target
   CAIRN_DEPLOY_WORKDIR  absolute working directory for the unit
 
@@ -26,9 +28,6 @@ Optional environment:
   CAIRN_DEPLOY_SCOPE    system | user            (default: system)
   CAIRN_DEPLOY_USER     account a system unit runs as (default: the invoking user)
   CAIRN_DEPLOY_GROUP    group a system unit runs as   (default: that account's group)
-  CAIRN_DEPLOY_HOME     absolute deployment root (controller only; the unit is granted write
-                        access to exactly the trees it owns and writes, and the rest of the
-                        filesystem stays read-only)
 USAGE
   exit 2
 }
@@ -50,7 +49,6 @@ readonly PREFIX="${CAIRN_DEPLOY_PREFIX:?CAIRN_DEPLOY_PREFIX is required}"
 readonly CONFIG="${CAIRN_DEPLOY_CONFIG:?CAIRN_DEPLOY_CONFIG is required}"
 readonly WORKDIR="${CAIRN_DEPLOY_WORKDIR:?CAIRN_DEPLOY_WORKDIR is required}"
 readonly SCOPE="${CAIRN_DEPLOY_SCOPE:-system}"
-readonly HOME_ROOT="${CAIRN_DEPLOY_HOME:-}"
 
 case "$ROLE" in
   controller)
@@ -60,11 +58,10 @@ case "$ROLE" in
     binary="cairn-cuda-migration-server"
     template="deploy/systemd/cairn-controller.service.template"
     unit="cairn-controller-$INSTANCE.service"
-    [[ -n "$HOME_ROOT" ]] || { echo "CAIRN_DEPLOY_HOME is required for the controller role" >&2; exit 2; }
     # The Admission side is the controller, and it writes the exposure ledger and gate receipts
     # into `restricted/`. Leaving that read-only was a considered-looking setting that had simply
     # not accounted for a writer that does not exist yet.
-    writable_trees="$HOME_ROOT/store $HOME_ROOT/workspaces $HOME_ROOT/log $HOME_ROOT/restricted"
+    writable_trees="$PREFIX/store $PREFIX/workspaces $PREFIX/log $PREFIX/restricted"
     ;;
   worker)
     writable_trees=""
@@ -109,7 +106,7 @@ version="${version%%-*}"
 
 rendered="$(sed \
   -e "s|@INSTANCE@|$INSTANCE|g" \
-  -e "s|@BINARY@|$PREFIX/current/bin/$binary|g" \
+  -e "s|@BINARY@|$PREFIX/bin/$binary|g" \
   -e "s|@CONFIG@|$CONFIG|g" \
   -e "s|@WORKING_DIRECTORY@|$WORKDIR|g" \
   -e "s|@WRITABLE_TREES@|$writable_trees|g" \
@@ -177,8 +174,8 @@ chmod 0755 "\$version_dir/bin/$binary"
 
 # ln -sfn on an existing symlink is not atomic; a create-then-rename is, so a concurrent start can
 # never observe the prefix without a current version.
-ln -sfn "versions/$version" "$PREFIX/.current.staged"
-mv -T "$PREFIX/.current.staged" "$PREFIX/current"
+ln -sfn "versions/$version/bin" "$PREFIX/.bin.staged"
+mv -T "$PREFIX/.bin.staged" "$PREFIX/bin"
 
 mkdir -p "\$unit_dir"
 cat > "\$unit_dir/\$unit" <<'UNIT'
@@ -197,7 +194,7 @@ if ! "\${systemctl_cmd[@]}" is-active --quiet "\$unit"; then
   "\${systemctl_cmd[@]}" status "\$unit" --no-pager --lines=20 >&2 || true
   exit 1
 fi
-echo "active \$unit running $version from $PREFIX/current"
+echo "active \$unit running $version from $PREFIX/bin"
 if [[ "$HOST" != local ]]; then
   rm -f "$remote_bundle"
 fi

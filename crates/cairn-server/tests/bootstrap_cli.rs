@@ -45,7 +45,7 @@ async fn a_bootstrapped_deployment_starts() -> Result<(), Box<dyn Error + Send +
         );
     }
 
-    let config = cairn_server::load_server_config(&root.join("controller.json"))?;
+    let config = cairn_server::load_server_config(&root.join("config/controller.json"))?;
     let server = tokio::spawn(cairn_server::run(config));
     tokio::time::sleep(Duration::from_millis(400)).await;
     if server.is_finished() {

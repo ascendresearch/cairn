@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeTree {
+    /// Process configuration, runtime model, target context, enabled packs and policy.
+    Config,
     /// Import source for knowledge and skill material. Never read at run time.
     Packs,
     /// Events, content-addressed storage and rebuildable derived indexes.
@@ -36,6 +38,7 @@ pub enum RuntimeTree {
 impl RuntimeTree {
     /// Every tree a controller deployment is laid out in.
     pub const CONTROLLER: &'static [Self] = &[
+        Self::Config,
         Self::Packs,
         Self::Store,
         Self::Restricted,
@@ -48,12 +51,13 @@ impl RuntimeTree {
     ///
     /// A judged party does not share a host with its judge, so `packs/` and `restricted/` are
     /// absent here by not being created rather than by being refused somewhere.
-    pub const WORKER: &'static [Self] = &[Self::Store, Self::Secrets, Self::Log];
+    pub const WORKER: &'static [Self] = &[Self::Config, Self::Store, Self::Secrets, Self::Log];
 
     /// Returns the directory name this tree takes under a deployment root.
     #[must_use]
     pub const fn directory_name(self) -> &'static str {
         match self {
+            Self::Config => "config",
             Self::Packs => "packs",
             Self::Store => "store",
             Self::Restricted => "restricted",
@@ -71,7 +75,7 @@ impl RuntimeTree {
     pub const fn mode(self) -> u32 {
         match self {
             Self::Secrets | Self::Restricted => 0o700,
-            Self::Packs | Self::Store | Self::Workspaces | Self::Log => 0o755,
+            Self::Config | Self::Packs | Self::Store | Self::Workspaces | Self::Log => 0o755,
         }
     }
 }

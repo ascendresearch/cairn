@@ -92,7 +92,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if env::args_os().nth(2).is_some() {
         return Err("usage: cairn-cuda-migration-server PRODUCT.json".into());
     }
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
     let mut config: ProductConfigV1 = serde_json::from_slice(&std::fs::read(&config_path)?)?;
     if config.schema_version != 1 || config.inbox_capacity == 0 {
         return Err("invalid current-V1 CUDA migration product configuration".into());
@@ -104,7 +103,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "evidence-augmented reasoning requires an ordinary Worker configuration".into(),
         );
     }
-    resolve_product_paths(&mut config, base);
+    resolve_product_paths(&mut config, &cairn_server::deployment_root(&config_path));
     let server = load_server_config(&config.server_config)?;
     let template: ModelTemplate = serde_json::from_slice(&std::fs::read(&config.model_template)?)?;
     let templates = ModelTemplateRegistry::from_templates([template])?;

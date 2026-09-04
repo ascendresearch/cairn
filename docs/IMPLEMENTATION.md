@@ -825,19 +825,24 @@ unknown:`fminf`/`fmaxf` 的 NaN 语义决定该算子对非有限输入的行为
 （socket 路径超长）。同时新增一道门:随仓库发布的产品配置例必须能被真正读它的类型解析，
 且它命名的构建配方必须在树里——两个方向都红验过。
 
-**安装位置已统一到 `/opt/cairn/<instance>`（2026-09-03）。** 此前三个进程三种形状:
-控制器在 `~/.local/lib/cairn-controller` 加 `~/.local/share/cairn`（user unit）,
-NPU worker 在 `/opt/cairn-worker`（system unit）,GPU worker 在 `~/.local/lib/cairn-worker`
-加 `~/.local/state/cairn-worker`（user unit）——二进制按角色分目录、状态一处在 `share` 一处在 `state`、
-scope 两种。现在:
+**安装位置已统一为按角色单根（2026-09-03）。** 三台主机现在同一形态:
+`/opt/cairn/server` 与 `/opt/cairn/worker`,各自含 `bin/`（指向 `versions/<commit>/bin` 的符号链接）、
+`config/` 与其余状态树,全部 system unit。角色根之上不再有共用的 `versions/` 与 `current/`——
+那把版本目录放在角色之上,两个角色共用一棵,而 `controller` 也不是任何 crate 的名字。
 
-| 主机 | 位置 | unit |
-| --- | --- | --- |
-| 控制器（本机） | `/opt/cairn/controller`,二进制 `/opt/cairn/current/bin` | system,`cairn-controller` |
-| NPU 构建 worker | `/opt/cairn/npu-build`,同一形状 | system,`cairn-worker-npu-build` |
-| GPU worker | **未迁移**,仍在 `~/.local/state/cairn-worker/gpu` | user |
+**补上了 `config/` 树。** 架构 10.5 列七棵树,`cairn-layout` 只有六棵,配置因此散在部署根下。
+同时把路径解析规则从「相对配置文件所在目录」改为「相对部署根」:配置移进 `config/` 之后,
+其余树仍从根解析,不需要在配置里写 `../store` 这种「离我多远」而不是「我用哪棵树」的写法。
+有单元测试与 bootstrap 端到端测试同时钉住这条规则,红验证时两者一起失败。
 
-GPU 主机没有免密 root,那台的迁移需要一次人工授权。
+**三处诊断性缺陷，同一类，一次修完。** 产品进程启动失败只报「失败了」不报原因；
+控制器配置读取失败只说「没有那个文件」不说哪个文件；worker 资源探针同样。
+三处都改为把路径或原因带进记录——第一处修好后立刻说清了是端口被占，第二处说清了是哪份配置缺失。
+
+**这次迁移的方式有问题，记下来。** 我在真实部署上先停服务再改结构，产生了一段停机窗口，
+其间 unit 启动失败且我未能立刻定位（启动限流把真实原因挡住了，看到的是「重启过于频繁」）。
+正确做法是在旁边建好新结构、验证可启动、再切换。这个部署已因「配置与代码必须一起部署」栽过两次，
+这是同一类问题的第三种形态。
 
 **控制器 unit 现在跑迁移产品进程,不再跑裸 controller。** 产品进程本身就是 controller,
 两者不能并存——试运行直接 `Address already in use`,这正是「一份 store 只由一个 Controller 进程服务」。

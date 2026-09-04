@@ -88,12 +88,12 @@ async fn one_command_join_persists_and_reuses_a_runnable_worker_tree()
     ])
     .await?;
     let mut operator_config: WorkerConfig =
-        serde_json::from_slice(&fs::read(state.join("worker.json"))?)?;
+        serde_json::from_slice(&fs::read(state.join("config/worker.json"))?)?;
     operator_config.heartbeat_interval_ms = NonZeroU64::new(17_000);
     let operator_config = serde_json::to_vec_pretty(&operator_config)?;
-    fs::write(state.join("worker.json"), &operator_config)?;
+    fs::write(state.join("config/worker.json"), &operator_config)?;
     let receipt = Box::pin(join_from_bundle(&bundle_path, &state)).await?;
-    assert_eq!(receipt.config_path, state.join("worker.json"));
+    assert_eq!(receipt.config_path, state.join("config/worker.json"));
     // One command produces a deployment, not a pile of files: identity lands in the secret tree
     // and everything this worker writes lands in the store tree.
     assert!(state.join("secrets/identity/worker-key.pem").is_file());

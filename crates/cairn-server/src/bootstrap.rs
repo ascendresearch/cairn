@@ -52,7 +52,12 @@ pub fn run(
         pki.server_private_key.as_bytes(),
     )?;
 
-    let config_path = root.join("controller.json");
+    // Configuration is one of the seven trees, so it goes in that tree rather than loose at the
+    // deployment root. Paths inside it resolve against the file's own directory, so `store` and the
+    // rest still name the trees beside it.
+    let config_path = root
+        .join(RuntimeTree::Config.directory_name())
+        .join("controller.json");
     let config = configuration(server_name, control_address, enrollment_address)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     let mut bytes = serde_json::to_vec_pretty(&config)
@@ -66,7 +71,7 @@ pub fn run(
     for tree in RuntimeTree::CONTROLLER {
         println!("  {}/  mode {:o}", tree.directory_name(), tree.mode());
     }
-    println!("  controller.json");
+    println!("  {}/controller.json", RuntimeTree::Config.directory_name());
     println!();
     println!("The certificate authority in secrets/ is self-signed and names {server_name}.");
     println!("Replace it with your own before this deployment issues credentials you rely on.");
