@@ -564,13 +564,19 @@ intent review 现在携带可被指名的 caller claims，由同一条发布路�
 清空发布的 claim 集合。**第三条先抓到了测试本身的弱点**——测试自己造了一份 review 资源，
 验的是复制品而不是产品路径。发布因此抽成一个函数，测试调用它。
 
-**任务已重新提交并越过 Intent Admission（2026-09-04，live）。** 新一轮 SIR 产生三条裁决请求，
-三条都提供了同一个 observable-contract 假说 `h-contract-closed-interval-only`:
-「scale-then-confine 契约只覆盖有序有限区间；倒置区间与非有限输入不是被授权的语义」。
-三条均选它，scope 为 `elementwise-scale-then-confine`。
-选它的理由是它是唯一不把源码的偶然行为提升为契约的选项（3.1），
-也把风险留在通路而不是算法上，而通路正是本阶段要证明的对象。
-任务随即进入 `exploring-oracle`——**这是此前从未到达过的阶段**。
+**任务已重新提交并越过 Intent Admission（2026-09-04，live）。** SIR 每次运行给出的 unknown 分解不同,
+这本身是可观察的事实:一次给两条裁决请求,一次给三条,措辞与切分都不一样,但每次都把
+「倒置区间」与「非有限输入」摆成竞争假说交给管理员,没有把源码行为当成规范。
+两轮均选那个不把源码偶然行为写进契约的选项（3.1 要求的正是不自动提升）,
+scope 为 `elementwise-scale-then-confine`,理由是把风险留在通路而不是算法上,
+而通路正是本阶段要证明的对象。任务随即进入 `exploring-oracle`——**这是此前从未到达过的阶段**。
+
+**修复本身也在真实部署上验证了。** 重新部署后的 intent review 携带全部五条 caller claim
+及其 layer,管理员因此能从 API 读到合法的 scope 取值,而不是回头翻自己提交的声明。
+
+**同一轮还观察到严格 gateway 的修复路径生效。** SIR 的第一次提交被拒
+（`outcome = rejected`,诊断按 10.3 归档进 store 而不进日志）,模型在同一 continuation 内重新提交并通过。
+这一步的模型调用耗时 296 秒、输出 16905 token,远低于 131072 的上限,因此不是截断。
 
 **Oracle 与候选两段仍是 P4 剩下的全部内容。** `qualify` 由 P5 第 7 项打通，
 但在此之前从未在真实 worker 上跑过。
