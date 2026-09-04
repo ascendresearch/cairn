@@ -647,6 +647,45 @@ Oracle Admission 的 authority；它们是生产任务策略，因此消融实�
 线上配置已切换并重启验证:策略冻结为 `minimal-decomposition`，Oracle 阶段运行的角色是
 `migration-oracle-whole-portfolio-proposer`，日志中不再出现 `oracle_item_discovery_step_started`。
 
+### 4.6 第二条不可满足的配置:要求一个没有实现的角色
+
+切到最小分解后第一次整体 portfolio 提交仍被拒，诊断是
+`strategy is not eligible for the exact dimension`，代价是一次 12.5 分钟、58180 token 的模型调用。
+
+根因是配置与实现的硬性错配。`runtime_agent.rs` 注册的 Oracle 策略只有一个，其角色列表是
+`vec![OracleStrategyRoleV1::Synthesis]`;而线上 `oracle_adversarial_policy` 为
+`required-for-every-concern`，使 `derive_oracle_dimensions` 为每个 concern 额外生成一个
+`Adversarial` 维度。`supports()` 要求角色匹配，**因此那一半维度没有任何可用策略**。
+模型无论怎么写都会被拒，而 `migration_role_attempt_limit` 为 5,即白跑五次约一小时。
+
+**两处拒绝都正确，都太晚。** `OracleExplorationLedgerV1::open` 对无可用策略的维度返回
+`MissingStrategy`，策略解析对不合格配对返回 `IneligibleStrategy`——但此时任务已存在、
+episode 已付过费。而这个配对只取决于 coverage policy 与已注册策略，**与任何任务无关**。
+
+已修:构建产品边界时对账 policy 要求的每个「concern × 角色」是否有可用策略，缺则点名拒绝启动。
+放在产品边界而不是 `main`，因为本仓库的 `main.rs` 没有任何测试覆盖，而这正是值得有测试的检查。
+红验证:把对抗要求从对账里去掉，钉住线上那组配置为不可服务的测试立刻变红。
+线上配置同时改为 `not-required`——对抗策略没有实现，这是唯一诚实的取值。
+
+### 4.7 三堵墙是同一个形状
+
+本轮纵向连撞三次，全部是同一个毛病:**gate 装在付过代价之后，而不是能改的地方**。
+
+| 墙 | 何时才发现 | 已否修好 |
+| --- | --- | --- |
+| 裁决 scope 指名了未声明的 caller claim | Intent Admission promotion，任务已不可再裁决 | 已移到 record 时并点名 |
+| coverage policy 要求没有实现的角色 | 一次完整提案 episode 之后 | 已移到产品边界构建时并点名 |
+| 评审无法表达「此维度故意不判」 | 每轮打回，循环无上界 | **未修**，见 4.4 |
+
+前两条的共同修法是同一条:该判据只依赖启动期或录入期就已存在的信息，因此把它挪到那里，
+并让拒绝点名。第三条不同——它缺的是一个裁决变体，属于协议变更，留待纵向到达候选构建后处理。
+
+**另有一处代价形状值得记，但不是缺陷。** 整体 portfolio 是一次性提交:三条 claim × 15 concern
+= 45 个维度的 item 一并提交，单次约 8 分钟、38000 token，**任何一处枚举写错整份被拒**。
+一次实测的拒绝是模型把 `method` 写成了 schema 中不存在的 `coverage-discovery`,
+而该 schema 已经把五个合法取值全部列出。gateway 按设计回传了合法取值，模型在同一 continuation 内重试。
+这条路径是对的，但全有全无的提交粒度使一次笔误的代价等于一次完整 episode。
+
 **代价要写明，不能默认。** 覆盖强度下降是真实的。对 P4 可以接受，因为 P4 的 Exit 是通路上的
 native build success 而不是 Oracle 覆盖率，且 `EVALUATION.md` 4.3 本就把这几个分解策略列为
 待同预算对照的 treatment 而非固定要求。但 `structured-review` 的三条缺陷不因绕开而消失:
