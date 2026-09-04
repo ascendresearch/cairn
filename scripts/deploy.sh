@@ -56,8 +56,12 @@ case "$ROLE" in
     # product module together. A deployment that ran a bare `cairn-server` beside it could not
     # start, because one store is served by exactly one controller process.
     binary="cairn-cuda-migration-server"
-    template="deploy/systemd/cairn-controller.service.template"
-    unit="cairn-controller-$INSTANCE.service"
+    template="deploy/systemd/cairn-server.service.template"
+    # Named after what runs, not after the role argument that selects it. There is no
+    # `cairn-controller` crate, binary or service, so a unit by that name describes nothing an
+    # operator can look up, and this deployment already carries one unit that had to be named by
+    # hand because the script would not produce the name the host actually uses.
+    unit="cairn-$INSTANCE.service"
     # The Admission side is the controller, and it writes the exposure ledger and gate receipts
     # into `restricted/`. Leaving that read-only was a considered-looking setting that had simply
     # not accounted for a writer that does not exist yet.

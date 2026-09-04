@@ -25,7 +25,7 @@ KillSignal=SIGTERM
 # in the log stream, so no private file sink is needed here.
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=cairn-controller-@INSTANCE@
+SyslogIdentifier=cairn-@INSTANCE@
 # The App API socket needs somewhere writable, and `ProtectSystem=strict` makes /run read-only.
 # A runtime directory is the narrow answer: systemd creates it, only this unit writes it, and it is
 # removed when the unit stops, so a stale socket cannot outlive the process that bound it.
