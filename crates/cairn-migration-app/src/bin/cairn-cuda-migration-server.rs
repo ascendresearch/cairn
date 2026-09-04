@@ -68,11 +68,15 @@ async fn main() -> ExitCode {
     }
     match Box::pin(run()).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(_error) => {
+        Err(error) => {
+            // The reason travels with the record. A process that refuses to start and says only
+            // that it refused leaves an operator with nothing to act on, and this is the second
+            // place in this binary's path where that had to be fixed after it actually happened.
             tracing::error!(
                 target: "cairn.migration.process",
                 event = "cuda_migration_process_failed",
                 error_class = "startup-or-runtime",
+                reason = %error,
                 "CUDA migration product process terminated"
             );
             ExitCode::FAILURE

@@ -52,7 +52,10 @@ readonly HOME_ROOT="${CAIRN_DEPLOY_HOME:-}"
 
 case "$ROLE" in
   controller)
-    binary="cairn-server"
+    # The migration product process is the controller: it serves the control plane and hosts the
+    # product module together. A deployment that ran a bare `cairn-server` beside it could not
+    # start, because one store is served by exactly one controller process.
+    binary="cairn-cuda-migration-server"
     template="deploy/systemd/cairn-controller.service.template"
     unit="cairn-controller-$INSTANCE.service"
     [[ -n "$HOME_ROOT" ]] || { echo "CAIRN_DEPLOY_HOME is required for the controller role" >&2; exit 2; }

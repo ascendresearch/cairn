@@ -6,4 +6,7 @@ uv = "0.12.5"
 python = "3.12"
 glibc = "2.28"
 targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
-binaries = ["cairn-server", "cairn-worker"]
+# The controller host runs the migration product, so a bundle without it cannot deploy the
+# controller role. The manifest naming fewer binaries than the deployment needs is how this
+# project already produced a bundle that could not be installed once.
+binaries = ["cairn-cuda-migration-server", "cairn-server", "cairn-worker"]

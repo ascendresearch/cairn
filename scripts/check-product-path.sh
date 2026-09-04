@@ -88,6 +88,23 @@ fi
 # cairn-migration-app joined this list on 2026-09-03: its product services now open the durable
 # store inside `block_in_place` on every candidate search transition, so it carries the same
 # requirement the controller and worker do.
+# 4. The release manifest is the declaration and build-release.sh is its implementation, so the
+#    script must read it rather than restate it. A manifest naming one set of binaries while the
+#    script builds another already produced a bundle that could not deploy the host it was for.
+for field in targets binaries; do
+  if ! grep -q "manifest_list $field" scripts/build-release.sh; then
+    echo "build-release.sh must read '$field' from release/toolchain.toml, not restate it" >&2
+    status=1
+  fi
+done
+while read -r binary; do
+  [[ -n "$binary" ]] || continue
+  if ! grep -qw -- "$binary" deploy/systemd/*.template scripts/deploy.sh; then
+    echo "release manifest ships $binary, which no deployment installs" >&2
+    status=1
+  fi
+done < <(sed -n 's/^binaries = \[\(.*\)\]$/\1/p' release/toolchain.toml | tr -d '"' | tr ',' '\n' | tr -d ' ')
+
 for crate in cairn-server cairn-worker cairn-migration-app; do
   if grep -rn 'current_thread' "crates/$crate"; then
     echo "$crate must stay on a multi-threaded runtime: it calls block_in_place" >&2

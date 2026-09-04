@@ -1,5 +1,5 @@
 [Unit]
-Description=Cairn controller (@INSTANCE@)
+Description=Cairn CUDA migration product (@INSTANCE@)
 After=network-online.target
 Wants=network-online.target
 # The controller retries its own listeners; an exit is a real fault, not a transient one. Bounding
@@ -21,6 +21,10 @@ KillSignal=SIGTERM
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=cairn-controller-@INSTANCE@
+# The App API socket needs somewhere writable, and `ProtectSystem=strict` makes /run read-only.
+# A runtime directory is the narrow answer: systemd creates it, only this unit writes it, and it is
+# removed when the unit stops, so a stale socket cannot outlive the process that bound it.
+RuntimeDirectory=cairn-@INSTANCE@
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

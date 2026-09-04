@@ -22,6 +22,14 @@ readonly ZIGBUILD_CACHE="${CAIRN_ZIGBUILD_CACHE_DIR:-$SOURCE_ROOT/target/release
 readonly ZIG_GLOBAL_CACHE="${CAIRN_ZIG_GLOBAL_CACHE_DIR:-$SOURCE_ROOT/target/release-tool-cache/zig-global}"
 readonly ZIG_LOCAL_CACHE="${CAIRN_ZIG_LOCAL_CACHE_DIR:-$SOURCE_ROOT/target/release-tool-cache/zig-local}"
 
+# The manifest is the declaration and this script is the implementation, so the script reads it
+# rather than restating it. A manifest that names one set of binaries while the script builds
+# another is how this project produced a bundle that could not deploy the host it was built for.
+manifest_list() {
+  sed -n "s/^$1 = \\[\\(.*\\)\\]$/\\1/p" "$SOURCE_ROOT/release/toolchain.toml" |
+    tr -d '"' | tr ',' ' ' | tr -s ' '
+}
+
 if [[ ! -f "$SOURCE_ROOT/Cargo.lock" || ! -f "$SOURCE_ROOT/release/toolchain.toml" ]]; then
   echo "build-release must run from the Cairn repository root" >&2
   exit 2
@@ -71,10 +79,20 @@ export SOURCE_DATE_EPOCH
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SOURCE_ROOT=/src/cairn -C strip=symbols"
 
 if (($# == 0)); then
-  targets=(aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-unknown-linux-musl)
+  read -r -a targets <<<"$(manifest_list targets)"
 else
   targets=("$@")
 fi
+read -r -a binaries <<<"$(manifest_list binaries)"
+[[ ${#binaries[@]} -gt 0 ]] || { echo "release manifest names no binaries" >&2; exit 2; }
+package_flags=()
+for binary in "${binaries[@]}"; do
+  case "$binary" in
+    cairn-cuda-migration-server) package_flags+=(-p cairn-migration-app --bin "$binary") ;;
+    *) package_flags+=(-p "$binary") ;;
+  esac
+done
+
 for target in "${targets[@]}"; do
   # A glibc baseline only means something for a dynamically linked target. The musl target is
   # statically linked and carries its own libc, which is why the NPU host runs it on a glibc older
@@ -110,20 +128,20 @@ for target in "${targets[@]}"; do
     --release \
     --target "$build_target" \
     --target-dir "$BUILD_ROOT" \
-    -p cairn-server \
-    -p cairn-worker
+    "${package_flags[@]}"
 
   stage="$OUTPUT_ROOT/.stage-$target"
   bundle="$OUTPUT_ROOT/cairn-$COMMIT_SHORT-$target.tar.gz"
   rm -rf "$stage"
   mkdir -p "$stage/bin" "$stage/config"
-  cp "$BUILD_ROOT/$target/release/cairn-server" "$stage/bin/"
-  cp "$BUILD_ROOT/$target/release/cairn-worker" "$stage/bin/"
+  for binary in "${binaries[@]}"; do
+    cp "$BUILD_ROOT/$target/release/$binary" "$stage/bin/"
+  done
   cp "$SOURCE_ROOT/config/controller.example.json" "$stage/config/"
   cp "$SOURCE_ROOT/config/worker.example.json" "$stage/config/"
   cp "$SOURCE_ROOT/LICENSE" "$stage/"
 
-  for binary in cairn-server cairn-worker; do
+  for binary in "${binaries[@]}"; do
     binary_path="$stage/bin/$binary"
     machine="$(readelf -h "$binary_path" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
     interpreter="$(readelf -l "$binary_path" | sed -n 's/.*Requesting program interpreter: \([^]]*\).*/\1/p')"
@@ -172,8 +190,13 @@ for target in "${targets[@]}"; do
     glibc_baseline_json="null"
   fi
 
-  server_sha="$(sha256sum "$stage/bin/cairn-server" | cut -d ' ' -f 1)"
-  worker_sha="$(sha256sum "$stage/bin/cairn-worker" | cut -d ' ' -f 1)"
+  binary_shas=""
+  for binary in "${binaries[@]}"; do
+    sha="$(sha256sum "$stage/bin/$binary" | cut -d ' ' -f 1)"
+    [[ -z "$binary_shas" ]] || binary_shas+=",
+"
+    binary_shas+="    \"$binary\": \"sha256:$sha\""
+  done
   printf '%s\n' \
     '{' \
     '  "schema_version": 2,' \
@@ -187,8 +210,7 @@ for target in "${targets[@]}"; do
     "  \"cargo_zigbuild\": \"0.21.8\"," \
     "  \"zig\": \"0.14.1\"," \
     '  "binaries": {' \
-    "    \"cairn-server\": \"sha256:$server_sha\"," \
-    "    \"cairn-worker\": \"sha256:$worker_sha\"" \
+    "$binary_shas" \
     '  }' \
     '}' > "$stage/BUILD-METADATA.json"
 
