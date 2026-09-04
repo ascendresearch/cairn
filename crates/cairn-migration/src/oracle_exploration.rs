@@ -7327,6 +7327,115 @@ mod tests {
         assert!(serde_json::from_value::<OracleDimensionV1>(json).is_err());
     }
 
+    /// The Candidate contract orders its obligations the way its own invariant requires.
+    ///
+    /// The ledger orders dimensions by what they mean, plane then concern then role, because that
+    /// is the order a reader follows. The contract is keyed by content identity and its `validate`
+    /// requires that order instead. Inheriting the ledger's order therefore produced a contract
+    /// that failed its own check for every real portfolio, and the whole Oracle stage had to be
+    /// paid for before anyone found out.
+    ///
+    /// The full correctness concern set is used deliberately. One dimension is sorted under every
+    /// order, which is why the existing coverage never saw this, and with fifteen the two orders
+    /// agree only by an accident too unlikely to rely on.
+    #[test]
+    fn a_candidate_contract_orders_obligations_by_the_identity_its_own_check_requires() {
+        let claim_body = OracleClaimV1::new(
+            TaskId::new(),
+            id("admitted intent"),
+            OracleClaimName::new("ordered-obligations").expect("claim name"),
+            AuthoritativeIntentClaimV1::new(
+                crate::OperationIntentV1::new(
+                    vec![
+                        crate::SirCallerClaimV1::new(
+                            crate::SirCallerClaimId::new("selected-output").expect("caller claim"),
+                            crate::SirIntentLayer::ObservableContract,
+                            crate::SirCallerClaimStatement::new("Outputs are preserved.")
+                                .expect("statement"),
+                            Vec::new(),
+                        )
+                        .expect("caller claim"),
+                    ],
+                    crate::SirIntentLayer::ObservableContract,
+                    crate::SirHypothesisClaim::new("preserve observable transform outputs")
+                        .expect("semantics"),
+                    crate::SirIntentDomain::new("all caller-authorized inputs").expect("domain"),
+                )
+                .expect("operation intent"),
+            ),
+        );
+        let claim_id = claim_body.identity().expect("claim id");
+        let policy_for_dimensions = OracleCoveragePolicyV1::new(
+            OracleCoverageProfileV1::Correctness,
+            OracleAdversarialPolicyV1::NotRequired,
+        );
+        let dimensions =
+            derive_oracle_dimensions(&[claim_id], &policy_for_dimensions).expect("dimensions");
+        assert!(dimensions.len() > 1, "the invariant needs more than one");
+
+        let mut accepted = Vec::new();
+        for dimension in &dimensions {
+            let proposed = oracle_item(dimension, "Check one observable property of the port.");
+            let plan = item_plan(&proposed, "Establish the observable property.");
+            let draft =
+                OracleItemDraftV1::initial(proposed, id("run"), vec![plan]).expect("item draft");
+            let review = OracleItemReviewV1::approved(&draft).expect("item approval");
+            accepted.push(OracleAcceptedItemV1::new(&draft, &review).expect("accepted item"));
+        }
+        let proposal =
+            OraclePortfolioProposalV1::assemble(&test_workspace(), dimensions.clone(), accepted)
+                .expect("reviewed proposal");
+        let (admission_policy, mechanisms, attempt) = admission_context(&proposal);
+        let mut receipts = Vec::new();
+        for (ordinal, element) in proposal.elements().iter().enumerate() {
+            for control in admission_policy.required_controls() {
+                receipts.push(
+                    OracleControlReceiptV1::new(
+                        proposal.identity().expect("proposal id"),
+                        element.item(),
+                        *control,
+                        mechanisms.mechanism(*control).expect("qualified mechanism"),
+                        id(&format!("receipt-{ordinal}-{control:?}")),
+                        OracleControlResultV1::Passed,
+                        None,
+                    )
+                    .expect("control receipt"),
+                );
+            }
+        }
+        let evidence = OracleAdmissionEvidenceV1::new(&attempt, receipts).expect("evidence");
+        let admitted = recompute_oracle_admission(
+            &proposal,
+            &admission_policy,
+            &mechanisms,
+            &attempt,
+            &evidence,
+        )
+        .expect("admitted outcome");
+
+        let contract = crate::CandidateOracleContractV1::derive(&proposal, &admitted)
+            .expect("a real portfolio must produce a contract that passes its own check");
+
+        let identities = contract.admitted_claims()[0]
+            .entries()
+            .iter()
+            .map(|entry| {
+                entry
+                    .dimension()
+                    .identity()
+                    .expect("dimension id")
+                    .to_wire()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(identities.len(), dimensions.len());
+        let mut sorted = identities.clone();
+        sorted.sort();
+        assert_eq!(
+            identities, sorted,
+            "obligations must be ordered by the identity the contract check reads"
+        );
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,

@@ -658,6 +658,22 @@ impl CandidateOracleContractV1 {
             if !admitted_items.is_empty() {
                 return Err(CandidateExplorationError::BindingMismatch);
             }
+            // The ledger orders its obligations by what a dimension means - plane, then concern,
+            // then role - because that is the order a reader follows. This contract is keyed by
+            // content identity instead, and `validate` requires that order. Two canonical orders
+            // over one collection agree only by accident, so the entries are put into this one
+            // here rather than inherited from the ledger's.
+            let mut ordered = entries
+                .into_iter()
+                .map(|entry| {
+                    Ok((
+                        entry.dimension().identity().map_err(codec)?.to_wire(),
+                        entry,
+                    ))
+                })
+                .collect::<Result<Vec<_>, CandidateExplorationError>>()?;
+            ordered.sort_by(|left, right| left.0.cmp(&right.0));
+            let entries = ordered.into_iter().map(|(_, entry)| entry).collect();
             admitted_claims.push(CandidateAdmittedOracleClaimV1 {
                 claim: claim.claim(),
                 entries,
