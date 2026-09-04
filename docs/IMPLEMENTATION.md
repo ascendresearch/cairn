@@ -616,6 +616,43 @@ dimension。评审只能一直打回，循环只能一直转。`ARCHITECTURE.md`
 有九处裸 `loop`，无预算、无重复动作检测、无预算临界通知。这是「全流程 durable 状态机」
 只做了一段的直接后果，与工作流层没有重启恢复同源。
 
+**换裁决不够，规模才是决定性的。** 上面那个对照实验只解决单个 dimension 的不可满足，
+解决不了扇出。`derive_oracle_dimensions` 的展开是机械的:
+
+| 量 | 值 |
+| --- | --- |
+| `CORRECTNESS_CONCERNS` | 15（代码常量，不可配） |
+| 每 concern 的角色 | 2（`required-for-every-concern` 时加对抗一路） |
+| 每条 admitted claim | 30 个 dimension |
+| 两条 claim | **60 个 dimension，串行处理** |
+
+每个 dimension 先跑发现/评审循环，通过后再展开成 item 逐个开发与评审——仅前两个 dimension
+就已产出 24 个 item。两次真实运行**都停在第 1 个 dimension**。即使每个 dimension 一轮通过、
+每轮六分钟，仅 item set 达成一致就需约六小时，item 开发尚未开始。
+**按 `structured-review` 配置，这条纵向在实践中到不了候选阶段。**
+
+### 4.5 最小分解:产品自带的那条路（2026-09-04 启用）
+
+`establish_minimal_oracle` 早已实现，入口是 `run_oracle_stage` 开头的一个分支:
+`ReasoningDecompositionPolicyV1::MinimalDecomposition` 时直接进入，其语义是
+「一次 SIR episode，Intent Admission 之后再来一次整体 portfolio 的 Oracle episode」，
+不再有 60 个 dimension 的串行循环。这正是首轮评审给出的「开局只要一个最小可执行 oracle」，
+只是线上配置一直是 `structured-review`。
+
+**它不是旁门。** 该类型的文档注释写明:这些变体「改变模型分解与可用证据，从不改变 Intent 或
+Oracle Admission 的 authority；它们是生产任务策略，因此消融实验走的是同一条公开工作流，
+而不是只供测试的绕行」。P0 删除的 `continue_after_oracle_admission` 才是旁门——它绕过 Admission
+本身；这一条不绕过任何 gate，只改变提案拓扑。
+
+线上配置已切换并重启验证:策略冻结为 `minimal-decomposition`，Oracle 阶段运行的角色是
+`migration-oracle-whole-portfolio-proposer`，日志中不再出现 `oracle_item_discovery_step_started`。
+
+**代价要写明，不能默认。** 覆盖强度下降是真实的。对 P4 可以接受，因为 P4 的 Exit 是通路上的
+native build success 而不是 Oracle 覆盖率，且 `EVALUATION.md` 4.3 本就把这几个分解策略列为
+待同预算对照的 treatment 而非固定要求。但 `structured-review` 的三条缺陷不因绕开而消失:
+60 倍串行扇出、评审裁决只有通过/打回两个变体、循环无上界。要么按最小可证伪集重构该路径，
+要么至少补上上界与 `NotApplicable` 出口。在此之前不应把 `structured-review` 当作可用配置。
+
 ### 本轮修好的一类缺陷，值得下一次留意
 
 **四处「只报失败不报原因」，同一形状，同一天各修一次。** 产品进程启动、
