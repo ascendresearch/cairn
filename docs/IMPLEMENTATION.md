@@ -581,6 +581,41 @@ scope 为 `elementwise-scale-then-confine`,理由是把风险留在通路而不�
 **Oracle 与候选两段仍是 P4 剩下的全部内容。** `qualify` 由 P5 第 7 项打通，
 但在此之前从未在真实 worker 上跑过。
 
+### 4.4 Oracle 探索阶段的一个死结（2026-09-04，live 归因）
+
+**首次真实运行 Oracle 阶段就不收敛。** 同一个 dimension 上「发现 → 评审 → 打回 → 重发现」
+连转三轮（findings 3 → 1 → 3），第四轮九分钟未出，全程 28 次模型调用、127k output token，
+无终止迹象。任务被取消而不是等它自己停，因为它不会自己停。
+
+**根因不是模型能力，是三条各自合理的规则叠在一起构成了不可满足。** 从 store 取出的评审意见
+逐轮指向同一件事:「The proposal therefore leaves the admitted-intent domain entirely uncovered.」
+
+| 规则 | 位置 |
+| --- | --- |
+| 每条 admitted claim 机械展开成一个 dimension，调用方不能增删 | `derive_oracle_claims` |
+| 每个 dimension 必须被可判定的候选面 item 覆盖 | item-set 评审的 `IncompleteCoverage` / `NotCandidateFacing` |
+| 评审裁决只有 `Approved` 与 `NeedsRevision` 两个变体 | `OracleDimensionItemSetReviewDecisionV1` |
+| 消费 `NeedsRevision` 的循环没有上界 | `controller_workflow.rs` 的 `let item_set = loop` |
+
+于是一条内容为「此区域故意不规定」的 admitted claim，会变成一个必须被判定、却没有任何东西可判的
+dimension。评审只能一直打回，循环只能一直转。`ARCHITECTURE.md` 第 8 节明写 obligation 可以落到
+「有依据的 `NotApplicable`」——**设计里有这条路，实现里没有**：代码中的 `NotApplicable`
+只有 `OracleAllowanceProvenanceV1` 那一个，是数值容差来源，与此无关。
+
+**触发它的是一次管理员裁决，这一点必须记下来。** 两条 unknown 都被裁为「排除出域 / 不规定」，
+理由是把风险留在通路而不是算法上。该理由本身成立，但它的效果是给 Oracle 递了两个空 dimension
+再要求覆盖——**用降低算法风险的方式制造了一个不可满足的 gate**，正是 3.6 所禁止的形状。
+
+**对照实验正在进行。** 同一任务、同一流水线，只把两条裁决换成有承诺的假说
+（倒置区间饱和到 upper、非有限输入照 CUDA `fminf`/`fmaxf` 语义），使 dimension 有确切期望值可覆盖。
+若收敛，则卡点是「无法表达故意不判」这一具体缺口；若仍不收敛，则问题在 Oracle 阶段本身，
+应按最小可执行 oracle 重构，其余义务从候选的真实失败里长出来。
+
+**无上界循环在这里的作用要说准。** 它不是根因，但它把一次错误裁决从有界失败放大成无界消耗。
+`ARCHITECTURE.md` 6.2 的五条迭代策略只落在候选搜索循环上；`controller_workflow.rs` 的 Oracle 段
+有九处裸 `loop`，无预算、无重复动作检测、无预算临界通知。这是「全流程 durable 状态机」
+只做了一段的直接后果，与工作流层没有重启恢复同源。
+
 ### 本轮修好的一类缺陷，值得下一次留意
 
 **四处「只报失败不报原因」，同一形状，同一天各修一次。** 产品进程启动、
