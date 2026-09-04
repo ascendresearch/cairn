@@ -38,9 +38,14 @@ use thiserror::Error;
 
 const RUNNER: &[u8] = br#"#!/bin/sh
 set -eu
-mode=$(sed -n '1p' meta/control-mode)
+# The contract requires the working directory to be `work`, and the sandbox makes that an empty
+# tmpfs beside the read-only bundle. Every path below is therefore resolved against the bundle
+# root, derived from this script's own location rather than from the sandbox's mount constants,
+# which belong to the worker and are not this program's to know.
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+mode=$(sed -n '1p' "$root/meta/control-mode")
 validate_plan() {
-  file=$1
+  file=$root/$1
   item=$2
   digest=$3
   actual=$(sha256sum "$file" | cut -d ' ' -f 1)
@@ -79,7 +84,7 @@ while IFS='|' read -r file item digest; do
       ;;
     *) exit 32 ;;
   esac
-done < meta/control-index
+done < "$root/meta/control-index"
 "#;
 const MIN_SCHEDULING_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -872,6 +877,48 @@ mod tests {
         OracleDimensionArtifact,
     };
 
+    /// Materializes a bundle the way the sandbox does and runs its entry point the way the worker
+    /// does: the tree read-only beside an empty `work`, the working directory set to `work`, and
+    /// the program invoked by absolute path.
+    ///
+    /// Reading the script cannot show that it runs. The one defect this catches made every control
+    /// job exit 2 in zero milliseconds with no output, and no test in this repository could have
+    /// seen it, because none of them ever executed the script.
+    fn materialize_like_the_sandbox(bundle: &InputBundleV1) -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("sandbox root");
+        let input = root.path().join("input");
+        let work = root.path().join("work");
+        std::fs::create_dir_all(&input).expect("input root");
+        std::fs::create_dir_all(&work).expect("work root");
+        for entry in bundle.entries() {
+            let path = input.join(entry.path().as_str());
+            match entry {
+                cairn_execution::InputBundleEntry::Directory { .. } => {
+                    std::fs::create_dir_all(&path).expect("bundle directory");
+                }
+                cairn_execution::InputBundleEntry::File { mode, bytes, .. } => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent).expect("bundle parent");
+                    }
+                    std::fs::write(&path, bytes).expect("bundle file");
+                    if *mode == InputFileMode::Executable {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                            .expect("executable bit");
+                    }
+                }
+            }
+        }
+        root
+    }
+
+    fn run_like_the_sandbox(root: &tempfile::TempDir) -> std::process::Output {
+        std::process::Command::new(root.path().join("input/bin/run"))
+            .current_dir(root.path().join("work"))
+            .output()
+            .expect("run the bundled control entry point")
+    }
+
     fn item() -> OracleItemV1 {
         OracleItemV1::new(
             ContentId::<OracleDimensionArtifact>::derive(b"generic-dimension").expect("dimension"),
@@ -902,6 +949,46 @@ mod tests {
             }],
         )
         .expect("plan")
+    }
+
+    /// The bundled control entry point runs where the contract actually puts it, and judges.
+    ///
+    /// The contract fixes the working directory to `work`, which the sandbox makes an empty tmpfs
+    /// beside the read-only bundle, so a path relative to the working directory names nothing.
+    /// Every control job exited 2 in zero milliseconds with no output until this was fixed, and no
+    /// test here could have seen it, because none of them ever executed the script.
+    ///
+    /// Both halves are needed. A well-formed plan must be accepted, which fails if the script
+    /// cannot reach its material; and a tampered plan must be refused, which fails if the script
+    /// reaches its material and accepts anything. Passing the first alone would leave a script
+    /// that reads nothing and says yes.
+    #[test]
+    fn the_bundled_control_runner_reads_and_judges_from_the_declared_working_directory() {
+        let item = item();
+        let plans = vec![plan(&item)];
+        let (bundle, _) =
+            build_bundle(OracleControlFamilyV1::Honest, &plans, Some(&item)).expect("bundle");
+
+        let intact = materialize_like_the_sandbox(&bundle);
+        let accepted = run_like_the_sandbox(&intact);
+        assert!(
+            accepted.status.success(),
+            "a well-formed plan must be accepted, got {:?} stderr={}",
+            accepted.status.code(),
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+
+        // Same bundle, one byte of the plan changed after its digest was recorded.
+        let tampered = materialize_like_the_sandbox(&bundle);
+        let plan_path = tampered.path().join("input/plans/0.json");
+        let mut bytes = std::fs::read(&plan_path).expect("plan bytes");
+        bytes.extend_from_slice(b" ");
+        std::fs::write(&plan_path, &bytes).expect("tamper with the plan");
+        let refused = run_like_the_sandbox(&tampered);
+        assert!(
+            !refused.status.success(),
+            "a plan that no longer matches its recorded digest must be refused"
+        );
     }
 
     #[test]
