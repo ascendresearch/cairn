@@ -2024,14 +2024,14 @@ mod tests {
     fn a_configuration_names_its_trees_from_the_deployment_root_wherever_it_sits() {
         let root = std::path::Path::new("/opt/cairn/server");
 
-        assert_eq!(deployment_root(&root.join("config/controller.json")), root);
+        assert_eq!(deployment_root(&root.join("config/server.json")), root);
         // A file outside the config tree is its own root, which is what a single-file deployment
         // and every test fixture rely on.
-        assert_eq!(deployment_root(&root.join("controller.json")), root);
+        assert_eq!(deployment_root(&root.join("server.json")), root);
         // Only the tree of that exact name lifts: a directory that merely ends in something
         // similar is not the config tree.
         assert_eq!(
-            deployment_root(std::path::Path::new("/opt/cairn/reconfig/controller.json")),
+            deployment_root(std::path::Path::new("/opt/cairn/reconfig/server.json")),
             std::path::Path::new("/opt/cairn/reconfig")
         );
     }
@@ -2045,7 +2045,7 @@ mod tests {
     #[test]
     fn related_clocks_are_checked_against_each_other_at_load() {
         let documented: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+            serde_json::from_str(include_str!("../../../config/server.example.json"))
                 .expect("documented controller configuration");
         let config: ServerConfig =
             serde_json::from_value(documented.clone()).expect("documented configuration");
@@ -2090,7 +2090,7 @@ mod tests {
     #[test]
     fn documented_configuration_is_strictly_decodable() {
         let config: ServerConfig =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+            serde_json::from_str(include_str!("../../../config/server.example.json"))
                 .expect("documented server configuration");
         assert!(config.scheduler.is_some());
     }
@@ -2098,7 +2098,7 @@ mod tests {
     #[test]
     fn scheduler_can_be_disabled_or_omitted_but_enabled_durations_are_positive() {
         let mut documented: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+            serde_json::from_str(include_str!("../../../config/server.example.json"))
                 .expect("documented JSON");
         documented["scheduler"] = serde_json::Value::Null;
         let disabled: ServerConfig =
@@ -2114,13 +2114,13 @@ mod tests {
         assert!(omitted.scheduler.is_none());
 
         let mut invalid: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+            serde_json::from_str(include_str!("../../../config/server.example.json"))
                 .expect("documented JSON");
         invalid["scheduler"]["assignment_lease_duration_ms"] = 0.into();
         assert!(serde_json::from_value::<ServerConfig>(invalid).is_err());
 
         let mut invalid_retry: serde_json::Value =
-            serde_json::from_str(include_str!("../../../config/controller.example.json"))
+            serde_json::from_str(include_str!("../../../config/server.example.json"))
                 .expect("documented JSON");
         invalid_retry["scheduler"]["optimistic_retry_limit"] = 0.into();
         assert!(serde_json::from_value::<ServerConfig>(invalid_retry).is_err());
@@ -2128,7 +2128,7 @@ mod tests {
 
     #[test]
     fn only_schema_version_one_is_accepted() {
-        let documented = include_str!("../../../config/controller.example.json");
+        let documented = include_str!("../../../config/server.example.json");
         let unsupported: ServerConfig = serde_json::from_str(
             &documented.replace("\"schema_version\": 1", "\"schema_version\": 99"),
         )
@@ -2138,7 +2138,7 @@ mod tests {
 
     #[test]
     fn rotation_overlap_can_be_explicitly_disabled() {
-        let documented = include_str!("../../../config/controller.example.json");
+        let documented = include_str!("../../../config/server.example.json");
         let disabled = documented.replace(
             "\"rotation_overlap_ms\": 300000",
             "\"rotation_overlap_ms\": null",
@@ -2156,7 +2156,7 @@ mod tests {
 
     #[test]
     fn missing_optional_rotation_overlap_disables_retirement() {
-        let documented = include_str!("../../../config/controller.example.json");
+        let documented = include_str!("../../../config/server.example.json");
         let omitted = documented.replace("    \"rotation_overlap_ms\": 300000,\n", "");
         let config: ServerConfig =
             serde_json::from_str(&omitted).expect("omitted optional rotation overlap");
@@ -2174,10 +2174,10 @@ mod tests {
     #[test]
     fn a_relative_configuration_resolves_beside_its_own_file() {
         let directory = tempfile::tempdir().expect("deployment root");
-        let config_path = directory.path().join("controller.json");
+        let config_path = directory.path().join("server.json");
         std::fs::write(
             &config_path,
-            include_str!("../../../config/controller.example.json"),
+            include_str!("../../../config/server.example.json"),
         )
         .expect("write documented configuration");
         let config = super::load_server_config(&config_path).expect("documented configuration");

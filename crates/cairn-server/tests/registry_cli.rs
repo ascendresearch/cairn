@@ -8,7 +8,7 @@ fn registry_query_cli_emits_strict_json_and_missing_entries_fail() -> Result<(),
     let directory = tempfile::tempdir()?;
     let home = directory.path().join("deployment");
     fs::create_dir_all(home.join("store"))?;
-    let config = directory.path().join("controller.json");
+    let config = directory.path().join("server.json");
     fs::write(
         &config,
         serde_json::to_vec_pretty(&serde_json::json!({

@@ -44,11 +44,11 @@ pub fn run(
     write_public(&secrets.join("ca.pem"), pki.ca_certificate.as_bytes())?;
     crate::write_new_secret_file(&secrets.join("ca-key.pem"), pki.ca_private_key.as_bytes())?;
     write_public(
-        &secrets.join("controller.pem"),
+        &secrets.join("server.pem"),
         pki.server_certificate.as_bytes(),
     )?;
     crate::write_new_secret_file(
-        &secrets.join("controller-key.pem"),
+        &secrets.join("server-key.pem"),
         pki.server_private_key.as_bytes(),
     )?;
 
@@ -57,7 +57,7 @@ pub fn run(
     // rest still name the trees beside it.
     let config_path = root
         .join(RuntimeTree::Config.directory_name())
-        .join("controller.json");
+        .join("server.json");
     let config = configuration(server_name, control_address, enrollment_address)
         .map_err(|error| ServerError::Startup(error.to_string()))?;
     let mut bytes = serde_json::to_vec_pretty(&config)
@@ -65,13 +65,28 @@ pub fn run(
     bytes.push(b'\n');
     crate::write_new_secret_file(&config_path, &bytes)?;
 
+    // The migration product configuration is generated for the same reason the server's is: a
+    // deployment whose configuration is hand-copied from an example is a deployment whose values
+    // nothing checks, and this one shipped a coverage policy naming a strategy role the product
+    // does not implement. Generating it means the example is exercised on every bootstrap.
+    let migration_path = root
+        .join(RuntimeTree::Config.directory_name())
+        .join("migration.json");
+    let migration =
+        migration_configuration().map_err(|error| ServerError::Startup(error.to_string()))?;
+    let mut migration_bytes = serde_json::to_vec_pretty(&migration)
+        .map_err(|error| ServerError::Startup(error.to_string()))?;
+    migration_bytes.push(b'\n');
+    crate::write_new_secret_file(&migration_path, &migration_bytes)?;
+
     // The trees are named here rather than left to be discovered, because the next thing an
     // operator does is decide where their own material goes.
-    println!("Created a controller deployment at {}", root.display());
+    println!("Created a server deployment at {}", root.display());
     for tree in RuntimeTree::CONTROLLER {
         println!("  {}/  mode {:o}", tree.directory_name(), tree.mode());
     }
-    println!("  {}/controller.json", RuntimeTree::Config.directory_name());
+    println!("  {}/server.json", RuntimeTree::Config.directory_name());
+    println!("  {}/migration.json", RuntimeTree::Config.directory_name());
     println!();
     println!("The certificate authority in secrets/ is self-signed and names {server_name}.");
     println!("Replace it with your own before this deployment issues credentials you rely on.");
@@ -83,6 +98,8 @@ pub fn run(
     println!();
     println!("Start it with:");
     println!("  cairn-server {}", config_path.display());
+    println!("or, for the CUDA migration product, with:");
+    println!("  cairn-cuda-migration-server {}", migration_path.display());
     Ok(())
 }
 
@@ -120,6 +137,19 @@ fn generate_pki(server_name: &str) -> Result<GeneratedPki, Box<dyn Error>> {
     })
 }
 
+/// Returns the documented migration product configuration.
+///
+/// It is shipped verbatim rather than filled in, because every value it carries is a deployment
+/// policy choice and none of them is derivable from the arguments a bootstrap is given. What this
+/// buys is the same thing generating the server's configuration buys: the example stops being
+/// something an operator copies unchecked, and a value that no longer works stops being something
+/// only a live run discovers.
+fn migration_configuration() -> Result<serde_json::Value, Box<dyn Error>> {
+    Ok(serde_json::from_str(include_str!(
+        "../../../config/migration.example.json"
+    ))?)
+}
+
 /// Fills the documented configuration in, so the example and what bootstrap writes cannot drift:
 /// if the example stops decoding, this stops working.
 fn configuration(
@@ -128,7 +158,7 @@ fn configuration(
     enrollment_address: &str,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let mut config: serde_json::Value =
-        serde_json::from_str(include_str!("../../../config/controller.example.json"))?;
+        serde_json::from_str(include_str!("../../../config/server.example.json"))?;
     config["listen"] = serde_json::json!(control_address);
     let service = config
         .get_mut("enrollment_service")

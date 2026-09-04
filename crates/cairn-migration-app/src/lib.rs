@@ -17,6 +17,15 @@ pub use candidate_build_runner::{
 pub use oracle_control_runner::{
     OracleControlRunnerError, OracleControlRunnerV1, OracleControlWorkerConfigV1,
 };
+/// Reports the Oracle strategy roles this product registers.
+///
+/// Exposed so a deployment's coverage policy can be checked against what exists rather than
+/// against a second copy of the same list.
+#[must_use]
+pub fn registered_strategy_roles() -> &'static [cairn_migration::OracleStrategyRoleV1] {
+    runtime_agent::REGISTERED_STRATEGY_ROLES
+}
+
 pub use runtime_agent::{
     MigrationAgentRuntimeError, MigrationAgentRuntimeExecutorV1, MigrationRuntimeMaterialsV1,
     migration_tool_registry,

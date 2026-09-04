@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: scripts/real-gpu-worker-smoke.sh <controller.json> <sha256:image-id>" >&2
+  echo "usage: scripts/real-gpu-worker-smoke.sh <server.json> <sha256:image-id>" >&2
   exit 2
 fi
 

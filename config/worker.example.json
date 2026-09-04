@@ -10,8 +10,8 @@
     "assignment_material_chunk_size": 262144
   },
   "controller": {
-    "tcp_address": "controller.example.test:7443",
-    "websocket_uri": "wss://controller.example.test:7443/control"
+    "tcp_address": "server.example.test:7443",
+    "websocket_uri": "wss://server.example.test:7443/control"
   },
   "execution": {
     "mode": "disabled"

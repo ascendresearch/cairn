@@ -35,7 +35,7 @@ for target in "${TARGETS[@]}"; do
     ./SHA256SUMS \
     ./bin/cairn-server \
     ./bin/cairn-worker \
-    ./config/controller.example.json \
+    ./config/server.example.json \
     ./config/worker.example.json; do
     if ! tar -tzf "$BUNDLE_ROOT/$bundle" "$required" >/dev/null; then
       echo "$bundle does not contain $required" >&2

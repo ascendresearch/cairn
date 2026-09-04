@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "server_config": "controller.json",
+  "server_config": "config/server.json",
   "app_api_socket": "/run/cairn/migration.sock",
   "authority_subject": "task-authority:administrator",
   "model_template": "model-templates/deepseek/deepseek-v4-pro.json",
@@ -27,7 +27,7 @@
   },
   "inbox_capacity": 8,
   "oracle_coverage_profile": "correctness",
-  "oracle_adversarial_policy": "required-for-every-concern",
+  "oracle_adversarial_policy": "not-required",
   "reasoning_decomposition": "structured-review",
   "evidence_experiment_worker": null,
   "oracle_control_worker": {

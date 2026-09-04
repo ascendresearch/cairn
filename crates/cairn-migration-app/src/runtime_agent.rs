@@ -63,6 +63,16 @@ use crate::evidence_experiment_runner::{
 const SCHEMA_V1: u16 = 1;
 const TOOL_VERSION: &str = "migration-role-tools-v1";
 const MODEL_BACKED_SYNTHESIS_STRATEGY: &str = "model-backed-synthesis";
+
+/// The strategy roles this product actually registers.
+///
+/// Named once because two sides read it: the catalog that registers the strategies, and the check
+/// that a deployment's coverage policy does not ask for a role nothing implements. A shipped
+/// example demanded the adversarial role against this list and every proposal was refused after a
+/// model call had been paid for. Adding an adversarial strategy means extending this and the
+/// registration together.
+pub(crate) const REGISTERED_STRATEGY_ROLES: &[OracleStrategyRoleV1] =
+    &[OracleStrategyRoleV1::Synthesis];
 const SIR_INSTRUCTION: &str = r"You are the semantic-intent-recovery analyst for one CUDA-to-Ascend-C migration task.
 
 Inspect only the offered task artifacts. First use migration-read-task-artifact to read the source, host launch, ABI, tests, or build files needed for your analysis. Treat observable source facts separately from intent inferences. Cite exact task-local paths and inclusive line ranges.
@@ -901,7 +911,7 @@ impl MigrationAgentRuntimeExecutorV1 {
                     invocation,
                     tools,
                 },
-                vec![OracleStrategyRoleV1::Synthesis],
+                REGISTERED_STRATEGY_ROLES.to_vec(),
                 policy.concerns().to_vec(),
             )
             .map_err(MigrationAgentRuntimeError::domain)?,

@@ -740,6 +740,30 @@ obligation，因为那是阅读顺序;`CandidateOracleContractV1` 以 content id
 **三、四、五这三堵墙的共同点:所在代码路径从未被真正走到过。** 因此「测试全绿」在这些位置
 不构成任何能力证据，与本文第 1 节「没有反向审计的绿灯不构成能力证据」是同一件事。
 
+### 4.11 配置命名与生成:产品配置此前不是产品生成的
+
+**为什么线上会有一份不可服务的配置。** `bootstrap` 只生成服务端配置一份文件;
+迁移产品的配置没有任何东西生成它，是从示例手工拷过去的，而**示例本身就带着那个坏值**
+（`required-for-every-concern`，见 4.6）。所以那不是谁写错了，是照着一份错的示例部署。
+仓库确有一道针对该示例的检查，但它验的是可解析性与构建配方路径存在，
+验不出「这份策略要求一个产品没有实现的角色」。
+
+**三项一起改:**
+
+- 命名。`controller` 不对应任何 crate、二进制或服务，文件名不该暗示它存在。
+  `config/controller.example.json` → `server.example.json`，bootstrap 写出 `config/server.json`;
+  `config/migration-product.example.json` → `migration.example.json`;
+  示例中的 `controller.example.test` 与 `secrets/controller.pem` 一并改为 `server` 系。
+  **worker 配置里的 `controller` 字段不改**:它命名的是 `ARCHITECTURE.md` 第 5 节
+  authority 表里真实存在的角色，与文件名暗示不存在的二进制不是一回事。
+- 生成。bootstrap 现在同时写出 `config/migration.json`，内容取自示例。
+  这样示例不再是「被拷贝而无人校验」的东西，每次 bootstrap 都会走一遍它。
+- 可服务性。示例的 `oracle_adversarial_policy` 改为 `not-required`，
+  并新增一道检查:示例要求的角色必须都在产品**实际注册**的角色里。
+  产品注册的角色抽成 `REGISTERED_STRATEGY_ROLES` 一处声明，注册端与检查端读同一份，
+  因此将来真的实现对抗策略时，放宽这道检查靠的是扩展声明而不是改测试。
+  红验证:把示例改回 `required-for-every-concern`，测试点名 `Adversarial` 角色未注册。
+
 ### 4.10 P4 通路跑通，失败点是 platform fact gap（2026-09-04，live）
 
 **整条通路首次贯通:** 正常入口 → SIR 真实调用 → Intent Admission → Oracle 整体 portfolio →
@@ -787,7 +811,7 @@ P3 补上了后者，前者一点没动，于是失败以同一形态复现。
 **预算已一次调到位，不要再逐个撞。** 输出 token 131072（模型上限 384000）、
 episode 步数 96、工具操作 512、循环步数 96、角色重试 5、任务 256 文件共 8 MiB、
 单次读 4096 行、候选搜索 12 轮、worker 执行 1 小时/完成 2 小时。
-线上配置与 `config/migration-product.example.json` 取值一致，有测试钉住例配置可被产品类型解析。
+线上配置与 `config/migration.example.json` 取值一致，有测试钉住例配置可被产品类型解析。
 
 ### 未解决的事实，别当成已解决
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
-  echo "usage: scripts/real-cuda-reduction-smoke.sh <controller.json> <sha256:image-id> <cuda-reduction-v1/input>" >&2
+  echo "usage: scripts/real-cuda-reduction-smoke.sh <server.json> <sha256:image-id> <cuda-reduction-v1/input>" >&2
   exit 2
 fi
 

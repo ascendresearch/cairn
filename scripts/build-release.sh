@@ -137,7 +137,7 @@ for target in "${targets[@]}"; do
   for binary in "${binaries[@]}"; do
     cp "$BUILD_ROOT/$target/release/$binary" "$stage/bin/"
   done
-  cp "$SOURCE_ROOT/config/controller.example.json" "$stage/config/"
+  cp "$SOURCE_ROOT/config/server.example.json" "$stage/config/"
   cp "$SOURCE_ROOT/config/worker.example.json" "$stage/config/"
   cp "$SOURCE_ROOT/LICENSE" "$stage/"
 

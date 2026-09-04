@@ -5,27 +5,27 @@
     "credential_validity_ms": 2592000000,
     "control_endpoint": {
       "server_ca": "secrets/ca.pem",
-      "server_name": "controller.example.test",
-      "tcp_address": "controller.example.test:7443",
-      "websocket_uri": "wss://controller.example.test:7443/control"
+      "server_name": "server.example.test",
+      "tcp_address": "server.example.test:7443",
+      "websocket_uri": "wss://server.example.test:7443/control"
     },
     "diagnostic_byte_limit": 1024,
     "handshake_timeout_ms": 10000,
     "issuer_certificate": "secrets/ca.pem",
     "issuer_private_key": "secrets/ca-key.pem",
     "listen": "0.0.0.0:7444",
-    "public_tcp_address": "controller.example.test:7444",
+    "public_tcp_address": "server.example.test:7444",
     "rotation_overlap_ms": 300000,
     "server_ca": "secrets/ca.pem",
-    "server_name": "controller.example.test",
+    "server_name": "server.example.test",
     "server_tls": {
-      "certificate": "secrets/controller.pem",
-      "private_key": "secrets/controller-key.pem"
+      "certificate": "secrets/server.pem",
+      "private_key": "secrets/server-key.pem"
     },
     "transport": {
       "message_byte_limit": 1048576
     },
-    "websocket_uri": "wss://controller.example.test:7444/enrollment"
+    "websocket_uri": "wss://server.example.test:7444/enrollment"
   },
   "handshake_timeout_ms": 10000,
   "idle_timeout_ms": 120000,
@@ -45,9 +45,9 @@
   "schema_version": 1,
   "store_root": "store",
   "tls": {
-    "certificate": "secrets/controller.pem",
+    "certificate": "secrets/server.pem",
     "client_ca": "secrets/ca.pem",
-    "private_key": "secrets/controller-key.pem"
+    "private_key": "secrets/server-key.pem"
   },
   "transport": {
     "message_byte_limit": 1048576

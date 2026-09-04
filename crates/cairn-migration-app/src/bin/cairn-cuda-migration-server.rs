@@ -209,7 +209,7 @@ mod tests {
     fn the_shipped_product_example_parses_as_the_configuration_it_documents() {
         let bytes = std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../config/migration-product.example.json"
+            "/../../config/migration.example.json"
         ))
         .expect("example configuration");
 
@@ -232,5 +232,50 @@ mod tests {
             "the example names a build recipe that is not in the tree: {}",
             runner.display()
         );
+    }
+
+    /// The shipped example asks only for coverage this product registers a strategy for.
+    ///
+    /// It did not. It required the adversarial role for every concern while the product registers
+    /// only synthesis, so half the derived dimensions had no eligible strategy and every
+    /// whole-portfolio proposal was refused - each refusal after a model call of several minutes.
+    /// Parsing was already checked; being servable was not, and bootstrap now writes a deployment
+    /// from this file, so an unservable value here is an unservable deployment.
+    #[test]
+    fn the_shipped_product_example_asks_only_for_roles_this_product_registers() {
+        use cairn_migration::{OracleCoveragePolicyV1, OracleStrategyRoleV1};
+
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/migration.example.json"
+        ))
+        .expect("example configuration");
+        let config: ProductConfigV1 =
+            serde_json::from_slice(&bytes).expect("the example is the current configuration");
+        let policy = OracleCoveragePolicyV1::new(
+            config.oracle_coverage_profile,
+            config.oracle_adversarial_policy,
+        );
+
+        // Read from the same declaration the catalog registers from, so adding an adversarial
+        // strategy relaxes this without editing it.
+        let registered = cairn_migration_app::registered_strategy_roles();
+        let required = if policy.adversarial()
+            == cairn_migration::OracleAdversarialPolicyV1::RequiredForEveryConcern
+        {
+            vec![
+                OracleStrategyRoleV1::Synthesis,
+                OracleStrategyRoleV1::Adversarial,
+            ]
+        } else {
+            vec![OracleStrategyRoleV1::Synthesis]
+        };
+
+        for role in required {
+            assert!(
+                registered.contains(&role),
+                "the example requires the {role:?} role, which this product does not register"
+            );
+        }
     }
 }
