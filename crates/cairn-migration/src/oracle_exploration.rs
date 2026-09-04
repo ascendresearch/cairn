@@ -873,6 +873,35 @@ impl OracleStrategyCatalogV1 {
         &self.strategies
     }
 
+    /// Reports every concern and role this coverage policy requires that no strategy can serve.
+    ///
+    /// A dimension with no eligible strategy is rejected by [`OracleExplorationLedgerV1::open`],
+    /// and a whole-portfolio proposal naming one is rejected as an ineligible strategy. Both are
+    /// correct, and both arrive after a model call has already been paid for. The pairing depends
+    /// only on the configured policy and the registered strategies, never on a task, so a
+    /// deployment can be asked the same question before it accepts any work.
+    #[must_use]
+    pub fn uncovered_by_policy(
+        &self,
+        policy: &OracleCoveragePolicyV1,
+    ) -> Vec<(OracleConcernV1, OracleStrategyRoleV1)> {
+        let mut roles = vec![OracleStrategyRoleV1::Synthesis];
+        if policy.adversarial() == OracleAdversarialPolicyV1::RequiredForEveryConcern {
+            roles.push(OracleStrategyRoleV1::Adversarial);
+        }
+        let mut uncovered = Vec::new();
+        for concern in policy.concerns() {
+            for role in &roles {
+                if !self.strategies.iter().any(|strategy| {
+                    strategy.roles.contains(role) && strategy.concerns.contains(concern)
+                }) {
+                    uncovered.push((*concern, *role));
+                }
+            }
+        }
+        uncovered
+    }
+
     fn eligible(&self, dimension: &OracleDimensionV1) -> Vec<OracleStrategyName> {
         self.strategies
             .iter()
@@ -6437,6 +6466,59 @@ pub fn archive_oracle_framework_artifact<A: ContentType, S: ContentStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthesis_only_catalog(policy: &OracleCoveragePolicyV1) -> OracleStrategyCatalogV1 {
+        OracleStrategyCatalogV1::new(vec![
+            OracleStrategyRegistrationV1::new(
+                OracleStrategyName::new("model-backed-synthesis").expect("strategy name"),
+                OracleStrategyKindV1::DeterministicAnalyzer,
+                OracleStrategyExecutorV1::Deterministic {
+                    implementation: ContentId::derive(b"deterministic").expect("implementation"),
+                },
+                vec![OracleStrategyRoleV1::Synthesis],
+                policy.concerns().to_vec(),
+            )
+            .expect("registration"),
+        ])
+        .expect("catalog")
+    }
+
+    /// A policy that demands adversarial coverage from a catalog with no adversarial strategy is
+    /// unservable, and the deployment can be told so before any task exists.
+    ///
+    /// Both failures this prevents are correct where they fire and both fire too late: the ledger
+    /// refuses the dimension, and a whole-portfolio proposal naming a strategy for it is rejected
+    /// as ineligible, each after a proposal episode has already been paid for.
+    #[test]
+    fn a_policy_requiring_strategies_the_catalog_lacks_is_reported_before_any_task() {
+        let demanding = OracleCoveragePolicyV1::new(
+            OracleCoverageProfileV1::Correctness,
+            OracleAdversarialPolicyV1::RequiredForEveryConcern,
+        );
+        let catalog = synthesis_only_catalog(&demanding);
+
+        let uncovered = catalog.uncovered_by_policy(&demanding);
+
+        assert_eq!(uncovered.len(), demanding.concerns().len());
+        assert!(
+            uncovered
+                .iter()
+                .all(|(_, role)| *role == OracleStrategyRoleV1::Adversarial),
+            "only the adversarial half is unservable, got {uncovered:?}"
+        );
+
+        // The same catalog serves the same profile completely once the policy stops demanding a
+        // role nothing implements.
+        let servable = OracleCoveragePolicyV1::new(
+            OracleCoverageProfileV1::Correctness,
+            OracleAdversarialPolicyV1::NotRequired,
+        );
+        assert!(
+            synthesis_only_catalog(&servable)
+                .uncovered_by_policy(&servable)
+                .is_empty()
+        );
+    }
 
     // A mechanism's identity now names a record rather than a hash of its own name, and the
     // calibration is part of that record. Registering one that was never shown to discriminate

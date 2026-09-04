@@ -506,6 +506,21 @@ pub fn migration_product_boundary(
     if !unix_socket.is_absolute() || inbox_capacity == 0 {
         return Err(MigrationAppApiError::InvalidConfiguration);
     }
+    // Reconciled here because here it costs nothing. A dimension no strategy can serve is refused
+    // correctly further in, but only after a proposal episode has been paid for: a policy that
+    // requires adversarial coverage against a catalog registering no adversarial strategy makes
+    // every such episode unsatisfiable, and the run spends a full model call per attempt to learn
+    // it. The pairing depends only on the policy and the catalog, never on a task.
+    let uncovered = oracle_catalog.uncovered_by_policy(&oracle_policy);
+    if !uncovered.is_empty() {
+        return Err(MigrationAppApiError::UnservableOracleCoverage(
+            uncovered
+                .iter()
+                .map(|(concern, role)| format!("{concern:?}/{role:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
     let tasks = SharedTasksV1::default();
     let (sender, receiver) = mpsc::channel(inbox_capacity);
     Ok((
@@ -1607,6 +1622,8 @@ pub enum MigrationAppApiError {
     TaskWorkspacePathEscape,
     #[error("intent authority scope names a claim the caller did not declare: {0}")]
     UndeclaredAuthorityClaim(String),
+    #[error("oracle coverage policy requires strategies this deployment does not register: {0}")]
+    UnservableOracleCoverage(String),
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1645,6 +1662,7 @@ impl MigrationAppApiError {
             Self::ArchiveIdentityMismatch => "archive-identity-mismatch",
             Self::TaskWorkspacePathEscape => "task-workspace-path-escape",
             Self::UndeclaredAuthorityClaim(_) => "undeclared-authority-claim",
+            Self::UnservableOracleCoverage(_) => "unservable-oracle-coverage",
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1664,6 +1682,7 @@ impl MigrationAppApiError {
             Self::Conflict | Self::ArchiveUploadAlreadyStarted => AppApiErrorCodeV1::Conflict,
             Self::NotReady | Self::Cancelled => AppApiErrorCodeV1::NotReady,
             Self::WorkflowUnavailable
+            | Self::UnservableOracleCoverage(_)
             | Self::StatePoisoned
             | Self::NotImplemented(_)
             | Self::OracleSemanticMechanismUnavailable
@@ -1864,6 +1883,59 @@ mod tests {
             states.insert(task_id, state);
         }
         (tasks, review)
+    }
+
+    /// A deployment whose coverage policy demands a role no strategy implements is refused when
+    /// the product boundary is built, not after a proposal episode has been paid for.
+    ///
+    /// The live deployment shipped exactly this pairing: adversarial coverage required for every
+    /// concern against a catalog registering one synthesis-only strategy. Every whole-portfolio
+    /// proposal was rejected as ineligible, each after a model call of several minutes.
+    #[test]
+    fn a_deployment_that_cannot_serve_its_own_coverage_policy_is_refused_at_startup() {
+        use cairn_migration::{
+            OracleAdversarialPolicyV1, OracleCoveragePolicyV1, OracleCoverageProfileV1,
+            OracleStrategyCatalogV1, OracleStrategyExecutorV1, OracleStrategyKindV1,
+            OracleStrategyName, OracleStrategyRegistrationV1, OracleStrategyRoleV1,
+        };
+
+        let synthesis_only = |policy: &OracleCoveragePolicyV1| {
+            OracleStrategyCatalogV1::new(vec![
+                OracleStrategyRegistrationV1::new(
+                    OracleStrategyName::new("model-backed-synthesis").expect("name"),
+                    OracleStrategyKindV1::DeterministicAnalyzer,
+                    OracleStrategyExecutorV1::Deterministic {
+                        implementation: ContentId::derive(b"impl").expect("implementation"),
+                    },
+                    vec![OracleStrategyRoleV1::Synthesis],
+                    policy.concerns().to_vec(),
+                )
+                .expect("registration"),
+            ])
+            .expect("catalog")
+        };
+
+        let demanding = OracleCoveragePolicyV1::new(
+            OracleCoverageProfileV1::Correctness,
+            OracleAdversarialPolicyV1::RequiredForEveryConcern,
+        );
+        assert!(
+            !synthesis_only(&demanding)
+                .uncovered_by_policy(&demanding)
+                .is_empty(),
+            "the shipped pairing must be reported as unservable"
+        );
+
+        let servable = OracleCoveragePolicyV1::new(
+            OracleCoverageProfileV1::Correctness,
+            OracleAdversarialPolicyV1::NotRequired,
+        );
+        assert!(
+            synthesis_only(&servable)
+                .uncovered_by_policy(&servable)
+                .is_empty(),
+            "the same catalog serves the policy that stops demanding what nothing implements"
+        );
     }
 
     /// A decision scoped to a claim the caller never declared is refused where it is made.
