@@ -825,6 +825,30 @@ unknown:`fminf`/`fmaxf` 的 NaN 语义决定该算子对非有限输入的行为
 （socket 路径超长）。同时新增一道门:随仓库发布的产品配置例必须能被真正读它的类型解析，
 且它命名的构建配方必须在树里——两个方向都红验过。
 
+**安装位置已统一到 `/opt/cairn/<instance>`（2026-09-03）。** 此前三个进程三种形状:
+控制器在 `~/.local/lib/cairn-controller` 加 `~/.local/share/cairn`（user unit）,
+NPU worker 在 `/opt/cairn-worker`（system unit）,GPU worker 在 `~/.local/lib/cairn-worker`
+加 `~/.local/state/cairn-worker`（user unit）——二进制按角色分目录、状态一处在 `share` 一处在 `state`、
+scope 两种。现在:
+
+| 主机 | 位置 | unit |
+| --- | --- | --- |
+| 控制器（本机） | `/opt/cairn/controller`,二进制 `/opt/cairn/current/bin` | system,`cairn-controller` |
+| NPU 构建 worker | `/opt/cairn/npu-build`,同一形状 | system,`cairn-worker-npu-build` |
+| GPU worker | **未迁移**,仍在 `~/.local/state/cairn-worker/gpu` | user |
+
+GPU 主机没有免密 root,那台的迁移需要一次人工授权。
+
+**控制器 unit 现在跑迁移产品进程,不再跑裸 controller。** 产品进程本身就是 controller,
+两者不能并存——试运行直接 `Address already in use`,这正是「一份 store 只由一个 Controller 进程服务」。
+`deploy.sh` 的 controller 角色也随之改为安装产品二进制。
+
+迁移中暴露并修好的两处:发布清单只声明 `cairn-server` 与 `cairn-worker`,按它构建产不出能部署
+控制器的 bundle;而 `build-release.sh` 把目标与二进制列表在四处硬编码,从不读清单——
+与已记录的 musl 缺口同形。现已改为读清单,并加了两道门:脚本必须读而不是复述,
+清单发布的每个二进制都必须被某个部署安装。unit 模板也补上了 `User=`,
+system unit 默认以 root 跑,而状态目录属于部署账户。
+
 **冻结源码现在落在任务自己的目录下**（`workspaces/<task>/`），不在共享 store 里。
 先前放进 store 是错的,理由是删除:store 的内容按内容标识去重,两个任务提交同一份文件只存一份,
 于是「任务结束、不再需要保存」就无法只删一个——要先算出还有谁持有它,那是一套引用计数,

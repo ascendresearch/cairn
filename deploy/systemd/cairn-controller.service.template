@@ -10,6 +10,11 @@ StartLimitBurst=5
 
 [Service]
 Type=exec
+# A system unit runs as root unless it is told otherwise, and this one owns durable state.
+# Left unset it would write that state as root, so a later user-scope run of the same
+# deployment could no longer read what it had written.
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
 WorkingDirectory=@WORKING_DIRECTORY@
 ExecStart=@BINARY@ @CONFIG@
 Restart=always

@@ -24,6 +24,8 @@ Required environment:
 
 Optional environment:
   CAIRN_DEPLOY_SCOPE    system | user            (default: system)
+  CAIRN_DEPLOY_USER     account a system unit runs as (default: the invoking user)
+  CAIRN_DEPLOY_GROUP    group a system unit runs as   (default: that account's group)
   CAIRN_DEPLOY_HOME     absolute deployment root (controller only; the unit is granted write
                         access to exactly the trees it owns and writes, and the rest of the
                         filesystem stays read-only)
@@ -73,8 +75,18 @@ case "$ROLE" in
   *) usage ;;
 esac
 case "$SCOPE" in
-  system) wanted_by="multi-user.target" ;;
-  user) wanted_by="default.target" ;;
+  # A system unit defaults to root. The state trees belong to the account that owns the
+  # deployment, so the unit names it rather than inheriting whatever systemd would have used.
+  system)
+    wanted_by="multi-user.target"
+    service_user="${CAIRN_DEPLOY_USER:-$(id -un)}"
+    service_group="${CAIRN_DEPLOY_GROUP:-$(id -gn "$service_user")}"
+    ;;
+  user)
+    wanted_by="default.target"
+    service_user="$(id -un)"
+    service_group="$(id -gn)"
+    ;;
   *) echo "CAIRN_DEPLOY_SCOPE must be system or user, observed: $SCOPE" >&2; exit 2 ;;
 esac
 for path in "$PREFIX" "$CONFIG" "$WORKDIR"; do
@@ -102,6 +114,8 @@ rendered="$(sed \
   -e "s|@WORKING_DIRECTORY@|$WORKDIR|g" \
   -e "s|@WRITABLE_TREES@|$writable_trees|g" \
   -e "s|@WANTED_BY@|$wanted_by|g" \
+  -e "s|@SERVICE_USER@|$service_user|g" \
+  -e "s|@SERVICE_GROUP@|$service_group|g" \
   "$template")"
 
 on_target() {
