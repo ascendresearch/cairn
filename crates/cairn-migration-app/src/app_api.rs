@@ -236,6 +236,42 @@ fn pause_for_intent_reconciliation(
     Ok(true)
 }
 
+/// Builds the administrator's view of one SIR proposal awaiting decision.
+///
+/// The authority claims travel with the requests because answering a request requires naming the
+/// claims the decision is scoped to, and a scope naming anything else is refused. Deriving them
+/// here, from the same frozen declaration Intent Admission later reads, keeps the published set
+/// and the accepted set one set.
+fn publish_intent_review(
+    task: &FrozenMigrationTaskV1,
+    proposal: &IntentHypothesisSetProposalV1,
+    requests: &IntentDecisionRequestBatchV1,
+) -> Result<IntentReviewResourceV1, MigrationAppApiError> {
+    Ok(IntentReviewResourceV1 {
+        task_id: task.task_id(),
+        proposal_id: proposal
+            .identity()
+            .map_err(MigrationAppApiError::internal)?,
+        proposal: proposal.clone(),
+        requests_id: Some(
+            requests
+                .identity()
+                .map_err(MigrationAppApiError::internal)?,
+        ),
+        requests: requests
+            .requests()
+            .iter()
+            .map(|request| {
+                Ok(IntentReviewRequestResourceV1 {
+                    request_id: request.identity().map_err(MigrationAppApiError::internal)?,
+                    request: request.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, MigrationAppApiError>>()?,
+        authority_claims: task.recovery_input().request().caller().claims().to_vec(),
+    })
+}
+
 enum IntentDecisionReadinessV1 {
     Pending,
     Reconciliation {
@@ -562,30 +598,7 @@ impl CudaMigrationProductServices for MigrationProductServicesV1 {
             let state = tasks
                 .get_mut(&task.task_id())
                 .ok_or(MigrationAppApiError::TaskNotFound)?;
-            state.intent_review = Some(IntentReviewResourceV1 {
-                task_id: task.task_id(),
-                proposal_id: proposal
-                    .identity()
-                    .map_err(MigrationAppApiError::internal)?,
-                proposal: proposal.clone(),
-                requests_id: Some(
-                    requests
-                        .identity()
-                        .map_err(MigrationAppApiError::internal)?,
-                ),
-                requests: requests
-                    .requests()
-                    .iter()
-                    .map(|request| {
-                        Ok(IntentReviewRequestResourceV1 {
-                            request_id: request
-                                .identity()
-                                .map_err(MigrationAppApiError::internal)?,
-                            request: request.clone(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, MigrationAppApiError>>()?,
-            });
+            state.intent_review = Some(publish_intent_review(task, proposal, requests)?);
             state.transition(
                 TaskPhaseV1::AwaitingIntentReview,
                 Some(TaskAttentionV1::IntentReview),
@@ -1302,6 +1315,18 @@ fn record_intent_decision(
             return Err(MigrationAppApiError::Conflict);
         }
     }
+    // Intent Admission resolves this same scope when it promotes, and a scope naming a claim the
+    // caller never declared fails there. Reaching that point costs the whole task: promotion runs
+    // only once every request is answered, and its failure leaves the task in an attention state
+    // that accepts no further decision. Refusing here keeps the correction where the administrator
+    // can still make it, and both sides read the scope through one function.
+    cairn_migration::resolve_authority_scope_claims(&authority_scope, &review.authority_claims)
+        .map_err(|error| match error {
+            cairn_migration::IntentPromotionError::UndeclaredAuthorityClaim(claim) => {
+                MigrationAppApiError::UndeclaredAuthorityClaim(claim.as_str().to_owned())
+            }
+            other => MigrationAppApiError::internal(other),
+        })?;
     let grant =
         UserIntentAuthorityGrantV1::new(task_id, authority_subject.clone(), authority_scope);
     let decision = UserIntentDecisionV1::new(
@@ -1580,6 +1605,8 @@ pub enum MigrationAppApiError {
     ArchiveIdentityMismatch,
     #[error("task artifact path leaves the task directory")]
     TaskWorkspacePathEscape,
+    #[error("intent authority scope names a claim the caller did not declare: {0}")]
+    UndeclaredAuthorityClaim(String),
     #[error("migration App API I/O failed: {0}")]
     Io(String),
     #[error("migration App API internal operation failed: {0}")]
@@ -1617,6 +1644,7 @@ impl MigrationAppApiError {
             Self::ArchiveUploadTooLarge => "archive-upload-too-large",
             Self::ArchiveIdentityMismatch => "archive-identity-mismatch",
             Self::TaskWorkspacePathEscape => "task-workspace-path-escape",
+            Self::UndeclaredAuthorityClaim(_) => "undeclared-authority-claim",
             Self::Io(_) => "io",
             Self::Internal(_) => "internal",
         }
@@ -1630,7 +1658,8 @@ impl MigrationAppApiError {
             | Self::ArchiveUploadRangeInvalid
             | Self::ArchiveUploadTooLarge
             | Self::ArchiveIdentityMismatch
-            | Self::TaskWorkspacePathEscape => AppApiErrorCodeV1::InvalidRequest,
+            | Self::TaskWorkspacePathEscape
+            | Self::UndeclaredAuthorityClaim(_) => AppApiErrorCodeV1::InvalidRequest,
             Self::TaskNotFound => AppApiErrorCodeV1::TaskNotFound,
             Self::Conflict | Self::ArchiveUploadAlreadyStarted => AppApiErrorCodeV1::Conflict,
             Self::NotReady | Self::Cancelled => AppApiErrorCodeV1::NotReady,
@@ -1690,6 +1719,225 @@ mod tests {
             archive_limits(1 << 20),
         )
         .expect("staged upload")
+    }
+
+    fn review_proposal(
+        recovery_id: ContentId<cairn_migration::IntentRecoveryInputArtifact>,
+    ) -> cairn_migration::IntentHypothesisSetProposalV1 {
+        use cairn_protocol::EpisodeId;
+
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "recovery_input": recovery_id,
+            "episode_id": EpisodeId::new(),
+            "model_configuration":
+                ContentId::<cairn_migration::AgentResolvedRuntimeModelArtifact>::derive(
+                    b"record test model",
+                )
+                .expect("model identity"),
+            "submission": {
+                "schema_version": 1,
+                "observed_facts": [{
+                    "id": "atomic-slots",
+                    "statement": "Output slots are allocated atomically.",
+                    "citations": [{
+                        "path": "src/compact_above.cu",
+                        "start_line": 16,
+                        "end_line": 20
+                    }]
+                }],
+                "hypotheses": [
+                    {
+                        "id": "order-unspecified",
+                        "layer": "observable-contract",
+                        "claim": "Any permutation of qualifying values is acceptable.",
+                        "domain": "Successful calls with sufficient capacity.",
+                        "supporting_evidence": [
+                            {"source": "caller-claim", "claim": "copies-strictly-above"}
+                        ],
+                        "counter_evidence": []
+                    },
+                    {
+                        "id": "stable-order",
+                        "layer": "observable-contract",
+                        "claim": "Qualifying values retain input-relative order.",
+                        "domain": "Successful calls with sufficient capacity.",
+                        "supporting_evidence": [
+                            {"source": "caller-claim", "claim": "copies-strictly-above"}
+                        ],
+                        "counter_evidence": [
+                            {"source": "observed-fact", "observation": "atomic-slots"}
+                        ]
+                    }
+                ],
+                "conflicts": [{
+                    "id": "order-conflict",
+                    "statement": "The output-order contracts conflict.",
+                    "claims": [
+                        {"source": "hypothesis", "hypothesis": "order-unspecified"},
+                        {"source": "hypothesis", "hypothesis": "stable-order"}
+                    ],
+                    "evidence": [{"source": "observed-fact", "observation": "atomic-slots"}]
+                }],
+                "unknowns": [{
+                    "id": "output-order",
+                    "kind": "desired-semantics",
+                    "question": "Must output preserve input-relative order?",
+                    "evidence": [{"source": "observed-fact", "observation": "atomic-slots"}]
+                }],
+                "invariants": [{
+                    "id": "copied-values",
+                    "statement": "Every output value comes from input.",
+                    "evidence": [{"source": "caller-claim", "claim": "copies-strictly-above"}]
+                }],
+                "optimization_freedoms": [],
+                "source_dispositions": [],
+                "disambiguation_experiments": [{
+                    "id": "decide-order",
+                    "targets": [
+                        {"kind": "conflict", "conflict": "order-conflict"},
+                        {"kind": "unknown", "unknown": "output-order"}
+                    ],
+                    "plan": "Ask the task authority whether output ordering is observable.",
+                    "predictions": [
+                        "Stable use selects stable-order.",
+                        "Order-insensitive use selects order-unspecified."
+                    ]
+                }]
+            }
+        }))
+        .expect("proposal envelope")
+    }
+
+    fn intent_review_for(task_id: TaskId) -> IntentReviewResourceV1 {
+        use cairn_migration::{
+            IntentRecoveryInputV1, SirCapabilityManifestV1, SirTaskLimits,
+            derive_user_intent_decision_requests,
+        };
+
+        let workspace = SirTaskWorkspace::from_sources(
+            vec![(
+                cairn_migration::SirTaskArtifactPath::new("src/compact_above.cu").expect("path"),
+                "void launch() {}\n".to_owned(),
+            )],
+            SirTaskLimits::default(),
+        )
+        .expect("workspace");
+        let recovery = IntentRecoveryInputV1::new(
+            task_id,
+            workspace.bundle().identity().expect("bundle identity"),
+            recovery_request(),
+            SirCapabilityManifestV1::proposal_only(SirTaskLimits::default()),
+        )
+        .expect("recovery input");
+        let recovery_id = recovery.identity().expect("recovery identity");
+        let proposal = review_proposal(recovery_id);
+        let proposal_id = proposal.identity().expect("proposal identity");
+        let requests =
+            derive_user_intent_decision_requests(proposal_id, &proposal, recovery_id, &recovery)
+                .expect("decision requests");
+        // Built through the product's own publication path, so what this test reads is what an
+        // administrator is actually served.
+        let task = FrozenMigrationTaskV1::new(
+            task_id,
+            workspace,
+            recovery,
+            cairn_migration::ReasoningDecompositionPolicyV1::StructuredReview,
+        )
+        .expect("frozen task");
+        publish_intent_review(&task, &proposal, &requests).expect("published review")
+    }
+
+    fn awaiting_review(task_id: TaskId) -> (SharedTasksV1, IntentReviewResourceV1) {
+        let review = intent_review_for(task_id);
+        let tasks = SharedTasksV1::default();
+        {
+            let mut states = tasks.0.lock().expect("task state");
+            let mut state = TaskStateV1::new(task_id).expect("task state");
+            state.intent_review = Some(review.clone());
+            state
+                .transition(
+                    TaskPhaseV1::AwaitingIntentReview,
+                    Some(TaskAttentionV1::IntentReview),
+                )
+                .expect("await review");
+            states.insert(task_id, state);
+        }
+        (tasks, review)
+    }
+
+    /// A decision scoped to a claim the caller never declared is refused where it is made.
+    ///
+    /// Intent Admission refuses the same scope, but only after every request has an answer, and
+    /// its refusal moves the task to a state that accepts no further decision. Recording it and
+    /// discovering it later costs the whole task, so the refusal has to happen here.
+    #[test]
+    fn a_decision_scoped_to_an_undeclared_claim_is_refused_when_it_is_recorded() {
+        let task_id = TaskId::new();
+        let (tasks, review) = awaiting_review(task_id);
+        let subject = cairn_migration::TaskIntentAuthoritySubject::new("task-authority:test")
+            .expect("authority subject");
+
+        let error = record_intent_decision(
+            &tasks,
+            task_id,
+            review.requests[0].request_id,
+            cairn_migration::UserIntentAuthorityScopeV1::new(vec![
+                cairn_migration::SirCallerClaimId::new("output-order").expect("claim"),
+            ])
+            .expect("authority scope"),
+            &subject,
+            UserIntentDecisionResponseV1::SelectHypothesis {
+                hypothesis: cairn_migration::SirHypothesisId::new("order-unspecified")
+                    .expect("hypothesis"),
+            },
+        )
+        .expect_err("an undeclared authority claim is refused");
+
+        assert!(
+            matches!(
+                &error,
+                MigrationAppApiError::UndeclaredAuthorityClaim(claim) if claim == "output-order"
+            ),
+            "refusal must name the undeclared claim, got: {error}"
+        );
+        let states = tasks.0.lock().expect("task state");
+        assert!(
+            states[&task_id].decisions.is_empty(),
+            "a refused decision must not be recorded"
+        );
+    }
+
+    /// The claims the API publishes for review are exactly the claims a decision may name.
+    ///
+    /// The scope is a required argument, so a review that does not carry its legal values leaves
+    /// no authorized way to learn one.
+    #[test]
+    fn every_published_authority_claim_is_accepted_as_a_decision_scope() {
+        let subject = cairn_migration::TaskIntentAuthoritySubject::new("task-authority:test")
+            .expect("authority subject");
+        let published = intent_review_for(TaskId::new()).authority_claims;
+        assert!(!published.is_empty());
+
+        // A recorded decision may not be revised while the review is open, so each claim is
+        // offered to a task of its own rather than reusing one that has already answered.
+        for claim in &published {
+            let task_id = TaskId::new();
+            let (tasks, review) = awaiting_review(task_id);
+            record_intent_decision(
+                &tasks,
+                task_id,
+                review.requests[0].request_id,
+                cairn_migration::UserIntentAuthorityScopeV1::new(vec![claim.id().clone()])
+                    .expect("authority scope"),
+                &subject,
+                UserIntentDecisionResponseV1::SelectHypothesis {
+                    hypothesis: cairn_migration::SirHypothesisId::new("order-unspecified")
+                        .expect("hypothesis"),
+                },
+            )
+            .expect("a published claim is a legal decision scope");
+        }
     }
 
     #[test]

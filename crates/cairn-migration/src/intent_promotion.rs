@@ -822,25 +822,40 @@ pub fn promote_user_intent(
     })
 }
 
+/// Resolves one authority scope against the claims a task's caller actually declared.
+///
+/// An administrator decision is scoped by naming caller claims. Two sides read that scope: the App
+/// API when it records the decision, and Intent Admission when it promotes one. They must decide
+/// the same way, so both call this rather than each interpreting the field, and a scope naming a
+/// claim the caller never declared is refused where the administrator can still correct it.
+///
+/// # Errors
+///
+/// Names the first claim in the scope that the caller declaration does not carry.
+pub fn resolve_authority_scope_claims(
+    scope: &UserIntentAuthorityScopeV1,
+    caller_claims: &[crate::SirCallerClaimV1],
+) -> Result<Vec<crate::SirCallerClaimV1>, IntentPromotionError> {
+    scope
+        .claims()
+        .iter()
+        .map(|authority_claim| {
+            caller_claims
+                .iter()
+                .find(|claim| claim.id() == authority_claim)
+                .cloned()
+                .ok_or_else(|| {
+                    IntentPromotionError::UndeclaredAuthorityClaim(authority_claim.clone())
+                })
+        })
+        .collect()
+}
+
 fn scoped_caller_claims(
     grant: &UserIntentAuthorityGrantV1,
     recovery_input: &IntentRecoveryInputV1,
 ) -> Result<Vec<crate::SirCallerClaimV1>, IntentPromotionError> {
-    grant
-        .scope()
-        .claims()
-        .iter()
-        .map(|authority_claim| {
-            recovery_input
-                .request()
-                .caller()
-                .claims()
-                .iter()
-                .find(|claim| claim.id() == authority_claim)
-                .cloned()
-                .ok_or(IntentPromotionError::AuthorityScope)
-        })
-        .collect()
+    resolve_authority_scope_claims(grant.scope(), recovery_input.request().caller().claims())
 }
 
 fn validate_authority_scope(
@@ -848,22 +863,14 @@ fn validate_authority_scope(
     recovery_input: &IntentRecoveryInputV1,
     admitted_claim: &AuthoritativeIntentClaimV1,
 ) -> Result<(), IntentPromotionError> {
+    let declared =
+        resolve_authority_scope_claims(grant.scope(), recovery_input.request().caller().claims())?;
     let admitted_caller_claims = admitted_claim.operation().caller_claims();
-    if grant.scope.claims().len() != admitted_caller_claims.len()
-        || !grant
-            .scope
-            .claims()
+    if declared.len() != admitted_caller_claims.len()
+        || !declared
             .iter()
             .zip(admitted_caller_claims)
-            .all(|(authority_claim, admitted)| authority_claim == admitted.id())
-        || !grant.scope.claims().iter().all(|authority_claim| {
-            recovery_input
-                .request()
-                .caller()
-                .claims()
-                .iter()
-                .any(|claim| claim.id() == authority_claim)
-        })
+            .all(|(declared, admitted)| declared.id() == admitted.id())
     {
         return Err(IntentPromotionError::AuthorityScope);
     }
@@ -898,6 +905,8 @@ pub enum IntentPromotionError {
     KeptUnknown,
     #[error("the authority grant does not cover the authoritative claim scope")]
     AuthorityScope,
+    #[error("the authority scope names a claim the caller did not declare: {}", .0.as_str())]
+    UndeclaredAuthorityClaim(crate::SirCallerClaimId),
     #[error("migration contract rejected: {0}")]
     Migration(String),
     #[error("Intent Admission restricted storage failed: {0}")]

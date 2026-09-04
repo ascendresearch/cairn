@@ -4,8 +4,9 @@ use std::{future::Future, path::PathBuf};
 
 use cairn_migration::{
     IntentDecisionRequestBatchArtifact, IntentHypothesisSetProposalV1, IntentRecoveryRequestV1,
-    SirHypothesisId, SirIntentHypothesisSetProposalArtifact, UserIntentAuthorityScopeV1,
-    UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1, UserProvidedIntentClaimV1,
+    SirCallerClaimV1, SirHypothesisId, SirIntentHypothesisSetProposalArtifact,
+    UserIntentAuthorityScopeV1, UserIntentDecisionRequestArtifact, UserIntentDecisionRequestV1,
+    UserProvidedIntentClaimV1,
 };
 use cairn_protocol::{
     BlobDigest, CommandId, ContentId, EventId, EventSequence, ObservedAtUnixMillis, TaskId,
@@ -335,6 +336,12 @@ pub struct IntentReviewResourceV1 {
     pub proposal: IntentHypothesisSetProposalV1,
     pub requests_id: Option<ContentId<IntentDecisionRequestBatchArtifact>>,
     pub requests: Vec<IntentReviewRequestResourceV1>,
+    /// The caller claims a decision's authority scope may name.
+    ///
+    /// Answering a request requires naming the claims the decision is scoped to. Without this the
+    /// only way to learn a legal name is to re-read the submitted declaration, and a name that is
+    /// not legal is not discoverable at all.
+    pub authority_claims: Vec<SirCallerClaimV1>,
 }
 
 /// One exact decision request with the identity required by a later selection command.

@@ -171,7 +171,7 @@ pub use intent_promotion::{
     TaskIntentAuthoritySubject, UserIntentAuthorityGrantArtifact, UserIntentAuthorityGrantV1,
     UserIntentAuthorityScopeV1, UserIntentDecisionArtifact, UserIntentDecisionResponseV1,
     UserIntentDecisionV1, UserProvidedIntentClaimV1, intent_user_decision_gate_id,
-    promote_user_intent,
+    promote_user_intent, resolve_authority_scope_claims,
 };
 pub use materialize::{
     CorpusBufferByteLength, CorpusBufferByteLimit, CorpusByteOrder, CorpusElementCount,

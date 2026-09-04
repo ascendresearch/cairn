@@ -7,8 +7,9 @@ use cairn_migration::{
     derive_user_intent_decision_requests,
 };
 use cairn_migration::{
-    TaskIntentAuthoritySubject, UserIntentAuthorityGrantV1, UserIntentAuthorityScopeV1,
-    UserIntentDecisionResponseV1, UserIntentDecisionV1, promote_user_intent,
+    IntentPromotionError, TaskIntentAuthoritySubject, UserIntentAuthorityGrantV1,
+    UserIntentAuthorityScopeV1, UserIntentDecisionResponseV1, UserIntentDecisionV1,
+    promote_user_intent, resolve_authority_scope_claims,
 };
 use cairn_protocol::{ContentId, EpisodeId, TaskId};
 use serde_json::json;
@@ -298,6 +299,111 @@ fn promotion_requires_and_preserves_every_administrator_decision() {
             &materials[..1],
         )
         .is_err()
+    );
+}
+
+/// An authority scope naming a claim the caller never declared is refused, and the refusal says
+/// which claim.
+///
+/// This gate is the last one to see the scope, and it sees it only once every request has been
+/// answered. A refusal that does not name the claim leaves an administrator with a whole failed
+/// task and no way to tell which of several decisions carried the bad name.
+#[test]
+fn promotion_names_the_authority_claim_the_caller_never_declared() {
+    let caller_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/cuda-ascend/sir/compact-above-f32/v1/caller-intent.json");
+    let recovery_request: IntentRecoveryRequestV1 =
+        serde_json::from_slice(&fs::read(caller_path).expect("caller request"))
+            .expect("strict recovery request");
+    let task_id = TaskId::new();
+    let recovery = IntentRecoveryInputV1::new(
+        task_id,
+        ContentId::<SirTaskBundleArtifact>::derive(b"undeclared authority claim bundle")
+            .expect("bundle identity"),
+        recovery_request,
+        SirCapabilityManifestV1::proposal_only(SirTaskLimits::default()),
+    )
+    .expect("recovery input");
+    let recovery_id = recovery.identity().expect("recovery identity");
+    let proposal: IntentHypothesisSetProposalV1 = serde_json::from_value(json!({
+        "schema_version": 1,
+        "recovery_input": recovery_id,
+        "episode_id": EpisodeId::new(),
+        "model_configuration": ContentId::<AgentResolvedRuntimeModelArtifact>::derive(b"test model")
+            .expect("model identity"),
+        "submission": proposal_submission(),
+    }))
+    .expect("proposal envelope");
+    let proposal_id = proposal.identity().expect("proposal identity");
+    let requests =
+        derive_user_intent_decision_requests(proposal_id, &proposal, recovery_id, &recovery)
+            .expect("decision requests");
+    let request = &requests.requests()[0];
+    // `output-order` is a declared unknown, not a declared claim. Naming it is the exact mistake
+    // an administrator makes when the two id spaces look alike in a decision request.
+    let grant = UserIntentAuthorityGrantV1::new(
+        task_id,
+        TaskIntentAuthoritySubject::new("task-authority:user").expect("authority subject"),
+        UserIntentAuthorityScopeV1::new(vec![
+            SirCallerClaimId::new("output-order").expect("claim"),
+        ])
+        .expect("authority scope"),
+    );
+    let decision = UserIntentDecisionV1::new(
+        request.identity().expect("request identity"),
+        grant.identity().expect("grant identity"),
+        UserIntentDecisionResponseV1::SelectHypothesis {
+            hypothesis: SirHypothesisId::new("order-unspecified").expect("hypothesis"),
+        },
+    );
+
+    let Err(error) = promote_user_intent(
+        proposal_id,
+        &proposal,
+        recovery_id,
+        &recovery,
+        &requests,
+        &[IntentDecisionMaterialV1 {
+            request,
+            grant: &grant,
+            decision: &decision,
+        }],
+    ) else {
+        panic!("an undeclared authority claim must be refused");
+    };
+
+    assert!(
+        matches!(
+            &error,
+            IntentPromotionError::UndeclaredAuthorityClaim(claim) if claim.as_str() == "output-order"
+        ),
+        "refusal must name the undeclared claim, got: {error}"
+    );
+}
+
+/// Every scope the caller did declare resolves, in the order the scope names them.
+#[test]
+fn a_declared_authority_scope_resolves_to_the_caller_claims_it_names() {
+    let caller_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/cuda-ascend/sir/compact-above-f32/v1/caller-intent.json");
+    let recovery_request: IntentRecoveryRequestV1 =
+        serde_json::from_slice(&fs::read(caller_path).expect("caller request"))
+            .expect("strict recovery request");
+    let scope = UserIntentAuthorityScopeV1::new(vec![
+        SirCallerClaimId::new("copies-strictly-above").expect("claim"),
+        SirCallerClaimId::new("output-capacity").expect("claim"),
+    ])
+    .expect("authority scope");
+
+    let resolved =
+        resolve_authority_scope_claims(&scope, recovery_request.caller().claims()).expect("scope");
+
+    assert_eq!(
+        resolved
+            .iter()
+            .map(|claim| claim.id().as_str())
+            .collect::<Vec<_>>(),
+        vec!["copies-strictly-above", "output-capacity"]
     );
 }
 
