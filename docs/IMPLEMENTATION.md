@@ -676,6 +676,7 @@ episode 已付过费。而这个配对只取决于 coverage policy 与已注册�
 | 裁决 scope 指名了未声明的 caller claim | Intent Admission promotion，任务已不可再裁决 | 已移到 record 时并点名 |
 | coverage policy 要求没有实现的角色 | 一次完整提案 episode 之后 | 已移到产品边界构建时并点名 |
 | 评审无法表达「此维度故意不判」 | 每轮打回，循环无上界 | **未修**，见 4.4 |
+| 控制脚本按相对路径读 bundle | worker 上执行 0 毫秒后 exit 2 | 已改为从脚本自身位置解析，见 4.8 |
 
 前两条的共同修法是同一条:该判据只依赖启动期或录入期就已存在的信息，因此把它挪到那里，
 并让拒绝点名。第三条不同——它缺的是一个裁决变体，属于协议变更，留待纵向到达候选构建后处理。
@@ -691,6 +692,34 @@ native build success 而不是 Oracle 覆盖率，且 `EVALUATION.md` 4.3 本就
 待同预算对照的 treatment 而非固定要求。但 `structured-review` 的三条缺陷不因绕开而消失:
 60 倍串行扇出、评审裁决只有通过/打回两个变体、循环无上界。要么按最小可证伪集重构该路径，
 要么至少补上上界与 `NotApplicable` 出口。在此之前不应把 `structured-review` 当作可用配置。
+
+### 4.8 Oracle 控制族首次在 worker 上执行（2026-09-04，live）
+
+**整体 portfolio 提案第一次被接受，控制族第一次真的被调度执行。** 日志完整走过:
+portfolio episode 完成 → 提案接受 → `AwaitingOracleControls` → 调度 → worker 接受指派 →
+执行 → receipt 回折。这几步此前从未发生过。
+
+**receipt 是 `SubjectFailed`，exit code 2，耗时 0 毫秒，无输出**——第四堵墙，
+而且是四堵里唯一一个「这段代码从来没有被执行过」的。
+
+产品把一段 `/bin/sh` 脚本打进 bundle 作为控制作业入口点，它第一条语句读 `meta/control-mode`，
+**用的是相对路径**。而 `CommandContract` 把工作目录固定为 `work`，`docker.rs` 把 bundle 只读挂在
+`/cairn/input`、另开一个空 tmpfs 挂在 `/cairn/work`、`--workdir` 设为后者，入口点则以
+`{INPUT}/bin/run` 绝对路径调用。于是脚本能启动但读不到任何材料，`sed` 退出 2，`set -e` 收尾。
+
+对照:部署提供的 `deploy/candidate-build/ascend-dav3510-build` 用绝对路径，是对的。
+错的只有产品内嵌的这一份。已改为从脚本自身位置推出 bundle 根，而不是把 worker 的挂载常量
+复制进产品代码——那些常量归 worker 所有。
+
+**没有任何测试能抓到它，因为没有任何测试执行过这个脚本。** 现已补上:按 worker 的真实沙箱形状
+把 bundle 落盘（只读树旁一个空 `work`、cwd 设为 `work`、绝对路径调入口），并断言两个方向——
+良构计划被接受，字节改动后与记录摘要不符的计划被拒。只断言前者的话，
+一个「什么都不读就说是」的脚本同样能通过。红验证把相对路径改回，
+测试复现出与线上完全相同的失败:`exit 2`、`sed: can't read meta/control-mode`。
+
+**第一版测试写错了，记下来。** 它断言 mutant 族退出 31，这是双重错误:31 表示 mutant 被错误接受，
+而且 mutant 退出 0 在坏脚本下同样成立（文件缺失导致校验失败，因而不触发 31），
+那一半什么都证明不了——正是 `AGENTS.md` 说的「拿一个东西和它自己比」。
 
 ### 本轮修好的一类缺陷，值得下一次留意
 
