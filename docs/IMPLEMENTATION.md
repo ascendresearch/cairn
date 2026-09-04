@@ -520,6 +520,19 @@ App API socket 在 `/run/cairn-server/migration.sock`，客户端配置指向它
 本地交叉构建需要钉住版本的 zig，而它装在 scratchpad 里、不跨会话存活;
 重建方式见本节末的「会咬人的地方」。
 
+**服务端 unit 此前不是这条路径产出的（2026-09-04 已纠正）。** 脚本写的是
+`cairn-controller-<instance>.service`，而仓库里没有叫 `cairn-controller` 的 crate、二进制或服务——
+这个名字指不向任何可查的东西。线上那台因此是手工命名成 `cairn-server.service` 的，
+于是走授权路径部署会在正在跑的那个旁边再装一个 unit，而一份 store 只能由一个 Controller 进程服务。
+脚本现在写 `cairn-<instance>.service`，与部署实际使用的名字一致，模板文件同步改名。
+这是 `AGENTS.md`「只有 builder 能用的旁门等于没有 gate」的一个实例:
+名字对不上时，绕过去比修脚本容易，而绕过去一次就再也不会被发现。
+
+重新部署已实测:服务端在 `cairn-server.service` 下起来，
+启动扫除把两条陈旧会话记为结束，两个 worker 在一秒内重新注册。
+**客户端与服务端必须同版本**:intent review 资源新增字段而 SDK 是严格解码，
+旧 CLI 读新服务端会解析失败。
+
 ### P4 走到哪里了
 
 **正常入口已在真实部署上跑通到 intent 裁决之后。** 用任务 `scale-clamp-f32`
