@@ -841,6 +841,10 @@ where
             .map_err(|_| MigrationApplicationError::AgentLoopInitialization)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one role attempt keeps its restart, exhaustion and suspension paths in one readable sequence"
+    )]
     async fn run_role_loop<C, H>(
         &mut self,
         loop_id: AgentLoopId,
@@ -874,8 +878,12 @@ where
             {
                 Ok(outcome) => break outcome,
                 Err(AgentLoopRunError::Executor(error)) => {
+                    // The reason travels with the failure. A role that stopped and reported only
+                    // its class leaves an operator with a blocked task and nothing to act on.
                     let Some(class) = error.model_dispatch_failure_class() else {
-                        return Err(MigrationApplicationError::AgentLoopExecution);
+                        return Err(MigrationApplicationError::AgentLoopExecution(
+                            error.to_string(),
+                        ));
                     };
                     if !may_restart_migration_role_attempt(
                         class,
@@ -893,7 +901,9 @@ where
                             attempt_limit = self.role_attempt_limit.get(),
                             "migration role could not recover from model dispatch failure"
                         );
-                        return Err(MigrationApplicationError::AgentLoopExecution);
+                        return Err(MigrationApplicationError::AgentLoopExecution(
+                            error.to_string(),
+                        ));
                     }
                     let failed_loop_id = current_loop_id;
                     attempt_ordinal += 1;
@@ -912,7 +922,11 @@ where
                         "migration role restarted with a fresh Agent Loop after model dispatch failure"
                     );
                 }
-                Err(_) => return Err(MigrationApplicationError::AgentLoopExecution),
+                Err(error) => {
+                    return Err(MigrationApplicationError::AgentLoopExecution(
+                        error.to_string(),
+                    ));
+                }
             }
         };
         self.services
@@ -997,8 +1011,8 @@ pub enum MigrationApplicationError {
     Binding(&'static str),
     #[error("Agent Loop initialization failed")]
     AgentLoopInitialization,
-    #[error("Agent Loop execution failed")]
-    AgentLoopExecution,
+    #[error("Agent Loop execution failed: {0}")]
+    AgentLoopExecution(String),
     #[error("Agent Loop exhausted its budget before reaching the role goal: {0}")]
     AgentLoopExhausted(AgentLoopId),
     #[error("Agent Loop yielded and requires durable resumption: {0}")]
@@ -1031,7 +1045,7 @@ impl MigrationApplicationError {
             Self::Domain(_) => "domain",
             Self::Binding(_) => "authority-binding",
             Self::AgentLoopInitialization => "agent-loop-initialization",
-            Self::AgentLoopExecution => "agent-loop-execution",
+            Self::AgentLoopExecution(_) => "agent-loop-execution",
             Self::AgentLoopExhausted(_) => "agent-loop-exhausted",
             Self::AgentLoopSuspended(_) => "agent-loop-suspended",
             Self::DuplicateAgentLoop(_) => "duplicate-agent-loop",
@@ -1048,7 +1062,7 @@ impl MigrationApplicationError {
             Self::AgentLoopInitialization => {
                 MigrationWorkflowFailureClassV1::AgentLoopInitialization
             }
-            Self::AgentLoopExecution => MigrationWorkflowFailureClassV1::AgentLoopExecution,
+            Self::AgentLoopExecution(_) => MigrationWorkflowFailureClassV1::AgentLoopExecution,
             Self::AgentLoopExhausted(_) => MigrationWorkflowFailureClassV1::AgentLoopExhausted,
             Self::AgentLoopSuspended(_) => MigrationWorkflowFailureClassV1::AgentLoopSuspended,
             Self::DuplicateAgentLoop(_) => MigrationWorkflowFailureClassV1::DuplicateAgentLoop,
@@ -2709,11 +2723,15 @@ where
                             "CUDA migration task failure could not be committed"
                         );
                     }
+                    // The class says which gate stopped the task; the reason says what to do
+                    // about it. An operator holding only the class has a blocked task and no
+                    // next step, which is the state this deployment was left in.
                     tracing::warn!(
                         target: "cairn.migration.application",
                         event = "migration_task_failed",
                         task_id = %task_id,
                         error_class = error.log_class(),
+                        reason = %error,
                         "CUDA migration task stopped without terminating the application module"
                     );
                 }
